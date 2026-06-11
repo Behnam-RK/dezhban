@@ -87,6 +87,38 @@ Operations:
 - `IsBlocked()`: `pfctl -a dezhban -s rules` non-empty → blocked.
 - `Cleanup()`: same as Unblock but never errors fatally (best-effort, logged).
 
+### Full-tunnel VPN limitation & interface-aware rules
+
+The destination-IP ruleset above **only works on a direct connection**. Under a
+full-tunnel VPN the default route is the tunnel (e.g. `utun4`), and pf on the
+**physical** interface (`en0`) sees only the **encrypted outer packets to the VPN
+endpoint** — the inner DNS/geo-API destinations never appear on the wire. So a
+per-IP allowlist can't selectively pass them: allowing the endpoint opens the
+whole tunnel (no kill switch); blocking it kills everything (no recovery poll).
+See [VPN / full-tunnel mode](./README.md#vpn--full-tunnel-mode-primary-use-case).
+
+When `vpn.enabled`, the backend emits **interface-aware** rules in one of two
+modes (`$tun` = tunnel iface, `$phys` = physical iface, `$endpoint` = VPN server):
+
+```
+# GUARD (exit allowed) — always-on; VPN drop ⇒ instant cut, zero leak
+pass quick on lo0 all
+pass out on $tun all
+pass out on $phys proto { udp tcp } to { $endpoint }    # handshake / keepalive
+block drop out on $phys all
+
+# FULL BLOCK (exit forbidden / country unknown) — cut the tunnel too
+pass quick on lo0 all
+block drop out on $phys all
+# tunnel egress dropped; the DNS/geo-API allowlist is passed ONLY during the
+# brief recovery-probe window (see Phase 4), never standing.
+```
+
+`renderRuleset` therefore gains **mode + tunnel iface + endpoint** inputs, and the
+backend grows a `Policy`/`Apply` shape (`Apply(Policy{Mode, Allowlist, TunnelIfaces,
+VPNEndpoints})`) that subsumes `Block`. The existing destination-IP path stays as
+the `vpn.enabled=false` fallback so non-VPN hosts are unaffected.
+
 ### ⚠️ Research item to resolve during implementation
 macOS only **evaluates** an anchor if the main ruleset (`/etc/pf.conf`) contains
 an `anchor "dezhban"` line. Two options — pick one and document it:

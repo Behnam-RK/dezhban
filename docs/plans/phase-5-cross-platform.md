@@ -20,11 +20,20 @@ interface, proving the abstraction holds. No changes to monitor/decision/run.
 `New()` in each file returns that OS's backend. The `notimpl_others.go` stub from
 Phase 2 is removed once all three exist.
 
+> **Interface-aware parity (VPN mode).** macOS introduced interface-aware GUARD /
+> FULL-BLOCK rules (see [VPN mode](./README.md#vpn--full-tunnel-mode-primary-use-case)
+> and Phase 2). Linux and Windows backends must mirror the same two states via
+> their native interface conditions — not just the destination-IP allowlist.
+
 ### Linux — nftables ([`google/nftables`](https://github.com/google/nftables))
 - Pure-Go netlink, no shelling to `nft`.
 - Create a **dedicated table** `inet dezhban` with an `output` chain (hook output,
   priority filter). Default policy drop; accept rules for loopback, DNS, geo-API
   egress, and established/related (ct state).
+- **Interface-aware (VPN mode)**: GUARD = accept `oifname $tun` + accept output to
+  `$endpoint` on `$phys` + drop other output (`meta oif`/`oifname` match); FULL
+  BLOCK additionally drops `oifname $tun`. Maps the same `Policy{Mode,TunnelIfaces,
+  VPNEndpoints}` shape as macOS.
 - `Block`: add table+chain+rules. `Unblock`: delete the `dezhban` table (surgical —
   touches nothing else). `IsBlocked`: table exists with rules.
 - ⚠️ `google/nftables` API is self-described as early-stage. Wrap every call behind
@@ -38,6 +47,10 @@ Phase 2 is removed once all three exist.
 - Create a WFP **sublayer/provider tagged `dezhban`** so all rules can be removed
   as a group. Add block filters on the outbound connect layers, with permit
   filters (higher weight) for loopback, DNS, and geo-API egress.
+- **Interface-aware (VPN mode)**: key filters on the interface LUID — GUARD =
+  permit on the tunnel LUID + permit to `$endpoint` on the physical LUID + block
+  other outbound; FULL BLOCK additionally blocks the tunnel LUID. Same `Policy`
+  shape as the other backends.
 - `Block`/`Unblock`/`IsBlocked`/`Cleanup` map to adding/removing the tagged
   sublayer's filters.
 - Privilege: requires Administrator. Implement the real Windows admin check here
@@ -68,6 +81,10 @@ other targets. Verify `GOOS=darwin/linux/windows go build` each compile cleanly
   under the `dezhban` group/sublayer; `unblock` removes them; idempotent.
 - `GOOS=… go build ./...` succeeds for all three targets.
 - Reuse the same `run` end-to-end test from Phase 3 on each OS.
+- **Interface-aware (VPN mode)**: with GUARD active, simulate a tunnel-down
+  (bring the tunnel iface down) → all egress is cut with no physical leak; bring
+  it back → traffic resumes. Confirm rules honor the tunnel/endpoint interface
+  conditions (`nft list ruleset` / WFP filter dump), not just dst-IPs.
 
 ## Out of scope
 Service install (Phase 6). Packaging (Phase 7). Offline mmdb hybrid (deferred).

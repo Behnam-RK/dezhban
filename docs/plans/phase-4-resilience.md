@@ -40,6 +40,29 @@ func (d *Decider) Evaluate(r monitor.Result) Verdict  // returns committed verdi
   feed the streak like any reading (N consecutive errors → block), so transient
   blips don't trigger.
 
+### Recovery while in FULL BLOCK — VPN back to an allowed country
+(VPN mode only — see [VPN mode](./README.md#vpn--full-tunnel-mode-primary-use-case).)
+
+In FULL BLOCK the tunnel is cut, so the exit country can't be observed and pf
+can't allow *only* the geo-API inside a tunnel. Recovery uses a **time-windowed
+probe**:
+
+```
+each poll tick while FULL BLOCK:
+    backend.Apply(GUARD)          # briefly lift — opens the tunnel
+    reading = monitor.Once(ctx)   # ONE geo-API lookup through the tunnel
+    backend.Apply(FULL BLOCK)     # re-cut immediately
+    feed reading into the hysteresis streak
+when `Hysteresis` consecutive probes report an allowed country ⇒ commit GUARD
+```
+
+- Tradeoff: one lookup's worth of egress per interval while blocked (controlled
+  minimal egress — the accepted recovery semantics).
+- Interaction with hysteresis: probe readings feed the same streak counter; a
+  single allowed reading does not lift the block.
+- Fallbacks if the probe never clears: `dezhban unblock --force` and `dezhban
+  panic` (Phase 7) both tear the guard/block down without the daemon.
+
 ### Allowlist hardening (`internal/firewall` + assembly)
 - Always include: loopback, configured DNS resolvers, and **all** geo-API
   provider IPs (resolve every provider host, not just the first).
@@ -47,6 +70,10 @@ func (d *Decider) Evaluate(r monitor.Result) Verdict  // returns committed verdi
   `Block` and on a slow timer. Document the risk: if a provider's IP changes while
   blocked and DNS is also blocked, recovery could stall — mitigate by always
   allowing DNS egress so re-resolution works.
+- **VPN mode**: the allowlist matters only during the probe window above and for
+  `vpn.enabled=false`; the standing guarantee is interface-based (GUARD), not the
+  dst-IP list. Fail-closed (country unknown) maps to **FULL BLOCK**, not the
+  legacy dst-IP block.
 
 ### Multi-provider (`internal/monitor`)
 - Phase 1 already does ordered fallback. Add optional **quorum**: query K
