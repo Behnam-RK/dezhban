@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"strings"
 	"time"
@@ -18,6 +19,25 @@ type Allowlist struct {
 	DNS []string `json:"dns"`
 	// Hosts is extra host IPs to always allow (provider IPs are added at runtime).
 	Hosts []string `json:"hosts"`
+}
+
+// VPN configures the interface-aware kill-switch guard for hosts behind a
+// full-tunnel VPN. When Enabled, enforcement uses the tunnel interface(s) and
+// VPN endpoint(s) instead of the destination-IP allowlist (which is meaningless
+// under a tunnel). See docs/plans VPN mode. Disabled by default — the always-on
+// guard can lock a host out if misconfigured, so it is opt-in.
+type VPN struct {
+	// Enabled turns on VPN guard mode.
+	Enabled bool
+	// TunnelInterfaces are the VPN tunnel interface names (e.g. "utun4"). For now
+	// these are concrete names; autodetect/pattern expansion lands with netdetect.
+	TunnelInterfaces []string
+	// Endpoints are the VPN server IPs reachable on the physical interface, kept
+	// open so the tunnel can stay up and reconnect.
+	Endpoints []string
+	// Autodetect requests discovery of the tunnel interface + endpoint (netdetect,
+	// future); explicit values above always win.
+	Autodetect bool
 }
 
 // Config is dezhban's validated runtime configuration.
@@ -38,6 +58,8 @@ type Config struct {
 	ProviderQuorum bool
 	// LogLevel is one of debug, info, warn, error.
 	LogLevel string
+	// VPN configures the interface-aware guard for full-tunnel VPN hosts.
+	VPN VPN
 }
 
 // fileConfig is the on-disk JSON shape. Durations are strings (e.g. "30s")
@@ -52,6 +74,16 @@ type fileConfig struct {
 	Allowlist        Allowlist `json:"allowlist"`
 	ProviderQuorum   *bool     `json:"providerQuorum"`
 	LogLevel         string    `json:"logLevel"`
+	VPN              *fileVPN  `json:"vpn"`
+}
+
+// fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
+// absent block keep defaults.
+type fileVPN struct {
+	Enabled          bool     `json:"enabled"`
+	TunnelInterfaces []string `json:"tunnelInterfaces"`
+	Endpoints        []string `json:"endpoints"`
+	Autodetect       bool     `json:"autodetect"`
 }
 
 // Default returns a Config with safe, security-first defaults.
@@ -132,6 +164,14 @@ func apply(cfg *Config, fc fileConfig) error {
 	if fc.LogLevel != "" {
 		cfg.LogLevel = fc.LogLevel
 	}
+	if fc.VPN != nil {
+		cfg.VPN = VPN{
+			Enabled:          fc.VPN.Enabled,
+			TunnelInterfaces: fc.VPN.TunnelInterfaces,
+			Endpoints:        fc.VPN.Endpoints,
+			Autodetect:       fc.VPN.Autodetect,
+		}
+	}
 	return nil
 }
 
@@ -141,6 +181,12 @@ func normalize(cfg *Config) {
 		cfg.BlockedCountries[i] = strings.ToUpper(strings.TrimSpace(c))
 	}
 	cfg.LogLevel = strings.ToLower(strings.TrimSpace(cfg.LogLevel))
+	for i, iface := range cfg.VPN.TunnelInterfaces {
+		cfg.VPN.TunnelInterfaces[i] = strings.TrimSpace(iface)
+	}
+	for i, ep := range cfg.VPN.Endpoints {
+		cfg.VPN.Endpoints[i] = strings.TrimSpace(ep)
+	}
 }
 
 // Validate checks invariants the rest of the program relies on.
@@ -157,6 +203,22 @@ func (c *Config) Validate() error {
 	for _, code := range c.BlockedCountries {
 		if len(code) != 2 {
 			return fmt.Errorf("blocked country %q must be a 2-letter ISO-3166 code", code)
+		}
+	}
+	if c.VPN.Enabled {
+		// Autodetect (netdetect) is not wired yet, so guard mode currently needs
+		// explicit interface + endpoint values; a wrong/empty set would lock the
+		// host out, so fail loudly here rather than at block time.
+		if len(c.VPN.TunnelInterfaces) == 0 {
+			return errors.New("vpn.enabled requires at least one vpn.tunnelInterfaces entry")
+		}
+		if len(c.VPN.Endpoints) == 0 {
+			return errors.New("vpn.enabled requires at least one vpn.endpoints entry")
+		}
+		for _, ep := range c.VPN.Endpoints {
+			if _, err := netip.ParseAddr(ep); err != nil {
+				return fmt.Errorf("vpn.endpoints: invalid IP %q: %w", ep, err)
+			}
 		}
 	}
 	return nil

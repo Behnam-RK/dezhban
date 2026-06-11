@@ -50,12 +50,46 @@ func TestLoadOverlaysAndNormalizes(t *testing.T) {
 	}
 }
 
+func TestLoadVPNBlock(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{
+		"vpn": {
+			"enabled": true,
+			"tunnelInterfaces": [" utun4 "],
+			"endpoints": ["203.0.113.5"],
+			"autodetect": true
+		}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.VPN.Enabled {
+		t.Error("VPN.Enabled = false, want true")
+	}
+	if got := cfg.VPN.TunnelInterfaces; len(got) != 1 || got[0] != "utun4" {
+		t.Errorf("VPN.TunnelInterfaces = %v, want [utun4] (trimmed)", got)
+	}
+	if got := cfg.VPN.Endpoints; len(got) != 1 || got[0] != "203.0.113.5" {
+		t.Errorf("VPN.Endpoints = %v, want [203.0.113.5]", got)
+	}
+	if !cfg.VPN.Autodetect {
+		t.Error("VPN.Autodetect = false, want true")
+	}
+}
+
 func TestValidateErrors(t *testing.T) {
 	cases := map[string]string{
-		"bad interval": `{"pollInterval": "0s"}`,
-		"bad hyst":     `{"hysteresis": 0}`,
-		"bad country":  `{"blockedCountries": ["USA"]}`,
-		"no providers": `{"providers": []}`,
+		"bad interval":     `{"pollInterval": "0s"}`,
+		"bad hyst":         `{"hysteresis": 0}`,
+		"bad country":      `{"blockedCountries": ["USA"]}`,
+		"no providers":     `{"providers": []}`,
+		"vpn no ifaces":    `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"]}}`,
+		"vpn no endpoints": `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"]}}`,
+		"vpn bad endpoint": `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["not-an-ip"]}}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {

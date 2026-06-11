@@ -17,6 +17,7 @@ func New() (FirewallBackend, error) {
 	return &notImplBackend{}, nil
 }
 
+func (b *notImplBackend) Apply(Policy) error       { return errNotImplemented }
 func (b *notImplBackend) Block(Allowlist) error    { return errNotImplemented }
 func (b *notImplBackend) Unblock() error           { return errNotImplemented }
 func (b *notImplBackend) IsBlocked() (bool, error) { return false, errNotImplemented }

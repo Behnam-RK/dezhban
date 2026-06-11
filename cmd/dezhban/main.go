@@ -149,6 +149,7 @@ func runDryRun(cfg *config.Config, log *slog.Logger) int {
 func cmdBlock(args []string) int {
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other egress)")
 	_ = fs.Bool("force", false, "block regardless of detection (Phase 7)")
 	_ = fs.Parse(args)
 	cfg, err := loadConfig(*cfgPath)
@@ -170,12 +171,59 @@ func cmdBlock(args []string) int {
 	// geo-API provider hostnames to IPs so recovery detection can keep reaching
 	// them once egress is cut.
 	al := buildAllowlist(cfg, log)
-	if err := fw.Block(al); err != nil {
-		log.Error("block failed", "err", err)
-		return 1
+
+	switch {
+	case *guard || cfg.VPN.Enabled:
+		// VPN mode. `--guard` installs the always-on interface guard (tunnel stays
+		// open, physical egress locked to the endpoint); a plain `block` under
+		// vpn.enabled is a full block that cuts the tunnel too.
+		if len(cfg.VPN.TunnelInterfaces) == 0 || len(cfg.VPN.Endpoints) == 0 {
+			log.Error("vpn mode needs vpn.tunnelInterfaces and vpn.endpoints in config")
+			return 1
+		}
+		endpoints := parseEndpoints(cfg.VPN.Endpoints, log)
+		mode := firewall.ModeFullBlock
+		if *guard {
+			mode = firewall.ModeGuard
+		}
+		pol := firewall.Policy{
+			Mode:         mode,
+			Allowlist:    al,
+			TunnelIfaces: cfg.VPN.TunnelInterfaces,
+			VPNEndpoints: endpoints,
+		}
+		if err := fw.Apply(pol); err != nil {
+			log.Error("block failed", "err", err)
+			return 1
+		}
+		if *guard {
+			log.Info("vpn guard active", "tunnels", cfg.VPN.TunnelInterfaces, "endpoints", len(endpoints))
+		} else {
+			log.Info("network full-blocked (vpn)", "tunnels", cfg.VPN.TunnelInterfaces)
+		}
+	default:
+		if err := fw.Block(al); err != nil {
+			log.Error("block failed", "err", err)
+			return 1
+		}
+		log.Info("network blocked", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 	}
-	log.Info("network blocked", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 	return 0
+}
+
+// parseEndpoints converts configured VPN endpoint strings to addresses, warning
+// on (and skipping) any that don't parse. Config validation already rejects bad
+// endpoints when vpn.enabled, so this mainly guards the --guard-without-enabled path.
+func parseEndpoints(eps []string, log *slog.Logger) []netip.Addr {
+	var out []netip.Addr
+	for _, s := range eps {
+		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
+			out = append(out, a.Unmap())
+		} else {
+			log.Warn("ignoring invalid vpn endpoint", "addr", s, "err", err)
+		}
+	}
+	return out
 }
 
 // buildAllowlist converts the config allowlist into a firewall.Allowlist and
