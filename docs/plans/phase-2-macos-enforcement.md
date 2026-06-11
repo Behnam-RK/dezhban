@@ -1,5 +1,32 @@
 # Phase 2 — macOS Enforcement Backend
 
+> ## ⚠️ CAUTION — this phase can cut your own network
+>
+> This is the first phase that touches the live firewall. A default-deny
+> `block` rule applied via `pfctl` will drop **all** outbound traffic except the
+> allowlist — including the SSH/remote session you may be running it through, and
+> the very geo-API calls the monitor needs to detect recovery. A bug in the
+> allowlist, a crash before `Unblock`, or a botched pf-state restore can **lock
+> you out of your own machine/network**.
+>
+> Before running `block` for real:
+> - **Test on the local console**, not over SSH/VPN/remote — so a lock-out
+>   doesn't also kill your way back in.
+> - Verify `Unblock`/`Cleanup` works *first* (apply → immediately tear down) and
+>   that the `dezhban` anchor is empty afterward (`sudo pfctl -a dezhban -s rules`).
+> - Keep a manual escape ready in another terminal:
+>   `sudo pfctl -a dezhban -F all` (flush our anchor) and, if pf was enabled by
+>   us, `sudo pfctl -d` (disable pf). The Phase 7 `panic` command automates this,
+>   but it does not exist yet during Phase 2.
+> - Confirm the allowlist includes loopback, DNS, and the geo-API egress IPs, or
+>   recovery detection can never fire and the block becomes permanent.
+> - Snapshot/keep the original `/etc/pf.conf` and prior pf enable state so it can
+>   be restored if a session dies mid-block.
+>
+> Treat every `block` as potentially self-inflicting until the tear-down path is
+> proven reliable. Idempotency + surgical, always-safe `Cleanup()` are not nice-to-haves
+> here — they are what stops a kill switch from killing the operator.
+
 ## Goal
 First real firewall backend. Implement `FirewallBackend` for macOS via `pfctl`
 and a dedicated `dezhban` pf anchor. Wire manual `block` / `unblock` / `status`
