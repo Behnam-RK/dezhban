@@ -34,7 +34,7 @@ so teardown is surgical.
 
 | Phase | Doc | Status | Theme |
 |---|---|---|---|
-| 0 | [phase-0-scaffold.md](./phase-0-scaffold.md) | ☐ | Go module, CLI skeleton, config, logging, privilege check, CLAUDE.md |
+| 0 | [phase-0-scaffold.md](./phase-0-scaffold.md) | ✅ | Go module, CLI skeleton, config, logging, privilege check, CLAUDE.md |
 | 1 | [phase-1-monitor.md](./phase-1-monitor.md) | ☐ | Public-IP fetch + country resolve + polling loop (prints country) |
 | 2 | [phase-2-macos-enforcement.md](./phase-2-macos-enforcement.md) | ☐ | `pfctl` anchor backend + manual `block`/`unblock`/`status` |
 | 3 | [phase-3-wire-end-to-end.md](./phase-3-wire-end-to-end.md) | ☐ | Decision layer + monitor→decision→enforcement daemon (macOS) |
