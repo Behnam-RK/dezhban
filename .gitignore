@@ -15,3 +15,8 @@ state.json
 # Tooling
 .remember/
 .DS_Store
+
+# Personal tooling artifacts (do not commit)
+AGENTS.md
+*.bak
+CLAUDE.md.original.md
