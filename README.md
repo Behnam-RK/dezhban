@@ -124,6 +124,10 @@ until teardown is proven on your machine.
   our anchor) and, if pf was off before, `sudo pfctl -d` (disable pf).
 - The allowlist must include loopback (implicit), DNS, and the geo-API egress IPs,
   or recovery can never fire and the block becomes permanent.
+- The allowlist pins provider IPs **at block time**. A provider behind a rotating
+  CDN may resolve to a different IP later that isn't allowed, breaking recovery.
+  Prefer providers with stable IPs, or pin a wide-enough `allowlist.hosts` range.
+  (The Phase 3 run loop refreshes the allowlist live; manual `block` is static.)
 
 On macOS, `block` appends one `anchor "dezhban"` line to `/etc/pf.conf` (backed up
 to `/etc/pf.conf.dezhban.bak` first) and loads rules into the kernel `dezhban`

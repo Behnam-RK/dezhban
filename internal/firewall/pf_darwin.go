@@ -60,6 +60,14 @@ type savedState struct {
 }
 
 func (b *pfBackend) Block(a Allowlist) error {
+	ruleset := renderRuleset(a)
+	// Validate the generated ruleset (-n parses without loading) BEFORE touching
+	// any system state, so a malformed allowlist can't half-apply and leave a
+	// modified pf.conf with an empty kernel anchor.
+	if _, err := pfctl(ruleset, "-n", "-f", "-"); err != nil {
+		return fmt.Errorf("invalid block ruleset: %w", err)
+	}
+
 	info, err := pfctl("", "-s", "info")
 	if err != nil {
 		return fmt.Errorf("query pf status: %w", err)
@@ -86,7 +94,7 @@ func (b *pfBackend) Block(a Allowlist) error {
 	}
 	// (Re)load our anchor rules. Loading replaces the anchor's contents, so a
 	// repeat block does not stack duplicates — this is what makes Block idempotent.
-	if _, err := pfctl(renderRuleset(a), "-a", anchorName, "-f", "-"); err != nil {
+	if _, err := pfctl(ruleset, "-a", anchorName, "-f", "-"); err != nil {
 		return fmt.Errorf("load dezhban anchor: %w", err)
 	}
 	// Turn enforcement on last, once the rules are in place.
@@ -111,7 +119,7 @@ func (b *pfBackend) Unblock() error {
 		if err != nil {
 			return fmt.Errorf("read pf.conf backup: %w", err)
 		}
-		if err := os.WriteFile(pfConfPath, data, 0o644); err != nil {
+		if err := atomicWrite(pfConfPath, data, 0o644); err != nil {
 			return fmt.Errorf("restore pf.conf: %w", err)
 		}
 		_ = os.Remove(backupPath)
@@ -141,7 +149,16 @@ func (b *pfBackend) IsBlocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.TrimSpace(out) != "", nil
+	if strings.TrimSpace(out) == "" {
+		return false, nil
+	}
+	// Anchor rules are loaded but only enforced while pf itself is enabled, so a
+	// stale anchor under a disabled pf must not report as blocked.
+	info, err := pfctl("", "-s", "info")
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(info, "Status: Enabled"), nil
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any
@@ -191,7 +208,7 @@ func ensureAnchorRef() error {
 		body += "\n"
 	}
 	body += "# dezhban anchor (Phase 2) — removed on unblock by restoring the backup\n" + anchorRef + "\n"
-	if err := os.WriteFile(pfConfPath, []byte(body), 0o644); err != nil {
+	if err := atomicWrite(pfConfPath, []byte(body), 0o644); err != nil {
 		return fmt.Errorf("append anchor to %s: %w", pfConfPath, err)
 	}
 	return nil
@@ -208,7 +225,7 @@ func backupPfConf() error {
 	if err != nil {
 		return fmt.Errorf("read %s for backup: %w", pfConfPath, err)
 	}
-	if err := os.WriteFile(backupPath, data, 0o600); err != nil {
+	if err := atomicWrite(backupPath, data, 0o600); err != nil {
 		return fmt.Errorf("write pf.conf backup: %w", err)
 	}
 	return nil
@@ -222,10 +239,37 @@ func saveState(s savedState) error {
 	if err != nil {
 		return err
 	}
-	if err := os.WriteFile(statePath, data, 0o600); err != nil {
+	if err := atomicWrite(statePath, data, 0o600); err != nil {
 		return fmt.Errorf("write state: %w", err)
 	}
 	return nil
+}
+
+// atomicWrite writes data to a temp file in the same directory, fsyncs it, then
+// renames it over path — so a crash mid-write can never leave a partially
+// written /etc/pf.conf or state file that a later restore would trust.
+func atomicWrite(path string, data []byte, mode os.FileMode) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".dezhban-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename succeeds
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, mode); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, path)
 }
 
 func loadState() (savedState, bool) {

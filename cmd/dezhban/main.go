@@ -223,6 +223,14 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 			}
 		}
 	}
+	// The allowlist pins IPs at block time. If nothing resolved, recovery
+	// detection can never reach a geo-API once egress is cut — the block would
+	// become permanent. Warn loudly rather than silently lock the operator out.
+	// (Providers behind rotating-CDN IPs carry the same risk even when some
+	// resolve; Phase 3's run loop is where the allowlist gets refreshed live.)
+	if len(al.Hosts) == 0 {
+		log.Warn("no geo-API egress IPs in allowlist — recovery detection cannot work while blocked")
+	}
 	return al
 }
 
