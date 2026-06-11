@@ -20,10 +20,12 @@ import (
 	"syscall"
 
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/logging"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/privilege"
+	"github.com/behnam-rk/dezhban/internal/runner"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -112,8 +114,43 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
-	// The monitor→decision→enforcement loop lands in Phase 3.
-	log.Info("run loop not implemented yet (Phase 3)")
+	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
+	if len(providers) == 0 {
+		log.Error("no usable geo providers configured")
+		return 1
+	}
+	fw, err := firewall.New()
+	if err != nil {
+		log.Error("firewall backend unavailable", "err", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	opts := runner.Options{
+		Monitor:   monitor.New(providers, cfg.PollInterval, log),
+		Decider:   decision.New(cfg.BlockedCountries),
+		Backend:   fw,
+		Log:       log,
+		VPN:       cfg.VPN.Enabled,
+		Tunnels:   cfg.VPN.TunnelInterfaces,
+		Endpoints: parseEndpoints(cfg.VPN.Endpoints, log),
+		// Re-resolve the allowlist at each Block so rotated provider IPs stay
+		// reachable for recovery detection while egress is cut.
+		Allowlist: func() firewall.Allowlist { return buildAllowlist(cfg, log) },
+	}
+	log.Info("run loop started",
+		"interval", cfg.PollInterval,
+		"providers", len(providers),
+		"blocked_countries", cfg.BlockedCountries,
+		"vpn", cfg.VPN.Enabled,
+	)
+	if err := runner.Run(ctx, opts); err != nil {
+		log.Error("run loop failed", "err", err)
+		return 1
+	}
+	log.Info("run loop stopped")
 	return 0
 }
 
