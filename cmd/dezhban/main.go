@@ -7,13 +7,18 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
+	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/logging"
+	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/privilege"
 )
 
@@ -96,12 +101,44 @@ func cmdRun(args []string) int {
 	}
 	log := logging.New(cfg.LogLevel)
 
-	if !*dryRun && !requireRoot("run") {
+	if *dryRun {
+		return runDryRun(cfg, log)
+	}
+	if !requireRoot("run") {
 		return 1
 	}
 
-	// Filled in by Phase 1 (monitor) and Phase 3 (loop).
-	log.Info("run not implemented yet", "dryRun", *dryRun, "phase", "0")
+	// The monitor→decision→enforcement loop lands in Phase 3.
+	log.Info("run loop not implemented yet (Phase 3)")
+	return 0
+}
+
+// runDryRun polls the monitor and prints each reading without touching the
+// firewall. Stops on SIGINT/SIGTERM.
+func runDryRun(cfg *config.Config, log *slog.Logger) int {
+	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
+	if len(providers) == 0 {
+		log.Error("no usable geo providers configured")
+		return 1
+	}
+	mon := monitor.New(providers, cfg.PollInterval, log)
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	log.Info("monitor dry-run started", "interval", cfg.PollInterval, "providers", len(providers))
+	for res := range mon.Poll(ctx) {
+		if res.Err != nil {
+			log.Warn("country lookup failed", "err", res.Err)
+			continue
+		}
+		log.Info("tick",
+			"ip", res.Reading.IP,
+			"country", res.Reading.CountryCode,
+			"provider", res.Reading.Provider,
+		)
+	}
+	log.Info("monitor dry-run stopped")
 	return 0
 }
 
