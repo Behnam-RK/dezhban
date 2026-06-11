@@ -11,12 +11,16 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
+	"net/netip"
+	"net/url"
 	"os"
 	"os/signal"
 	"strings"
 	"syscall"
 
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/logging"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/privilege"
@@ -147,15 +151,79 @@ func cmdBlock(args []string) int {
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	_ = fs.Bool("force", false, "block regardless of detection (Phase 7)")
 	_ = fs.Parse(args)
-	if _, err := loadConfig(*cfgPath); err != nil {
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
 	}
+	log := logging.New(cfg.LogLevel)
 	if !requireRoot("block") {
 		return 1
 	}
-	fmt.Fprintln(os.Stderr, "block not implemented yet (Phase 2)")
+
+	fw, err := firewall.New()
+	if err != nil {
+		log.Error("firewall backend unavailable", "err", err)
+		return 1
+	}
+	// Build the allowlist BEFORE blocking, while DNS still works: resolve the
+	// geo-API provider hostnames to IPs so recovery detection can keep reaching
+	// them once egress is cut.
+	al := buildAllowlist(cfg, log)
+	if err := fw.Block(al); err != nil {
+		log.Error("block failed", "err", err)
+		return 1
+	}
+	log.Info("network blocked", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 	return 0
+}
+
+// buildAllowlist converts the config allowlist into a firewall.Allowlist and
+// augments it with the resolved IPs of the configured geo-API providers, so the
+// monitor can still reach them while a block is in force.
+func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
+	var al firewall.Allowlist
+	for _, s := range cfg.Allowlist.DNS {
+		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
+			al.DNS = append(al.DNS, a.Unmap())
+		} else {
+			log.Warn("ignoring invalid DNS allowlist address", "addr", s, "err", err)
+		}
+	}
+
+	seen := make(map[netip.Addr]bool)
+	add := func(a netip.Addr) {
+		a = a.Unmap()
+		if a.IsValid() && !seen[a] {
+			seen[a] = true
+			al.Hosts = append(al.Hosts, a)
+		}
+	}
+	for _, s := range cfg.Allowlist.Hosts {
+		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
+			add(a)
+		} else {
+			log.Warn("ignoring invalid host allowlist address", "addr", s, "err", err)
+		}
+	}
+	for _, raw := range cfg.Providers {
+		u, err := url.Parse(raw)
+		if err != nil || u.Hostname() == "" {
+			log.Warn("cannot parse provider url for allowlist", "url", raw)
+			continue
+		}
+		ips, err := net.LookupIP(u.Hostname())
+		if err != nil {
+			log.Warn("cannot resolve provider for allowlist", "host", u.Hostname(), "err", err)
+			continue
+		}
+		for _, ip := range ips {
+			if a, ok := netip.AddrFromSlice(ip); ok {
+				add(a)
+			}
+		}
+	}
+	return al
 }
 
 func cmdUnblock(args []string) int {
@@ -164,7 +232,16 @@ func cmdUnblock(args []string) int {
 	if !requireRoot("unblock") {
 		return 1
 	}
-	fmt.Fprintln(os.Stderr, "unblock not implemented yet (Phase 2)")
+	fw, err := firewall.New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "firewall backend unavailable:", err)
+		return 1
+	}
+	if err := fw.Unblock(); err != nil {
+		fmt.Fprintln(os.Stderr, "unblock failed:", err)
+		return 1
+	}
+	fmt.Println("dezhban: network unblocked")
 	return 0
 }
 
@@ -202,6 +279,14 @@ func cmdStatus(args []string) int {
 	fmt.Println("blocked countries:", strings.Join(blocked, ", "))
 	fmt.Println("providers:       ", strings.Join(cfg.Providers, ", "))
 	fmt.Println("log level:       ", cfg.LogLevel)
-	// blocked-state (IsBlocked) is reported once the firewall backend lands (Phase 2).
+
+	if fw, err := firewall.New(); err != nil {
+		fmt.Println("blocked:          unknown:", err)
+	} else if blocked, err := fw.IsBlocked(); err != nil {
+		// Reading pf rules needs root; report rather than fail the command.
+		fmt.Println("blocked:          unknown:", err)
+	} else {
+		fmt.Println("blocked:         ", blocked)
+	}
 	return 0
 }
