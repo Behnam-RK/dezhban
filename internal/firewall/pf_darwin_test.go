@@ -91,6 +91,13 @@ func TestRenderRulesetGuard(t *testing.T) {
 	if strings.Contains(rs, "port 53") || strings.Contains(rs, "1.1.1.1") {
 		t.Errorf("guard ruleset must not emit the dst-IP allowlist:\n%s", rs)
 	}
+	// Passes must be stateless so a tunnel transport connection already open at
+	// block time isn't dropped by pf's default `flags S/SA keep state`.
+	for _, line := range strings.Split(strings.TrimSpace(rs), "\n") {
+		if strings.HasPrefix(line, "pass") && !strings.HasSuffix(line, "no state") {
+			t.Errorf("guard pass rule is not stateless (drops mid-stream flows): %q", line)
+		}
+	}
 	assertDefaultDenyLast(t, rs)
 }
 

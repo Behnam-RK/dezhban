@@ -196,22 +196,29 @@ func (b *pfBackend) Cleanup() error {
 func renderRuleset(p Policy) string {
 	var b strings.Builder
 	b.WriteString("# dezhban ruleset — default-deny outbound.\n")
-	b.WriteString("pass quick on lo0 all\n")
+	// Every pass is `no state`. We filter OUTBOUND only, so return traffic is
+	// never touched and per-flow state buys nothing. Critically, pf's default
+	// (`keep state flags S/SA`) admits only TCP flows that START after the rules
+	// load — it drops mid-stream packets of connections already open at block
+	// time, which would tear down the live VPN tunnel transport (the encrypted
+	// connection to the endpoint, established before the guard). Stateless passes
+	// admit that existing connection.
+	b.WriteString("pass quick on lo0 all no state\n")
 	switch p.Mode {
 	case ModeGuard:
 		if len(p.TunnelIfaces) > 0 {
-			fmt.Fprintf(&b, "pass out quick on { %s } all\n", strings.Join(p.TunnelIfaces, " "))
+			fmt.Fprintf(&b, "pass out quick on { %s } all no state\n", strings.Join(p.TunnelIfaces, " "))
 		}
 		if len(p.VPNEndpoints) > 0 {
-			fmt.Fprintf(&b, "pass out quick to { %s }\n", joinAddrs(p.VPNEndpoints))
+			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 		}
 	default: // ModeFullBlock
 		if len(p.TunnelIfaces) == 0 {
 			if len(p.Allowlist.DNS) > 0 {
-				fmt.Fprintf(&b, "pass out quick proto { udp tcp } to { %s } port 53\n", joinAddrs(p.Allowlist.DNS))
+				fmt.Fprintf(&b, "pass out quick proto { udp tcp } to { %s } port 53 no state\n", joinAddrs(p.Allowlist.DNS))
 			}
 			if len(p.Allowlist.Hosts) > 0 {
-				fmt.Fprintf(&b, "pass out quick to { %s }\n", joinAddrs(p.Allowlist.Hosts))
+				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.Allowlist.Hosts))
 			}
 		}
 	}
