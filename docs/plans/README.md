@@ -5,6 +5,11 @@
 country, and when the country matches a blocklist it drives the OS firewall to
 cut traffic — while keeping a minimal allowlist so recovery detection still works.
 
+It is also **VPN-aware**: a primary deployment is running behind a full-tunnel
+VPN, where dezhban must (a) cut traffic the instant the VPN drops unnoticed, and
+(b) cut traffic when the VPN exit switches to a forbidden country. See
+[VPN / full-tunnel mode](#vpn--full-tunnel-mode-primary-use-case).
+
 ## Locked decisions
 
 | Decision | Choice | Rationale |
@@ -13,6 +18,9 @@ cut traffic — while keeping a minimal allowlist so recovery detection still wo
 | Platform order | **macOS first** → Linux → Windows | Build/verify one backend end-to-end, then port behind the interface |
 | Detection | **API-based first**, offline IP-range hybrid later | Simple to start; add robustness once the loop works |
 | Fail mode | **Fail-closed** | Block when country is undeterminable — safe default for a security tool |
+| Enforcement primitive | **Interface-aware** (pass-on-tunnel + endpoint handshake, block physical) | A destination-IP allowlist is meaningless under a full tunnel — pf/nft see only outer packets to the VPN endpoint |
+| Guard model | **Always-on interface guard** | VPN drop ⇒ instant cut, zero leak window. A reactive poller leaks for one poll interval |
+| Recovery | **VPN returns to allowed country** | While full-blocked, observe the exit via a time-windowed probe; auto-restore the guard when the exit is allowed again |
 
 ## Architecture (3 layers)
 
@@ -29,6 +37,58 @@ Enforcement ── FirewallBackend per OS                (only platform-specific
 The `FirewallBackend` interface is the seam: ~90% of code is shared; one small
 module differs per OS. Every firewall rule carries a unique tag/anchor (`dezhban`)
 so teardown is surgical.
+
+Enforcement is **interface-aware**: it consumes the tunnel interface(s) and VPN
+endpoint(s) and runs in one of two states — **GUARD** (exit allowed: pass tunnel
+egress + endpoint handshake, block all other physical egress) and **FULL BLOCK**
+(exit forbidden / country unknown: cut the tunnel too). See below.
+
+## VPN / full-tunnel mode (primary use-case)
+
+Under a full-tunnel VPN the default route is the tunnel (e.g. `utun4`). The
+firewall on the **physical** interface (e.g. `en0`) sees only the **encrypted
+outer packets to one address — the VPN endpoint**; inner destinations (DNS,
+geo-API) never appear on the wire. So the original destination-IP allowlist is
+the **wrong primitive**: allow the endpoint ⇒ the whole tunnel passes (no kill
+switch); block the endpoint ⇒ everything dies, including the polling that detects
+recovery.
+
+**The fix is interface-aware enforcement with two states:**
+
+- **GUARD** (armed/normal, exit allowed) — continuous, always-on:
+  `pass quick on lo0` · `pass out on $tun all` · `pass out on $phys to $endpoint`
+  (handshake/keepalive) · `block drop out on $phys all`. Tunnel traffic flows
+  normally; if the tunnel disappears, physical egress is already locked ⇒ **zero
+  leak window**. Country detection polls *through* the tunnel and reflects the
+  exit country.
+- **FULL BLOCK** (exit forbidden, or unknown under fail-closed) — cut the tunnel
+  too. pf can't allow *only* the geo-API inside a tunnel, so recovery uses a
+  **time-windowed probe**: on each poll tick, briefly lift the block, run **one**
+  geo-API lookup through the tunnel, re-apply. After `hysteresis` consecutive
+  allowed probes ⇒ return to GUARD. Tradeoff: one lookup's worth of egress per
+  interval while blocked (controlled minimal egress).
+
+Config — a `vpn` block (guard is active only when `enabled`; with it off the
+behavior is the legacy destination-IP model, unchanged):
+
+```json
+"vpn": {
+  "enabled": true,            // opt-in; always-on guard can lock you out, default false
+  "tunnelInterfaces": ["utun*"],
+  "endpoints": ["203.0.113.5"],
+  "autodetect": true          // assist iface/endpoint discovery; explicit values win
+}
+```
+
+**Where each part is implemented:**
+
+| Part | Phase |
+|---|---|
+| Interface-aware backend rules (macOS `pfctl`) | [Phase 2](./phase-2-macos-enforcement.md) |
+| Guard state machine in the `run` daemon | [Phase 3](./phase-3-wire-end-to-end.md) |
+| Recovery probe + fail-closed interplay | [Phase 4](./phase-4-resilience.md) |
+| Interface-aware parity (Linux nft / Windows WFP) | [Phase 5](./phase-5-cross-platform.md) |
+| `panic`/`Cleanup` of guard, `status`, `detect-vpn` | [Phase 7](./phase-7-safety-packaging.md) |
 
 ## Phases
 
@@ -69,12 +129,19 @@ dezhban/
   go.mod                       # github.com/behnam-rk/dezhban (path adjustable)
   cmd/dezhban/main.go          # CLI: run, block, unblock, status, panic
   internal/
-    config/config.go           # Config struct + load + defaults
+    config/config.go           # Config struct + load + defaults (+ vpn block)
     monitor/{monitor.go,provider.go}
     decision/decision.go
     firewall/{backend.go,pf_darwin.go,nft_linux.go,wfp_windows.go}
+    netdetect/                 # tunnel-iface + VPN-endpoint auto-detect (VPN mode)
     logging/logging.go
   configs/dezhban.example.yaml
   CLAUDE.md
   docs/plans/                  # these files
 ```
+
+The `vpn` config block (see [VPN mode](#vpn--full-tunnel-mode-primary-use-case))
+adds `enabled`, `tunnelInterfaces`, `endpoints`, `autodetect`. The optional
+`internal/netdetect` helper backs a `dezhban detect-vpn` command that prints the
+detected tunnel interface + endpoint so users can fill the config and avoid
+self-lockout.

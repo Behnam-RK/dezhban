@@ -59,8 +59,26 @@ type savedState struct {
 	PrevEnabled bool `json:"prevEnabled"`
 }
 
+// Block is the legacy direct-connection entry point: a full block whose only
+// exceptions are loopback and the dst-IP allowlist. It is Apply with
+// ModeFullBlock and no tunnel interfaces.
 func (b *pfBackend) Block(a Allowlist) error {
-	ruleset := renderRuleset(a)
+	return b.Apply(Policy{Mode: ModeFullBlock, Allowlist: a})
+}
+
+// Apply installs the ruleset for p into the dezhban anchor. The mechanism is
+// identical regardless of mode (validate → snapshot → anchor ref → load → enable);
+// only the rendered ruleset differs, so guard and full-block share one code path
+// and the same idempotent, surgical teardown.
+func (b *pfBackend) Apply(p Policy) error {
+	// Guard mode with no tunnel interface would render only loopback + a default
+	// deny — a total lockout with no guard at all. cmdBlock checks this, but a
+	// programmatic caller (the Phase 3 daemon) must not be able to self-inflict
+	// it, so reject it at the backend seam.
+	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 {
+		return fmt.Errorf("guard mode requires at least one tunnel interface")
+	}
+	ruleset := renderRuleset(p)
 	// Validate the generated ruleset (-n parses without loading) BEFORE touching
 	// any system state, so a malformed allowlist can't half-apply and leave a
 	// modified pf.conf with an empty kernel anchor.
@@ -167,19 +185,49 @@ func (b *pfBackend) Cleanup() error {
 	return b.Unblock()
 }
 
-// renderRuleset builds the pf ruleset loaded into the dezhban anchor: a
-// default-deny on outbound traffic, with quick passes for loopback, DNS, and
-// the geo-API allowlist. `pass` rules keep state by default, so return traffic
-// for the allowed flows is permitted; inbound is not blocked (we only cut egress).
-func renderRuleset(a Allowlist) string {
+// renderRuleset builds the pf ruleset loaded into the dezhban anchor. Every
+// posture is loopback-always + a default-deny `block drop out all` last; the
+// quick passes in between depend on the mode. Every pass is stateless (see the
+// `no state` rationale below); inbound is never blocked (we only cut egress), so
+// return traffic for allowed flows is unaffected.
+//
+//   - ModeGuard: pass egress on the tunnel interface(s) and the handshake to the
+//     VPN endpoint(s). Everything else is dropped, so if the tunnel disappears,
+//     traffic falling back to the physical interface is cut with no leak.
+//   - ModeFullBlock, direct (no tunnel ifaces): pass the dst-IP DNS + geo-API
+//     allowlist — the legacy model, valid only off-VPN.
+//   - ModeFullBlock, VPN (tunnel ifaces present): cut the tunnel too; emit no
+//     passes. The dst-IP allowlist is meaningless under a tunnel, so it is
+//     deliberately omitted — the daemon opens a brief guard window to probe for
+//     recovery instead (see Phase 4).
+func renderRuleset(p Policy) string {
 	var b strings.Builder
-	b.WriteString("# dezhban block ruleset (Phase 2) — default-deny outbound.\n")
-	b.WriteString("pass quick on lo0 all\n")
-	if len(a.DNS) > 0 {
-		fmt.Fprintf(&b, "pass out quick proto { udp tcp } to { %s } port 53\n", joinAddrs(a.DNS))
-	}
-	if len(a.Hosts) > 0 {
-		fmt.Fprintf(&b, "pass out quick to { %s }\n", joinAddrs(a.Hosts))
+	b.WriteString("# dezhban ruleset — default-deny outbound.\n")
+	// Every pass is `no state`. We filter OUTBOUND only, so return traffic is
+	// never touched and per-flow state buys nothing. Critically, pf's default
+	// (`keep state flags S/SA`) admits only TCP flows that START after the rules
+	// load — it drops mid-stream packets of connections already open at block
+	// time, which would tear down the live VPN tunnel transport (the encrypted
+	// connection to the endpoint, established before the guard). Stateless passes
+	// admit that existing connection.
+	b.WriteString("pass quick on lo0 all no state\n")
+	switch p.Mode {
+	case ModeGuard:
+		if len(p.TunnelIfaces) > 0 {
+			fmt.Fprintf(&b, "pass out quick on { %s } all no state\n", strings.Join(p.TunnelIfaces, " "))
+		}
+		if len(p.VPNEndpoints) > 0 {
+			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
+		}
+	default: // ModeFullBlock
+		if len(p.TunnelIfaces) == 0 {
+			if len(p.Allowlist.DNS) > 0 {
+				fmt.Fprintf(&b, "pass out quick proto { udp tcp } to { %s } port 53 no state\n", joinAddrs(p.Allowlist.DNS))
+			}
+			if len(p.Allowlist.Hosts) > 0 {
+				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.Allowlist.Hosts))
+			}
+		}
 	}
 	b.WriteString("block drop out all\n")
 	return b.String()

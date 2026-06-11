@@ -12,6 +12,9 @@ vendor/
 /var/run/dezhban/
 state.json
 
+# Local configs (may hold a personal VPN endpoint IP — do not commit)
+/configs/*.local.json
+
 # Tooling
 .remember/
 .DS_Store

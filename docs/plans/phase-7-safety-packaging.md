@@ -19,6 +19,10 @@ user out of their own network if the daemon crashed.
 - Implementation: call the OS backend's `Cleanup()` directly (each backend's
   teardown targets only the `dezhban` tag/anchor/table/sublayer, so it works
   whether or not a daemon owns it).
+- **VPN guard teardown**: `Cleanup()`/`panic` must remove the **always-on GUARD**
+  rules too, not only FULL-BLOCK ones — a stale guard (physical egress locked to a
+  now-dead endpoint) can lock the user out just like a stale block. Both states
+  live under the same `dezhban` tag, so one surgical teardown covers them.
 - Must run even when the service is stopped/crashed. Idempotent (no-op if already
   clean). Requires root/admin.
 - macOS: flush `dezhban` anchor + restore saved pf state if a saved-state file
@@ -29,13 +33,21 @@ user out of their own network if the daemon crashed.
 
 ### Manual override
 - `dezhban block --force` / `dezhban unblock --force` (Phase 2 commands; ensure
-  they bypass detection/hysteresis).
+  they bypass detection/hysteresis and the VPN guard state machine).
 - Optional config/flag `mode: auto|always-block|always-allow` for the daemon, so a
   user can pin state.
+
+### `dezhban detect-vpn` (VPN-mode setup helper)
+Prints the detected tunnel interface(s) and VPN endpoint IP(s) (default route is a
+`utun`/`tun`; endpoint from the VPN process's established socket) so the user can
+fill the `vpn` config block correctly and **avoid self-lockout** from a wrong
+endpoint. Backed by `internal/netdetect`. Read-only; no privilege needed.
 
 ### Logging & status polish
 - `status` reports: version, privileged?, blocked?, current detected country,
   last successful provider, service installed/running?, last N transitions.
+- **VPN mode** additions to `status`: vpn enabled?, tunnel iface(s), endpoint(s),
+  current enforcement state (GUARD vs FULL BLOCK), current exit country.
 - Consistent structured logs for every state transition (Phase 6 routes them to
   the platform logger).
 
@@ -59,8 +71,9 @@ GOOS=windows GOARCH=amd64  go build -o dist/dezhban-windows-amd64.exe ./cmd/dezh
 - Note: macOS still requires the system `pfctl` at runtime (shelled, not linked).
 
 ## Files touched
-- `cmd/dezhban/main.go` (`panic`, override flags, richer `status`)
-- `internal/firewall/*` (state persistence for cold `panic`/restore)
+- `cmd/dezhban/main.go` (`panic`, `detect-vpn`, override flags, richer `status`)
+- `internal/firewall/*` (state persistence for cold `panic`/restore; guard teardown)
+- `internal/netdetect/*` (tunnel iface + endpoint detection for `detect-vpn`)
 - `Taskfile.yml` or `Makefile` (`build-all`)
 - `internal/runner` / `internal/decision` (override `mode`)
 
