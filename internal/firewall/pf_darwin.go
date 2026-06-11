@@ -71,6 +71,13 @@ func (b *pfBackend) Block(a Allowlist) error {
 // only the rendered ruleset differs, so guard and full-block share one code path
 // and the same idempotent, surgical teardown.
 func (b *pfBackend) Apply(p Policy) error {
+	// Guard mode with no tunnel interface would render only loopback + a default
+	// deny — a total lockout with no guard at all. cmdBlock checks this, but a
+	// programmatic caller (the Phase 3 daemon) must not be able to self-inflict
+	// it, so reject it at the backend seam.
+	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 {
+		return fmt.Errorf("guard mode requires at least one tunnel interface")
+	}
 	ruleset := renderRuleset(p)
 	// Validate the generated ruleset (-n parses without loading) BEFORE touching
 	// any system state, so a malformed allowlist can't half-apply and leave a
@@ -180,9 +187,9 @@ func (b *pfBackend) Cleanup() error {
 
 // renderRuleset builds the pf ruleset loaded into the dezhban anchor. Every
 // posture is loopback-always + a default-deny `block drop out all` last; the
-// quick passes in between depend on the mode. `pass` rules keep state by default,
-// so return traffic for allowed flows is permitted; inbound is never blocked
-// (we only cut egress).
+// quick passes in between depend on the mode. Every pass is stateless (see the
+// `no state` rationale below); inbound is never blocked (we only cut egress), so
+// return traffic for allowed flows is unaffected.
 //
 //   - ModeGuard: pass egress on the tunnel interface(s) and the handshake to the
 //     VPN endpoint(s). Everything else is dropped, so if the tunnel disappears,

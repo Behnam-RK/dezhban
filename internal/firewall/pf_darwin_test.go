@@ -101,6 +101,14 @@ func TestRenderRulesetGuard(t *testing.T) {
 	assertDefaultDenyLast(t, rs)
 }
 
+func TestApplyGuardRequiresTunnelIface(t *testing.T) {
+	// The guard check runs before any pfctl call, so this is safe without root:
+	// a guard policy with no tunnel interface would render a total lockout.
+	if err := (&pfBackend{}).Apply(Policy{Mode: ModeGuard}); err == nil {
+		t.Fatal("Apply(guard, no tunnel ifaces) = nil, want error (would be a total lockout)")
+	}
+}
+
 func TestRenderRulesetVPNFullBlockCutsTunnel(t *testing.T) {
 	// VPN full block carries tunnel ifaces as a mode signal but emits no passes:
 	// the tunnel is cut and the dst-IP allowlist is deliberately omitted.
