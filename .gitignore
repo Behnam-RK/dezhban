@@ -1,0 +1,17 @@
+# Binaries
+/dist/
+/dezhban
+/dezhban.exe
+*.test
+*.out
+
+# Go
+vendor/
+
+# Runtime state
+/var/run/dezhban/
+state.json
+
+# Tooling
+.remember/
+.DS_Store
