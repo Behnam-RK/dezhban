@@ -18,11 +18,11 @@ this: `block` drives the live firewall and can cut your own network.
 > geo-API providers. That is expected here, not a bug — it's why the per-IP
 > allowlist is the wrong primitive for a VPN host.
 >
-> To exercise this dst-IP backend, **disconnect the VPN first** so `en0` carries
-> the real traffic the allowlist names. The VPN-aware **interface guard** (GUARD /
-> FULL-BLOCK states) is the path for VPN hosts — see
-> [VPN / full-tunnel mode](./plans/README.md#vpn--full-tunnel-mode-primary-use-case);
-> test it once that lands.
+> Steps 0–5 below exercise this dst-IP backend, so **disconnect the VPN first**
+> so `en0` carries the real traffic the allowlist names. If you are behind a VPN,
+> skip to [VPN guard test](#vpn-guard-test-behind-a-vpn) instead — that is the
+> path built for VPN hosts. Background:
+> [VPN / full-tunnel mode](./plans/README.md#vpn--full-tunnel-mode-primary-use-case).
 
 ## Before you start
 
@@ -119,6 +119,112 @@ sudo pfctl -a dezhban -s rules       # expect: empty
 State the backend relies on: the kernel `dezhban` anchor (rules) and
 `/var/db/dezhban/pf.state` + `/etc/pf.conf.dezhban.bak` (prior pf state). None of
 it is held in process memory, so teardown works after a crash.
+
+## VPN guard test (behind a VPN)
+
+This is the path for full-tunnel VPN hosts. Instead of a destination-IP
+allowlist, the **guard** passes egress on the tunnel interface plus the handshake
+to the VPN endpoint and blocks all other physical egress — so traffic flows
+normally while the VPN is up, and is cut the instant the tunnel drops, with no
+leak. (Background:
+[VPN / full-tunnel mode](./plans/README.md#vpn--full-tunnel-mode-primary-use-case).)
+
+> [!WARNING]
+> **A wrong endpoint IP locks you out.** The guard keeps the physical interface
+> open *only* to the configured VPN endpoint(s). If that IP is wrong, the tunnel
+> can't stay up / reconnect and you lose connectivity. Run at the local console
+> and keep the escape hatch (`sudo pfctl -a dezhban -F all`) open in a second
+> terminal before you start.
+
+### Before you start (guard)
+
+- Find the two values the guard needs:
+  - **Tunnel interface** — `route -n get default | grep interface` (e.g. `utun4`).
+  - **VPN endpoint IP** — the real server your VPN client connects to on the
+    physical interface. From your VPN client's config/logs, or:
+    ```bash
+    lsof -nP -iUDP -a -p "$(pgrep -f 'your-vpn-process')"   # UDP VPNs (WireGuard/OpenVPN-udp)
+    lsof -nP -iTCP -sTCP:ESTABLISHED -a -p "$(pgrep -f 'your-vpn-process')"  # TCP VPNs
+    ```
+    The non-private remote address is the endpoint.
+- Fill the `vpn` block in your config (`configs/dezhban.example.json`):
+  ```json
+  "vpn": {
+    "enabled": true,
+    "tunnelInterfaces": ["utun4"],
+    "endpoints": ["<VPN endpoint IP>"],
+    "autodetect": false
+  }
+  ```
+- Build: `go build -o /tmp/dezhban ./cmd/dezhban`.
+
+### Step G0 — prove teardown first
+
+```bash
+sudo /tmp/dezhban block --guard --config configs/dezhban.example.json
+sudo /tmp/dezhban unblock
+sudo pfctl -a dezhban -s rules     # expect: empty anchor
+```
+
+### Step G1 — guard is up, tunnel traffic still flows
+
+```bash
+sudo /tmp/dezhban block --guard --config configs/dezhban.example.json
+sudo pfctl -a dezhban -s rules     # expect: pass on { utun4 }, pass to { endpoint }, block drop out all
+```
+
+Expect, in another shell — **unlike the dst-IP `block`, general egress keeps
+working** because it rides the tunnel:
+
+| Check | Command | Expected |
+|-------|---------|----------|
+| Tunnel egress works | `curl -m 5 https://example.com` | returns page |
+| DNS resolves | `dig ipinfo.io` | resolves (through tunnel) |
+| Loopback works | `ping -c1 127.0.0.1` | works |
+
+### Step G2 — VPN drop cuts egress with no leak
+
+With the guard still active, disconnect the VPN (or `sudo ifconfig utun4 down`):
+
+```bash
+curl -m 5 https://example.com       # expect: hangs / fails — no fall-through to en0
+```
+
+Reconnect the VPN → `curl` works again (the guard stays installed; traffic
+resumes once the tunnel is back). This is the core guarantee: a silent VPN drop
+never leaks to the raw ISP path.
+
+### Step G3 — guard is idempotent
+
+```bash
+sudo pfctl -a dezhban -s rules > /tmp/g.before
+sudo /tmp/dezhban block --guard --config configs/dezhban.example.json
+sudo pfctl -a dezhban -s rules > /tmp/g.after
+diff /tmp/g.before /tmp/g.after     # expect: no difference
+```
+
+### Step G4 — full block (forbidden country) cuts the tunnel too
+
+A plain `block` while `vpn.enabled` is the forbidden-country posture: it cuts the
+tunnel as well, leaving only loopback.
+
+```bash
+sudo /tmp/dezhban block --config configs/dezhban.example.json   # no --guard
+sudo pfctl -a dezhban -s rules      # expect: only `pass quick on lo0 all` + `block drop out all`
+curl -m 5 https://example.com       # expect: fails (tunnel cut)
+```
+
+### Step G5 — unblock restores everything
+
+```bash
+sudo /tmp/dezhban unblock
+curl -m 5 https://example.com       # expect: connectivity back
+sudo pfctl -a dezhban -s rules      # expect: empty
+```
+
+> The always-on guard state machine (auto GUARD ↔ FULL BLOCK from detection) and
+> recovery probing land with the `run` daemon (Phase 3) and resilience (Phase 4).
+> Here `block --guard` / `block` exercise the two postures manually.
 
 ## If something goes wrong
 
