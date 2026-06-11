@@ -99,6 +99,7 @@ func TestProviderParsers(t *testing.T) {
 		{"ipinfo", parseIPInfo, `{"ip":"8.8.8.8","country":"us"}`, "8.8.8.8", "US", false},
 		{"ip-api ok", parseIPAPI, `{"status":"success","query":"1.1.1.1","countryCode":"AU"}`, "1.1.1.1", "AU", false},
 		{"ip-api fail", parseIPAPI, `{"status":"fail","message":"quota"}`, "", "", true},
+		{"ip-api empty status", parseIPAPI, `{"query":"1.1.1.1","countryCode":"AU"}`, "", "", true},
 		{"ifconfig", parseIfconfig, `{"ip":"9.9.9.9","country_iso":"CH"}`, "9.9.9.9", "CH", false},
 		{"bad json", parseIPInfo, `{nope`, "", "", true},
 		{"missing country", parseIPInfo, `{"ip":"8.8.8.8"}`, "", "", true},

@@ -107,7 +107,9 @@ func parseIPAPI(b []byte) (netip.Addr, string, error) {
 	if err := json.Unmarshal(b, &v); err != nil {
 		return netip.Addr{}, "", err
 	}
-	if v.Status != "" && v.Status != "success" {
+	// ip-api.com always includes a status field; require it to be "success" so
+	// an ambiguous/malformed response (e.g. empty body) fails closed.
+	if v.Status != "success" {
 		return netip.Addr{}, "", fmt.Errorf("provider status %q: %s", v.Status, v.Message)
 	}
 	ip, err := netip.ParseAddr(strings.TrimSpace(v.Query))
