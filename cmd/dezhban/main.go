@@ -130,10 +130,11 @@ func cmdRun(args []string) int {
 	defer stop()
 
 	opts := runner.Options{
-		Monitor:   monitor.New(providers, cfg.PollInterval, log),
-		Decider:   decision.New(cfg.BlockedCountries),
+		Monitor:   monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum),
+		Decider:   decision.New(cfg.BlockedCountries, cfg.FailClosed, cfg.Hysteresis),
 		Backend:   fw,
 		Log:       log,
+		Interval:  cfg.PollInterval,
 		VPN:       cfg.VPN.Enabled,
 		Tunnels:   cfg.VPN.TunnelInterfaces,
 		Endpoints: parseEndpoints(cfg.VPN.Endpoints, log),
@@ -145,6 +146,9 @@ func cmdRun(args []string) int {
 		"interval", cfg.PollInterval,
 		"providers", len(providers),
 		"blocked_countries", cfg.BlockedCountries,
+		"fail_closed", cfg.FailClosed,
+		"hysteresis", cfg.Hysteresis,
+		"quorum", cfg.ProviderQuorum,
 		"vpn", cfg.VPN.Enabled,
 	)
 	if err := runner.Run(ctx, opts); err != nil {
@@ -163,7 +167,7 @@ func runDryRun(cfg *config.Config, log *slog.Logger) int {
 		log.Error("no usable geo providers configured")
 		return 1
 	}
-	mon := monitor.New(providers, cfg.PollInterval, log)
+	mon := monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

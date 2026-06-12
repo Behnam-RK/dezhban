@@ -33,7 +33,7 @@ func (s *stubProvider) Lookup(context.Context, *http.Client) (Reading, error) {
 func TestOnceFallsBackToNextProvider(t *testing.T) {
 	bad := &stubProvider{name: "bad", err: errors.New("boom")}
 	good := &stubProvider{name: "good", r: Reading{CountryCode: "US", Provider: "good"}}
-	m := New([]GeoProvider{bad, good}, time.Second, testLogger())
+	m := New([]GeoProvider{bad, good}, time.Second, testLogger(), false)
 
 	r, err := m.Once(context.Background())
 	if err != nil {
@@ -50,7 +50,7 @@ func TestOnceFallsBackToNextProvider(t *testing.T) {
 func TestOnceAllFail(t *testing.T) {
 	a := &stubProvider{name: "a", err: errors.New("a-down")}
 	b := &stubProvider{name: "b", err: errors.New("b-down")}
-	m := New([]GeoProvider{a, b}, time.Second, testLogger())
+	m := New([]GeoProvider{a, b}, time.Second, testLogger(), false)
 
 	if _, err := m.Once(context.Background()); err == nil {
 		t.Fatal("Once = nil error, want all-providers-failed")
@@ -58,7 +58,7 @@ func TestOnceAllFail(t *testing.T) {
 }
 
 func TestOnceNoProviders(t *testing.T) {
-	m := New(nil, time.Second, testLogger())
+	m := New(nil, time.Second, testLogger(), false)
 	if _, err := m.Once(context.Background()); err == nil {
 		t.Fatal("Once with no providers = nil error, want error")
 	}
@@ -66,7 +66,7 @@ func TestOnceNoProviders(t *testing.T) {
 
 func TestPollEmitsAndStopsOnCancel(t *testing.T) {
 	good := &stubProvider{name: "good", r: Reading{CountryCode: "US", Provider: "good"}}
-	m := New([]GeoProvider{good}, time.Hour, testLogger()) // long interval: rely on immediate first emit
+	m := New([]GeoProvider{good}, time.Hour, testLogger(), false) // long interval: rely on immediate first emit
 
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := m.Poll(ctx)
@@ -82,6 +82,64 @@ func TestPollEmitsAndStopsOnCancel(t *testing.T) {
 	cancel()
 	// Channel must close after cancel.
 	for range ch { //nolint:revive // drain until closed
+	}
+}
+
+func TestQuorumMajorityWins(t *testing.T) {
+	// Two providers say US, one says IR (spoofed/wrong) → US wins, IR ignored.
+	a := &stubProvider{name: "a", r: Reading{CountryCode: "US", Provider: "a"}}
+	b := &stubProvider{name: "b", r: Reading{CountryCode: "US", Provider: "b"}}
+	c := &stubProvider{name: "c", r: Reading{CountryCode: "IR", Provider: "c"}}
+	m := New([]GeoProvider{a, b, c}, time.Second, testLogger(), true)
+
+	r, err := m.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if r.CountryCode != "US" {
+		t.Errorf("quorum country = %q, want US (majority)", r.CountryCode)
+	}
+	// Quorum must query every provider, not stop at first success.
+	if a.calls != 1 || b.calls != 1 || c.calls != 1 {
+		t.Errorf("calls a=%d b=%d c=%d, want all 1", a.calls, b.calls, c.calls)
+	}
+}
+
+func TestQuorumNoMajorityErrors(t *testing.T) {
+	// Three-way split: no country reaches a majority → error (undeterminable).
+	a := &stubProvider{name: "a", r: Reading{CountryCode: "US"}}
+	b := &stubProvider{name: "b", r: Reading{CountryCode: "IR"}}
+	c := &stubProvider{name: "c", r: Reading{CountryCode: "DE"}}
+	m := New([]GeoProvider{a, b, c}, time.Second, testLogger(), true)
+
+	if _, err := m.Once(context.Background()); err == nil {
+		t.Fatal("Once = nil error, want no-quorum error")
+	}
+}
+
+func TestQuorumToleratesFailedProvider(t *testing.T) {
+	// One provider down; the two responders agree → quorum over responders.
+	a := &stubProvider{name: "a", err: errors.New("down")}
+	b := &stubProvider{name: "b", r: Reading{CountryCode: "IR"}}
+	c := &stubProvider{name: "c", r: Reading{CountryCode: "IR"}}
+	m := New([]GeoProvider{a, b, c}, time.Second, testLogger(), true)
+
+	r, err := m.Once(context.Background())
+	if err != nil {
+		t.Fatalf("Once: %v", err)
+	}
+	if r.CountryCode != "IR" {
+		t.Errorf("country = %q, want IR", r.CountryCode)
+	}
+}
+
+func TestQuorumAllFail(t *testing.T) {
+	a := &stubProvider{name: "a", err: errors.New("down")}
+	b := &stubProvider{name: "b", err: errors.New("down")}
+	m := New([]GeoProvider{a, b}, time.Second, testLogger(), true)
+
+	if _, err := m.Once(context.Background()); err == nil {
+		t.Fatal("Once = nil error, want all-failed error")
 	}
 }
 

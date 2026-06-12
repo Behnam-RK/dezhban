@@ -7,38 +7,108 @@ import (
 	"github.com/behnam-rk/dezhban/internal/monitor"
 )
 
-func TestEvaluate(t *testing.T) {
-	d := New([]string{"IR", "ru"}) // mixed case → normalized
+func ok(cc string) monitor.Result {
+	return monitor.Result{Reading: monitor.Reading{CountryCode: cc}}
+}
 
-	tests := []struct {
-		name    string
-		country string
-		err     error
-		want    Verdict
-	}{
-		{"in blocklist", "IR", nil, Block},
-		{"in blocklist lowercased input", "ir", nil, Block},
-		{"second entry, case-folded config", "RU", nil, Block},
-		{"out of blocklist", "US", nil, Allow},
-		{"empty country", "", nil, Allow},
-		{"lookup error → Allow (Phase 3)", "IR", errors.New("all providers failed"), Allow},
+func fail() monitor.Result {
+	return monitor.Result{Err: errors.New("all providers failed")}
+}
+
+// feed runs a sequence of readings through one Decider and returns the verdict
+// after each reading, so a test can assert exactly when state flips.
+func feed(d *Decider, in []monitor.Result) []Verdict {
+	out := make([]Verdict, len(in))
+	for i, r := range in {
+		out[i] = d.Evaluate(r)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			r := monitor.Result{
-				Reading: monitor.Reading{CountryCode: tt.country},
-				Err:     tt.err,
-			}
-			if got := d.Evaluate(r); got != tt.want {
-				t.Fatalf("Evaluate(country=%q, err=%v) = %v, want %v", tt.country, tt.err, got, tt.want)
-			}
-		})
+	return out
+}
+
+func assertSeq(t *testing.T, got, want []Verdict) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("length mismatch: got %v want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("step %d: got %v, want %v (full: got %v want %v)", i, got[i], want[i], got, want)
+		}
 	}
 }
 
-func TestNewEmptyBlocklist(t *testing.T) {
-	d := New(nil)
-	if got := d.Evaluate(monitor.Result{Reading: monitor.Reading{CountryCode: "IR"}}); got != Allow {
-		t.Fatalf("empty blocklist must Allow everything, got %v", got)
-	}
+// hysteresis=1 → behaves like the pure Phase-3 mapping (immediate toggle).
+func TestNoHysteresisImmediateToggle(t *testing.T) {
+	d := New([]string{"IR", "ru"}, true, 1) // mixed case → normalized
+	got := feed(d, []monitor.Result{
+		ok("US"), // allow
+		ok("IR"), // block immediately
+		ok("ir"), // lowercased input still blocked
+		ok("RU"), // second config entry, case-folded
+		ok("US"), // allow immediately
+		ok(""),   // empty country → allow
+	})
+	assertSeq(t, got, []Verdict{Allow, Block, Block, Block, Allow, Allow})
+}
+
+func TestHysteresisRequiresConsecutiveAgreement(t *testing.T) {
+	d := New([]string{"IR"}, true, 3)
+	got := feed(d, []monitor.Result{
+		ok("IR"), // streak 1 → still Allow
+		ok("IR"), // streak 2 → still Allow
+		ok("IR"), // streak 3 → commit Block
+		ok("IR"), // stays Block
+		ok("US"), // streak 1 toward Allow → still Block
+		ok("US"), // streak 2 → still Block
+		ok("US"), // streak 3 → commit Allow
+	})
+	assertSeq(t, got, []Verdict{Allow, Allow, Block, Block, Block, Block, Allow})
+}
+
+// A reading that agrees with the committed state resets a pending flip, so an
+// alternating sequence never flaps the firewall.
+func TestFlapResetsStreak(t *testing.T) {
+	d := New([]string{"IR"}, true, 3)
+	got := feed(d, []monitor.Result{
+		ok("IR"), // streak 1 toward Block
+		ok("US"), // agrees with committed Allow → reset
+		ok("IR"), // streak 1 again
+		ok("US"), // reset
+		ok("IR"), // streak 1
+		ok("IR"), // streak 2
+		ok("IR"), // streak 3 → commit Block
+	})
+	assertSeq(t, got, []Verdict{Allow, Allow, Allow, Allow, Allow, Allow, Block})
+}
+
+func TestFailClosedNeedsConsecutiveErrors(t *testing.T) {
+	d := New([]string{"IR"}, true, 3)
+	got := feed(d, []monitor.Result{
+		fail(),   // error → raw Block, streak 1
+		fail(),   // streak 2
+		ok("US"), // a good allowed reading → reset, no block
+		fail(),   // streak 1 again
+		fail(),   // streak 2
+		fail(),   // streak 3 → commit Block (fail-closed)
+	})
+	assertSeq(t, got, []Verdict{Allow, Allow, Allow, Allow, Allow, Block})
+}
+
+func TestFailOpenErrorsNeverBlock(t *testing.T) {
+	d := New([]string{"IR"}, false, 1) // fail-open
+	got := feed(d, []monitor.Result{fail(), fail(), fail()})
+	assertSeq(t, got, []Verdict{Allow, Allow, Allow})
+}
+
+func TestEmptyBlocklistAllowsEverything(t *testing.T) {
+	d := New(nil, true, 1)
+	got := feed(d, []monitor.Result{ok("IR"), ok("KP"), fail()})
+	// fail-closed still blocks on error even with an empty blocklist.
+	assertSeq(t, got, []Verdict{Allow, Allow, Block})
+}
+
+func TestHysteresisFloorIsOne(t *testing.T) {
+	d := New([]string{"IR"}, true, 0) // clamped to 1
+	got := feed(d, []monitor.Result{ok("IR")})
+	assertSeq(t, got, []Verdict{Block})
 }
