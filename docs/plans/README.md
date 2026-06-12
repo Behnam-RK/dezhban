@@ -96,12 +96,12 @@ behavior is the legacy destination-IP model, unchanged):
 |---|---|---|---|
 | 0 | [phase-0-scaffold.md](./phase-0-scaffold.md) | ✅ | Go module, CLI skeleton, config, logging, privilege check, CLAUDE.md |
 | 1 | [phase-1-monitor.md](./phase-1-monitor.md) | ✅ | Public-IP fetch + country resolve + polling loop (prints country) |
-| 2 | [phase-2-macos-enforcement.md](./phase-2-macos-enforcement.md) | ☐ | `pfctl` anchor backend + manual `block`/`unblock`/`status` |
-| 3 | [phase-3-wire-end-to-end.md](./phase-3-wire-end-to-end.md) | ☐ | Decision layer + monitor→decision→enforcement daemon (macOS) |
-| 4 | [phase-4-resilience.md](./phase-4-resilience.md) | ☐ | Fail-closed, hysteresis, allowlist hardening, multi-provider |
-| 5 | [phase-5-cross-platform.md](./phase-5-cross-platform.md) | ☐ | Linux `nftables` + Windows WFP backends |
-| 6 | [phase-6-persistence.md](./phase-6-persistence.md) | ☐ | Run as service: launchd / systemd / Windows Service |
-| 7 | [phase-7-safety-packaging.md](./phase-7-safety-packaging.md) | ☐ | Panic-unblock, manual override, logging polish, cross-compile |
+| 2 | [phase-2-macos-enforcement.md](./phase-2-macos-enforcement.md) | ✅ | `pfctl` anchor backend + manual `block`/`unblock`/`status` |
+| 3 | [phase-3-wire-end-to-end.md](./phase-3-wire-end-to-end.md) | ✅ | Decision layer + monitor→decision→enforcement daemon (macOS) |
+| 4 | [phase-4-resilience.md](./phase-4-resilience.md) | ✅ | Fail-closed, hysteresis, allowlist hardening, multi-provider |
+| 5 | [phase-5-cross-platform.md](./phase-5-cross-platform.md) | ✅ | Linux `nft` + Windows WFP backends |
+| 6 | [phase-6-persistence.md](./phase-6-persistence.md) | ✅ | Run as service: launchd / systemd / Windows Service |
+| 7 | [phase-7-safety-packaging.md](./phase-7-safety-packaging.md) | ✅ | Panic-unblock, manual override, logging polish, cross-compile |
 
 Each phase is independently buildable & verifiable. Implement one at a time;
 verify before moving on.
@@ -109,14 +109,21 @@ verify before moving on.
 ## Dependency strategy (R&D summary)
 
 Keep the binary lean — stdlib where it suffices; a dep only where it removes real
-complexity. Only **3 real deps**, one per hard platform problem:
+complexity.
 
-| Lib | Phase | Role |
-|---|---|---|
-| [`kardianos/service`](https://github.com/kardianos/service) | 6 | cross-platform service (launchd/systemd/winsvc), one API |
-| [`google/nftables`](https://github.com/google/nftables) | 5 | pure-Go netlink nftables (Linux), no shelling |
-| [`tailscale/wf`](https://github.com/tailscale/wf) | 5 | pure-Go Windows Filtering Platform bindings |
-| [`oschwald/geoip2-golang/v2`](https://github.com/oschwald/geoip2-golang) | hybrid (deferred) | offline IP→country via GeoLite2 mmdb |
+**As built, the only third-party dependency is `kardianos/service`.** Phase 5
+deviated from the plan below: rather than link the pure-Go netlink/WFP libraries,
+the Linux and Windows backends shell out to the OS firewall tooling (`nft`,
+`netsh`/PowerShell), mirroring the macOS `pfctl` approach for one consistent
+shell-out model and zero extra deps. The libraries remain the documented
+alternative if pure-Go enforcement is ever needed.
+
+| Lib | Phase | Role | Status |
+|---|---|---|---|
+| [`kardianos/service`](https://github.com/kardianos/service) | 6 | cross-platform service (launchd/systemd/winsvc), one API | **used** |
+| [`google/nftables`](https://github.com/google/nftables) | 5 | pure-Go netlink nftables (Linux) | not used — shelled out to `nft` |
+| [`tailscale/wf`](https://github.com/tailscale/wf) | 5 | pure-Go Windows Filtering Platform bindings | not used — shelled out to `netsh`/PowerShell |
+| [`oschwald/geoip2-golang/v2`](https://github.com/oschwald/geoip2-golang) | hybrid (deferred) | offline IP→country via GeoLite2 mmdb | deferred |
 
 - **macOS enforcement** → shell out to `pfctl` (no maintained Go pf lib). Expected.
 - **CLI / config / logging / HTTP** → stdlib (`flag`, `encoding/*`, `log/slog`,

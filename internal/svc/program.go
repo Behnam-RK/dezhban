@@ -11,6 +11,7 @@ package svc
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/kardianos/service"
@@ -111,6 +112,29 @@ func Run(build Builder, baseLog *slog.Logger, level, configPath string) error {
 		}
 	}
 	return s.Run()
+}
+
+// Status reports whether the service is installed and running, as a short string
+// for `dezhban status`. Querying status may require privilege on some platforms;
+// any error is surfaced rather than hidden.
+func Status() string {
+	s, err := service.New(&program{}, serviceConfig(""))
+	if err != nil {
+		return "unknown: " + err.Error()
+	}
+	st, err := s.Status()
+	switch {
+	case errors.Is(err, service.ErrNotInstalled):
+		return "not installed"
+	case err != nil:
+		return "unknown: " + err.Error()
+	case st == service.StatusRunning:
+		return "installed, running"
+	case st == service.StatusStopped:
+		return "installed, stopped"
+	default:
+		return "installed"
+	}
 }
 
 // Control performs an install/uninstall/start/stop (and other kardianos control

@@ -51,6 +51,7 @@ Commands:
   uninstall  Remove the OS service
   start      Start the installed service
   stop       Stop the installed service (removes firewall rules)
+  detect-vpn Print detected VPN tunnel interfaces to help fill the vpn config
   version    Print the version
 
 Run "dezhban <command> -h" for command flags.`
@@ -79,6 +80,8 @@ func run(args []string) int {
 		return cmdPanic(rest)
 	case "install", "uninstall", "start", "stop":
 		return cmdService(cmd, rest)
+	case "detect-vpn":
+		return cmdDetectVPN(rest)
 	case "version", "--version", "-v":
 		fmt.Println("dezhban", version)
 		return 0
@@ -211,7 +214,7 @@ func cmdBlock(args []string) int {
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other egress)")
-	_ = fs.Bool("force", false, "block regardless of detection (Phase 7)")
+	force := fs.Bool("force", false, "force a hard full block of all egress, bypassing the VPN guard state machine")
 	_ = fs.Parse(args)
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
@@ -234,6 +237,15 @@ func cmdBlock(args []string) int {
 	al := buildAllowlist(cfg, log)
 
 	switch {
+	case *force:
+		// Manual override: cut ALL egress (except loopback + allowlist) regardless
+		// of VPN config or guard state. The escape hatch when detection is wrong or
+		// the operator wants an unconditional hard block. `unblock`/`panic` reverse it.
+		if err := fw.Block(al); err != nil {
+			log.Error("forced block failed", "err", err)
+			return 1
+		}
+		log.Info("network force-blocked (all egress cut except allowlist)", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 	case *guard || cfg.VPN.Enabled:
 		// VPN mode. `--guard` installs the always-on interface guard (tunnel stays
 		// open, physical egress locked to the endpoint); a plain `block` under
@@ -376,6 +388,9 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 
 func cmdUnblock(args []string) int {
 	fs := flag.NewFlagSet("unblock", flag.ExitOnError)
+	// unblock already removes dezhban's rules unconditionally; --force is accepted
+	// for symmetry with `block --force` and documents the manual-override intent.
+	_ = fs.Bool("force", false, "remove rules unconditionally (unblock is already unconditional)")
 	_ = fs.Parse(args)
 	if !requireRoot("unblock") {
 		return 1
@@ -393,13 +408,30 @@ func cmdUnblock(args []string) int {
 	return 0
 }
 
+// cmdPanic is the standalone safety net: it tears down dezhban's firewall rules
+// directly through the backend, with no running daemon involved. A crashed `run`
+// leaves its block-all (or VPN guard) rules in place — by design, the kill switch
+// must not fail open — so this is the escape hatch that restores connectivity.
+// Cleanup targets only the `dezhban` tag/anchor/table/sublayer, so it removes
+// both FULL-BLOCK and always-on GUARD rules and is a safe no-op on a clean system.
 func cmdPanic(args []string) int {
 	fs := flag.NewFlagSet("panic", flag.ExitOnError)
 	_ = fs.Parse(args)
 	if !requireRoot("panic") {
 		return 1
 	}
-	fmt.Fprintln(os.Stderr, "panic not implemented yet (Phase 7)")
+	fw, err := firewall.New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "firewall backend unavailable:", err)
+		return 1
+	}
+	// Cleanup is best-effort and idempotent: it restores any saved prior state
+	// (e.g. pf) and removes dezhban's rules whether or not a daemon owns them.
+	if err := fw.Cleanup(); err != nil {
+		fmt.Fprintln(os.Stderr, "panic: teardown reported an error (rules may persist):", err)
+		return 1
+	}
+	fmt.Println("dezhban: panic teardown complete — all dezhban rules removed, connectivity restored")
 	return 0
 }
 
@@ -464,6 +496,53 @@ func defaultConfigPath() string {
 	return "/etc/dezhban/dezhban.json"
 }
 
+// cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
+// interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
+// NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
+// leaks physical egress), so the endpoint must be entered deliberately from the
+// VPN client's own config. No privilege required.
+func cmdDetectVPN(args []string) int {
+	fs := flag.NewFlagSet("detect-vpn", flag.ExitOnError)
+	_ = fs.Parse(args)
+
+	tunnels, err := netdetect.TunnelInterfaces()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "detect-vpn: interface scan failed:", err)
+		return 1
+	}
+	if len(tunnels) == 0 {
+		fmt.Println("no VPN tunnel interfaces detected.")
+		fmt.Println("connect your VPN first, then re-run; or set vpn.tunnelInterfaces manually.")
+		return 0
+	}
+	fmt.Println("detected VPN tunnel interface(s):")
+	for _, t := range tunnels {
+		fmt.Println("  -", t)
+	}
+	fmt.Println("verify these belong to your VPN — on macOS the OS also creates system utun*")
+	fmt.Println("interfaces; guarding the wrong one would not protect you.")
+	fmt.Println()
+	fmt.Println("add to your config:")
+	fmt.Println(`  "vpn": {`)
+	fmt.Println(`    "enabled": true,`)
+	fmt.Printf("    \"tunnelInterfaces\": [%s],\n", quoteJoin(tunnels))
+	fmt.Println(`    "endpoints": ["<VPN-SERVER-IP>"]`)
+	fmt.Println(`  }`)
+	fmt.Println()
+	fmt.Println("set endpoints to your VPN server's public IP(s) from your VPN client config —")
+	fmt.Println("dezhban does not autodetect it, because a wrong endpoint would leak traffic.")
+	return 0
+}
+
+// quoteJoin renders a string slice as a JSON array body: "a", "b".
+func quoteJoin(ss []string) string {
+	q := make([]string, len(ss))
+	for i, s := range ss {
+		q[i] = `"` + s + `"`
+	}
+	return strings.Join(q, ", ")
+}
+
 func cmdStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
@@ -482,6 +561,7 @@ func cmdStatus(args []string) int {
 
 	fmt.Println("dezhban", version)
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
+	fmt.Println("service:         ", svc.Status())
 	fmt.Println("poll interval:   ", cfg.PollInterval)
 	fmt.Println("fail-closed:     ", cfg.FailClosed)
 	fmt.Println("hysteresis:      ", cfg.Hysteresis)
@@ -489,10 +569,21 @@ func cmdStatus(args []string) int {
 	fmt.Println("providers:       ", strings.Join(cfg.Providers, ", "))
 	fmt.Println("log level:       ", cfg.LogLevel)
 
+	// VPN mode fields: only meaningful when the guard is configured.
+	fmt.Println("vpn enabled:     ", cfg.VPN.Enabled)
+	if cfg.VPN.Enabled {
+		tunnels := cfg.VPN.TunnelInterfaces
+		if len(tunnels) == 0 && cfg.VPN.Autodetect {
+			tunnels = []string{"(autodetect)"}
+		}
+		fmt.Println("vpn tunnels:     ", strings.Join(tunnels, ", "))
+		fmt.Println("vpn endpoints:   ", strings.Join(cfg.VPN.Endpoints, ", "))
+	}
+
 	if fw, err := firewall.New(); err != nil {
 		fmt.Println("blocked:          unknown:", err)
 	} else if blocked, err := fw.IsBlocked(); err != nil {
-		// Reading pf rules needs root; report rather than fail the command.
+		// Reading firewall rules needs root; report rather than fail the command.
 		fmt.Println("blocked:          unknown:", err)
 	} else {
 		fmt.Println("blocked:         ", blocked)
