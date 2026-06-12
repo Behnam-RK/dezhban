@@ -9,16 +9,26 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"time"
 
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 )
 
-// Poller is the monitor surface the runner consumes. *monitor.Monitor satisfies
-// it; an interface keeps the loop testable without real HTTP.
-type Poller interface {
+// probeEgressBudget caps how long the VPN recovery probe may hold the guard
+// lifted for one observation. It is slightly above a single provider's lookup
+// timeout so a normal lookup completes, while bounding the leak window if the
+// tunnel hangs or quorum fans out across several providers.
+const probeEgressBudget = 8 * time.Second
+
+// Monitor is the monitor surface the runner consumes. *monitor.Monitor
+// satisfies it; an interface keeps the loop testable without real HTTP. Poll
+// drives the legacy loop; Once is used by the VPN recovery probe, which has to
+// interleave a single lookup between firewall transitions.
+type Monitor interface {
 	Poll(ctx context.Context) <-chan monitor.Result
+	Once(ctx context.Context) (monitor.Reading, error)
 }
 
 // Backend is the subset of firewall.FirewallBackend the runner drives.
@@ -33,10 +43,11 @@ type Backend interface {
 // Options bundles everything the run loop needs. main assembles it from config
 // so the runner itself stays free of config and HTTP dependencies.
 type Options struct {
-	Monitor Poller
-	Decider *decision.Decider
-	Backend Backend
-	Log     *slog.Logger
+	Monitor  Monitor
+	Decider  *decision.Decider
+	Backend  Backend
+	Log      *slog.Logger
+	Interval time.Duration // poll period; drives the VPN ticker
 
 	// VPN selects the interface-guard state machine (GUARD ↔ FULL BLOCK) instead
 	// of the legacy dst-IP Block/Unblock model.
@@ -44,9 +55,9 @@ type Options struct {
 	// Tunnels and Endpoints describe the VPN guard (VPN mode only).
 	Tunnels   []string
 	Endpoints []netip.Addr
-	// Allowlist (re)builds the legacy dst-IP allowlist; it is called on each
-	// Allow→Block transition so rotated provider IPs are picked up at block time.
-	// It is NOT refreshed during a sustained block — that is Phase 4. Legacy mode only.
+	// Allowlist (re)builds the legacy dst-IP allowlist. It is called before every
+	// Block — including each tick while blocked — so rotated provider IPs stay
+	// reachable for recovery detection. Legacy mode only.
 	Allowlist func() firewall.Allowlist
 }
 
@@ -71,11 +82,21 @@ func Run(ctx context.Context, o Options) error {
 
 // runVPN installs the always-on guard immediately at startup (so a tunnel drop
 // is cut even before the first poll), then toggles GUARD ↔ FULL BLOCK on each
-// verdict. In-process state tracks the applied posture so transitions log once
-// and redundant Applies are skipped (the backend is idempotent regardless).
+// verdict. While in FULL BLOCK the tunnel is cut and the exit country cannot be
+// observed, so recovery uses a time-windowed probe (see probe): each tick the
+// guard is briefly lifted for a single lookup, then re-cut. Probe readings feed
+// the same hysteresis streak in the Decider, so one allowed reading does not
+// lift the block — it takes `Hysteresis` consecutive allowed probes.
 func (o Options) runVPN(ctx context.Context) error {
 	guard := firewall.Policy{
 		Mode:         firewall.ModeGuard,
+		TunnelIfaces: o.Tunnels,
+		VPNEndpoints: o.Endpoints,
+	}
+	// FULL BLOCK under a tunnel cuts the tunnel too: the dst-IP allowlist is
+	// meaningless on encrypted outer packets, so it is omitted.
+	fullBlock := firewall.Policy{
+		Mode:         firewall.ModeFullBlock,
 		TunnelIfaces: o.Tunnels,
 		VPNEndpoints: o.Endpoints,
 	}
@@ -84,55 +105,84 @@ func (o Options) runVPN(ctx context.Context) error {
 	}
 	o.Log.Info("vpn guard active (startup)", "tunnels", o.Tunnels, "endpoints", len(o.Endpoints))
 
-	const (
-		stGuard     = "guard"
-		stFullBlock = "fullblock"
-	)
-	current := stGuard
+	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
+	tick := time.NewTicker(o.Interval)
+	defer tick.Stop()
 
-	for res := range o.Monitor.Poll(ctx) {
+	for {
+		var res monitor.Result
+		if blocked {
+			res = o.probe(ctx, guard, fullBlock)
+		} else {
+			r, err := o.Monitor.Once(ctx)
+			res = monitor.Result{Reading: r, Err: err}
+		}
 		if res.Err != nil {
 			o.Log.Warn("country lookup failed", "err", res.Err)
 		}
 		cc := res.Reading.CountryCode
+
 		switch o.Decider.Evaluate(res) {
 		case decision.Block:
-			if current == stFullBlock {
-				continue
+			if !blocked {
+				if err := o.Backend.Apply(fullBlock); err != nil {
+					o.Log.Error("full block failed", "err", err, "country", cc)
+				} else {
+					o.Log.Info("FULL BLOCK", "country", cc)
+					blocked = true
+				}
 			}
-			// FULL BLOCK under a tunnel cuts the tunnel too: the dst-IP allowlist is
-			// meaningless on encrypted outer packets, so it is omitted. Recovery
-			// probing out of this state lands in Phase 4.
-			fb := firewall.Policy{
-				Mode:         firewall.ModeFullBlock,
-				TunnelIfaces: o.Tunnels,
-				VPNEndpoints: o.Endpoints,
-			}
-			if err := o.Backend.Apply(fb); err != nil {
-				o.Log.Error("full block failed", "err", err, "country", cc)
-				continue
-			}
-			o.Log.Info("FULL BLOCK", "country", cc)
-			current = stFullBlock
+			// Already blocked: the probe above re-cut to FULL BLOCK, nothing to do.
 		case decision.Allow:
-			if current == stGuard {
-				continue
+			if blocked {
+				if err := o.Backend.Apply(guard); err != nil {
+					o.Log.Error("guard restore failed", "err", err, "country", cc)
+				} else {
+					o.Log.Info("GUARD", "country", cc)
+					blocked = false
+				}
 			}
-			if err := o.Backend.Apply(guard); err != nil {
-				o.Log.Error("guard restore failed", "err", err, "country", cc)
-				continue
-			}
-			o.Log.Info("GUARD", "country", cc)
-			current = stGuard
+		}
+
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-tick.C:
 		}
 	}
-	return nil
+}
+
+// probe is the VPN recovery probe: briefly lift the guard so a single geo lookup
+// can traverse the tunnel, then re-cut to FULL BLOCK immediately. The egress
+// window is one bounded lookup (probeEgressBudget) — the accepted recovery
+// semantics. A failed re-cut leaves egress open; it is logged at error and the
+// next tick re-applies the block.
+func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) monitor.Result {
+	if err := o.Backend.Apply(guard); err != nil {
+		// Could not open the tunnel to look — report as a lookup failure so the
+		// Decider treats the country as undeterminable (fail-closed keeps blocking).
+		o.Log.Error("recovery probe: lift guard failed", "err", err)
+		return monitor.Result{Err: fmt.Errorf("probe lift failed: %w", err)}
+	}
+	// Bound the open-guard window: while the guard is lifted, egress flows to the
+	// (possibly forbidden) exit. A hung tunnel or a quorum lookup over several
+	// providers would otherwise keep it open for the full lookup timeout(s). Cap
+	// the window — a bounded leak that retries next tick beats an open guard. If
+	// the probe times out it reports an error → fail-closed keeps the block.
+	pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
+	r, err := o.Monitor.Once(pctx)
+	cancel()
+	if cerr := o.Backend.Apply(fullBlock); cerr != nil {
+		o.Log.Error("recovery probe: re-cut to full block failed — egress may be open until next tick", "err", cerr)
+	}
+	return monitor.Result{Reading: r, Err: err}
 }
 
 // runLegacy is the direct-connection model: dst-IP allowlist Block on entering a
-// blocked country, Unblock on leaving. The allowlist is re-resolved on each
-// Allow→Block transition so rotated provider IPs are current at block time (no
-// mid-block refresh yet — that is Phase 4).
+// blocked country, Unblock on leaving. The allowlist is re-resolved on every
+// Block — including each tick while still blocked — so a provider that rotates
+// its CDN IP mid-block stays reachable for recovery detection. Block is
+// idempotent, so re-applying the refreshed allowlist never stacks rules.
 func (o Options) runLegacy(ctx context.Context) error {
 	blocked := false
 	for res := range o.Monitor.Poll(ctx) {
@@ -142,16 +192,26 @@ func (o Options) runLegacy(ctx context.Context) error {
 		cc := res.Reading.CountryCode
 		switch o.Decider.Evaluate(res) {
 		case decision.Block:
-			if blocked {
+			al := o.Allowlist() // re-resolve every tick so rotated provider IPs stay open
+			// A mid-block refresh that resolves no provider IPs (e.g. transient DNS
+			// failure) must NOT narrow an existing block: doing so would strand the
+			// monitor with no geo-API egress and make the block permanent. Keep the
+			// rules already in force and try again next tick. On first entry we still
+			// block even with an empty list (buildAllowlist warns separately).
+			if blocked && len(al.Hosts) == 0 {
+				o.Log.Warn("allowlist refresh resolved no provider IPs; keeping existing block", "country", cc)
 				continue
 			}
-			al := o.Allowlist()
 			if err := o.Backend.Block(al); err != nil {
 				o.Log.Error("block failed", "err", err, "country", cc)
 				continue
 			}
-			o.Log.Info("BLOCKING", "country", cc, "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
-			blocked = true
+			if !blocked {
+				o.Log.Info("BLOCKING", "country", cc, "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
+				blocked = true
+			} else {
+				o.Log.Debug("allowlist refreshed under block", "hosts_allowed", len(al.Hosts))
+			}
 		case decision.Allow:
 			if !blocked {
 				continue
