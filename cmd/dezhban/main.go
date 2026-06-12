@@ -25,6 +25,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/logging"
 	"github.com/behnam-rk/dezhban/internal/monitor"
+	"github.com/behnam-rk/dezhban/internal/netdetect"
 	"github.com/behnam-rk/dezhban/internal/privilege"
 	"github.com/behnam-rk/dezhban/internal/runner"
 )
@@ -136,7 +137,7 @@ func cmdRun(args []string) int {
 		Log:       log,
 		Interval:  cfg.PollInterval,
 		VPN:       cfg.VPN.Enabled,
-		Tunnels:   cfg.VPN.TunnelInterfaces,
+		Tunnels:   resolveTunnels(cfg, log),
 		Endpoints: parseEndpoints(cfg.VPN.Endpoints, log),
 		// Re-resolve the allowlist at each Block so rotated provider IPs stay
 		// reachable for recovery detection while egress is cut.
@@ -219,8 +220,9 @@ func cmdBlock(args []string) int {
 		// VPN mode. `--guard` installs the always-on interface guard (tunnel stays
 		// open, physical egress locked to the endpoint); a plain `block` under
 		// vpn.enabled is a full block that cuts the tunnel too.
-		if len(cfg.VPN.TunnelInterfaces) == 0 || len(cfg.VPN.Endpoints) == 0 {
-			log.Error("vpn mode needs vpn.tunnelInterfaces and vpn.endpoints in config")
+		tunnels := resolveTunnels(cfg, log)
+		if len(tunnels) == 0 || len(cfg.VPN.Endpoints) == 0 {
+			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autodetect) and vpn.endpoints")
 			return 1
 		}
 		endpoints := parseEndpoints(cfg.VPN.Endpoints, log)
@@ -231,7 +233,7 @@ func cmdBlock(args []string) int {
 		pol := firewall.Policy{
 			Mode:         mode,
 			Allowlist:    al,
-			TunnelIfaces: cfg.VPN.TunnelInterfaces,
+			TunnelIfaces: tunnels,
 			VPNEndpoints: endpoints,
 		}
 		if err := fw.Apply(pol); err != nil {
@@ -239,9 +241,9 @@ func cmdBlock(args []string) int {
 			return 1
 		}
 		if *guard {
-			log.Info("vpn guard active", "tunnels", cfg.VPN.TunnelInterfaces, "endpoints", len(endpoints))
+			log.Info("vpn guard active", "tunnels", tunnels, "endpoints", len(endpoints))
 		} else {
-			log.Info("network full-blocked (vpn)", "tunnels", cfg.VPN.TunnelInterfaces)
+			log.Info("network full-blocked (vpn)", "tunnels", tunnels)
 		}
 	default:
 		if err := fw.Block(al); err != nil {
@@ -251,6 +253,31 @@ func cmdBlock(args []string) int {
 		log.Info("network blocked", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 	}
 	return 0
+}
+
+// resolveTunnels returns the VPN tunnel interface names to guard. Explicit
+// config values always win; when none are set and vpn.autodetect is enabled, it
+// discovers them via netdetect. It may return empty (autodetect found nothing) —
+// callers must treat an empty guard set as a hard error, never proceed (an empty
+// guard would be a total lockout).
+func resolveTunnels(cfg *config.Config, log *slog.Logger) []string {
+	if len(cfg.VPN.TunnelInterfaces) > 0 {
+		return cfg.VPN.TunnelInterfaces
+	}
+	if !cfg.VPN.Autodetect {
+		return nil
+	}
+	tun, err := netdetect.TunnelInterfaces()
+	if err != nil {
+		log.Warn("tunnel autodetect failed", "err", err)
+		return nil
+	}
+	if len(tun) == 0 {
+		log.Warn("tunnel autodetect found no tunnel interfaces")
+		return nil
+	}
+	log.Info("autodetected tunnel interfaces", "tunnels", tun)
+	return tun
 }
 
 // parseEndpoints converts configured VPN endpoint strings to addresses, warning

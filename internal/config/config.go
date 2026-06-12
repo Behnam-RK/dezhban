@@ -206,11 +206,13 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.VPN.Enabled {
-		// Autodetect (netdetect) is not wired yet, so guard mode currently needs
-		// explicit interface + endpoint values; a wrong/empty set would lock the
-		// host out, so fail loudly here rather than at block time.
-		if len(c.VPN.TunnelInterfaces) == 0 {
-			return errors.New("vpn.enabled requires at least one vpn.tunnelInterfaces entry")
+		// Guard mode needs tunnel interface(s): either explicit, or discovered at
+		// runtime by netdetect when Autodetect is set. A wrong/empty set would lock
+		// the host out, so fail loudly here rather than at block time. Endpoints are
+		// always explicit — autodetecting them is unsafe (a wrong endpoint leaks),
+		// so netdetect never supplies them.
+		if len(c.VPN.TunnelInterfaces) == 0 && !c.VPN.Autodetect {
+			return errors.New("vpn.enabled requires vpn.tunnelInterfaces or vpn.autodetect")
 		}
 		if len(c.VPN.Endpoints) == 0 {
 			return errors.New("vpn.enabled requires at least one vpn.endpoints entry")
