@@ -18,6 +18,7 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/decision"
@@ -297,13 +298,17 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 			log.Warn("cannot parse provider url for allowlist", "url", raw)
 			continue
 		}
-		ips, err := net.LookupIP(u.Hostname())
+		// Bound the lookup: this runs synchronously in the run loop's Block path,
+		// so a hung resolver would otherwise stall enforcement.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
+		cancel()
 		if err != nil {
 			log.Warn("cannot resolve provider for allowlist", "host", u.Hostname(), "err", err)
 			continue
 		}
 		for _, ip := range ips {
-			if a, ok := netip.AddrFromSlice(ip); ok {
+			if a, ok := netip.AddrFromSlice(ip.IP); ok {
 				add(a)
 			}
 		}
@@ -311,8 +316,9 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 	// The allowlist pins IPs at block time. If nothing resolved, recovery
 	// detection can never reach a geo-API once egress is cut — the block would
 	// become permanent. Warn loudly rather than silently lock the operator out.
-	// (Providers behind rotating-CDN IPs carry the same risk even when some
-	// resolve; Phase 3's run loop is where the allowlist gets refreshed live.)
+	// NOTE: the legacy loop only rebuilds this on an Allow→Block transition, so a
+	// provider that rotates CDN IPs mid-block becomes unreachable until the next
+	// transition. Live mid-block refresh is Phase 4 (recovery probe) work.
 	if len(al.Hosts) == 0 {
 		log.Warn("no geo-API egress IPs in allowlist — recovery detection cannot work while blocked")
 	}

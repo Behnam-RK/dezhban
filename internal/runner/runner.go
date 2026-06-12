@@ -44,8 +44,9 @@ type Options struct {
 	// Tunnels and Endpoints describe the VPN guard (VPN mode only).
 	Tunnels   []string
 	Endpoints []netip.Addr
-	// Allowlist (re)builds the legacy dst-IP allowlist; it is called before each
-	// (re)Block so rotated provider IPs are picked up. Legacy mode only.
+	// Allowlist (re)builds the legacy dst-IP allowlist; it is called on each
+	// Allow→Block transition so rotated provider IPs are picked up at block time.
+	// It is NOT refreshed during a sustained block — that is Phase 4. Legacy mode only.
 	Allowlist func() firewall.Allowlist
 }
 
@@ -129,8 +130,9 @@ func (o Options) runVPN(ctx context.Context) error {
 }
 
 // runLegacy is the direct-connection model: dst-IP allowlist Block on entering a
-// blocked country, Unblock on leaving. The allowlist is re-resolved at each
-// Block so rotated provider IPs stay reachable for recovery detection.
+// blocked country, Unblock on leaving. The allowlist is re-resolved on each
+// Allow→Block transition so rotated provider IPs are current at block time (no
+// mid-block refresh yet — that is Phase 4).
 func (o Options) runLegacy(ctx context.Context) error {
 	blocked := false
 	for res := range o.Monitor.Poll(ctx) {
