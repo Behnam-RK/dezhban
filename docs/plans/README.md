@@ -92,6 +92,10 @@ behavior is the legacy destination-IP model, unchanged):
 
 ## Phases
 
+**Status: all 7 phases complete and merged to `main`.** Remaining work is
+privileged per-OS acceptance (run the `## Acceptance / verification` steps in
+each phase doc on real macOS/Linux/Windows hosts).
+
 | Phase | Doc | Status | Theme |
 |---|---|---|---|
 | 0 | [phase-0-scaffold.md](./phase-0-scaffold.md) | ✅ | Go module, CLI skeleton, config, logging, privilege check, CLAUDE.md |
