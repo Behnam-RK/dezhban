@@ -16,6 +16,8 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -28,6 +30,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/netdetect"
 	"github.com/behnam-rk/dezhban/internal/privilege"
 	"github.com/behnam-rk/dezhban/internal/runner"
+	"github.com/behnam-rk/dezhban/internal/svc"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -44,6 +47,10 @@ Commands:
   unblock    Remove dezhban's firewall rules
   status     Show version, config, and current state
   panic      Force-remove dezhban's rules even if the daemon is dead
+  install    Register dezhban as a boot-persistent OS service
+  uninstall  Remove the OS service
+  start      Start the installed service
+  stop       Stop the installed service (removes firewall rules)
   version    Print the version
 
 Run "dezhban <command> -h" for command flags.`
@@ -70,6 +77,8 @@ func run(args []string) int {
 		return cmdStatus(rest)
 	case "panic":
 		return cmdPanic(rest)
+	case "install", "uninstall", "start", "stop":
+		return cmdService(cmd, rest)
 	case "version", "--version", "-v":
 		fmt.Println("dezhban", version)
 		return 0
@@ -116,21 +125,45 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
+	// Run under the service manager. When launched from a shell this behaves like
+	// a foreground daemon (kardianos handles SIGINT/SIGTERM and calls Stop, which
+	// cancels the loop so its deferred Cleanup removes all rules); when launched by
+	// launchd/systemd/Windows it runs as the managed service and logs to the
+	// platform logger. The build closure assembles the run loop lazily so it can
+	// use whichever logger the service selects.
+	build := func(l *slog.Logger) (runner.Options, error) {
+		return assembleOptions(cfg, l)
+	}
+	if err := svc.Run(build, log, cfg.LogLevel, *cfgPath); err != nil {
+		log.Error("run loop failed", "err", err)
+		return 1
+	}
+	return 0
+}
+
+// assembleOptions builds the run-loop options from config, wiring the monitor,
+// decider, and firewall backend. It is shared by the `run` command and the
+// service Start path; the logger is supplied by the caller so service mode can
+// route output to the platform logger.
+func assembleOptions(cfg *config.Config, log *slog.Logger) (runner.Options, error) {
 	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
 	if len(providers) == 0 {
-		log.Error("no usable geo providers configured")
-		return 1
+		return runner.Options{}, fmt.Errorf("no usable geo providers configured")
 	}
 	fw, err := firewall.New()
 	if err != nil {
-		log.Error("firewall backend unavailable", "err", err)
-		return 1
+		return runner.Options{}, fmt.Errorf("firewall backend unavailable: %w", err)
 	}
-
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-
-	opts := runner.Options{
+	log.Info("run loop started",
+		"interval", cfg.PollInterval,
+		"providers", len(providers),
+		"blocked_countries", cfg.BlockedCountries,
+		"fail_closed", cfg.FailClosed,
+		"hysteresis", cfg.Hysteresis,
+		"quorum", cfg.ProviderQuorum,
+		"vpn", cfg.VPN.Enabled,
+	)
+	return runner.Options{
 		Monitor:   monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum),
 		Decider:   decision.New(cfg.BlockedCountries, cfg.FailClosed, cfg.Hysteresis),
 		Backend:   fw,
@@ -142,22 +175,7 @@ func cmdRun(args []string) int {
 		// Re-resolve the allowlist at each Block so rotated provider IPs stay
 		// reachable for recovery detection while egress is cut.
 		Allowlist: func() firewall.Allowlist { return buildAllowlist(cfg, log) },
-	}
-	log.Info("run loop started",
-		"interval", cfg.PollInterval,
-		"providers", len(providers),
-		"blocked_countries", cfg.BlockedCountries,
-		"fail_closed", cfg.FailClosed,
-		"hysteresis", cfg.Hysteresis,
-		"quorum", cfg.ProviderQuorum,
-		"vpn", cfg.VPN.Enabled,
-	)
-	if err := runner.Run(ctx, opts); err != nil {
-		log.Error("run loop failed", "err", err)
-		return 1
-	}
-	log.Info("run loop stopped")
-	return 0
+	}, nil
 }
 
 // runDryRun polls the monitor and prints each reading without touching the
@@ -383,6 +401,67 @@ func cmdPanic(args []string) int {
 	}
 	fmt.Fprintln(os.Stderr, "panic not implemented yet (Phase 7)")
 	return 0
+}
+
+// cmdService handles install/uninstall/start/stop against the OS service manager.
+// `install` embeds the config path into the boot invocation so the service loads
+// the same config on every restart; the path is made absolute because the
+// service manager runs from an unknown working directory.
+func cmdService(action string, args []string) int {
+	fs := flag.NewFlagSet(action, flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file the installed service loads on boot")
+	_ = fs.Parse(args)
+
+	if !requireRoot(action) {
+		return 1
+	}
+
+	path := *cfgPath
+	if action == "install" {
+		if path == "" {
+			path = defaultConfigPath()
+		}
+		if abs, err := filepath.Abs(path); err == nil {
+			path = abs
+		}
+		// The service loads this path on every boot. If it's absent, config.Load
+		// falls back to defaults (no blockedCountries) — a far weaker kill switch
+		// than the operator likely intends. Warn loudly rather than register a
+		// service that silently under-protects.
+		if _, err := os.Stat(path); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: config %q not found — the service will start with defaults until you create it\n", path)
+		}
+	}
+
+	if err := svc.Control(action, path); err != nil {
+		fmt.Fprintf(os.Stderr, "%s failed: %v\n", action, err)
+		return 1
+	}
+	switch action {
+	case "install":
+		fmt.Printf("dezhban service installed (config: %s)\n", path)
+		fmt.Println("start it now with: dezhban start")
+	case "uninstall":
+		fmt.Println("dezhban service uninstalled")
+	case "start":
+		fmt.Println("dezhban service started")
+	case "stop":
+		fmt.Println("dezhban service stopped (firewall rules removed)")
+	}
+	return 0
+}
+
+// defaultConfigPath is where the installed service looks for its config when no
+// --config is given: /etc/dezhban/ on unix, %ProgramData%\dezhban\ on Windows.
+func defaultConfigPath() string {
+	if runtime.GOOS == "windows" {
+		pd := os.Getenv("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		return filepath.Join(pd, "dezhban", "dezhban.json")
+	}
+	return "/etc/dezhban/dezhban.json"
 }
 
 func cmdStatus(args []string) int {
