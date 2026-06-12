@@ -16,6 +16,12 @@ import (
 	"github.com/behnam-rk/dezhban/internal/monitor"
 )
 
+// probeEgressBudget caps how long the VPN recovery probe may hold the guard
+// lifted for one observation. It is slightly above a single provider's lookup
+// timeout so a normal lookup completes, while bounding the leak window if the
+// tunnel hangs or quorum fans out across several providers.
+const probeEgressBudget = 8 * time.Second
+
 // Monitor is the monitor surface the runner consumes. *monitor.Monitor
 // satisfies it; an interface keeps the loop testable without real HTTP. Poll
 // drives the legacy loop; Once is used by the VPN recovery probe, which has to
@@ -148,8 +154,9 @@ func (o Options) runVPN(ctx context.Context) error {
 
 // probe is the VPN recovery probe: briefly lift the guard so a single geo lookup
 // can traverse the tunnel, then re-cut to FULL BLOCK immediately. The egress
-// window is one lookup — the accepted recovery semantics. A failed re-cut leaves
-// egress open; it is logged at error and the next tick re-applies the block.
+// window is one bounded lookup (probeEgressBudget) — the accepted recovery
+// semantics. A failed re-cut leaves egress open; it is logged at error and the
+// next tick re-applies the block.
 func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) monitor.Result {
 	if err := o.Backend.Apply(guard); err != nil {
 		// Could not open the tunnel to look — report as a lookup failure so the
@@ -157,7 +164,14 @@ func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) mo
 		o.Log.Error("recovery probe: lift guard failed", "err", err)
 		return monitor.Result{Err: fmt.Errorf("probe lift failed: %w", err)}
 	}
-	r, err := o.Monitor.Once(ctx)
+	// Bound the open-guard window: while the guard is lifted, egress flows to the
+	// (possibly forbidden) exit. A hung tunnel or a quorum lookup over several
+	// providers would otherwise keep it open for the full lookup timeout(s). Cap
+	// the window — a bounded leak that retries next tick beats an open guard. If
+	// the probe times out it reports an error → fail-closed keeps the block.
+	pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
+	r, err := o.Monitor.Once(pctx)
+	cancel()
 	if cerr := o.Backend.Apply(fullBlock); cerr != nil {
 		o.Log.Error("recovery probe: re-cut to full block failed — egress may be open until next tick", "err", cerr)
 	}
@@ -179,6 +193,15 @@ func (o Options) runLegacy(ctx context.Context) error {
 		switch o.Decider.Evaluate(res) {
 		case decision.Block:
 			al := o.Allowlist() // re-resolve every tick so rotated provider IPs stay open
+			// A mid-block refresh that resolves no provider IPs (e.g. transient DNS
+			// failure) must NOT narrow an existing block: doing so would strand the
+			// monitor with no geo-API egress and make the block permanent. Keep the
+			// rules already in force and try again next tick. On first entry we still
+			// block even with an empty list (buildAllowlist warns separately).
+			if blocked && len(al.Hosts) == 0 {
+				o.Log.Warn("allowlist refresh resolved no provider IPs; keeping existing block", "country", cc)
+				continue
+			}
 			if err := o.Backend.Block(al); err != nil {
 				o.Log.Error("block failed", "err", err, "country", cc)
 				continue

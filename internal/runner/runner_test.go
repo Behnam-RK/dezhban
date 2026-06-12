@@ -93,6 +93,12 @@ func failResult() monitor.Result {
 
 func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// oneHostAL is a non-empty allowlist so the legacy mid-block refresh re-Blocks
+// (an empty refresh is deliberately skipped — see TestLegacyRefreshSkipWhenEmpty).
+func oneHostAL() firewall.Allowlist {
+	return firewall.Allowlist{Hosts: []netip.Addr{netip.MustParseAddr("9.9.9.9")}}
+}
+
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -120,7 +126,7 @@ func TestLegacyBlockRefreshThenUnblock(t *testing.T) {
 		Decider:   decision.New([]string{"IR"}, false, 1),
 		Backend:   be,
 		Log:       discardLog(),
-		Allowlist: func() firewall.Allowlist { return firewall.Allowlist{} },
+		Allowlist: oneHostAL,
 	}
 	if err := Run(context.Background(), o); err != nil {
 		t.Fatal(err)
@@ -142,7 +148,7 @@ func TestLegacyFailOpenReleasesOnError(t *testing.T) {
 		Decider:   decision.New([]string{"IR"}, false, 1), // fail-open
 		Backend:   be,
 		Log:       discardLog(),
-		Allowlist: func() firewall.Allowlist { return firewall.Allowlist{} },
+		Allowlist: oneHostAL,
 	}
 	if err := Run(context.Background(), o); err != nil {
 		t.Fatal(err)
@@ -163,13 +169,37 @@ func TestLegacyFailClosedHoldsOnError(t *testing.T) {
 		Decider:   decision.New([]string{"IR"}, true, 1), // fail-closed
 		Backend:   be,
 		Log:       discardLog(),
-		Allowlist: func() firewall.Allowlist { return firewall.Allowlist{} },
+		Allowlist: oneHostAL,
 	}
 	if err := Run(context.Background(), o); err != nil {
 		t.Fatal(err)
 	}
 	// Never unblocks: a lookup error keeps the block (and refreshes the allowlist).
 	want := []string{"block", "block", "cleanup"}
+	if !equal(be.calls, want) {
+		t.Fatalf("calls = %v, want %v", be.calls, want)
+	}
+}
+
+// A mid-block allowlist refresh that resolves no provider IPs must not re-Block
+// (which would narrow the rules to an empty list and strand recovery). The
+// existing block is kept; only the entry Block fires.
+func TestLegacyRefreshSkipWhenEmpty(t *testing.T) {
+	be := &fakeBackend{}
+	o := Options{
+		Monitor: &fakeMonitor{results: []monitor.Result{
+			reading("IR"), // enter block (empty allowlist allowed on entry)
+			reading("IR"), // refresh resolves nothing → keep existing block, no re-Block
+		}},
+		Decider:   decision.New([]string{"IR"}, true, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Allowlist: func() firewall.Allowlist { return firewall.Allowlist{} }, // always empty
+	}
+	if err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"block", "cleanup"}
 	if !equal(be.calls, want) {
 		t.Fatalf("calls = %v, want %v", be.calls, want)
 	}
