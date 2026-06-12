@@ -93,8 +93,8 @@ behavior is the legacy destination-IP model, unchanged):
 ## Phases
 
 **Status: all 7 phases complete and merged to `main`.** Remaining work is
-privileged per-OS acceptance (run the `## Acceptance` steps in each phase doc on
-real macOS/Linux/Windows hosts).
+privileged per-OS acceptance (run the `## Acceptance / verification` steps in
+each phase doc on real macOS/Linux/Windows hosts).
 
 | Phase | Doc | Status | Theme |
 |---|---|---|---|
