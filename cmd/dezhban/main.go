@@ -245,7 +245,7 @@ func cmdBlock(args []string) int {
 			log.Error("forced block failed", "err", err)
 			return 1
 		}
-		log.Info("network force-blocked (all egress cut)", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
+		log.Info("network force-blocked (all egress cut except allowlist)", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 	case *guard || cfg.VPN.Enabled:
 		// VPN mode. `--guard` installs the always-on interface guard (tunnel stays
 		// open, physical egress locked to the endpoint); a plain `block` under
@@ -519,6 +519,8 @@ func cmdDetectVPN(args []string) int {
 	for _, t := range tunnels {
 		fmt.Println("  -", t)
 	}
+	fmt.Println("verify these belong to your VPN — on macOS the OS also creates system utun*")
+	fmt.Println("interfaces; guarding the wrong one would not protect you.")
 	fmt.Println()
 	fmt.Println("add to your config:")
 	fmt.Println(`  "vpn": {`)

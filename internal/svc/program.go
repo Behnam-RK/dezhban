@@ -11,6 +11,7 @@ package svc
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/kardianos/service"
@@ -123,7 +124,7 @@ func Status() string {
 	}
 	st, err := s.Status()
 	switch {
-	case err == service.ErrNotInstalled:
+	case errors.Is(err, service.ErrNotInstalled):
 		return "not installed"
 	case err != nil:
 		return "unknown: " + err.Error()
