@@ -22,13 +22,22 @@ go test ./...                       # all tests
 go test ./internal/config -run TestLoad   # a single package / test
 go run ./cmd/dezhban status         # run a subcommand without installing
 
+# safe, root-free dev loop — none of these touch the firewall
+make validate CONFIG=configs/dezhban.dev.json   # parse + validate a config
+make rules MODE=guard CONFIG=...                 # print the ruleset, don't apply it
+make doctor CONFIG=... [ARGS=--discover]         # diagnose VPN guard / lockout risks
+# scripts/ wrap the same flows (dev, rules, doctor, install-local, reinstall, panic)
+
 # cross-compile a single target
 GOOS=linux GOARCH=amd64 go build ./cmd/dezhban
 make build-all                      # all 5 targets into dist/, version-stamped
 ```
 
 The binary's subcommands: `run`, `block`, `unblock`, `status`, `panic`,
-`install`, `uninstall`, `start`, `stop`, `detect-vpn`, `version`. Privileged
+`install`, `uninstall`, `start`, `stop`, `detect-vpn`, `validate`, `print-rules`,
+`doctor`, `version`, plus a global `-v`/`--verbose` flag (forces debug logging).
+`validate`, `print-rules`, and `doctor` are read-only inspect commands — no root,
+no firewall effects — for testing rules without risking lockout. Privileged
 commands (`run`, `block`, `unblock`, `panic`, `install`, `uninstall`, `start`,
 `stop`) require root/admin and print a clear error otherwise.
 
@@ -78,6 +87,9 @@ each target compiles only its own backend.
   the deliverable is a dependency-light standalone binary.
 - Config is JSON with string durations (e.g. `"30s"`); on-disk shape is the
   `fileConfig` DTO in `internal/config`, converted to a validated `Config`.
+  Full field reference: `docs/CONFIG.md`. Sample configs in `configs/`
+  (`dezhban.dev.json`, `dezhban.vpn-guard.json`).
+- Lockout recovery / VPN-guard runbook: `docs/TROUBLESHOOTING.md`.
 - Module path `github.com/behnam-rk/dezhban` (adjust if the repo moves).
 
 

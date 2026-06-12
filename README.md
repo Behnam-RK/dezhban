@@ -257,6 +257,28 @@ go test ./internal/config -run TestLoad # one package / test
 GOOS=linux GOARCH=amd64 go build ./cmd/dezhban
 ```
 
+### Safe dev loop (no root)
+
+The `Makefile` and `scripts/` wrap the read-only inspect commands so you can
+iterate on rules and config without root and without risking a lockout:
+
+```bash
+make validate CONFIG=configs/dezhban.dev.json    # parse + validate a config
+make rules MODE=guard CONFIG=...                  # print the ruleset, don't apply it
+make doctor CONFIG=... [ARGS=--discover]          # diagnose tunnels / lockout risks
+make run-dry                                      # build + run the monitor, no firewall touch
+```
+
+The privileged flows have wrappers too — `make install-local` / `reinstall` /
+`uninstall-local` / `panic`, mirrored by `scripts/*.sh`. Sample configs live in
+`configs/` (`dezhban.dev.json`, `dezhban.vpn-guard.json`).
+
+### CI
+
+`.github/workflows/ci.yml` runs `go vet` + `go test` on macOS, Linux, and Windows
+(with `-race` on Linux) and a `build-all` cross-compile, so the per-OS build-tag
+backends can't silently break.
+
 ### Pre-commit hook
 
 A native git hook (no extra dependencies) runs gofmt, `go vet`, `go build`, and
