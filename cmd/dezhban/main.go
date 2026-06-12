@@ -36,23 +36,33 @@ import (
 // version is overridden at build time via -ldflags "-X main.version=...".
 var version = "dev"
 
+// verbose is the global -v/--verbose flag, stripped from args before dispatch.
+// When set it overrides the configured log level to debug.
+var verbose bool
+
 const usage = `dezhban — network kill switch
 
 Usage:
-  dezhban <command> [flags]
+  dezhban [-v] <command> [flags]
 
 Commands:
-  run        Run the monitor→decision→enforcement loop
-  block      Manually block network egress
-  unblock    Remove dezhban's firewall rules
-  status     Show version, config, and current state
-  panic      Force-remove dezhban's rules even if the daemon is dead
-  install    Register dezhban as a boot-persistent OS service
-  uninstall  Remove the OS service
-  start      Start the installed service
-  stop       Stop the installed service (removes firewall rules)
-  detect-vpn Print detected VPN tunnel interfaces to help fill the vpn config
-  version    Print the version
+  run         Run the monitor→decision→enforcement loop
+  block       Manually block network egress
+  unblock     Remove dezhban's firewall rules
+  status      Show version, config, and current state
+  validate    Load and validate a config file (no root, no side effects)
+  print-rules Print the firewall ruleset a block/guard would apply, without applying it
+  doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
+  panic       Force-remove dezhban's rules even if the daemon is dead
+  install     Register dezhban as a boot-persistent OS service
+  uninstall   Remove the OS service
+  start       Start the installed service
+  stop        Stop the installed service (removes firewall rules)
+  detect-vpn  Print detected VPN tunnel interfaces to help fill the vpn config
+  version     Print the version
+
+Global flags:
+  -v, --verbose   Override the configured log level to debug
 
 Run "dezhban <command> -h" for command flags.`
 
@@ -61,6 +71,7 @@ func main() {
 }
 
 func run(args []string) int {
+	args = stripVerbose(args)
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, usage)
 		return 2
@@ -76,13 +87,19 @@ func run(args []string) int {
 		return cmdUnblock(rest)
 	case "status":
 		return cmdStatus(rest)
+	case "validate":
+		return cmdValidate(rest)
+	case "print-rules":
+		return cmdPrintRules(rest)
+	case "doctor":
+		return cmdDoctor(rest)
 	case "panic":
 		return cmdPanic(rest)
 	case "install", "uninstall", "start", "stop":
 		return cmdService(cmd, rest)
 	case "detect-vpn":
 		return cmdDetectVPN(rest)
-	case "version", "--version", "-v":
+	case "version", "--version":
 		fmt.Println("dezhban", version)
 		return 0
 	case "help", "--help", "-h":
@@ -92,6 +109,35 @@ func run(args []string) int {
 		fmt.Fprintf(os.Stderr, "unknown command %q\n\n%s\n", cmd, usage)
 		return 2
 	}
+}
+
+// stripVerbose removes the global -v/--verbose flag (which may appear before or
+// after the subcommand) from args and records it in the package-level verbose.
+// Pulling it out here lets every subcommand's FlagSet stay unaware of it.
+func stripVerbose(args []string) []string {
+	out := make([]string, 0, len(args))
+	for _, a := range args {
+		switch a {
+		case "-v", "--v", "-verbose", "--verbose":
+			verbose = true
+		default:
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// effectiveLevel is the log level after applying the global -v/--verbose override.
+func effectiveLevel(cfg *config.Config) string {
+	if verbose {
+		return "debug"
+	}
+	return cfg.LogLevel
+}
+
+// newLogger builds a logger honoring the -v/--verbose override.
+func newLogger(cfg *config.Config) *slog.Logger {
+	return logging.New(effectiveLevel(cfg))
 }
 
 // requireRoot prints a clear error and returns false if not privileged.
@@ -119,7 +165,7 @@ func cmdRun(args []string) int {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
 	}
-	log := logging.New(cfg.LogLevel)
+	log := newLogger(cfg)
 
 	if *dryRun {
 		return runDryRun(cfg, log)
@@ -137,7 +183,7 @@ func cmdRun(args []string) int {
 	build := func(l *slog.Logger) (runner.Options, error) {
 		return assembleOptions(cfg, l)
 	}
-	if err := svc.Run(build, log, cfg.LogLevel, *cfgPath); err != nil {
+	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath); err != nil {
 		log.Error("run loop failed", "err", err)
 		return 1
 	}
@@ -221,7 +267,7 @@ func cmdBlock(args []string) int {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
 	}
-	log := logging.New(cfg.LogLevel)
+	log := newLogger(cfg)
 	if !requireRoot("block") {
 		return 1
 	}
@@ -541,6 +587,200 @@ func quoteJoin(ss []string) string {
 		q[i] = `"` + s + `"`
 	}
 	return strings.Join(q, ", ")
+}
+
+// cmdValidate loads and validates a config without running anything or touching
+// the firewall — a fast, root-free pre-flight. config.Load already runs
+// Validate(), so a clean load is a valid config; print a one-line summary so the
+// operator can eyeball the loaded values.
+func cmdValidate(args []string) int {
+	fs := flag.NewFlagSet("validate", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config invalid:", err)
+		return 1
+	}
+	src := *cfgPath
+	if src == "" {
+		src = "(defaults — no --config given)"
+	}
+	blocked := cfg.BlockedCountries
+	if len(blocked) == 0 {
+		blocked = []string{"(none)"}
+	}
+	fmt.Printf("config OK: %s\n", src)
+	fmt.Printf("  blocked countries: %s\n", strings.Join(blocked, ", "))
+	fmt.Printf("  poll interval:     %s\n", cfg.PollInterval)
+	fmt.Printf("  fail-closed:       %t\n", cfg.FailClosed)
+	fmt.Printf("  vpn guard:         %t\n", cfg.VPN.Enabled)
+	if cfg.VPN.Enabled {
+		fmt.Printf("  vpn tunnels:       %s\n", strings.Join(cfg.VPN.TunnelInterfaces, ", "))
+		fmt.Printf("  vpn endpoints:     %s\n", strings.Join(cfg.VPN.Endpoints, ", "))
+	}
+	return 0
+}
+
+// policyForMode builds the firewall Policy the named mode would apply, mirroring
+// the run loop's guard/full-block construction (runner.runVPN). It is the single
+// source print-rules renders from. NOTE: keep in sync with runner.runVPN; a
+// future refactor should extract a shared constructor in the firewall package.
+func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
+	al := buildAllowlist(cfg, log)
+	switch mode {
+	case "guard":
+		return firewall.Policy{
+			Mode:         firewall.ModeGuard,
+			Allowlist:    al,
+			TunnelIfaces: resolveTunnels(cfg, log),
+			VPNEndpoints: parseEndpoints(cfg.VPN.Endpoints, log),
+		}, nil
+	case "fullblock":
+		return firewall.Policy{
+			Mode:         firewall.ModeFullBlock,
+			Allowlist:    al,
+			TunnelIfaces: resolveTunnels(cfg, log),
+			VPNEndpoints: parseEndpoints(cfg.VPN.Endpoints, log),
+		}, nil
+	case "legacy":
+		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.
+		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: al}, nil
+	default:
+		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, legacy)", mode)
+	}
+}
+
+// cmdPrintRules renders the exact firewall ruleset a given policy would install
+// and prints it to stdout WITHOUT applying it — the safe way to inspect a block
+// or guard before risking a lockout. No root: rendering is pure. Diagnostic logs
+// (allowlist resolution, etc.) go to stderr, so stdout is just the ruleset.
+func cmdPrintRules(args []string) int {
+	fs := flag.NewFlagSet("print-rules", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, or legacy")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+	pol, err := policyForMode(cfg, newLogger(cfg), *mode)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+	rules, err := firewall.RenderRules(pol)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "render failed:", err)
+		return 1
+	}
+	fmt.Print(rules)
+	return 0
+}
+
+// cmdDoctor diagnoses the VPN guard configuration without root or side effects:
+// it validates config, lists tunnel interfaces and their subnets, and flags any
+// endpoint that sits inside a tunnel's own subnet (a guaranteed lockout). With
+// --discover it additionally runs the macOS-only best-effort hunt for the
+// connected VPN's real server IP, automating the manual netstat/scutil dance.
+func cmdDoctor(args []string) int {
+	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	discover := fs.Bool("discover", false, "best-effort: find the connected VPN's real server IP (macOS only)")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config invalid:", err)
+		return 1
+	}
+	log := newLogger(cfg)
+
+	fmt.Println("dezhban doctor")
+	fmt.Println()
+	fmt.Println("config:  OK (loaded and validated)")
+	fmt.Printf("  vpn guard enabled: %t\n", cfg.VPN.Enabled)
+	fmt.Println()
+
+	tunnels := resolveTunnels(cfg, log)
+	fmt.Println("tunnels:")
+	if len(tunnels) == 0 {
+		fmt.Println("  (none — set vpn.tunnelInterfaces or vpn.autodetect)")
+	} else {
+		nets, _ := netdetect.TunnelSubnets(tunnels)
+		subsByIface := map[string][]string{}
+		for _, tn := range nets {
+			subsByIface[tn.Iface] = append(subsByIface[tn.Iface], tn.Subnet.String())
+		}
+		for _, t := range tunnels {
+			if subs := subsByIface[t]; len(subs) > 0 {
+				fmt.Printf("  %s — %s\n", t, strings.Join(subs, ", "))
+			} else {
+				fmt.Printf("  %s — no subnet (interface down or absent?)\n", t)
+			}
+		}
+	}
+	fmt.Println()
+
+	endpoints := parseEndpoints(cfg.VPN.Endpoints, log)
+	fmt.Println("endpoints:")
+	var bad []netdetect.EndpointRoute
+	if len(endpoints) == 0 {
+		fmt.Println("  (none configured)")
+	} else {
+		bad, _ = netdetect.CheckEndpointRouting(endpoints, tunnels)
+		internal := map[string]netdetect.EndpointRoute{}
+		for _, b := range bad {
+			internal[b.Endpoint.String()] = b
+		}
+		for _, ep := range endpoints {
+			if b, ok := internal[ep.String()]; ok {
+				fmt.Printf("  %s — MISCONFIGURED: inside %s's subnet %s\n", ep, b.Iface, b.Subnet)
+			} else {
+				fmt.Printf("  %s — ok (assumed reachable on the physical interface)\n", ep)
+			}
+		}
+	}
+	if len(bad) > 0 {
+		fmt.Println()
+		fmt.Println("fixes:")
+		for _, b := range bad {
+			fmt.Printf("  - %s is a tunnel-internal address (inside %s %s); set vpn.endpoints to\n", b.Endpoint, b.Iface, b.Subnet)
+			fmt.Println("    your VPN server's PUBLIC IP from your VPN client config.")
+		}
+	}
+	fmt.Println()
+
+	if *discover {
+		fmt.Println("discover (best-effort, macOS):")
+		cands, err := netdetect.DiscoverEndpoints()
+		switch {
+		case err != nil:
+			fmt.Println("  ", err)
+		case len(cands) == 0:
+			fmt.Println("  no physical-side public transport sockets found — is the VPN connected?")
+		default:
+			configured := map[string]bool{}
+			for _, ep := range endpoints {
+				configured[ep.String()] = true
+			}
+			for _, c := range cands {
+				line := fmt.Sprintf("  %s:%d", c.Server, c.Port)
+				if c.VPN != "" {
+					line += " [" + c.VPN + "]"
+				}
+				if !configured[c.Server.String()] {
+					line += "  <- not in vpn.endpoints"
+				}
+				fmt.Println(line)
+			}
+			fmt.Println("  add any missing server IP to vpn.endpoints and drop stale entries.")
+		}
+	}
+	return 0
 }
 
 func cmdStatus(args []string) int {

@@ -1,0 +1,23 @@
+{
+  "pollInterval": "5s",
+  "blockedCountries": [],
+  "failClosed": false,
+  "hysteresis": 1,
+  "providers": [
+    "https://ipinfo.io/json",
+    "http://ip-api.com/json",
+    "https://ifconfig.co/json"
+  ],
+  "allowlist": {
+    "dns": ["1.1.1.1", "8.8.8.8"],
+    "hosts": []
+  },
+  "vpn": {
+    "enabled": false,
+    "tunnelInterfaces": [],
+    "endpoints": [],
+    "autodetect": false
+  },
+  "providerQuorum": false,
+  "logLevel": "debug"
+}
