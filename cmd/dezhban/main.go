@@ -424,6 +424,13 @@ func cmdService(action string, args []string) int {
 		if abs, err := filepath.Abs(path); err == nil {
 			path = abs
 		}
+		// The service loads this path on every boot. If it's absent, config.Load
+		// falls back to defaults (no blockedCountries) — a far weaker kill switch
+		// than the operator likely intends. Warn loudly rather than register a
+		// service that silently under-protects.
+		if _, err := os.Stat(path); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: config %q not found — the service will start with defaults until you create it\n", path)
+		}
 	}
 
 	if err := svc.Control(action, path); err != nil {
