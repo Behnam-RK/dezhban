@@ -7,7 +7,7 @@ import (
 
 func TestIsTunnelName(t *testing.T) {
 	tunnels := []string{
-		"utun4", "tun0", "tap0", "wg0", "ppp0", "ipsec0",
+		"utun4", "tun0", "tap0", "wg0", "ipsec0",
 		"WireGuard Tunnel", "OpenVPN TAP-Windows Adapter", "Proton VPN",
 		"UTUN5", // case-insensitive
 	}
@@ -17,7 +17,8 @@ func TestIsTunnelName(t *testing.T) {
 		}
 	}
 
-	notTunnels := []string{"", "lo", "lo0", "eth0", "en0", "wlan0", "Ethernet", "Wi-Fi"}
+	// "ppp0" is NOT a tunnel: it is routinely the physical DSL/cellular WAN.
+	notTunnels := []string{"", "lo", "lo0", "eth0", "en0", "wlan0", "Ethernet", "Wi-Fi", "ppp0"}
 	for _, n := range notTunnels {
 		if isTunnelName(n) {
 			t.Errorf("isTunnelName(%q) = true, want false", n)
@@ -32,11 +33,12 @@ func TestIsTunnelIface(t *testing.T) {
 		want  bool
 	}{
 		{"utun4", net.FlagUp, true},
-		{"eth0", net.FlagUp | net.FlagPointToPoint, true}, // p2p flag alone qualifies
-		{"utun4", 0, false},                               // down: skip
-		{"lo0", net.FlagUp | net.FlagLoopback, false},     // loopback: skip
-		{"wg0", net.FlagUp | net.FlagLoopback, false},     // loopback wins even with tunnel name
-		{"eth0", net.FlagUp, false},                       // plain iface, no p2p
+		{"eth0", net.FlagUp | net.FlagPointToPoint, false}, // p2p alone is NOT enough (WAN links carry it)
+		{"ppp0", net.FlagUp | net.FlagPointToPoint, false}, // physical PPPoE/cellular WAN: not a tunnel
+		{"utun4", 0, false},                                // down: skip
+		{"lo0", net.FlagUp | net.FlagLoopback, false},      // loopback: skip
+		{"wg0", net.FlagUp | net.FlagLoopback, false},      // loopback wins even with tunnel name
+		{"eth0", net.FlagUp, false},                        // plain iface
 	}
 	for _, c := range cases {
 		if got := isTunnelIface(c.name, c.flags); got != c.want {

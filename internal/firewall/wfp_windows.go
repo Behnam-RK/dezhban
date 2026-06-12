@@ -97,27 +97,36 @@ func (b *wfpBackend) Apply(p Policy) error {
 	return nil
 }
 
-// Unblock removes ONLY the dezhban rule group and restores the saved outbound
-// defaults. Safe to run when nothing is blocked.
+// Unblock restores the saved outbound defaults, then removes ONLY the dezhban
+// rule group. Safe to run when nothing is blocked.
+//
+// Order matters: defaults are restored FIRST, while the allow rules are still in
+// place, so there is never a window of "Block default + no allow rules" (a total
+// outbound lockout). If the saved state is missing or corrupt we restore every
+// profile to Allow rather than leaving the default at Block — failing to read
+// state must never strand the host with no egress (CLAUDE.md: a stale block-all
+// rule can lock the user out of their own network).
 func (b *wfpBackend) Unblock() error {
+	st, ok := loadState()
+	var sb strings.Builder
+	sb.WriteString("$ErrorActionPreference='Stop'\n")
+	for _, prof := range fwProfiles {
+		action := "Allow" // fail-open on restore: never leave a profile at Block
+		if ok {
+			if a := st.OutboundAction[prof]; a != "" {
+				action = a
+			}
+		}
+		fmt.Fprintf(&sb, "Set-NetFirewallProfile -Name %s -DefaultOutboundAction %s\n", prof, action)
+	}
+	if _, err := powershell(sb.String()); err != nil {
+		return fmt.Errorf("restore firewall defaults: %w", err)
+	}
+
 	if _, err := powershell(removeGroupScript()); err != nil {
 		return fmt.Errorf("remove dezhban firewall rules: %w", err)
 	}
-
-	st, ok := loadState()
 	if ok {
-		var sb strings.Builder
-		sb.WriteString("$ErrorActionPreference='Stop'\n")
-		for _, prof := range fwProfiles {
-			action := st.OutboundAction[prof]
-			if action == "" {
-				action = "Allow" // sane default if the snapshot lacked this profile
-			}
-			fmt.Fprintf(&sb, "Set-NetFirewallProfile -Name %s -DefaultOutboundAction %s\n", prof, action)
-		}
-		if _, err := powershell(sb.String()); err != nil {
-			return fmt.Errorf("restore firewall defaults: %w", err)
-		}
 		_ = os.Remove(statePath())
 	}
 	return nil
