@@ -18,12 +18,15 @@ import (
 	"os/signal"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/logging"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/privilege"
+	"github.com/behnam-rk/dezhban/internal/runner"
 )
 
 // version is overridden at build time via -ldflags "-X main.version=...".
@@ -112,8 +115,43 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
-	// The monitor→decision→enforcement loop lands in Phase 3.
-	log.Info("run loop not implemented yet (Phase 3)")
+	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
+	if len(providers) == 0 {
+		log.Error("no usable geo providers configured")
+		return 1
+	}
+	fw, err := firewall.New()
+	if err != nil {
+		log.Error("firewall backend unavailable", "err", err)
+		return 1
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	opts := runner.Options{
+		Monitor:   monitor.New(providers, cfg.PollInterval, log),
+		Decider:   decision.New(cfg.BlockedCountries),
+		Backend:   fw,
+		Log:       log,
+		VPN:       cfg.VPN.Enabled,
+		Tunnels:   cfg.VPN.TunnelInterfaces,
+		Endpoints: parseEndpoints(cfg.VPN.Endpoints, log),
+		// Re-resolve the allowlist at each Block so rotated provider IPs stay
+		// reachable for recovery detection while egress is cut.
+		Allowlist: func() firewall.Allowlist { return buildAllowlist(cfg, log) },
+	}
+	log.Info("run loop started",
+		"interval", cfg.PollInterval,
+		"providers", len(providers),
+		"blocked_countries", cfg.BlockedCountries,
+		"vpn", cfg.VPN.Enabled,
+	)
+	if err := runner.Run(ctx, opts); err != nil {
+		log.Error("run loop failed", "err", err)
+		return 1
+	}
+	log.Info("run loop stopped")
 	return 0
 }
 
@@ -260,13 +298,17 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 			log.Warn("cannot parse provider url for allowlist", "url", raw)
 			continue
 		}
-		ips, err := net.LookupIP(u.Hostname())
+		// Bound the lookup: this runs synchronously in the run loop's Block path,
+		// so a hung resolver would otherwise stall enforcement.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ips, err := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
+		cancel()
 		if err != nil {
 			log.Warn("cannot resolve provider for allowlist", "host", u.Hostname(), "err", err)
 			continue
 		}
 		for _, ip := range ips {
-			if a, ok := netip.AddrFromSlice(ip); ok {
+			if a, ok := netip.AddrFromSlice(ip.IP); ok {
 				add(a)
 			}
 		}
@@ -274,8 +316,9 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 	// The allowlist pins IPs at block time. If nothing resolved, recovery
 	// detection can never reach a geo-API once egress is cut — the block would
 	// become permanent. Warn loudly rather than silently lock the operator out.
-	// (Providers behind rotating-CDN IPs carry the same risk even when some
-	// resolve; Phase 3's run loop is where the allowlist gets refreshed live.)
+	// NOTE: the legacy loop only rebuilds this on an Allow→Block transition, so a
+	// provider that rotates CDN IPs mid-block becomes unreachable until the next
+	// transition. Live mid-block refresh is Phase 4 (recovery probe) work.
 	if len(al.Hosts) == 0 {
 		log.Warn("no geo-API egress IPs in allowlist — recovery detection cannot work while blocked")
 	}
