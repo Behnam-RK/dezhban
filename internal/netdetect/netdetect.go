@@ -150,7 +150,14 @@ func prefixFromIPNet(n *net.IPNet) (netip.Prefix, bool) {
 		return netip.Prefix{}, false
 	}
 	ip = ip.Unmap()
-	ones, _ := n.Mask.Size() // (0,0) for a non-contiguous mask we can't express
+	ones, bits := n.Mask.Size()
+	// Size returns (0,0) for a non-contiguous mask it cannot express. Accept a
+	// real /0 only if the mask length matches the address family; otherwise reject
+	// — treating an unrepresentable mask as 0.0.0.0/0 would make Contains match
+	// EVERY endpoint and falsely flag them all as tunnel-internal.
+	if ones == 0 && bits == 0 {
+		return netip.Prefix{}, false
+	}
 	pfx := netip.PrefixFrom(ip, ones)
 	if !pfx.IsValid() {
 		return netip.Prefix{}, false

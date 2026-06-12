@@ -89,6 +89,25 @@ func Run(ctx context.Context, o Options) error {
 // the same hysteresis streak in the Decider, so one allowed reading does not
 // lift the block — it takes `Hysteresis` consecutive allowed probes.
 func (o Options) runVPN(ctx context.Context) error {
+	// A VPN endpoint must be reachable on the PHYSICAL interface. An endpoint that
+	// is itself a tunnel-internal address can't be — the physical-side pass-to rule
+	// is futile, and cutting the tunnel cuts the only path to the endpoint, so it
+	// can never reconnect and the host locks itself out. Refuse to start BEFORE
+	// touching the firewall rather than discover it at the next FULL BLOCK: a warn
+	// scrolls past in a service log, but a config that cannot recover must not run.
+	// (run `dezhban doctor` for the full picture, including a stale-but-public
+	// endpoint this check can't see.) A read error — can't classify — is non-fatal.
+	if bad, err := netdetect.CheckEndpointRouting(o.Endpoints, o.Tunnels); err != nil {
+		o.Log.Debug("could not check endpoint routing", "err", err)
+	} else if len(bad) > 0 {
+		for _, br := range bad {
+			o.Log.Error("vpn endpoint is inside the tunnel's own subnet — guaranteed lockout if blocked; "+
+				"set vpn.endpoints to the server IP reachable on the physical interface",
+				"endpoint", br.Endpoint, "subnet", br.Subnet, "iface", br.Iface)
+		}
+		return fmt.Errorf("refusing to start: %d vpn endpoint(s) are tunnel-internal and would lock the host out on full block (run `dezhban doctor` to fix)", len(bad))
+	}
+
 	guard := firewall.Policy{
 		Mode:         firewall.ModeGuard,
 		TunnelIfaces: o.Tunnels,
@@ -105,22 +124,6 @@ func (o Options) runVPN(ctx context.Context) error {
 		return fmt.Errorf("install startup guard: %w", err)
 	}
 	o.Log.Info("vpn guard active (startup)", "tunnels", o.Tunnels, "endpoints", len(o.Endpoints))
-
-	// A VPN endpoint must be reachable on the PHYSICAL interface. An endpoint that
-	// is itself a tunnel-internal address can't be — the physical-side pass-to rule
-	// is futile, and cutting the tunnel cuts the only path to the endpoint, so it
-	// can never reconnect and the host locks itself out. Warn loudly at startup
-	// rather than discover it at the next FULL BLOCK. (run `dezhban doctor` for the
-	// full picture, including a stale-but-public endpoint this check can't see.)
-	if bad, err := netdetect.CheckEndpointRouting(o.Endpoints, o.Tunnels); err != nil {
-		o.Log.Debug("could not check endpoint routing", "err", err)
-	} else {
-		for _, br := range bad {
-			o.Log.Warn("vpn endpoint is inside the tunnel's own subnet — guaranteed lockout if blocked; "+
-				"set vpn.endpoints to the server IP reachable on the physical interface",
-				"endpoint", br.Endpoint, "subnet", br.Subnet, "iface", br.Iface)
-		}
-	}
 
 	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
 	tick := time.NewTicker(o.Interval)
