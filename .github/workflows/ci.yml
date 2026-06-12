@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  # Vet + test on every OS. Each runner compiles and tests its OWN build-tagged
+  # firewall backend (pf/nft/wfp), so a backend that fails to build — e.g. a
+  # missing RenderRules on a non-host OS — is caught here, not at release time.
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+      # Race detector once (ubuntu): the runner toggles posture from a ticker
+      # loop with a recovery probe — catch data races there. Skipped on windows
+      # where -race needs a gcc toolchain that isn't preinstalled.
+      - if: matrix.os == 'ubuntu-latest'
+        run: go test -race ./...
+
+  # Verify gofmt cleanliness once (formatting is OS-independent).
+  fmt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then
+            echo "These files need gofmt:"; echo "$unformatted"; exit 1
+          fi
+
+  # Cross-compile all five release targets and assert every artifact exists.
+  build-all:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make build-all
+      - name: verify artifacts
+        run: |
+          set -eu
+          for f in \
+            dist/dezhban-darwin-arm64 \
+            dist/dezhban-darwin-amd64 \
+            dist/dezhban-linux-amd64 \
+            dist/dezhban-linux-arm64 \
+            dist/dezhban-windows-amd64.exe; do
+            test -f "$f" || { echo "missing artifact: $f"; exit 1; }
+          done
+          echo "all 5 artifacts present"

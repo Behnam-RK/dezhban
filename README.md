@@ -80,20 +80,25 @@ linked).
 ## Usage
 
 ```
-dezhban <command> [flags]
+dezhban [-v] <command> [flags]
 
 Commands:
-  run         Run the monitor→decision→enforcement loop          (root)
-  block       Manually block network egress                      (root)
-  unblock     Remove dezhban's firewall rules                    (root)
-  status      Show version, config, service, and block state
-  panic       Force-remove dezhban's rules even with no daemon   (root)
-  install     Register dezhban as a boot-persistent OS service   (root)
-  uninstall   Remove the OS service                              (root)
-  start       Start the installed service                        (root)
-  stop        Stop the installed service (removes firewall rules) (root)
-  detect-vpn  Print detected VPN tunnel interfaces for config
-  version     Print the version
+  run          Run the monitor→decision→enforcement loop          (root)
+  block        Manually block network egress                      (root)
+  unblock      Remove dezhban's firewall rules                    (root)
+  status       Show version, config, service, and block state
+  validate     Load + validate a config file (no root, no effects)
+  print-rules  Print the ruleset a block/guard would apply, without applying it
+  doctor       Diagnose VPN guard config (tunnels, endpoints, lockout risks)
+  panic        Force-remove dezhban's rules even with no daemon   (root)
+  install      Register dezhban as a boot-persistent OS service   (root)
+  uninstall    Remove the OS service                              (root)
+  start        Start the installed service                        (root)
+  stop         Stop the installed service (removes firewall rules) (root)
+  detect-vpn   Print detected VPN tunnel interfaces for config
+  version      Print the version
+
+Global: -v / --verbose   override the configured log level to debug
 ```
 
 Privileged commands require root/admin and print a clear error otherwise.
@@ -117,6 +122,21 @@ sudo dezhban panic                                # standalone teardown, no daem
   only), bypassing the VPN guard. The override when detection is wrong.
 - `block --guard` — install the VPN interface guard (see below).
 - `unblock --force` — accepted for symmetry (`unblock` is already unconditional).
+
+### Diagnose & test safely (no root)
+
+Inspect and validate before you risk a block — none of these touch the firewall:
+
+```bash
+dezhban validate    --config <config>                 # parse + validate, summarize
+dezhban print-rules --mode guard --config <config>    # exact ruleset, not applied
+dezhban doctor      --config <config>                 # tunnels, subnets, endpoint sanity
+dezhban doctor --discover --config <config>           # macOS: find the VPN's real server IP
+```
+
+`print-rules --mode` takes `guard`, `fullblock`, or `legacy`. See
+[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the lockout-recovery
+runbook and [docs/CONFIG.md](docs/CONFIG.md) for the full config reference.
 
 ## Configuration
 
