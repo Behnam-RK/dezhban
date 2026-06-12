@@ -22,13 +22,15 @@ go test ./...                       # all tests
 go test ./internal/config -run TestLoad   # a single package / test
 go run ./cmd/dezhban status         # run a subcommand without installing
 
-# cross-compile (Phase 7)
+# cross-compile a single target
 GOOS=linux GOARCH=amd64 go build ./cmd/dezhban
+make build-all                      # all 5 targets into dist/, version-stamped
 ```
 
-The binary's subcommands: `run`, `block`, `unblock`, `status`, `panic`, `version`.
-Privileged commands (`run`, `block`, `unblock`, `panic`) require root/admin and
-print a clear error otherwise.
+The binary's subcommands: `run`, `block`, `unblock`, `status`, `panic`,
+`install`, `uninstall`, `start`, `stop`, `detect-vpn`, `version`. Privileged
+commands (`run`, `block`, `unblock`, `panic`, `install`, `uninstall`, `start`,
+`stop`) require root/admin and print a clear error otherwise.
 
 ## Architecture — three layers
 
@@ -41,9 +43,12 @@ Firewall   internal/firewall   FirewallBackend per OS              (ONLY platfor
 The **`FirewallBackend` interface** (`internal/firewall/backend.go`) is the seam
 that keeps ~90% of the code shared. Rules per OS:
 
+Every backend shells out to the OS's own firewall tooling (no netlink/WFP
+libraries are linked) and tags rules with the unique name `dezhban`:
+
 - **macOS** → shell out to `pfctl`, dedicated `dezhban` anchor (`pf_darwin.go`)
-- **Linux** → `google/nftables` netlink, dedicated `dezhban` table (`nft_linux.go`)
-- **Windows** → `tailscale/wf` WFP, tagged sublayer (`wfp_windows.go`)
+- **Linux** → shell out to `nft`, dedicated `dezhban` table (`nft_linux.go`)
+- **Windows** → shell out to `netsh`/PowerShell (WFP), tagged sublayer (`wfp_windows.go`)
 
 Backends are selected by **build tags** (`//go:build darwin|linux|windows`), so
 each target compiles only its own backend.
@@ -65,9 +70,12 @@ each target compiles only its own backend.
 ## Conventions
 
 - **Dependencies are deliberate.** Stdlib for CLI (`flag`), config (JSON),
-  logging (`log/slog`), HTTP. Only three real third-party deps, one per hard
-  platform problem: `google/nftables`, `tailscale/wf`, `kardianos/service`. Don't
-  add `cobra`/`viper`/etc. — the deliverable is a dependency-light standalone binary.
+  logging (`log/slog`), HTTP, and firewall control (shell out to the OS tooling).
+  The **only** third-party dep is `kardianos/service` (cross-platform service
+  manager, Phase 6). The Linux/Windows backends shell out to `nft` and
+  `netsh`/PowerShell rather than linking `google/nftables` / `tailscale/wf` — one
+  consistent shell-out model, zero extra deps. Don't add `cobra`/`viper`/etc. —
+  the deliverable is a dependency-light standalone binary.
 - Config is JSON with string durations (e.g. `"30s"`); on-disk shape is the
   `fileConfig` DTO in `internal/config`, converted to a validated `Config`.
 - Module path `github.com/behnam-rk/dezhban` (adjust if the repo moves).
