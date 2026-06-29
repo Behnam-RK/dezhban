@@ -17,6 +17,7 @@ state.json
 
 # Tooling
 .remember/
+.serena/
 .DS_Store
 
 # Personal tooling artifacts (do not commit)
