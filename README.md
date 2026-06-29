@@ -19,23 +19,6 @@ full-blocks when the VPN exit switches to a forbidden country. See
 > machine**. Read [Safety](#safety) before running `block` for real. The escape
 > hatch is `sudo dezhban panic`.
 
-## Status
-
-Built phase-by-phase — all seven phases complete. Each phase is an independently
-buildable unit with its own acceptance checks; see
-[`docs/plans/`](docs/plans/) (`README.md` is the index).
-
-| Phase | What | State |
-|------:|------|-------|
-| 0 | Project scaffold, CLI, config, logging, privilege checks | ✅ |
-| 1 | Monitor layer — public IP → country, multi-provider polling | ✅ |
-| 2 | macOS enforcement backend (`pfctl`) + manual `block`/`unblock`/`status` | ✅ |
-| 3 | Wire monitor → decision → enforcement loop | ✅ |
-| 4 | Resilience (hysteresis, quorum, fail-modes, recovery probe) | ✅ |
-| 5 | Cross-platform backends (Linux `nft`, Windows WFP) + VPN autodetect | ✅ |
-| 6 | Persistence — run as a managed OS service (launchd/systemd/Windows) | ✅ |
-| 7 | Safety + packaging (`panic`, `--force`, `detect-vpn`, cross-compile) | ✅ |
-
 ## How it works
 
 Three layers; only the firewall layer is platform-specific.
@@ -90,6 +73,7 @@ Commands:
   validate     Load + validate a config file (no root, no effects)
   print-rules  Print the ruleset a block/guard would apply, without applying it
   doctor       Diagnose VPN guard config (tunnels, endpoints, lockout risks)
+  monitor      Live read-only view: IP, country, tunnel state, endpoints, verdict
   panic        Force-remove dezhban's rules even with no daemon   (root)
   install      Register dezhban as a boot-persistent OS service   (root)
   uninstall    Remove the OS service                              (root)
@@ -132,9 +116,13 @@ dezhban validate    --config <config>                 # parse + validate, summar
 dezhban print-rules --mode guard --config <config>    # exact ruleset, not applied
 dezhban doctor      --config <config>                 # tunnels, subnets, endpoint sanity
 dezhban doctor --discover --config <config>           # macOS: find the VPN's real server IP
+dezhban monitor     --config <config>                 # live: IP, country, tunnels, endpoints, verdict
 ```
 
-`print-rules --mode` takes `guard`, `fullblock`, or `legacy`. See
+`monitor` streams the live state the decision rests on; add `--once` for a single
+snapshot. To drive detection from anywhere without a sanctioned IP, force the
+verdict with `--simulate-country IR` (on `monitor` and `run`). `print-rules
+--mode` takes `guard`, `fullblock`, or `legacy`. See
 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for the lockout-recovery
 runbook and [docs/CONFIG.md](docs/CONFIG.md) for the full config reference.
 

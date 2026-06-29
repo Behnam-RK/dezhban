@@ -35,9 +35,11 @@ make build-all                      # all 5 targets into dist/, version-stamped
 
 The binary's subcommands: `run`, `block`, `unblock`, `status`, `panic`,
 `install`, `uninstall`, `start`, `stop`, `detect-vpn`, `validate`, `print-rules`,
-`doctor`, `version`, plus a global `-v`/`--verbose` flag (forces debug logging).
-`validate`, `print-rules`, and `doctor` are read-only inspect commands — no root,
-no firewall effects — for testing rules without risking lockout. Privileged
+`doctor`, `monitor`, `version`, plus a global `-v`/`--verbose` flag (forces debug
+logging). `validate`, `print-rules`, `doctor`, and `monitor` are read-only inspect
+commands — no root, no firewall effects — for testing rules without risking
+lockout. `monitor` is a live view of IP/country, per-tunnel state, resolved
+endpoints, and the would-be verdict. Privileged
 commands (`run`, `block`, `unblock`, `panic`, `install`, `uninstall`, `start`,
 `stop`) require root/admin and print a clear error otherwise.
 

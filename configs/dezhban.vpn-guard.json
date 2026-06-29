@@ -15,8 +15,11 @@
   "vpn": {
     "enabled": true,
     "tunnelInterfaces": ["utun4"],
-    "endpoints": ["203.0.113.10"],
-    "autodetect": false
+    "endpoints": ["vpn.example.com", "203.0.113.10"],
+    "autodetect": false,
+    "autoDiscoverEndpoints": true,
+    "endpointRefresh": "5m",
+    "tunnelWatch": "1s"
   },
   "providerQuorum": false,
   "logLevel": "info"

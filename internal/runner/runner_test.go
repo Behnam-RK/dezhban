@@ -6,12 +6,14 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
+	"github.com/behnam-rk/dezhban/internal/netdetect"
 )
 
 // fakeMonitor is a deterministic Monitor for tests. Poll (legacy loop) drains
@@ -328,3 +330,181 @@ func (b *failingGuardBackend) Apply(p firewall.Policy) error    { return errors.
 func (b *failingGuardBackend) Block(a firewall.Allowlist) error { return nil }
 func (b *failingGuardBackend) Unblock() error                   { return nil }
 func (b *failingGuardBackend) Cleanup() error                   { b.cleanups++; return nil }
+
+// --- tunnel watcher ---
+
+// signalBackend is concurrency-safe (the watcher runs in its own goroutine) and
+// signals on blockCh whenever Block is called, so a test can synchronize on it.
+type signalBackend struct {
+	mu      sync.Mutex
+	calls   []string
+	blockCh chan struct{}
+}
+
+func (b *signalBackend) record(s string) {
+	b.mu.Lock()
+	b.calls = append(b.calls, s)
+	b.mu.Unlock()
+}
+func (b *signalBackend) Apply(p firewall.Policy) error {
+	if p.Mode == firewall.ModeGuard {
+		b.record("apply-guard")
+	} else {
+		b.record("apply-fullblock")
+	}
+	return nil
+}
+func (b *signalBackend) Block(a firewall.Allowlist) error {
+	b.record("block")
+	select {
+	case b.blockCh <- struct{}{}:
+	default:
+	}
+	return nil
+}
+func (b *signalBackend) Unblock() error { b.record("unblock"); return nil }
+func (b *signalBackend) Cleanup() error { b.record("cleanup"); return nil }
+func (b *signalBackend) has(call string) bool {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for _, c := range b.calls {
+		if c == call {
+			return true
+		}
+	}
+	return false
+}
+
+// idleMonitor never yields a reading; Poll stays open until ctx is cancelled, so
+// the legacy loop survives long enough for the watcher to drive it.
+type idleMonitor struct{}
+
+func (idleMonitor) Poll(ctx context.Context) <-chan monitor.Result {
+	ch := make(chan monitor.Result)
+	go func() {
+		<-ctx.Done()
+		close(ch)
+	}()
+	return ch
+}
+func (idleMonitor) Once(ctx context.Context) (monitor.Reading, error) {
+	<-ctx.Done()
+	return monitor.Reading{}, ctx.Err()
+}
+
+func downWatcher() *netdetect.Watcher {
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample:   func([]string) netdetect.TunnelState { return netdetect.TunnelState{Up: false} },
+	}
+}
+
+// In legacy mode a tunnel drop must block immediately, with no geo reading at
+// all, and a still-down tunnel must not auto-unblock.
+func TestLegacyTunnelDownBlocks(t *testing.T) {
+	be := &signalBackend{blockCh: make(chan struct{}, 4)}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := Options{
+		Monitor:   idleMonitor{},
+		Decider:   decision.New([]string{"IR"}, false, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Allowlist: oneHostAL,
+		Watcher:   downWatcher(),
+	}
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, o) }()
+
+	select {
+	case <-be.blockCh:
+	case <-time.After(2 * time.Second):
+		cancel()
+		t.Fatal("tunnel-down did not trigger an immediate block")
+	}
+	cancel()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if be.has("unblock") {
+		t.Error("a still-down tunnel must not auto-unblock")
+	}
+}
+
+// In VPN mode the watcher is observability-only: a tunnel drop must NOT apply any
+// firewall transition (the standing guard rule already cuts the leak). Only the
+// startup guard should appear, plus cleanup.
+func TestVPNWatcherObservabilityOnly(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := Options{
+		Monitor: &fakeMonitor{cancel: cancel, results: []monitor.Result{
+			reading("US"), reading("US"), reading("US"),
+		}},
+		Decider:   decision.New([]string{"IR"}, true, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		VPN:       true,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:   downWatcher(),
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range be.calls {
+		if c == "apply-fullblock" {
+			t.Fatalf("watcher must not trigger a full block in VPN mode; calls = %v", be.calls)
+		}
+	}
+	guards := 0
+	for _, c := range be.calls {
+		if c == "apply-guard" {
+			guards++
+		}
+	}
+	if guards != 1 {
+		t.Errorf("apply-guard count = %d, want 1 (startup only); calls = %v", guards, be.calls)
+	}
+}
+
+func addrsOf(ss ...string) []netip.Addr {
+	out := make([]netip.Addr, len(ss))
+	for i, s := range ss {
+		out[i] = netip.MustParseAddr(s)
+	}
+	return out
+}
+
+func TestReconcileEndpoints(t *testing.T) {
+	set := func(ss ...string) netdetect.EndpointSet { return netdetect.EndpointSet{Addrs: addrsOf(ss...)} }
+
+	// Empty refresh never narrows the set.
+	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set(), false); ch || !sameAddrs(got, addrsOf("1.1.1.1")) {
+		t.Errorf("empty fresh: got %v changed=%v, want unchanged", got, ch)
+	}
+	// Guarding: a different set fully replaces.
+	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set("2.2.2.2"), false); !ch || !sameAddrs(got, addrsOf("2.2.2.2")) {
+		t.Errorf("guard replace: got %v changed=%v, want [2.2.2.2] changed", got, ch)
+	}
+	// Guarding: identical set is no change.
+	if _, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set("1.1.1.1"), false); ch {
+		t.Error("guard identical: want no change")
+	}
+	// Guarding: a loss-only refresh (transient flake) must not drop an endpoint.
+	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1", "2.2.2.2"), set("1.1.1.1"), false); ch || !sameAddrs(got, addrsOf("1.1.1.1", "2.2.2.2")) {
+		t.Errorf("guard loss-only: got %v changed=%v, want unchanged (flake must not drop a needed endpoint)", got, ch)
+	}
+	// Guarding: a rotation that surfaces a new address still replaces.
+	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set("3.3.3.3"), false); !ch || !sameAddrs(got, addrsOf("3.3.3.3")) {
+		t.Errorf("guard rotation: got %v changed=%v, want [3.3.3.3] changed", got, ch)
+	}
+	// Blocked: union-only growth.
+	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set("2.2.2.2"), true); !ch || !sameAddrs(got, addrsOf("1.1.1.1", "2.2.2.2")) {
+		t.Errorf("blocked grow: got %v changed=%v, want union", got, ch)
+	}
+	// Blocked: a shrinking refresh must not drop endpoints.
+	if _, ch := reconcileEndpoints(addrsOf("1.1.1.1", "2.2.2.2"), set("1.1.1.1"), true); ch {
+		t.Error("blocked shrink: want no change (must not drop an endpoint while blocked)")
+	}
+}
