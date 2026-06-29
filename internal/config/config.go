@@ -259,12 +259,15 @@ func classifyTarget(s string) targetKind {
 
 // isPlausibleHostname is a light, offline RFC-1123-ish syntax check: dotted
 // labels of ASCII letters, digits and hyphens, each label 1..63 chars and not
-// hyphen-bounded, total length <= 253.
+// hyphen-bounded, total length <= 253. The final (top-level) label must not be
+// all-numeric, which rejects truncated or malformed IPs (e.g. "203.0.113") that
+// would otherwise masquerade as hostnames and pass validation but never resolve.
 func isPlausibleHostname(s string) bool {
 	if len(s) == 0 || len(s) > 253 {
 		return false
 	}
-	for _, lab := range strings.Split(s, ".") {
+	labels := strings.Split(s, ".")
+	for _, lab := range labels {
 		if l := len(lab); l == 0 || l > 63 {
 			return false
 		}
@@ -278,6 +281,24 @@ func isPlausibleHostname(s string) bool {
 			if !ok {
 				return false
 			}
+		}
+	}
+	// A real hostname's top-level label is never all digits; an all-numeric final
+	// label means this is a malformed IP, not a host to resolve.
+	if last := labels[len(labels)-1]; isAllDigits(last) {
+		return false
+	}
+	return true
+}
+
+// isAllDigits reports whether s is non-empty and contains only ASCII digits.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
 		}
 	}
 	return true

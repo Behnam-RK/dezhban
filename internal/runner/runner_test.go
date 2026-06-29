@@ -491,6 +491,14 @@ func TestReconcileEndpoints(t *testing.T) {
 	if _, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set("1.1.1.1"), false); ch {
 		t.Error("guard identical: want no change")
 	}
+	// Guarding: a loss-only refresh (transient flake) must not drop an endpoint.
+	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1", "2.2.2.2"), set("1.1.1.1"), false); ch || !sameAddrs(got, addrsOf("1.1.1.1", "2.2.2.2")) {
+		t.Errorf("guard loss-only: got %v changed=%v, want unchanged (flake must not drop a needed endpoint)", got, ch)
+	}
+	// Guarding: a rotation that surfaces a new address still replaces.
+	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set("3.3.3.3"), false); !ch || !sameAddrs(got, addrsOf("3.3.3.3")) {
+		t.Errorf("guard rotation: got %v changed=%v, want [3.3.3.3] changed", got, ch)
+	}
 	// Blocked: union-only growth.
 	if got, ch := reconcileEndpoints(addrsOf("1.1.1.1"), set("2.2.2.2"), true); !ch || !sameAddrs(got, addrsOf("1.1.1.1", "2.2.2.2")) {
 		t.Errorf("blocked grow: got %v changed=%v, want union", got, ch)

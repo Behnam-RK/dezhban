@@ -151,11 +151,14 @@ func TestClassifyTarget(t *testing.T) {
 		"vpn.example.com":         kindHost,
 		"nordlynx":                kindHost,
 		"a-b.c-d.example":         kindHost,
+		"1.example.com":           kindHost, // numeric non-final label is fine
 		"":                        kindInvalid,
 		"bad endpoint!":           kindInvalid,
 		"-leading.example":        kindInvalid,
 		"trailing-.example":       kindInvalid,
 		"under_score.example.com": kindInvalid,
+		"203.0.113":               kindInvalid, // truncated IP, not a hostname
+		"999.999.999.999":         kindInvalid, // malformed IP masquerading as host
 	}
 	for in, want := range cases {
 		if got := classifyTarget(in); got != want {

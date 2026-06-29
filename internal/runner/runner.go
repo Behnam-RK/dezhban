@@ -375,15 +375,21 @@ func (o Options) resolveEndpoints(ctx context.Context) netdetect.EndpointSet {
 }
 
 // reconcileEndpoints decides the endpoint set to use after a refresh, enforcing
-// the safety invariant: never apply an empty set, and while blocked only grow it
-// (a removed endpoint might be the one needed to recover). Returns the set and
-// whether it changed.
+// the safety invariant: never apply an empty set; while blocked only grow the set
+// (a removed endpoint might be the one needed to recover); and while guarding
+// never let a loss-only refresh drop an endpoint the tunnel still needs. Returns
+// the set and whether it changed.
 func reconcileEndpoints(current []netip.Addr, fresh netdetect.EndpointSet, blocked bool) ([]netip.Addr, bool) {
 	if len(fresh.Addrs) == 0 {
 		return current, false // never narrow to empty
 	}
 	if !blocked {
-		if sameAddrs(current, fresh.Addrs) {
+		// A guard-time refresh that brings nothing new is either identical (no-op)
+		// or a loss-only shrink — the signature of a transient DNS/discovery flake.
+		// Keep the current set: dropping a still-needed server endpoint here and
+		// then taking a geo BLOCK would restore a guard that can't reconnect. A
+		// genuine rotation surfaces a new address, so it still replaces.
+		if sameAddrs(current, unionAddrs(current, fresh.Addrs)) {
 			return current, false
 		}
 		return fresh.Addrs, true

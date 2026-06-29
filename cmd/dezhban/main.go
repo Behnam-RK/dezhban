@@ -311,12 +311,13 @@ func runDryRun(cfg *config.Config, log *slog.Logger, ov runOverrides) int {
 		log.Error("no usable geo providers configured")
 		return 1
 	}
+	base := monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
 	var mon interface {
 		Poll(ctx context.Context) <-chan monitor.Result
-	} = monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	} = base
 	if ov.simCountry != "" {
 		log.Warn("SIMULATION: forcing resolved country", "country", ov.simCountry)
-		mon = monitor.NewSimMonitor(monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum), ov.simCountry)
+		mon = monitor.NewSimMonitor(base, ov.simCountry)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -767,12 +768,13 @@ func cmdMonitor(args []string) int {
 		fmt.Fprintln(os.Stderr, "no usable geo providers configured")
 		return 1
 	}
+	base := monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
 	var mon interface {
 		Once(ctx context.Context) (monitor.Reading, error)
-	} = monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	} = base
 	if c := strings.TrimSpace(*simCountry); c != "" {
 		fmt.Fprintf(os.Stderr, "SIMULATION: forcing country %s\n", strings.ToUpper(c))
-		mon = monitor.NewSimMonitor(monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum), c)
+		mon = monitor.NewSimMonitor(base, c)
 	}
 
 	tunnels := resolveTunnels(cfg, log)
