@@ -32,12 +32,26 @@ type VPN struct {
 	// TunnelInterfaces are the VPN tunnel interface names (e.g. "utun4"). For now
 	// these are concrete names; autodetect/pattern expansion lands with netdetect.
 	TunnelInterfaces []string
-	// Endpoints are the VPN server IPs reachable on the physical interface, kept
-	// open so the tunnel can stay up and reconnect.
+	// Endpoints are the VPN server addresses reachable on the physical interface,
+	// kept open so the tunnel can stay up and reconnect. Each entry may be an IP
+	// literal or a hostname (resolved and re-resolved at runtime) — hostnames let
+	// third-party VPNs that publish a server name rather than a fixed IP be used.
 	Endpoints []string
-	// Autodetect requests discovery of the tunnel interface + endpoint (netdetect,
-	// future); explicit values above always win.
+	// Autodetect requests discovery of the tunnel interface (netdetect); explicit
+	// TunnelInterfaces always win.
 	Autodetect bool
+	// AutoDiscoverEndpoints continuously learns the live VPN server IP from the
+	// active socket (macOS only) and keeps that egress open, so a rotating-pool
+	// VPN (NordVPN/ProtonVPN/…) needs no endpoint typed by hand. On other
+	// platforms it is ignored and the host falls back to Endpoints.
+	AutoDiscoverEndpoints bool
+	// EndpointRefresh is how often hostnames are re-resolved and live discovery
+	// re-run. Defaults to 5m.
+	EndpointRefresh time.Duration
+	// TunnelWatch is how often the tunnel interface(s) are sampled for up/down so
+	// a drop cuts the network at once instead of waiting for the next geo poll.
+	// Defaults to 1s.
+	TunnelWatch time.Duration
 }
 
 // Config is dezhban's validated runtime configuration.
@@ -80,10 +94,13 @@ type fileConfig struct {
 // fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
 // absent block keep defaults.
 type fileVPN struct {
-	Enabled          bool     `json:"enabled"`
-	TunnelInterfaces []string `json:"tunnelInterfaces"`
-	Endpoints        []string `json:"endpoints"`
-	Autodetect       bool     `json:"autodetect"`
+	Enabled               bool     `json:"enabled"`
+	TunnelInterfaces      []string `json:"tunnelInterfaces"`
+	Endpoints             []string `json:"endpoints"`
+	Autodetect            bool     `json:"autodetect"`
+	AutoDiscoverEndpoints bool     `json:"autoDiscoverEndpoints"`
+	EndpointRefresh       string   `json:"endpointRefresh"`
+	TunnelWatch           string   `json:"tunnelWatch"`
 }
 
 // Default returns a Config with safe, security-first defaults.
@@ -165,12 +182,28 @@ func apply(cfg *Config, fc fileConfig) error {
 		cfg.LogLevel = fc.LogLevel
 	}
 	if fc.VPN != nil {
-		cfg.VPN = VPN{
-			Enabled:          fc.VPN.Enabled,
-			TunnelInterfaces: fc.VPN.TunnelInterfaces,
-			Endpoints:        fc.VPN.Endpoints,
-			Autodetect:       fc.VPN.Autodetect,
+		v := VPN{
+			Enabled:               fc.VPN.Enabled,
+			TunnelInterfaces:      fc.VPN.TunnelInterfaces,
+			Endpoints:             fc.VPN.Endpoints,
+			Autodetect:            fc.VPN.Autodetect,
+			AutoDiscoverEndpoints: fc.VPN.AutoDiscoverEndpoints,
 		}
+		if fc.VPN.EndpointRefresh != "" {
+			d, err := time.ParseDuration(fc.VPN.EndpointRefresh)
+			if err != nil {
+				return fmt.Errorf("vpn.endpointRefresh: %w", err)
+			}
+			v.EndpointRefresh = d
+		}
+		if fc.VPN.TunnelWatch != "" {
+			d, err := time.ParseDuration(fc.VPN.TunnelWatch)
+			if err != nil {
+				return fmt.Errorf("vpn.tunnelWatch: %w", err)
+			}
+			v.TunnelWatch = d
+		}
+		cfg.VPN = v
 	}
 	return nil
 }
@@ -187,6 +220,67 @@ func normalize(cfg *Config) {
 	for i, ep := range cfg.VPN.Endpoints {
 		cfg.VPN.Endpoints[i] = strings.TrimSpace(ep)
 	}
+	// VPN guard cadence defaults. Set unconditionally — these are only read in
+	// VPN mode, but defaulting here keeps Validate and the runner simple.
+	if cfg.VPN.EndpointRefresh <= 0 {
+		cfg.VPN.EndpointRefresh = 5 * time.Minute
+	}
+	if cfg.VPN.TunnelWatch <= 0 {
+		cfg.VPN.TunnelWatch = 1 * time.Second
+	}
+}
+
+// targetKind classifies an allowlist/endpoint entry.
+type targetKind int
+
+const (
+	kindInvalid targetKind = iota
+	kindIP
+	kindHost
+)
+
+// classifyTarget reports whether s is an IP literal, a plausible DNS hostname,
+// or neither. It performs NO DNS resolution — classification stays offline so
+// validation is root-free and fast; real resolution happens later in the run
+// path (internal/netdetect.EndpointSource).
+func classifyTarget(s string) targetKind {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return kindInvalid
+	}
+	if _, err := netip.ParseAddr(s); err == nil {
+		return kindIP
+	}
+	if isPlausibleHostname(s) {
+		return kindHost
+	}
+	return kindInvalid
+}
+
+// isPlausibleHostname is a light, offline RFC-1123-ish syntax check: dotted
+// labels of ASCII letters, digits and hyphens, each label 1..63 chars and not
+// hyphen-bounded, total length <= 253.
+func isPlausibleHostname(s string) bool {
+	if len(s) == 0 || len(s) > 253 {
+		return false
+	}
+	for _, lab := range strings.Split(s, ".") {
+		if l := len(lab); l == 0 || l > 63 {
+			return false
+		}
+		if lab[0] == '-' || lab[len(lab)-1] == '-' {
+			return false
+		}
+		for i := 0; i < len(lab); i++ {
+			c := lab[i]
+			ok := (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '-'
+			if !ok {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // Validate checks invariants the rest of the program relies on.
@@ -214,12 +308,17 @@ func (c *Config) Validate() error {
 		if len(c.VPN.TunnelInterfaces) == 0 && !c.VPN.Autodetect {
 			return errors.New("vpn.enabled requires vpn.tunnelInterfaces or vpn.autodetect")
 		}
-		if len(c.VPN.Endpoints) == 0 {
-			return errors.New("vpn.enabled requires at least one vpn.endpoints entry")
+		// At least one endpoint OR auto-discovery: a rotating-pool VPN may carry no
+		// hand-typed endpoint and rely entirely on live discovery, but a guard with
+		// no way to learn the server address can never let the tunnel reconnect.
+		if len(c.VPN.Endpoints) == 0 && !c.VPN.AutoDiscoverEndpoints {
+			return errors.New("vpn.enabled requires at least one vpn.endpoints entry or vpn.autoDiscoverEndpoints")
 		}
+		// Endpoints may be IP literals or hostnames; hostnames are resolved at
+		// runtime. Reject only entries that are neither.
 		for _, ep := range c.VPN.Endpoints {
-			if _, err := netip.ParseAddr(ep); err != nil {
-				return fmt.Errorf("vpn.endpoints: invalid IP %q: %w", ep, err)
+			if classifyTarget(ep) == kindInvalid {
+				return fmt.Errorf("vpn.endpoints: %q is neither an IP address nor a valid hostname", ep)
 			}
 		}
 	}

@@ -51,6 +51,7 @@ Commands:
   unblock     Remove dezhban's firewall rules
   status      Show version, config, and current state
   validate    Load and validate a config file (no root, no side effects)
+  monitor     Live read-only view: IP, country, tunnel state, endpoints, verdict
   print-rules Print the firewall ruleset a block/guard would apply, without applying it
   doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
   panic       Force-remove dezhban's rules even if the daemon is dead
@@ -89,6 +90,8 @@ func run(args []string) int {
 		return cmdStatus(rest)
 	case "validate":
 		return cmdValidate(rest)
+	case "monitor":
+		return cmdMonitor(rest)
 	case "print-rules":
 		return cmdPrintRules(rest)
 	case "doctor":
@@ -158,6 +161,8 @@ func cmdRun(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	dryRun := fs.Bool("dry-run", false, "resolve and print country without touching the firewall")
+	simCountry := fs.String("simulate-country", "", "TESTING: force the resolved country code (e.g. IR) to drive the verdict")
+	simTunDown := fs.String("simulate-tunnel-down", "", "TESTING: report the tunnel as down after this delay (e.g. 8s) to exercise failover")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)
@@ -167,8 +172,14 @@ func cmdRun(args []string) int {
 	}
 	log := newLogger(cfg)
 
+	ov, err := parseOverrides(*simCountry, *simTunDown)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2
+	}
+
 	if *dryRun {
-		return runDryRun(cfg, log)
+		return runDryRun(cfg, log, ov)
 	}
 	if !requireRoot("run") {
 		return 1
@@ -181,7 +192,7 @@ func cmdRun(args []string) int {
 	// platform logger. The build closure assembles the run loop lazily so it can
 	// use whichever logger the service selects.
 	build := func(l *slog.Logger) (runner.Options, error) {
-		return assembleOptions(cfg, l)
+		return assembleOptions(cfg, l, ov)
 	}
 	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath); err != nil {
 		log.Error("run loop failed", "err", err)
@@ -190,11 +201,33 @@ func cmdRun(args []string) int {
 	return 0
 }
 
+// runOverrides carries the TESTING-only flags (--simulate-country,
+// --simulate-tunnel-down) through the run-loop assembly. Zero value = no overrides.
+type runOverrides struct {
+	simCountry      string
+	tunnelDownSet   bool
+	tunnelDownAfter time.Duration
+}
+
+// parseOverrides validates the simulation flags into a runOverrides.
+func parseOverrides(simCountry, simTunDown string) (runOverrides, error) {
+	ov := runOverrides{simCountry: strings.TrimSpace(simCountry)}
+	if s := strings.TrimSpace(simTunDown); s != "" {
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return runOverrides{}, fmt.Errorf("--simulate-tunnel-down: %w", err)
+		}
+		ov.tunnelDownSet = true
+		ov.tunnelDownAfter = d
+	}
+	return ov, nil
+}
+
 // assembleOptions builds the run-loop options from config, wiring the monitor,
 // decider, and firewall backend. It is shared by the `run` command and the
 // service Start path; the logger is supplied by the caller so service mode can
 // route output to the platform logger.
-func assembleOptions(cfg *config.Config, log *slog.Logger) (runner.Options, error) {
+func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (runner.Options, error) {
 	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
 	if len(providers) == 0 {
 		return runner.Options{}, fmt.Errorf("no usable geo providers configured")
@@ -203,6 +236,17 @@ func assembleOptions(cfg *config.Config, log *slog.Logger) (runner.Options, erro
 	if err != nil {
 		return runner.Options{}, fmt.Errorf("firewall backend unavailable: %w", err)
 	}
+
+	var mon runner.Monitor = monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	if ov.simCountry != "" {
+		log.Warn("SIMULATION: forcing resolved country", "country", ov.simCountry)
+		mon = monitor.NewSimMonitor(mon.(*monitor.Monitor), ov.simCountry)
+	}
+
+	tunnels := resolveTunnels(cfg, log)
+	epSrc := buildEndpointSource(cfg, log, tunnels, true)
+	watcher := buildWatcher(cfg, log, tunnels, ov)
+
 	log.Info("run loop started",
 		"interval", cfg.PollInterval,
 		"providers", len(providers),
@@ -211,31 +255,69 @@ func assembleOptions(cfg *config.Config, log *slog.Logger) (runner.Options, erro
 		"hysteresis", cfg.Hysteresis,
 		"quorum", cfg.ProviderQuorum,
 		"vpn", cfg.VPN.Enabled,
+		"auto_discover_endpoints", cfg.VPN.AutoDiscoverEndpoints,
+		"tunnel_watch", watcher != nil,
 	)
 	return runner.Options{
-		Monitor:   monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum),
-		Decider:   decision.New(cfg.BlockedCountries, cfg.FailClosed, cfg.Hysteresis),
-		Backend:   fw,
-		Log:       log,
-		Interval:  cfg.PollInterval,
-		VPN:       cfg.VPN.Enabled,
-		Tunnels:   resolveTunnels(cfg, log),
-		Endpoints: parseEndpoints(cfg.VPN.Endpoints, log),
+		Monitor:          mon,
+		Decider:          decision.New(cfg.BlockedCountries, cfg.FailClosed, cfg.Hysteresis),
+		Backend:          fw,
+		Log:              log,
+		Interval:         cfg.PollInterval,
+		VPN:              cfg.VPN.Enabled,
+		Tunnels:          tunnels,
+		ResolveEndpoints: func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
+		EndpointRefresh:  cfg.VPN.EndpointRefresh,
+		Watcher:          watcher,
 		// Re-resolve the allowlist at each Block so rotated provider IPs stay
 		// reachable for recovery detection while egress is cut.
 		Allowlist: func() firewall.Allowlist { return buildAllowlist(cfg, log) },
 	}, nil
 }
 
+// buildWatcher constructs the tunnel watcher, or returns nil when there is
+// nothing to watch. It exists whenever tunnels are configured/autodetected (so
+// VPN-mode observability and the legacy kill switch work) or when a tunnel-drop
+// simulation is requested.
+func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov runOverrides) *netdetect.Watcher {
+	if len(tunnels) == 0 && !cfg.VPN.Autodetect && !ov.tunnelDownSet {
+		return nil
+	}
+	w := &netdetect.Watcher{Tunnels: tunnels, Interval: cfg.VPN.TunnelWatch, Log: log}
+	if ov.tunnelDownSet {
+		log.Warn("SIMULATION: tunnel will be reported down", "after", ov.tunnelDownAfter)
+		w.Sample = simTunnelSample(ov.tunnelDownAfter)
+	}
+	return w
+}
+
+// simTunnelSample reports the tunnel UP until downAfter has elapsed, then DOWN —
+// a deterministic drop for exercising the failover path with no real VPN.
+func simTunnelSample(downAfter time.Duration) func([]string) netdetect.TunnelState {
+	start := time.Now()
+	return func([]string) netdetect.TunnelState {
+		if time.Since(start) >= downAfter {
+			return netdetect.TunnelState{Up: false, Detail: "simulated drop"}
+		}
+		return netdetect.TunnelState{Up: true, Detail: "simulated up"}
+	}
+}
+
 // runDryRun polls the monitor and prints each reading without touching the
 // firewall. Stops on SIGINT/SIGTERM.
-func runDryRun(cfg *config.Config, log *slog.Logger) int {
+func runDryRun(cfg *config.Config, log *slog.Logger, ov runOverrides) int {
 	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
 	if len(providers) == 0 {
 		log.Error("no usable geo providers configured")
 		return 1
 	}
-	mon := monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	var mon interface {
+		Poll(ctx context.Context) <-chan monitor.Result
+	} = monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	if ov.simCountry != "" {
+		log.Warn("SIMULATION: forcing resolved country", "country", ov.simCountry)
+		mon = monitor.NewSimMonitor(monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum), ov.simCountry)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -297,11 +379,15 @@ func cmdBlock(args []string) int {
 		// open, physical egress locked to the endpoint); a plain `block` under
 		// vpn.enabled is a full block that cuts the tunnel too.
 		tunnels := resolveTunnels(cfg, log)
-		if len(tunnels) == 0 || len(cfg.VPN.Endpoints) == 0 {
-			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autodetect) and vpn.endpoints")
+		if len(tunnels) == 0 {
+			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autodetect)")
 			return 1
 		}
-		endpoints := parseEndpoints(cfg.VPN.Endpoints, log)
+		endpoints := resolveEndpointsOnce(cfg, log, tunnels)
+		if len(endpoints) == 0 {
+			log.Error("vpn mode needs at least one reachable endpoint (vpn.endpoints as IP/hostname, or vpn.autoDiscoverEndpoints with the VPN connected)")
+			return 1
+		}
 		mode := firewall.ModeFullBlock
 		if *guard {
 			mode = firewall.ModeGuard
@@ -356,19 +442,49 @@ func resolveTunnels(cfg *config.Config, log *slog.Logger) []string {
 	return tun
 }
 
-// parseEndpoints converts configured VPN endpoint strings to addresses, warning
-// on (and skipping) any that don't parse. Config validation already rejects bad
-// endpoints when vpn.enabled, so this mainly guards the --guard-without-enabled path.
-func parseEndpoints(eps []string, log *slog.Logger) []netip.Addr {
-	var out []netip.Addr
-	for _, s := range eps {
-		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
-			out = append(out, a.Unmap())
+// buildEndpointSource assembles the VPN endpoint resolver from config: IP
+// literals and hostnames are split out of vpn.endpoints, and live discovery is
+// attached when vpn.autoDiscoverEndpoints is on (macOS only). The same source
+// powers the live run loop, one-shot resolution for block/print-rules, and the
+// monitor view, so they agree on what "the endpoints" are.
+func buildEndpointSource(cfg *config.Config, log *slog.Logger, tunnels []string, withDiscovery bool) *netdetect.EndpointSource {
+	var literals []netip.Addr
+	var hostnames []string
+	for _, ep := range cfg.VPN.Endpoints {
+		ep = strings.TrimSpace(ep)
+		if ep == "" {
+			continue
+		}
+		if a, err := netip.ParseAddr(ep); err == nil {
+			literals = append(literals, a.Unmap())
 		} else {
-			log.Warn("ignoring invalid vpn endpoint", "addr", s, "err", err)
+			hostnames = append(hostnames, ep)
 		}
 	}
-	return out
+	src := &netdetect.EndpointSource{
+		Literals:  literals,
+		Hostnames: hostnames,
+		Tunnels:   tunnels,
+		Log:       log,
+	}
+	if withDiscovery && cfg.VPN.AutoDiscoverEndpoints {
+		if runtime.GOOS == "darwin" {
+			src.Discover = netdetect.DiscoverEndpointsAddrs
+		} else {
+			log.Warn("vpn.autoDiscoverEndpoints is set but live discovery is only supported on macOS; " +
+				"relying on vpn.endpoints (hostnames/IPs)")
+		}
+	}
+	return src
+}
+
+// resolveEndpointsOnce resolves the endpoint set a single time (literals +
+// hostnames + discovery), for the non-daemon commands that need a concrete list.
+func resolveEndpointsOnce(cfg *config.Config, log *slog.Logger, tunnels []string) []netip.Addr {
+	src := buildEndpointSource(cfg, log, tunnels, true)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	return src.Resolve(ctx).Addrs
 }
 
 // buildAllowlist converts the config allowlist into a firewall.Allowlist and
@@ -572,11 +688,14 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println(`  "vpn": {`)
 	fmt.Println(`    "enabled": true,`)
 	fmt.Printf("    \"tunnelInterfaces\": [%s],\n", quoteJoin(tunnels))
-	fmt.Println(`    "endpoints": ["<VPN-SERVER-IP>"]`)
+	fmt.Println(`    "endpoints": ["vpn.example.com"],`)
+	fmt.Println(`    "autoDiscoverEndpoints": true`)
 	fmt.Println(`  }`)
 	fmt.Println()
-	fmt.Println("set endpoints to your VPN server's public IP(s) from your VPN client config —")
-	fmt.Println("dezhban does not autodetect it, because a wrong endpoint would leak traffic.")
+	fmt.Println("endpoints may be IP(s) OR hostname(s) (re-resolved at runtime). For a")
+	fmt.Println("rotating-pool VPN (NordVPN/ProtonVPN/…), set autoDiscoverEndpoints: true and")
+	fmt.Println("dezhban learns the live server IP from the active socket (macOS). Verify with")
+	fmt.Println("`dezhban monitor` or `dezhban doctor --discover` before enabling the guard.")
 	return 0
 }
 
@@ -623,26 +742,144 @@ func cmdValidate(args []string) int {
 	return 0
 }
 
+// cmdMonitor is a read-only live view of everything the decision rests on: the
+// public IP and country, each tunnel's up/down state, the resolved + discovered
+// endpoints with their source, and the verdict that WOULD fire — all without root
+// or any firewall change. It is the safe way to watch detection and to confirm a
+// VPN-guard config behaves before enabling it. Diagnostic logs go to stderr so
+// stdout is just the snapshot.
+func cmdMonitor(args []string) int {
+	fs := flag.NewFlagSet("monitor", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	once := fs.Bool("once", false, "print a single snapshot and exit")
+	simCountry := fs.String("simulate-country", "", "override the resolved country code (e.g. IR) to test the verdict")
+	_ = fs.Parse(args)
+
+	cfg, err := loadConfig(*cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+	log := newLogger(cfg)
+
+	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
+	if len(providers) == 0 {
+		fmt.Fprintln(os.Stderr, "no usable geo providers configured")
+		return 1
+	}
+	var mon interface {
+		Once(ctx context.Context) (monitor.Reading, error)
+	} = monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	if c := strings.TrimSpace(*simCountry); c != "" {
+		fmt.Fprintf(os.Stderr, "SIMULATION: forcing country %s\n", strings.ToUpper(c))
+		mon = monitor.NewSimMonitor(monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum), c)
+	}
+
+	tunnels := resolveTunnels(cfg, log)
+	epSrc := buildEndpointSource(cfg, log, tunnels, true)
+	blocked := make(map[string]bool, len(cfg.BlockedCountries))
+	for _, c := range cfg.BlockedCountries {
+		blocked[c] = true
+	}
+
+	snapshot := func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		r, lookupErr := mon.Once(ctx)
+		set := epSrc.Resolve(ctx)
+
+		fmt.Println("── dezhban monitor ──")
+		if lookupErr != nil {
+			fmt.Printf("public IP:  (lookup failed: %v)\n", lookupErr)
+		} else {
+			fmt.Printf("public IP:  %s   country: %s   provider: %s\n", r.IP, r.CountryCode, r.Provider)
+		}
+
+		fmt.Println("tunnels:")
+		if len(tunnels) == 0 {
+			fmt.Println("  (none configured)")
+		}
+		for _, t := range tunnels {
+			st := netdetect.SampleTunnels([]string{t})
+			state := "DOWN"
+			if st.Up {
+				state = "UP"
+			}
+			fmt.Printf("  %s — %s (%s)\n", t, state, st.Detail)
+		}
+
+		fmt.Println("endpoints:")
+		if len(set.Addrs) == 0 {
+			fmt.Println("  (none resolved — set vpn.endpoints or enable vpn.autoDiscoverEndpoints)")
+		}
+		for _, a := range set.Addrs {
+			fmt.Printf("  %s — %s\n", a, set.Sources[a])
+		}
+
+		// Verdict for THIS reading (hysteresis=1 shows the immediate call; the
+		// configured hysteresis governs how many consecutive readings actually toggle).
+		v := decision.New(cfg.BlockedCountries, cfg.FailClosed, 1).Evaluate(monitor.Result{Reading: r, Err: lookupErr})
+		verdict := "ALLOW"
+		if v == decision.Block {
+			verdict = "BLOCK"
+		}
+		reason := "country not in blocklist"
+		switch {
+		case lookupErr != nil && cfg.FailClosed:
+			reason = "lookup failed (fail-closed)"
+		case lookupErr != nil:
+			reason = "lookup failed (fail-open)"
+		case blocked[r.CountryCode]:
+			reason = "country in blocklist"
+		}
+		fmt.Printf("verdict:    %s — %s\n", verdict, reason)
+		if cfg.Hysteresis > 1 {
+			fmt.Printf("            (needs %d consecutive readings to toggle enforcement)\n", cfg.Hysteresis)
+		}
+		fmt.Println()
+	}
+
+	if *once {
+		snapshot()
+		return 0
+	}
+
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	snapshot()
+	t := time.NewTicker(cfg.PollInterval)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return 0
+		case <-t.C:
+			snapshot()
+		}
+	}
+}
+
 // policyForMode builds the firewall Policy the named mode would apply, mirroring
 // the run loop's guard/full-block construction (runner.runVPN). It is the single
 // source print-rules renders from. NOTE: keep in sync with runner.runVPN; a
 // future refactor should extract a shared constructor in the firewall package.
 func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
 	al := buildAllowlist(cfg, log)
+	tunnels := resolveTunnels(cfg, log)
 	switch mode {
 	case "guard":
 		return firewall.Policy{
 			Mode:         firewall.ModeGuard,
 			Allowlist:    al,
-			TunnelIfaces: resolveTunnels(cfg, log),
-			VPNEndpoints: parseEndpoints(cfg.VPN.Endpoints, log),
+			TunnelIfaces: tunnels,
+			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
 		}, nil
 	case "fullblock":
 		return firewall.Policy{
 			Mode:         firewall.ModeFullBlock,
 			Allowlist:    al,
-			TunnelIfaces: resolveTunnels(cfg, log),
-			VPNEndpoints: parseEndpoints(cfg.VPN.Endpoints, log),
+			TunnelIfaces: tunnels,
+			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
 		}, nil
 	case "legacy":
 		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.
@@ -725,11 +962,11 @@ func cmdDoctor(args []string) int {
 	}
 	fmt.Println()
 
-	endpoints := parseEndpoints(cfg.VPN.Endpoints, log)
-	fmt.Println("endpoints:")
+	endpoints := resolveEndpointsOnce(cfg, log, tunnels)
+	fmt.Println("endpoints (resolved: literals + hostnames + discovery):")
 	var bad []netdetect.EndpointRoute
 	if len(endpoints) == 0 {
-		fmt.Println("  (none configured)")
+		fmt.Println("  (none resolved)")
 	} else {
 		bad, _ = netdetect.CheckEndpointRouting(endpoints, tunnels)
 		internal := map[string]netdetect.EndpointRoute{}
