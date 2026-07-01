@@ -22,7 +22,7 @@ this: `block` drives the live firewall and can cut your own network.
 > so `en0` carries the real traffic the allowlist names. If you are behind a VPN,
 > skip to [VPN guard test](#vpn-guard-test-behind-a-vpn) instead — that is the
 > path built for VPN hosts. Background:
-> [VPN / full-tunnel mode](./plans/README.md#vpn--full-tunnel-mode-primary-use-case).
+> [VPN / full-tunnel mode](./readme.md#vpn--full-tunnel-mode-primary-use-case).
 
 ## Before you start
 
@@ -127,7 +127,7 @@ allowlist, the **guard** passes egress on the tunnel interface plus the handshak
 to the VPN endpoint and blocks all other physical egress — so traffic flows
 normally while the VPN is up, and is cut the instant the tunnel drops, with no
 leak. (Background:
-[VPN / full-tunnel mode](./plans/README.md#vpn--full-tunnel-mode-primary-use-case).)
+[VPN / full-tunnel mode](./readme.md#vpn--full-tunnel-mode-primary-use-case).)
 
 > [!WARNING]
 > **A wrong endpoint IP locks you out.** The guard keeps the physical interface

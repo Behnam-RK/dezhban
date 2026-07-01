@@ -51,7 +51,7 @@ is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you ou
 ### Getting `vpn.endpoints` right
 
 A wrong or tunnel-internal endpoint is the #1 lockout cause — see
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md). Endpoints may now be **hostnames** (handy
+[troubleshooting.md](troubleshooting.md). Endpoints may now be **hostnames** (handy
 for self-hosted WireGuard/V2Ray with a stable name) and, on macOS,
 `autoDiscoverEndpoints` learns the live server IP so you need not type one at all.
 Verify what will actually be opened before enabling:
