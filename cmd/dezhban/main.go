@@ -42,6 +42,10 @@ var version = "dev"
 // When set it overrides the configured log level to debug.
 var verbose bool
 
+// noSudo is the global --no-sudo flag: when set, privileged commands do NOT
+// auto-re-exec under sudo and instead print the "must run as root" error.
+var noSudo bool
+
 const usage = `dezhban — network kill switch
 
 Usage:
@@ -69,6 +73,10 @@ Commands:
 
 Global flags:
   -v, --verbose   Override the configured log level to debug
+  --no-sudo       Don't auto-elevate; print the root error instead
+
+Privileged commands re-run themselves under sudo automatically when not root
+(unix, interactive terminal). Use --no-sudo (or DEZHBAN_NO_SUDO=1) to opt out.
 
 Config resolution (when --config is omitted): $DEZHBAN_CONFIG, else the system
 path (see "dezhban config path"), else built-in defaults.
@@ -137,6 +145,8 @@ func stripVerbose(args []string) []string {
 		switch a {
 		case "-v", "--v", "-verbose", "--verbose":
 			verbose = true
+		case "-no-sudo", "--no-sudo":
+			noSudo = true
 		default:
 			out = append(out, a)
 		}
@@ -157,10 +167,19 @@ func newLogger(cfg *config.Config) *slog.Logger {
 	return logging.New(effectiveLevel(cfg))
 }
 
-// requireRoot prints a clear error and returns false if not privileged.
+// requireRoot ensures the command runs as root. When it isn't, it auto-re-execs
+// the whole invocation under sudo (unix, unless --no-sudo / no TTY); that call
+// replaces the process and never returns. If elevation is unavailable it prints
+// a clear error and returns false.
 func requireRoot(cmd string) bool {
 	if privilege.IsPrivileged() {
 		return true
+	}
+	if canElevate() {
+		fmt.Fprintf(os.Stderr, "dezhban %s needs root — re-running with sudo…\n", cmd)
+		if err := reexecElevated(); err != nil {
+			fmt.Fprintln(os.Stderr, "auto-sudo failed:", err)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "dezhban %s must run as root (try: sudo dezhban %s ...)\n", cmd, cmd)
 	return false

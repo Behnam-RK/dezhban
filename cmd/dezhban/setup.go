@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/charmbracelet/huh"
+	"github.com/charmbracelet/x/term"
 
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/firewall"
@@ -180,7 +181,7 @@ func cmdSetup(args []string) int {
 		fmt.Fprintln(os.Stderr, "not saved.")
 		return 0
 	}
-	if err := config.Save(path, cfg); err != nil {
+	if err := writeConfig(path, cfg); err != nil {
 		return saveError(path, err)
 	}
 	fmt.Printf("saved %s\n", path)
@@ -318,10 +319,11 @@ func validDuration(s string) error {
 
 // isInteractive reports whether both stdin and stdout are terminals.
 func isInteractive() bool {
-	return isCharDevice(os.Stdin) && isCharDevice(os.Stdout)
+	return isTerminal(os.Stdin) && isTerminal(os.Stdout)
 }
 
-func isCharDevice(f *os.File) bool {
-	fi, err := f.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
+// isTerminal reports whether f is a real TTY (not just a character device like
+// /dev/null — that distinction matters for deciding whether sudo can prompt).
+func isTerminal(f *os.File) bool {
+	return term.IsTerminal(f.Fd())
 }

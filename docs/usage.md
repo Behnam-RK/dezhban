@@ -32,7 +32,12 @@ it), then built-in defaults. So `dezhban run` / `monitor` / `validate` normally
 need no path at all.
 
 Privileged commands (`run`, `block`, `unblock`, `panic`, `install`, `uninstall`,
-`start`, `stop`) require root/admin and print a clear error otherwise. The
+`start`, `stop`) require root/admin. When run without it from an interactive
+terminal on unix, dezhban **auto-re-runs itself under `sudo`** (prompting for your
+password once) — so you rarely need to type `sudo` yourself. Pass `--no-sudo` (or
+set `DEZHBAN_NO_SUDO=1`) to opt out and get the plain "must run as root" error;
+on Windows, and when there's no terminal (CI/pipes), it never auto-elevates.
+`setup` and `config set`/`edit` elevate just their config write the same way. The
 inspect commands (`validate`, `print-rules`, `doctor`, `monitor`) are read-only —
 no root, no firewall effects.
 

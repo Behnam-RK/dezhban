@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/privilege"
 )
 
 const configUsage = `usage: dezhban config <subcommand>
@@ -214,7 +215,7 @@ func configSet(args []string) int {
 		return 1
 	}
 	path := writeTargetPath()
-	if err := config.Save(path, cfg); err != nil {
+	if err := writeConfig(path, cfg); err != nil {
 		return saveError(path, err)
 	}
 	fmt.Printf("set %s = %s  (%s)\n", key, field.get(cfg), path)
@@ -223,6 +224,15 @@ func configSet(args []string) int {
 
 func configEdit() int {
 	path := writeTargetPath()
+	// Editing a root-owned config needs root for the editor to save; elevate the
+	// whole command up front (the editor then runs as root) rather than let the
+	// save fail after the user has typed their changes.
+	if !privilege.IsPrivileged() && !pathWritable(path) && canElevate() {
+		fmt.Fprintf(os.Stderr, "editing %s needs root — re-running with sudo…\n", path)
+		if err := reexecElevated(); err != nil {
+			fmt.Fprintln(os.Stderr, "auto-sudo failed:", err)
+		}
+	}
 	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		def := config.Default()
 		if err := config.Save(path, &def); err != nil {
