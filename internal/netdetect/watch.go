@@ -9,10 +9,12 @@ import (
 )
 
 // TunnelState is a sampled view of the configured tunnel interface(s): Up is
-// true when at least one is a usable tunnel (per isTunnelIface). Detail carries
-// a short human reason for logs.
+// true when at least one is a usable tunnel (per isTunnelIface). Name is the
+// interface that satisfied the check (empty when none is up or enumeration
+// failed). Detail carries a short human reason for logs.
 type TunnelState struct {
 	Up     bool
+	Name   string
 	Detail string
 }
 
@@ -136,7 +138,7 @@ func liveSample(tunnels []string) TunnelState {
 			continue
 		}
 		if isTunnelIface(ifc.Name, ifc.Flags, addrs) {
-			return TunnelState{Up: true, Detail: ifc.Name + " up"}
+			return TunnelState{Up: true, Name: ifc.Name, Detail: ifc.Name + " up"}
 		}
 	}
 	return TunnelState{Up: false, Detail: "no configured tunnel is up"}

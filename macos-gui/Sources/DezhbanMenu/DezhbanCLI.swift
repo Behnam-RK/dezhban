@@ -17,13 +17,6 @@ enum DezhbanCLI {
         return which("dezhban")
     }
 
-    /// Runs an unprivileged command, capturing stdout/stderr and exit status.
-    @discardableResult
-    static func run(_ args: [String]) -> (status: Int32, out: String, err: String) {
-        guard let bin = binaryPath() else { return (127, "", "dezhban CLI not found") }
-        return exec(bin, args)
-    }
-
     /// Runs a privileged command via the native admin prompt. Returns true on
     /// success (exit 0 and no AppleScript error), false otherwise.
     @discardableResult
@@ -42,14 +35,6 @@ enum DezhbanCLI {
         var errInfo: NSDictionary?
         script.executeAndReturnError(&errInfo)
         return errInfo == nil
-    }
-
-    /// Reads the daemon's authoritative status (service state + config summary)
-    /// via `status --json`. Used on menu open, not on every tick.
-    static func statusJSON() -> [String: Any]? {
-        let r = run(["status", "--json"])
-        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
-        return (try? JSONSerialization.jsonObject(with: data)) as? [String: Any]
     }
 
     // MARK: - helpers

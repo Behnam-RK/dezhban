@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/decision"
@@ -25,6 +26,11 @@ import (
 // timeout so a normal lookup completes, while bounding the leak window if the
 // tunnel hangs or quorum fans out across several providers.
 const probeEgressBudget = 8 * time.Second
+
+// publishBuffer sizes the background state-writer queue. It comfortably absorbs
+// a transient slow write at the daemon's event rate (a poll every few tens of
+// seconds); only a sustained write stall fills it and reintroduces back-pressure.
+const publishBuffer = 64
 
 // Monitor is the monitor surface the runner consumes. *monitor.Monitor
 // satisfies it; an interface keeps the loop testable without real HTTP. Poll
@@ -81,11 +87,24 @@ type Options struct {
 	// after each poll, verdict transition, tunnel edge, and endpoint refresh. It
 	// is best-effort observability (the menubar app / `status --json` read it) and
 	// must never affect enforcement — the wiring in main logs write failures at
-	// debug. nil → no-op (tests / legacy callers).
+	// debug. Run invokes it from a background writer goroutine (see publishBuffer),
+	// so a slow write never stalls the enforcement loop; it may run concurrently
+	// with the loop and need not be fast. nil → no-op (tests / legacy callers).
 	Publish func(state.Snapshot)
 	// BlockedCountries is copied verbatim into each published snapshot so an
 	// observer can show what the daemon is configured to block. Informational only.
 	BlockedCountries []string
+}
+
+// tunnelSnapshot maps a watcher edge to the published tunnel state. Name comes
+// from the interface the watcher identified; on a down/unknown edge it carries
+// no name, so fall back to the configured tunnel(s) the guard is watching.
+func tunnelSnapshot(st netdetect.TunnelState, tunnels []string) []state.Tunnel {
+	name := st.Name
+	if name == "" {
+		name = strings.Join(tunnels, ",")
+	}
+	return []state.Tunnel{{Name: name, Up: st.Up, Detail: st.Detail}}
 }
 
 // modeName is the snapshot's mode string.
@@ -154,6 +173,30 @@ func Run(ctx context.Context, o Options) error {
 			o.Log.Info("cleanup done — firewall rules removed")
 		}
 	}()
+
+	// Decouple best-effort publishing from the enforcement loop: hand snapshots to
+	// a background writer over a buffered channel, so a stalled disk write
+	// (full/hung/NFS-backed state dir) can't delay handling the next tunnel or geo
+	// event. The buffer absorbs any single slow write; only a sustained stall that
+	// fills it reintroduces back-pressure — far better than blocking on every write.
+	// Snapshots are delivered in order (no coalescing), so every posture transition
+	// is published. Nil Publish stays a plain no-op.
+	if o.Publish != nil {
+		sink := o.Publish
+		ch := make(chan state.Snapshot, publishBuffer)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for snap := range ch {
+				sink(snap)
+			}
+		}()
+		o.Publish = func(s state.Snapshot) { ch <- s }
+		defer func() {
+			close(ch)
+			<-done // flush queued snapshots before returning
+		}()
+	}
 
 	if o.VPN {
 		return o.runVPN(ctx)
@@ -252,7 +295,7 @@ func (o Options) runVPN(ctx context.Context) error {
 				o.Log.Warn("vpn tunnel down — guard holds the line (physical egress stays blocked, "+
 					"endpoints open for reconnect)", "detail", st.Detail)
 			}
-			lastTun = []state.Tunnel{{Up: st.Up, Detail: st.Detail}}
+			lastTun = tunnelSnapshot(st, o.Tunnels)
 			snapshot()
 		case <-epTick.C:
 			next, changed := reconcileEndpoints(endpoints, o.resolveEndpoints(ctx), blocked)
@@ -421,7 +464,7 @@ func (o Options) runLegacy(ctx context.Context) error {
 				o.Log.Warn("vpn tunnel down — blocking immediately (kill switch)", "detail", st.Detail)
 				block("tunnel-down", "")
 			}
-			lastTun = []state.Tunnel{{Up: st.Up, Detail: st.Detail}}
+			lastTun = tunnelSnapshot(st, o.Tunnels)
 			snapshot()
 		case res, ok := <-results:
 			if !ok {

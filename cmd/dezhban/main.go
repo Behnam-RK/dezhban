@@ -1106,8 +1106,8 @@ func cmdStatus(args []string) int {
 
 // statusJSON prints a machine-readable status: the live posture from the state
 // file (if the daemon is running and has published one) merged with service and
-// config status. It is the stable contract the macOS menubar app falls back to
-// when it needs authoritative service state. Read-only, no root required.
+// config status. It is the stable contract for tooling and scripts that want
+// authoritative service state alongside the snapshot. Read-only, no root required.
 func statusJSON(cfg *config.Config) int {
 	statePath := defaultStatePath()
 	out := struct {
