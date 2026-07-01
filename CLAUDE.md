@@ -31,6 +31,8 @@ make doctor CONFIG=... [ARGS=--discover]         # diagnose VPN guard / lockout 
 # cross-compile a single target
 GOOS=linux GOARCH=amd64 go build ./cmd/dezhban
 make build-all                      # all 5 targets into dist/, version-stamped
+
+make gui-macos                      # build the macOS menubar app -> dist/Dezhban.app (macOS only)
 ```
 
 The binary's subcommands: `run`, `block`, `unblock`, `status`, `panic`,
@@ -50,6 +52,15 @@ Monitor    internal/monitor    polls public IP, resolves country   (platform-ind
 Decision   internal/decision   blocklist + hysteresis + fail-mode → Block/Allow  (platform-independent)
 Firewall   internal/firewall   FirewallBackend per OS              (ONLY platform-specific part)
 ```
+
+The live `run` daemon also publishes its posture (IP, country, verdict, mode,
+tunnels) to a world-readable JSON **state file** — `/var/db/dezhban/state.json`
+on unix — via an injected `Publish` callback in `internal/runner` (writer:
+`internal/state`). It is best-effort observability and never affects enforcement.
+`dezhban status --json` reads it (merged with service status). The **macOS
+menubar app** (`macos-gui/`, Swift, built with `make gui-macos`) reads the same
+file to drive its status icon and shells out to the CLI for actions —
+see `docs/STATE.md` and `docs/plans/phase-8-macos-gui.md`.
 
 The **`FirewallBackend` interface** (`internal/firewall/backend.go`) is the seam
 that keeps ~90% of the code shared. Rules per OS:

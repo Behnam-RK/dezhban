@@ -14,6 +14,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 // fakeMonitor is a deterministic Monitor for tests. Poll (legacy loop) drains
@@ -111,6 +112,66 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// --- state publishing ---
+
+func TestPostureName(t *testing.T) {
+	cases := []struct {
+		vpn, blocked bool
+		want         string
+	}{
+		{false, false, "allow"},
+		{false, true, "block"},
+		{true, false, "guard"},
+		{true, true, "full-block"},
+	}
+	for _, c := range cases {
+		if got := postureName(c.vpn, c.blocked); got != c.want {
+			t.Errorf("postureName(vpn=%v, blocked=%v) = %q, want %q", c.vpn, c.blocked, got, c.want)
+		}
+	}
+}
+
+// TestLegacyPublishesPostureTransitions asserts a snapshot fires on every poll
+// with the correct posture as the daemon crosses allow→block→allow.
+func TestLegacyPublishesPostureTransitions(t *testing.T) {
+	var snaps []state.Snapshot
+	be := &fakeBackend{}
+	o := Options{
+		Monitor: &fakeMonitor{results: []monitor.Result{
+			reading("US"), // allow
+			reading("IR"), // block (enter)
+			reading("US"), // allow (unblock)
+		}},
+		Decider:          decision.New([]string{"IR"}, false, 1),
+		Backend:          be,
+		Log:              discardLog(),
+		Allowlist:        oneHostAL,
+		BlockedCountries: []string{"IR"},
+		Publish:          func(s state.Snapshot) { snaps = append(snaps, s) },
+	}
+	if err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+
+	var postures []string
+	for _, s := range snaps {
+		postures = append(postures, s.Posture)
+		if s.Mode != "legacy" {
+			t.Errorf("mode = %q, want legacy", s.Mode)
+		}
+		if len(s.BlockedCountries) != 1 || s.BlockedCountries[0] != "IR" {
+			t.Errorf("blockedCountries = %v, want [IR]", s.BlockedCountries)
+		}
+	}
+	if want := []string{"allow", "block", "allow"}; !equal(postures, want) {
+		t.Fatalf("postures = %v, want %v", postures, want)
+	}
+	if snaps[0].Blocked || !snaps[1].Blocked || snaps[2].Blocked {
+		t.Errorf("blocked flags = [%v %v %v], want [false true false]",
+			snaps[0].Blocked, snaps[1].Blocked, snaps[2].Blocked)
+	}
 }
 
 // --- legacy mode ---

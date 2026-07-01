@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/netdetect"
 	"github.com/behnam-rk/dezhban/internal/privilege"
 	"github.com/behnam-rk/dezhban/internal/runner"
+	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/svc"
 )
 
@@ -247,6 +249,16 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 	epSrc := buildEndpointSource(cfg, log, tunnels, true)
 	watcher := buildWatcher(cfg, log, tunnels, ov)
 
+	// Publish live posture to the state file for out-of-process observers (the
+	// macOS menubar app, `status --json`). Best-effort: a write failure is logged
+	// at debug and never affects enforcement.
+	statePath := defaultStatePath()
+	publish := func(s state.Snapshot) {
+		if err := state.Write(statePath, s); err != nil {
+			log.Debug("state publish failed", "path", statePath, "err", err)
+		}
+	}
+
 	log.Info("run loop started",
 		"interval", cfg.PollInterval,
 		"providers", len(providers),
@@ -271,7 +283,9 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		Watcher:          watcher,
 		// Re-resolve the allowlist at each Block so rotated provider IPs stay
 		// reachable for recovery detection while egress is cut.
-		Allowlist: func() firewall.Allowlist { return buildAllowlist(cfg, log) },
+		Allowlist:        func() firewall.Allowlist { return buildAllowlist(cfg, log) },
+		Publish:          publish,
+		BlockedCountries: cfg.BlockedCountries,
 	}, nil
 }
 
@@ -659,6 +673,21 @@ func defaultConfigPath() string {
 	return "/etc/dezhban/dezhban.json"
 }
 
+// defaultStatePath is where the running daemon publishes its live posture and
+// where observers (`status --json`, the macOS menubar app) read it. It sits in
+// the same OS state dir the firewall backends already use, world-readable so the
+// unprivileged logged-in user can read what the root daemon wrote.
+func defaultStatePath() string {
+	if runtime.GOOS == "windows" {
+		pd := os.Getenv("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		return filepath.Join(pd, "dezhban", "state.json")
+	}
+	return "/var/db/dezhban/state.json"
+}
+
 // cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
 // interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
 // NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
@@ -1025,12 +1054,17 @@ func cmdDoctor(args []string) int {
 func cmdStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON (merges the live state file with service/config status)")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
+	}
+
+	if *jsonOut {
+		return statusJSON(cfg)
 	}
 
 	blocked := cfg.BlockedCountries
@@ -1067,5 +1101,43 @@ func cmdStatus(args []string) int {
 	} else {
 		fmt.Println("blocked:         ", blocked)
 	}
+	return 0
+}
+
+// statusJSON prints a machine-readable status: the live posture from the state
+// file (if the daemon is running and has published one) merged with service and
+// config status. It is the stable contract the macOS menubar app falls back to
+// when it needs authoritative service state. Read-only, no root required.
+func statusJSON(cfg *config.Config) int {
+	statePath := defaultStatePath()
+	out := struct {
+		Version          string          `json:"version"`
+		Privileged       bool            `json:"privileged"`
+		Service          string          `json:"service"`
+		StatePath        string          `json:"statePath"`
+		State            *state.Snapshot `json:"state,omitempty"`    // nil when no snapshot has been published yet
+		StateAge         string          `json:"stateAge,omitempty"` // wall-clock age of the snapshot
+		PollInterval     string          `json:"pollInterval"`
+		BlockedCountries []string        `json:"blockedCountries"`
+		VPNEnabled       bool            `json:"vpnEnabled"`
+	}{
+		Version:          version,
+		Privileged:       privilege.IsPrivileged(),
+		Service:          svc.Status(),
+		StatePath:        statePath,
+		PollInterval:     cfg.PollInterval.String(),
+		BlockedCountries: cfg.BlockedCountries,
+		VPNEnabled:       cfg.VPN.Enabled,
+	}
+	if snap, err := state.Read(statePath); err == nil {
+		out.State = &snap
+		out.StateAge = time.Since(snap.Time).Round(time.Second).String()
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "status json:", err)
+		return 1
+	}
+	fmt.Println(string(data))
 	return 0
 }
