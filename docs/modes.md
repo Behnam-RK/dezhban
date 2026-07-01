@@ -1,5 +1,8 @@
 # Enforcement modes
 
+> Prefer a styled, single-page view (state-machine diagrams + rulesets)? Open
+> [modes.html](modes.html) in a browser.
+
 dezhban enforces in one of two modes. They are **not** two flavours of the same
 thing — they use different firewall primitives and behave differently *even when
 nothing is wrong*. The whole distinction lives in the **resting state**:
