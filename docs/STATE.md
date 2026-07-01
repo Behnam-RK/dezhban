@@ -38,7 +38,7 @@ Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
   "provider": "ipinfo.io",
   "lookupErr": "",                      // last lookup error, omitted when none
   "tunnels": [                          // (vpn)
-    { "name": "utun4", "up": true, "detail": "UP" }
+    { "name": "utun4", "up": true, "detail": "utun4 up" }
   ],
   "endpoints": ["198.51.100.7"],        // (vpn) resolved VPN endpoints
   "blockedCountries": ["IR"],
