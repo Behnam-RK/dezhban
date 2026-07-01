@@ -18,10 +18,18 @@ Commands:
   start        Start the installed service                        (root)
   stop         Stop the installed service (removes firewall rules) (root)
   detect-vpn   Print detected VPN tunnel interfaces for config
+  setup        Interactive wizard to create or update the config
+  config       Inspect or change the config without hand-editing JSON
+  completion   Print a shell completion script (bash|zsh|fish)
   version      Print the version
 
 Global: -v / --verbose   override the configured log level to debug
 ```
+
+`--config` is **optional**: when omitted, dezhban resolves the config from
+`$DEZHBAN_CONFIG`, then the canonical system path (`dezhban config path` prints
+it), then built-in defaults. So `dezhban run` / `monitor` / `validate` normally
+need no path at all.
 
 Privileged commands (`run`, `block`, `unblock`, `panic`, `install`, `uninstall`,
 `start`, `stop`) require root/admin and print a clear error otherwise. The
@@ -67,6 +75,35 @@ dezhban monitor     --config <config>                 # live: IP, country, tunne
 snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `legacy`. See
 [config.md](config.md) for the full field reference and [troubleshooting.md](troubleshooting.md)
 for the lockout-recovery runbook.
+
+## Create & manage the config
+
+You rarely need to touch JSON by hand. See [config.md](config.md#where-the-config-lives)
+for where the file lives and the resolution order.
+
+```sh
+sudo dezhban setup                 # interactive wizard — builds/updates the config,
+                                   # detects tunnels, previews the ruleset, then writes it
+dezhban config path                # print the resolved config path
+dezhban config show                # print the effective config as JSON
+dezhban config get blockedCountries
+sudo dezhban config set blockedCountries IR,RU   # set, validate, save
+sudo dezhban config edit           # open the config in $EDITOR, re-validated on save
+```
+
+`setup` needs an interactive terminal and reuses the same tunnel detection,
+validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
+the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+## Shell completion
+
+```sh
+source <(dezhban completion zsh)     # or bash; add to your ~/.zshrc / ~/.bashrc
+dezhban completion fish | source     # fish
+```
+
+Completes subcommands, `--mode` values (`guard|fullblock|legacy`), the `config`
+subcommands, and file paths for `--config`.
 
 ## Run as a service
 

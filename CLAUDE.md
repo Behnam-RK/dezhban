@@ -66,10 +66,12 @@ The design depends on these invariants (rationale in
 
 ## Conventions
 
-- **Dependencies are deliberate.** Stdlib for everything except the one
-  third-party module, `kardianos/service`. Linux/Windows backends shell out to
-  `nft` / `netsh`/PowerShell rather than linking libraries. Don't add
-  `cobra`/`viper`/etc. — the deliverable is a dependency-light standalone binary.
+- **Dependencies are deliberate.** Stdlib for everything except two third-party
+  modules: `kardianos/service` (cross-platform service manager) and
+  `charmbracelet/huh` (the interactive `setup` wizard only — the daemon/enforcement
+  path stays stdlib). Linux/Windows backends shell out to `nft` / `netsh`/PowerShell
+  rather than linking libraries. Don't add `cobra`/`viper`/etc. — the deliverable is
+  still a dependency-light standalone binary; weigh any new dep against that.
 - Config is JSON with string durations; on-disk shape is the `fileConfig` DTO in
   `internal/config`, converted to a validated `Config`. Field reference:
   [docs/config.md](docs/config.md).

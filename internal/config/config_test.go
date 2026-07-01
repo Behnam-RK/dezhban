@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -188,6 +189,65 @@ func TestValidateErrors(t *testing.T) {
 				t.Errorf("Load(%s) = nil error, want validation error", body)
 			}
 		})
+	}
+}
+
+// Save then Load must reproduce the same validated Config. Both configs pass
+// through the Load pipeline so nil/empty-slice representations match.
+func TestSaveLoadRoundTrip(t *testing.T) {
+	cases := map[string]string{
+		"legacy": `{
+			"pollInterval": "5s",
+			"blockedCountries": ["RU", "IR"],
+			"failClosed": false,
+			"hysteresis": 2,
+			"allowlist": {"dns": ["1.1.1.1"], "hosts": ["9.9.9.9"]},
+			"providerQuorum": true,
+			"logLevel": "debug"
+		}`,
+		"vpn": `{
+			"vpn": {
+				"enabled": true,
+				"tunnelInterfaces": ["utun4"],
+				"endpoints": ["vpn.example.com", "203.0.113.5"],
+				"autoDiscoverEndpoints": true,
+				"endpointRefresh": "2m",
+				"tunnelWatch": "500ms"
+			}
+		}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			src := filepath.Join(t.TempDir(), "src.json")
+			if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg1, err := Load(src)
+			if err != nil {
+				t.Fatalf("Load src: %v", err)
+			}
+
+			out := filepath.Join(t.TempDir(), "nested", "out.json")
+			if err := Save(out, cfg1); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			cfg2, err := Load(out)
+			if err != nil {
+				t.Fatalf("Load saved: %v", err)
+			}
+			if !reflect.DeepEqual(cfg1, cfg2) {
+				t.Errorf("round-trip mismatch:\n before = %+v\n after  = %+v", cfg1, cfg2)
+			}
+		})
+	}
+}
+
+// Save must reject an invalid Config rather than persist it.
+func TestSaveValidates(t *testing.T) {
+	bad := Default()
+	bad.PollInterval = 0
+	if err := Save(filepath.Join(t.TempDir(), "x.json"), &bad); err == nil {
+		t.Error("Save(invalid) = nil error, want validation error")
 	}
 }
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -204,6 +205,69 @@ func apply(cfg *Config, fc fileConfig) error {
 			v.TunnelWatch = d
 		}
 		cfg.VPN = v
+	}
+	return nil
+}
+
+// toFileConfig is the inverse of apply: it projects a validated Config onto the
+// on-disk DTO so it round-trips through Load. Durations serialize as strings;
+// the vpn block is emitted only when enabled (a disabled guard needs no fields).
+func toFileConfig(c *Config) fileConfig {
+	failClosed := c.FailClosed
+	hysteresis := c.Hysteresis
+	quorum := c.ProviderQuorum
+	fc := fileConfig{
+		PollInterval:     c.PollInterval.String(),
+		BlockedCountries: c.BlockedCountries,
+		FailClosed:       &failClosed,
+		Hysteresis:       &hysteresis,
+		Providers:        c.Providers,
+		Allowlist:        c.Allowlist,
+		ProviderQuorum:   &quorum,
+		LogLevel:         c.LogLevel,
+	}
+	if c.VPN.Enabled {
+		fc.VPN = &fileVPN{
+			Enabled:               true,
+			TunnelInterfaces:      c.VPN.TunnelInterfaces,
+			Endpoints:             c.VPN.Endpoints,
+			Autodetect:            c.VPN.Autodetect,
+			AutoDiscoverEndpoints: c.VPN.AutoDiscoverEndpoints,
+			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
+			TunnelWatch:           c.VPN.TunnelWatch.String(),
+		}
+	}
+	return fc
+}
+
+// Marshal validates c and returns its pretty-printed on-disk JSON (the same bytes
+// Save writes). Used by `dezhban config show` and Save.
+func Marshal(c *Config) ([]byte, error) {
+	if err := c.Validate(); err != nil {
+		return nil, err
+	}
+	data, err := json.MarshalIndent(toFileConfig(c), "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("encode config: %w", err)
+	}
+	return append(data, '\n'), nil
+}
+
+// Save validates c and writes it as pretty-printed JSON to path, creating parent
+// directories as needed. The file is world-readable (0644) so unprivileged
+// inspect commands can read the config the root daemon uses; it holds no secrets.
+func Save(path string, c *Config) error {
+	data, err := Marshal(c)
+	if err != nil {
+		return err
+	}
+	if dir := filepath.Dir(path); dir != "" && dir != "." {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return fmt.Errorf("create config dir %q: %w", dir, err)
+		}
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		return fmt.Errorf("write config %q: %w", path, err)
 	}
 	return nil
 }

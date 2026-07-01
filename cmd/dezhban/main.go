@@ -62,10 +62,16 @@ Commands:
   start       Start the installed service
   stop        Stop the installed service (removes firewall rules)
   detect-vpn  Print detected VPN tunnel interfaces to help fill the vpn config
+  setup       Interactive wizard to create or update the config
+  config      Inspect or change the config without hand-editing JSON
+  completion  Print a shell completion script (bash|zsh|fish)
   version     Print the version
 
 Global flags:
   -v, --verbose   Override the configured log level to debug
+
+Config resolution (when --config is omitted): $DEZHBAN_CONFIG, else the system
+path (see "dezhban config path"), else built-in defaults.
 
 Run "dezhban <command> -h" for command flags.`
 
@@ -104,6 +110,12 @@ func run(args []string) int {
 		return cmdService(cmd, rest)
 	case "detect-vpn":
 		return cmdDetectVPN(rest)
+	case "setup":
+		return cmdSetup(rest)
+	case "config":
+		return cmdConfig(rest)
+	case "completion":
+		return cmdCompletion(rest)
 	case "version", "--version":
 		fmt.Println("dezhban", version)
 		return 0
@@ -154,9 +166,31 @@ func requireRoot(cmd string) bool {
 	return false
 }
 
-// loadConfig is a small helper shared by the commands that take --config.
+// loadConfig is a small helper shared by the commands that take --config. It
+// resolves the path (so --config can be omitted) before loading.
 func loadConfig(path string) (*config.Config, error) {
-	return config.Load(path)
+	return config.Load(resolveConfigPath(path))
+}
+
+// resolveConfigPath decides which config file a command reads when its --config
+// flag is empty, so the flag can usually be omitted. Precedence:
+//  1. an explicit --config value
+//  2. $DEZHBAN_CONFIG
+//  3. the canonical system path (defaultConfigPath), if the file exists
+//  4. "" — built-in defaults (config.Load treats an empty path as defaults)
+func resolveConfigPath(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if env := strings.TrimSpace(os.Getenv("DEZHBAN_CONFIG")); env != "" {
+		return env
+	}
+	if p := defaultConfigPath(); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 func cmdRun(args []string) int {
@@ -752,9 +786,9 @@ func cmdValidate(args []string) int {
 		fmt.Fprintln(os.Stderr, "config invalid:", err)
 		return 1
 	}
-	src := *cfgPath
+	src := resolveConfigPath(*cfgPath)
 	if src == "" {
-		src = "(defaults — no --config given)"
+		src = "(built-in defaults — no config file found)"
 	}
 	blocked := cfg.BlockedCountries
 	if len(blocked) == 0 {

@@ -24,20 +24,20 @@ poll. Both modes and how to choose are in [docs/modes.md](docs/modes.md).
 Requires Go 1.26+.
 
 ```sh
-make build                                        # host build → ./dezhban
+make build                        # host build → ./dezhban
 
-# inspect safely first — no root, no firewall effects
-dezhban validate --config configs/dezhban.vpn-guard.json
-dezhban monitor  --config configs/dezhban.vpn-guard.json    # live IP/country/tunnel/verdict
+sudo dezhban setup                # interactive wizard — build the config, no JSON by hand
+dezhban validate                  # confirm it (--config is optional; see docs/config.md)
+dezhban monitor                   # live IP/country/tunnel/verdict, no firewall touched
 
-# run the daemon (root; drives the firewall)
-sudo dezhban run --config /etc/dezhban/dezhban.json
-sudo dezhban panic                                # always-available teardown, no daemon needed
+sudo dezhban run                  # run the daemon (root; drives the firewall)
+sudo dezhban panic                # always-available teardown, no daemon needed
 ```
 
+`--config` is optional — dezhban resolves it from `$DEZHBAN_CONFIG` or the system
+path (`dezhban config path`). Tab-completion: `source <(dezhban completion zsh)`.
 The binary can also install itself as a boot-persistent service and ships an
-optional macOS menubar app. Full command and flag reference:
-[docs/usage.md](docs/usage.md).
+optional macOS menubar app. Full command reference: [docs/usage.md](docs/usage.md).
 
 ## Modes at a glance
 
