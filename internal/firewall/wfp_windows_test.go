@@ -90,7 +90,7 @@ func TestRenderBlockScriptGuard(t *testing.T) {
 	assertDefaultDenyLast(t, s)
 }
 
-func TestRenderBlockScriptVPNFullBlockCutsTunnel(t *testing.T) {
+func TestRenderBlockScriptVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	p := Policy{
 		Mode:         ModeFullBlock,
 		TunnelIfaces: []string{"utun4"},
@@ -99,8 +99,17 @@ func TestRenderBlockScriptVPNFullBlockCutsTunnel(t *testing.T) {
 	}
 	s := renderBlockScript(p)
 
-	if strings.Contains(s, "34.117.59.81") || strings.Contains(s, "203.0.113.5") {
-		t.Errorf("VPN full block must emit no egress allow rules (tunnel cut):\n%s", s)
+	// The endpoint allow stays open so the tunnel can reconnect.
+	if !strings.Contains(s, "203.0.113.5") {
+		t.Errorf("VPN full block must keep the endpoint allow (reconnect path):\n%s", s)
+	}
+	// No tunnel-interface allow: the iface name appears only in that rule's alias.
+	if strings.Contains(s, "utun4") {
+		t.Errorf("VPN full block must NOT allow the tunnel interface (user egress cut):\n%s", s)
+	}
+	// The dst-IP allowlist host is still omitted under a tunnel.
+	if strings.Contains(s, "34.117.59.81") {
+		t.Errorf("VPN full block must not emit the dst-IP allowlist host:\n%s", s)
 	}
 	if !strings.Contains(s, "-RemoteAddress 127.0.0.1,::1") {
 		t.Errorf("loopback must still be allowed:\n%s", s)

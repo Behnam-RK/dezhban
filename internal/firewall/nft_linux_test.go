@@ -129,7 +129,7 @@ func TestRenderNftGuard(t *testing.T) {
 	assertDefaultDrop(t, rs)
 }
 
-func TestRenderNftVPNFullBlockCutsTunnel(t *testing.T) {
+func TestRenderNftVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	p := Policy{
 		Mode:         ModeFullBlock,
 		TunnelIfaces: []string{"utun4"},
@@ -138,8 +138,19 @@ func TestRenderNftVPNFullBlockCutsTunnel(t *testing.T) {
 	}
 	rs := renderNftRuleset(p)
 
-	if strings.Contains(rs, "daddr") {
-		t.Errorf("VPN full block must emit no daddr accept rules (tunnel cut):\n%s", rs)
+	// The endpoint pass stays open so the encrypted handshake reaches the server
+	// and the tunnel can reconnect — a cut endpoint would livelock recovery.
+	if !strings.Contains(rs, "203.0.113.5") {
+		t.Errorf("VPN full block must keep the endpoint accept (reconnect path):\n%s", rs)
+	}
+	// But the tunnel-interface accept is dropped: no user traffic may leak to a
+	// forbidden exit. The tunnel iface name appears only in that accept rule.
+	if strings.Contains(rs, "utun4") {
+		t.Errorf("VPN full block must NOT pass the tunnel interface (user egress cut):\n%s", rs)
+	}
+	// The dst-IP allowlist is still meaningless under a tunnel and is omitted.
+	if strings.Contains(rs, "34.117.59.81") {
+		t.Errorf("VPN full block must not emit the dst-IP allowlist host:\n%s", rs)
 	}
 	if !strings.Contains(rs, `oifname "lo" accept`) {
 		t.Errorf("loopback must still pass:\n%s", rs)

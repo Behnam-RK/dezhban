@@ -21,10 +21,14 @@ type Allowlist struct {
 type Mode int
 
 const (
-	// ModeFullBlock cuts all outbound egress except loopback. On a direct
-	// connection (no tunnel interfaces) it additionally passes the dst-IP
-	// Allowlist; under a VPN it cuts the tunnel too (the allowlist is meaningless
-	// because the firewall only sees encrypted outer packets to the endpoint).
+	// ModeFullBlock cuts outbound egress except loopback. On a direct connection
+	// (no tunnel interfaces) it additionally passes the dst-IP Allowlist. Under a
+	// VPN it drops the tunnel-interface pass — so no user traffic egresses to a
+	// forbidden exit — but KEEPS the VPN endpoint passes, so the encrypted
+	// handshake still reaches the server and the tunnel can reconnect (a cut
+	// endpoint would livelock recovery: the tunnel could never re-establish to be
+	// re-evaluated). It is therefore ModeGuard minus the tunnel-interface pass.
+	// The dst-IP Allowlist stays meaningless under a tunnel and is omitted.
 	ModeFullBlock Mode = iota
 	// ModeGuard is the always-on VPN guard: pass egress on the tunnel
 	// interface(s) plus the handshake to the VPN endpoint(s), and block all

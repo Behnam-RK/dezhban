@@ -108,10 +108,12 @@ func (b *nftBackend) Cleanup() error {
 //     policy, so a tunnel drop cuts traffic with no physical leak.
 //   - ModeFullBlock, direct (no tunnel ifaces): accept the dst-IP DNS + geo-API
 //     allowlist — the legacy model, valid only off-VPN.
-//   - ModeFullBlock, VPN (tunnel ifaces present): cut the tunnel too; emit no
-//     accepts beyond loopback. The dst-IP allowlist is meaningless under a
-//     tunnel, so it is deliberately omitted — the daemon opens a brief guard
-//     window to probe for recovery instead (Phase 4).
+//   - ModeFullBlock, VPN (tunnel ifaces present): drop the tunnel-iface accept
+//     so no user traffic leaks to a forbidden exit, but KEEP the endpoint
+//     accepts open so the encrypted handshake reaches the server and the tunnel
+//     can reconnect. Identical to ModeGuard minus the tunnel-iface accept. The
+//     dst-IP allowlist is still meaningless under a tunnel, so it is omitted;
+//     the daemon opens a brief guard window to probe for recovery (Phase 4).
 //
 // The ruleset begins `add table; delete table; add table` so loading is an
 // atomic replace: the first `add` makes `delete` safe when no table exists yet,
@@ -145,9 +147,15 @@ func renderNftRuleset(p Policy) string {
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "udp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "tcp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.Hosts, "")
+		} else {
+			// VPN full block: drop the tunnel-iface accept so no user traffic can
+			// egress to a forbidden exit, but KEEP the endpoint accepts so the
+			// encrypted handshake still reaches the server and the tunnel can
+			// reconnect. The only difference from ModeGuard is the missing
+			// tunnel-iface accept — a cut endpoint would livelock recovery (the
+			// VPN could never re-establish to be re-evaluated).
+			emitDaddrAccepts(rule, p.VPNEndpoints, "")
 		}
-		// VPN full block (tunnel ifaces present): no accepts beyond loopback —
-		// the tunnel is cut and the dst-IP allowlist is deliberately omitted.
 	}
 	return b.String()
 }

@@ -326,8 +326,10 @@ func (o Options) runVPN(ctx context.Context) error {
 	// Observability watcher: a tunnel drop is already cut by the standing guard
 	// rule (physical egress is blocked except the endpoints), so the watcher takes
 	// NO firewall action here — it just surfaces the drop/restore for logging and
-	// the `monitor` view. Forcing FULL BLOCK on a drop would only cut the handshake
-	// the VPN needs to reconnect and leak during recovery probes.
+	// the `monitor` view. Forcing a posture change on a drop is pointless: GUARD
+	// already blocks the physical leak while keeping the endpoints open for
+	// reconnect, and FULL BLOCK (which now also keeps the endpoints open) would
+	// only cut the tunnel-interface egress a down tunnel isn't carrying anyway.
 	var tunCh <-chan netdetect.TunnelState
 	if o.Watcher != nil {
 		tunCh = o.Watcher.Watch(ctx)
@@ -466,6 +468,11 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 // window is one bounded lookup (probeEgressBudget) — the accepted recovery
 // semantics. A failed re-cut leaves egress open; it is logged at error and the
 // next tick re-applies the block.
+// Both GUARD and FULL BLOCK keep the endpoint passes open, so the encrypted
+// tunnel transport survives the re-cut — the probe toggles only the tunnel's
+// user-egress, never tearing down a tunnel that has reconnected. That is what
+// lets a genuinely-down tunnel come back and a later probe observe an allowed
+// country, instead of the block livelocking the reconnect.
 // It returns the observed result plus any re-cut failure: a failed re-cut leaves
 // egress open until the next tick, so it is surfaced as an enforcement error. A
 // failed guard LIFT is not — the guard still holds, egress stays cut — so that path

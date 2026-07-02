@@ -28,9 +28,14 @@ guard instead controls the **interface**, and its baseline is applied
   egress + the endpoint handshake; block all other physical egress. Because this
   is always on, a tunnel drop is cut with a **zero leak window** — traffic can
   never fall back to your real interface.
-- **FULL BLOCK** (exit forbidden / country unknown) — cut the tunnel too; loopback
-  only. Recovery uses a time-windowed probe: each tick the guard is briefly lifted
-  for one geo lookup, then re-cut.
+- **FULL BLOCK** (exit forbidden / country unknown) — drop the tunnel-egress pass
+  so no user traffic can reach a forbidden exit, but **keep the endpoint handshake
+  open** so the encrypted transport survives and the tunnel can reconnect (a cut
+  endpoint would livelock the reconnect). It is GUARD minus the tunnel-egress pass.
+  Recovery uses a time-windowed probe: each tick the guard is briefly lifted for
+  one geo lookup through the tunnel, then re-cut — the tunnel transport is never
+  torn down across the re-cut, so a genuinely-down tunnel can come back and a later
+  probe observe an allowed exit.
 
 ```
 # GUARD  — pass quick on lo0 all no state
@@ -39,6 +44,7 @@ guard instead controls the **interface**, and its baseline is applied
 #          block drop out all
 #
 # FULL BLOCK — pass quick on lo0 all no state
+#              pass out quick to { <vpn endpoint> } no state   # reconnect path
 #              block drop out all
 ```
 

@@ -158,8 +158,11 @@ func (b *wfpBackend) Cleanup() error {
 //     drop has no physical leak.
 //   - ModeFullBlock, direct (no tunnel ifaces): allow the dst-IP DNS + geo-API
 //     allowlist — the legacy model, valid only off-VPN.
-//   - ModeFullBlock, VPN (tunnel ifaces present): cut the tunnel too; allow only
-//     loopback. The dst-IP allowlist is meaningless under a tunnel.
+//   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface allow, so no
+//     user traffic leaks to a forbidden exit — but keep the endpoint allow so the
+//     encrypted handshake reaches the server and the tunnel can reconnect.
+//     Identical to ModeGuard minus the tunnel-iface allow. The dst-IP allowlist
+//     is still meaningless under a tunnel.
 //
 // The script opens by removing any existing dezhban group, so a re-block
 // replaces rather than stacks (idempotent), and sets the outbound default last.
@@ -193,8 +196,14 @@ func renderBlockScript(p Policy) string {
 			if hosts := psAddrList(p.Allowlist.Hosts); hosts != "" {
 				rule("hosts", "-RemoteAddress "+hosts)
 			}
+		} else if ep := psAddrList(p.VPNEndpoints); ep != "" {
+			// VPN full block: no tunnel-iface allow, so no user traffic leaks to a
+			// forbidden exit — but keep the endpoint allow so the encrypted
+			// handshake reaches the server and the tunnel can reconnect (a cut
+			// endpoint would livelock recovery). Identical to ModeGuard minus the
+			// tunnel-iface allow.
+			rule("endpoint", "-RemoteAddress "+ep)
 		}
-		// VPN full block: no allow rules beyond loopback — the tunnel is cut.
 	}
 
 	// Default-deny last, once the allow rules are in place.

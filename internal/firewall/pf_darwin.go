@@ -196,10 +196,12 @@ func (b *pfBackend) Cleanup() error {
 //     traffic falling back to the physical interface is cut with no leak.
 //   - ModeFullBlock, direct (no tunnel ifaces): pass the dst-IP DNS + geo-API
 //     allowlist — the legacy model, valid only off-VPN.
-//   - ModeFullBlock, VPN (tunnel ifaces present): cut the tunnel too; emit no
-//     passes. The dst-IP allowlist is meaningless under a tunnel, so it is
-//     deliberately omitted — the daemon opens a brief guard window to probe for
-//     recovery instead (see Phase 4).
+//   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface pass, so no
+//     user traffic leaks to a forbidden exit — but keep the endpoint pass so the
+//     encrypted handshake reaches the server and the tunnel can reconnect.
+//     Identical to ModeGuard minus the tunnel-iface pass. The dst-IP allowlist
+//     is still meaningless under a tunnel and stays omitted; the daemon opens a
+//     brief guard window to probe for recovery (see Phase 4).
 func renderRuleset(p Policy) string {
 	var b strings.Builder
 	b.WriteString("# dezhban ruleset — default-deny outbound.\n")
@@ -227,6 +229,13 @@ func renderRuleset(p Policy) string {
 			if len(p.Allowlist.Hosts) > 0 {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.Allowlist.Hosts))
 			}
+		} else if len(p.VPNEndpoints) > 0 {
+			// VPN full block: no tunnel-iface pass, so no user traffic leaks to a
+			// forbidden exit — but keep the endpoint pass so the encrypted
+			// handshake reaches the server and the tunnel can reconnect (a cut
+			// endpoint would livelock recovery). Identical to ModeGuard minus the
+			// tunnel-iface pass.
+			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 		}
 	}
 	b.WriteString("block drop out all\n")

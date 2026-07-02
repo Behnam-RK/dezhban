@@ -296,7 +296,7 @@
             <span class="dot"></span>
             <span class="body">
               <span class="name">FULL-BLOCK</span>
-              <span class="sub">loopback only — the tunnel is cut too</span>
+              <span class="sub">tunnel egress cut — endpoint kept open to reconnect</span>
             </span>
           </div>
           <div class="edge"><span class="glyph">▲</span><span class="cond">windowed probe: <em>exit allowed again</em> → back to GUARD</span></div>
@@ -315,6 +315,7 @@
             <span class="rule-head"><span class="swatch" style="background:var(--block)"></span>FULL-BLOCK ruleset</span>
 <pre><span class="c"># dezhban ruleset — default-deny outbound.</span>
 <span class="kp">pass</span> quick on lo0 all no state
+<span class="kp">pass</span> out quick to { 178.252.141.142 } no state <span class="c"># reconnect path</span>
 <span class="kb">block drop</span> out all</pre>
           </div>
           <p class="zero-note"><b>Leak window: 0 s.</b> The guard is standing policy, not a poll result — there
