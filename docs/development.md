@@ -52,6 +52,12 @@ The privileged flows have wrappers too — `make install-local` / `reinstall` /
 `uninstall-local` / `panic`, mirrored by `scripts/*.sh`. Sample configs live in
 `configs/` (see [config.md](config.md) for what each one is for).
 
+`make uninstall-local` panic-flushes the firewall rules first (so a wedged
+service can't leave you blocked), unregisters the service, then deletes the
+installed `/etc/dezhban` config; pass `KEEP_CONFIG=1` to keep the config. It also
+flags a `go install` copy of `dezhban` left on your `$PATH`, which would otherwise
+shadow your local build — a common "why is an old version installed?" surprise.
+
 ## CI
 
 `.github/workflows/ci.yml` runs `go vet` + `go test` on macOS, Linux, and Windows

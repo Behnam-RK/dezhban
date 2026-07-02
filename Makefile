@@ -69,7 +69,7 @@ install-local: ## Validate, build, install config + service, start it
 reinstall: ## Tear down then install fresh
 	CONFIG=$(CONFIG) sh scripts/reinstall.sh
 
-uninstall-local: ## Stop + unregister the service
+uninstall-local: ## Panic-teardown rules, unregister service, remove config (KEEP_CONFIG=1 to keep)
 	sh scripts/uninstall-local.sh
 
 panic: ## Force-remove dezhban's rules (lockout escape hatch)
