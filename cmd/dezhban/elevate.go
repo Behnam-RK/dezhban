@@ -16,10 +16,9 @@ func sudoDisabled() bool {
 		return true
 	}
 	if v := os.Getenv("DEZHBAN_NO_SUDO"); v != "" {
-		if b, err := strconv.ParseBool(v); err == nil {
-			return b
-		}
-		return true // any other non-empty value counts as "set"
+		// Truthy disables; any unparseable-but-set value also counts as "disable".
+		b, err := strconv.ParseBool(v)
+		return err != nil || b
 	}
 	return false
 }
@@ -33,8 +32,26 @@ func pathWritable(path string) bool {
 	} else if !os.IsNotExist(err) {
 		return false // exists but not writable, or some other error
 	}
-	// Absent file: can we create one in its directory?
-	f, err := os.CreateTemp(filepath.Dir(path), ".dezhban-wtest-*")
+	// Absent file: config.Save will MkdirAll any missing parent dirs unprivileged, so
+	// writability is decided by the nearest EXISTING ancestor, not path's immediate
+	// dir (which may not exist yet). Probing only Dir(path) would wrongly report an
+	// unwritable path for a user-owned tree like $HOME/newdir/dezhban.json and force a
+	// needless sudo escalation that then creates root-owned dirs in the user's home.
+	dir := filepath.Dir(path)
+	for {
+		if fi, err := os.Stat(dir); err == nil {
+			if !fi.IsDir() {
+				return false // an ancestor is a file, not a dir — Save can't MkdirAll through it
+			}
+			break
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return false // reached the root without finding an existing dir
+		}
+		dir = parent
+	}
+	f, err := os.CreateTemp(dir, ".dezhban-wtest-*")
 	if err != nil {
 		return false
 	}

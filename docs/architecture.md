@@ -51,13 +51,16 @@ These invariants are load-bearing — the whole design depends on them:
 ## Dependency strategy
 
 Dependencies are deliberate. Stdlib for CLI (`flag`), config (JSON), logging
-(`log/slog`), HTTP, and firewall control (shell out to the OS tooling). The
-**only** third-party module is
+(`log/slog`), HTTP, and firewall control (shell out to the OS tooling). There are
+three third-party modules:
 [`kardianos/service`](https://github.com/kardianos/service) (cross-platform
-service manager). The Linux/Windows backends shell out to `nft` and
-`netsh`/PowerShell rather than linking `google/nftables` / `tailscale/wf` — one
-consistent shell-out model, zero extra deps. Don't add `cobra`/`viper`/etc.; the
-deliverable is a dependency-light standalone binary.
+service manager), [`charmbracelet/huh`](https://github.com/charmbracelet/huh) (the
+interactive `setup` wizard only), and
+[`charmbracelet/x/term`](https://github.com/charmbracelet/x) (TTY detection for the
+sudo auto-elevation guard). The charm code stays off the daemon/enforcement path.
+The Linux/Windows backends shell out to `nft` and `netsh`/PowerShell rather than
+linking `google/nftables` / `tailscale/wf` — one consistent shell-out model. Don't
+add `cobra`/`viper`/etc.; the deliverable is a dependency-light standalone binary.
 
 Config is JSON with string durations; the on-disk shape is the `fileConfig` DTO in
 `internal/config`, converted to a validated `Config`. Module path

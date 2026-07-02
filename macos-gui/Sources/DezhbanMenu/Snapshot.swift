@@ -18,8 +18,10 @@ struct Snapshot: Codable {
     let countryCode: String?
     let provider: String?
     let lookupErr: String?
+    let enforcementErr: String?     // last firewall-action failure, nil when clear
     let tunnels: [Tunnel]?
     let endpoints: [String]?
+    let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness
     let blockedCountries: [String]?
     let pid: Int?
 
@@ -63,5 +65,11 @@ enum StateReader {
     static func read(path: String = defaultPath) -> Snapshot? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
         return try? decoder.decode(Snapshot.self, from: data)
+    }
+
+    /// The state file's last-modified time, or nil if absent. Lets a poller skip
+    /// re-decoding an unchanged file (the daemon rewrites it only ~every poll).
+    static func modificationTime(path: String = defaultPath) -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
     }
 }

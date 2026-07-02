@@ -132,6 +132,7 @@ func cmdSetup(args []string) int {
 		autoDiscover: autoDiscover,
 	})
 
+	config.Normalize(cfg)
 	if err := cfg.Validate(); err != nil {
 		fmt.Fprintln(os.Stderr, "\nthat config isn't valid yet:", err)
 		fmt.Fprintln(os.Stderr, "re-run 'dezhban setup' and adjust the flagged field.")
@@ -169,7 +170,7 @@ func cmdSetup(args []string) int {
 
 	path := *cfgPath
 	if path == "" {
-		path = writeTargetPath()
+		path = writeTargetPath(*cfgPath)
 	}
 	var save bool
 	if err := runForm(huh.NewForm(huh.NewGroup(
@@ -241,7 +242,7 @@ func applyWizard(cfg *config.Config, in wizardInput) {
 	cfg.LogLevel = in.logLevel
 	cfg.FailClosed = in.failClosed
 	cfg.ProviderQuorum = in.quorum
-	cfg.BlockedCountries = dedupeUpper(in.countries)
+	cfg.BlockedCountries = in.countries // config.Normalize upper-cases + de-dupes on save
 
 	cfg.VPN.Enabled = in.vpnEnabled
 	if in.vpnEnabled {
@@ -274,20 +275,6 @@ func endpointLockoutWarning(cfg *config.Config) string {
 	}
 	b.WriteString("   Set the VPN server's PHYSICAL (public) address instead — see 'dezhban doctor --discover'.")
 	return b.String()
-}
-
-func dedupeUpper(ss []string) []string {
-	seen := map[string]bool{}
-	var out []string
-	for _, s := range ss {
-		u := strings.ToUpper(strings.TrimSpace(s))
-		if u == "" || seen[u] {
-			continue
-		}
-		seen[u] = true
-		out = append(out, u)
-	}
-	return out
 }
 
 // runForm runs a huh form with a consistent theme.

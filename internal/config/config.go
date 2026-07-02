@@ -145,7 +145,7 @@ func Load(path string) (*Config, error) {
 		}
 	}
 
-	normalize(&cfg)
+	Normalize(&cfg)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
@@ -210,13 +210,15 @@ func apply(cfg *Config, fc fileConfig) error {
 }
 
 // toFileConfig is the inverse of apply: it projects a validated Config onto the
-// on-disk DTO so it round-trips through Load. Durations serialize as strings;
-// the vpn block is emitted only when enabled (a disabled guard needs no fields).
+// on-disk DTO so it round-trips through Load. Durations serialize as strings. The
+// vpn block is ALWAYS emitted — gating it on Enabled would silently drop
+// tunnelInterfaces/endpoints whenever a config was saved with the guard disabled
+// (e.g. `config set vpn.enabled false`), making them unrecoverable on re-enable.
 func toFileConfig(c *Config) fileConfig {
 	failClosed := c.FailClosed
 	hysteresis := c.Hysteresis
 	quorum := c.ProviderQuorum
-	fc := fileConfig{
+	return fileConfig{
 		PollInterval:     c.PollInterval.String(),
 		BlockedCountries: c.BlockedCountries,
 		FailClosed:       &failClosed,
@@ -225,24 +227,25 @@ func toFileConfig(c *Config) fileConfig {
 		Allowlist:        c.Allowlist,
 		ProviderQuorum:   &quorum,
 		LogLevel:         c.LogLevel,
-	}
-	if c.VPN.Enabled {
-		fc.VPN = &fileVPN{
-			Enabled:               true,
+		VPN: &fileVPN{
+			Enabled:               c.VPN.Enabled,
 			TunnelInterfaces:      c.VPN.TunnelInterfaces,
 			Endpoints:             c.VPN.Endpoints,
 			Autodetect:            c.VPN.Autodetect,
 			AutoDiscoverEndpoints: c.VPN.AutoDiscoverEndpoints,
 			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
 			TunnelWatch:           c.VPN.TunnelWatch.String(),
-		}
+		},
 	}
-	return fc
 }
 
-// Marshal validates c and returns its pretty-printed on-disk JSON (the same bytes
-// Save writes). Used by `dezhban config show` and Save.
+// Marshal canonicalizes c, validates it, and returns its pretty-printed on-disk
+// JSON (the same bytes Save writes). Used by `dezhban config show` and Save.
+// Normalize runs first so every write path — `config set`, the setup wizard,
+// programmatic Save — canonicalizes identically to Load, without each caller
+// re-implementing case/trim/dedup by hand. c is normalized in place.
 func Marshal(c *Config) ([]byte, error) {
+	Normalize(c)
 	if err := c.Validate(); err != nil {
 		return nil, err
 	}
@@ -272,10 +275,23 @@ func Save(path string, c *Config) error {
 	return nil
 }
 
-// normalize canonicalizes values (upper-case country codes, lower-case level).
-func normalize(cfg *Config) {
-	for i, c := range cfg.BlockedCountries {
-		cfg.BlockedCountries[i] = strings.ToUpper(strings.TrimSpace(c))
+// Normalize canonicalizes values in place: upper-case + trimmed + de-duplicated
+// country codes, lower-case log level, trimmed tunnel/endpoint entries, and the
+// VPN cadence defaults. It runs on both Load and every write path (via Marshal),
+// so the on-disk form is stable regardless of how a value was entered.
+func Normalize(cfg *Config) {
+	if len(cfg.BlockedCountries) > 0 {
+		seen := make(map[string]bool, len(cfg.BlockedCountries))
+		out := make([]string, 0, len(cfg.BlockedCountries))
+		for _, c := range cfg.BlockedCountries {
+			u := strings.ToUpper(strings.TrimSpace(c))
+			if u == "" || seen[u] {
+				continue
+			}
+			seen[u] = true
+			out = append(out, u)
+		}
+		cfg.BlockedCountries = out
 	}
 	cfg.LogLevel = strings.ToLower(strings.TrimSpace(cfg.LogLevel))
 	for i, iface := range cfg.VPN.TunnelInterfaces {

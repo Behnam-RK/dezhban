@@ -29,18 +29,27 @@ type Tunnel struct {
 // lowerCamelCase and stable. Time marshals as RFC3339 (Go's default), which the
 // Swift client decodes with an ISO-8601 strategy.
 type Snapshot struct {
-	Time             time.Time `json:"time"`
-	Mode             string    `json:"mode"`         // "vpn" | "legacy"
-	Posture          string    `json:"posture"`      // "allow" | "block" | "guard" | "full-block" | "stopped"
-	Blocked          bool      `json:"blocked"`      // egress currently cut
-	IP               string    `json:"ip,omitempty"` // last observed public IP
-	CountryCode      string    `json:"countryCode,omitempty"`
-	Provider         string    `json:"provider,omitempty"`  // geo provider of the last reading
-	LookupErr        string    `json:"lookupErr,omitempty"` // last lookup error, "" if none
-	Tunnels          []Tunnel  `json:"tunnels,omitempty"`   // VPN mode
-	Endpoints        []string  `json:"endpoints,omitempty"` // resolved VPN endpoints (VPN mode)
-	BlockedCountries []string  `json:"blockedCountries,omitempty"`
-	PID              int       `json:"pid,omitempty"`
+	Time        time.Time `json:"time"`
+	Mode        string    `json:"mode"`         // "vpn" | "legacy"
+	Posture     string    `json:"posture"`      // "allow" | "block" | "guard" | "full-block" | "stopped"
+	Blocked     bool      `json:"blocked"`      // egress currently cut
+	IP          string    `json:"ip,omitempty"` // last observed public IP
+	CountryCode string    `json:"countryCode,omitempty"`
+	Provider    string    `json:"provider,omitempty"`  // geo provider of the last reading
+	LookupErr   string    `json:"lookupErr,omitempty"` // last geo-lookup error (expected; handled by fail-closed)
+	// EnforcementErr is the last firewall action failure (Block/Unblock/Apply), "" when
+	// clear. Distinct from LookupErr: a set value means the daemon TRIED to enforce and
+	// the backend rejected it, so posture/blocked describe the data plane truthfully but
+	// the intended posture was not achieved (e.g. a failed block leaves posture "allow"
+	// during an active leak). Observers should surface it prominently regardless of posture.
+	EnforcementErr string   `json:"enforcementErr,omitempty"`
+	Tunnels        []Tunnel `json:"tunnels,omitempty"`   // VPN mode
+	Endpoints      []string `json:"endpoints,omitempty"` // resolved VPN endpoints (VPN mode)
+	// PollIntervalSeconds is the daemon's poll cadence, so a reader can size its own
+	// staleness threshold off the actual interval instead of hardcoding one. 0 when unknown.
+	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
+	BlockedCountries    []string `json:"blockedCountries,omitempty"`
+	PID                 int      `json:"pid,omitempty"`
 }
 
 // Write atomically persists s to path as JSON. It creates the parent directory
@@ -69,6 +78,14 @@ func Write(path string, s Snapshot) error {
 	if _, err := tmp.Write(data); err != nil {
 		_ = tmp.Close()
 		return fmt.Errorf("state: write temp: %w", err)
+	}
+	// fsync before rename so a crash/power-loss right after the rename can't leave a
+	// truncated snapshot behind (same guarantee internal/firewall/pf_darwin.go's
+	// atomicWrite provides for its state files; kept as a separate impl because that
+	// helper is darwin build-tagged).
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("state: sync temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("state: close temp: %w", err)

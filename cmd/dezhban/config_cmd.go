@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
-	"github.com/behnam-rk/dezhban/internal/privilege"
 )
 
 const configUsage = `usage: dezhban config <subcommand>
@@ -46,10 +45,8 @@ var configFields = map[string]configField{
 	},
 	"blockedCountries": {
 		get: func(c *config.Config) string { return strings.Join(c.BlockedCountries, ",") },
-		set: func(c *config.Config, v string) error {
-			c.BlockedCountries = upperAll(splitList(v))
-			return nil
-		},
+		// config.Normalize (run on save) upper-cases and de-duplicates; just split here.
+		set: func(c *config.Config, v string) error { c.BlockedCountries = splitList(v); return nil },
 	},
 	"failClosed": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.FailClosed) },
@@ -117,6 +114,10 @@ var configFields = map[string]configField{
 }
 
 func cmdConfig(args []string) int {
+	// The config subcommands take positional args (get <key>, set <key> <val>), so a
+	// --config flag can appear anywhere; pull it out before dispatch and thread the
+	// resolved path through, otherwise an explicit --config is silently ignored.
+	cfgPath, args := stripConfigFlag(args)
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, configUsage)
 		return 2
@@ -124,15 +125,15 @@ func cmdConfig(args []string) int {
 	sub, rest := args[0], args[1:]
 	switch sub {
 	case "path":
-		return configPath()
+		return configPath(cfgPath)
 	case "show":
-		return configShow()
+		return configShow(cfgPath)
 	case "get":
-		return configGet(rest)
+		return configGet(cfgPath, rest)
 	case "set":
-		return configSet(rest)
+		return configSet(cfgPath, rest)
 	case "edit":
-		return configEdit()
+		return configEdit(cfgPath)
 	case "-h", "--help", "help":
 		fmt.Println(configUsage)
 		return 0
@@ -142,17 +143,43 @@ func cmdConfig(args []string) int {
 	}
 }
 
-// writeTargetPath is where config set/edit persist to: the resolved path, or the
-// canonical system path when nothing exists yet.
-func writeTargetPath() string {
-	if p := resolveConfigPath(""); p != "" {
+// stripConfigFlag extracts a --config/-config value (in either `--config PATH` or
+// `--config=PATH` form) from anywhere in args, returning the value ("" if absent)
+// and the remaining args. Mirrors stripVerbose's whole-list scan so the flag works
+// regardless of position relative to the subcommand's positional args.
+func stripConfigFlag(args []string) (string, []string) {
+	path := ""
+	out := make([]string, 0, len(args))
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--config" || a == "-config":
+			if i+1 < len(args) {
+				path = args[i+1]
+				i++
+			}
+		case strings.HasPrefix(a, "--config="):
+			path = strings.TrimPrefix(a, "--config=")
+		case strings.HasPrefix(a, "-config="):
+			path = strings.TrimPrefix(a, "-config=")
+		default:
+			out = append(out, a)
+		}
+	}
+	return path, out
+}
+
+// writeTargetPath is where config set/edit persist to: the resolved path (honoring
+// an explicit --config), or the canonical system path when nothing exists yet.
+func writeTargetPath(flagVal string) string {
+	if p := resolveConfigPath(flagVal); p != "" {
 		return p
 	}
 	return defaultConfigPath()
 }
 
-func configPath() int {
-	if p := resolveConfigPath(""); p != "" {
+func configPath(flagVal string) int {
+	if p := resolveConfigPath(flagVal); p != "" {
 		fmt.Println(p)
 		return 0
 	}
@@ -160,8 +187,8 @@ func configPath() int {
 	return 0
 }
 
-func configShow() int {
-	cfg, err := loadConfig("")
+func configShow(flagVal string) int {
+	cfg, err := loadConfig(flagVal)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
@@ -175,7 +202,7 @@ func configShow() int {
 	return 0
 }
 
-func configGet(args []string) int {
+func configGet(flagVal string, args []string) int {
 	if len(args) != 1 {
 		fmt.Fprintln(os.Stderr, "usage: dezhban config get <key>")
 		return 2
@@ -185,7 +212,7 @@ func configGet(args []string) int {
 		fmt.Fprintf(os.Stderr, "unknown key %q\nvalid keys: %s\n", args[0], knownKeys())
 		return 2
 	}
-	cfg, err := loadConfig("")
+	cfg, err := loadConfig(flagVal)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
@@ -194,7 +221,7 @@ func configGet(args []string) int {
 	return 0
 }
 
-func configSet(args []string) int {
+func configSet(flagVal string, args []string) int {
 	if len(args) != 2 {
 		fmt.Fprintln(os.Stderr, "usage: dezhban config set <key> <value>")
 		return 2
@@ -205,7 +232,7 @@ func configSet(args []string) int {
 		fmt.Fprintf(os.Stderr, "unknown key %q\nvalid keys: %s\n", key, knownKeys())
 		return 2
 	}
-	cfg, err := loadConfig("")
+	cfg, err := loadConfig(flagVal)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
@@ -214,7 +241,7 @@ func configSet(args []string) int {
 		fmt.Fprintln(os.Stderr, "invalid value:", err)
 		return 1
 	}
-	path := writeTargetPath()
+	path := writeTargetPath(flagVal)
 	if err := writeConfig(path, cfg); err != nil {
 		return saveError(path, err)
 	}
@@ -222,24 +249,45 @@ func configSet(args []string) int {
 	return 0
 }
 
-func configEdit() int {
-	path := writeTargetPath()
-	// Editing a root-owned config needs root for the editor to save; elevate the
-	// whole command up front (the editor then runs as root) rather than let the
-	// save fail after the user has typed their changes.
-	if !privilege.IsPrivileged() && !pathWritable(path) && canElevate() {
-		fmt.Fprintf(os.Stderr, "editing %s needs root — re-running with sudo…\n", path)
-		if err := reexecElevated(); err != nil {
-			fmt.Fprintln(os.Stderr, "auto-sudo failed:", err)
+func configEdit(flagVal string) int {
+	path := writeTargetPath(flagVal)
+
+	// Seed an UNPRIVILEGED temp file with the current config (or defaults), let
+	// $EDITOR run as the invoking user on that temp, validate it, then elevate only
+	// the final write. Running $EDITOR under a whole-process sudo re-exec would run
+	// the editor (and any EDITOR=… shell it names) as root — avoid that. Validating
+	// the temp before persisting also means a broken edit never overwrites the
+	// live config.
+	seed, err := os.ReadFile(path)
+	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			fmt.Fprintln(os.Stderr, "read config:", err)
+			return 1
 		}
-	}
-	if _, err := os.Stat(path); errors.Is(err, fs.ErrNotExist) {
 		def := config.Default()
-		if err := config.Save(path, &def); err != nil {
-			return saveError(path, err)
+		if seed, err = config.Marshal(&def); err != nil {
+			fmt.Fprintln(os.Stderr, "encode defaults:", err)
+			return 1
 		}
-		fmt.Fprintf(os.Stderr, "created %s from defaults\n", path)
 	}
+
+	tmp, err := os.CreateTemp("", "dezhban-config-*.json")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "create temp:", err)
+		return 1
+	}
+	tmpPath := tmp.Name()
+	defer func() { _ = os.Remove(tmpPath) }()
+	if _, err := tmp.Write(seed); err != nil {
+		_ = tmp.Close()
+		fmt.Fprintln(os.Stderr, "write temp:", err)
+		return 1
+	}
+	if err := tmp.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, "write temp:", err)
+		return 1
+	}
+
 	editor := firstNonEmpty(os.Getenv("VISUAL"), os.Getenv("EDITOR"))
 	if editor == "" {
 		if runtime.GOOS == "windows" {
@@ -248,17 +296,22 @@ func configEdit() int {
 			editor = "vi"
 		}
 	}
-	cmd := exec.Command(editor, path)
+	cmd := exec.Command(editor, tmpPath)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
 		fmt.Fprintf(os.Stderr, "editor %q failed: %v\n", editor, err)
 		return 1
 	}
-	if _, err := config.Load(path); err != nil {
-		fmt.Fprintln(os.Stderr, "warning: config is now invalid:", err)
+
+	edited, err := config.Load(tmpPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "not saved — edited config is invalid:", err)
 		return 1
 	}
-	fmt.Println("config valid:", path)
+	if err := writeConfig(path, edited); err != nil {
+		return saveError(path, err)
+	}
+	fmt.Println("config saved:", path)
 	return 0
 }
 
@@ -310,13 +363,6 @@ func splitList(v string) []string {
 		}
 	}
 	return out
-}
-
-func upperAll(ss []string) []string {
-	for i := range ss {
-		ss[i] = strings.ToUpper(ss[i])
-	}
-	return ss
 }
 
 func firstNonEmpty(vals ...string) string {

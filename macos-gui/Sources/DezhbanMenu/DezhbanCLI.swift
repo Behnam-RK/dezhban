@@ -6,15 +6,20 @@ import Foundation
 /// code-signing infra for the MVP. macOS caches the authorization for ~5 min, so
 /// a burst of actions prompts once.
 enum DezhbanCLI {
-    /// The daemon's root-owned config path (see cmd/dezhban defaultConfigPath).
+    /// Fallback config path if the CLI can't be asked (see cmd/dezhban
+    /// defaultConfigPath). Prefer `resolvedConfigPath()`, which honors
+    /// $DEZHBAN_CONFIG / the system path via `dezhban config path`.
     static let configPath = "/etc/dezhban/dezhban.json"
 
-    /// Resolves the CLI binary: common install dirs first, then $PATH.
+    /// Resolves the CLI binary from trusted, root-controlled absolute locations
+    /// ONLY — never from $PATH. `runPrivileged` executes this path as root, so a
+    /// $PATH-resolved candidate would be a privilege-escalation vector (a binary
+    /// planted earlier in $PATH would run with administrator privileges).
     static func binaryPath() -> String? {
         let candidates = ["/usr/local/bin/dezhban", "/opt/homebrew/bin/dezhban"]
         let fm = FileManager.default
         for c in candidates where fm.isExecutableFile(atPath: c) { return c }
-        return which("dezhban")
+        return nil
     }
 
     /// Runs a privileged command via the native admin prompt. Returns true on
@@ -22,14 +27,17 @@ enum DezhbanCLI {
     @discardableResult
     static func runPrivileged(_ args: [String]) -> Bool {
         guard let bin = binaryPath() else { return false }
-        // Single-quote each token so paths with spaces survive the shell; our
-        // tokens never contain single quotes.
-        let shellCmd = ([bin] + args).map { "'\($0)'" }.joined(separator: " ")
-        // Embed shellCmd as an AppleScript string literal: escape backslashes then
-        // double-quotes.
-        let escaped = shellCmd
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        let tokens = [bin] + args
+        // Defense in depth: bin is a trusted absolute path and args are hardcoded
+        // literals, but since these run through `do shell script … with
+        // administrator privileges` as root, refuse any token carrying a single
+        // quote or backslash rather than risk breaking the quoting into an
+        // injection. (The alternative — argv without a shell — isn't available
+        // through NSAppleScript's `do shell script`.)
+        guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else { return false }
+        let shellCmd = tokens.map { "'\($0)'" }.joined(separator: " ")
+        // Embed shellCmd as an AppleScript string literal: escape double-quotes.
+        let escaped = shellCmd.replacingOccurrences(of: "\"", with: "\\\"")
         let source = "do shell script \"\(escaped)\" with administrator privileges"
         guard let script = NSAppleScript(source: source) else { return false }
         var errInfo: NSDictionary?
@@ -37,13 +45,19 @@ enum DezhbanCLI {
         return errInfo == nil
     }
 
-    // MARK: - helpers
-
-    private static func which(_ name: String) -> String? {
-        let r = exec("/usr/bin/which", [name])
-        let path = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
-        return (r.status == 0 && !path.isEmpty) ? path : nil
+    /// The config path the daemon actually uses, asked from the CLI so the GUI
+    /// agrees with the `--config` → $DEZHBAN_CONFIG → system-path resolution order
+    /// instead of hardcoding one location. Falls back to `configPath`.
+    static func resolvedConfigPath() -> String {
+        guard let bin = binaryPath() else { return configPath }
+        let r = exec(bin, ["config", "path"])
+        // `config path` prints the winning path (possibly followed by a note like
+        // "(not present — using built-in defaults)"); take the first field.
+        let first = r.out.split(whereSeparator: { $0 == " " || $0 == "\n" }).first.map(String.init) ?? ""
+        return (r.status == 0 && !first.isEmpty) ? first : configPath
     }
+
+    // MARK: - helpers
 
     private static func exec(_ launchPath: String, _ args: [String]) -> (status: Int32, out: String, err: String) {
         let p = Process()

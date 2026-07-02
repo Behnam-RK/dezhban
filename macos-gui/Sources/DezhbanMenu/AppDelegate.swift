@@ -8,14 +8,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menu = NSMenu()
     private var timer: Timer?
     private var snapshot: Snapshot?
+    private var lastMtime: Date?
+    private var lastIconKey: String?
 
-    /// A snapshot older than this reads as stopped/unknown. The daemon publishes
-    /// every poll (default 30s), so 90s tolerates a couple of missed cycles.
-    private let staleAfter: TimeInterval = 90
+    /// Floor for the staleness threshold. The daemon's actual poll cadence — carried
+    /// in the snapshot as `pollIntervalSeconds` — scales this up (see staleThreshold),
+    /// so a deliberately long pollInterval doesn't make an enforcing daemon read as
+    /// "stopped" between polls. 90s tolerates a couple of missed default-cadence cycles.
+    private let staleFloor: TimeInterval = 90
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         menu.delegate = self
+        // We compute item enablement ourselves (see addAction); without this, AppKit's
+        // automatic validation force-enables any item whose target responds to its
+        // selector, so the gating on "Block now"/"Start" etc. would be ignored.
+        menu.autoenablesItems = false
         statusItem.menu = menu
         refresh()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -25,12 +33,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - state → icon
 
-    /// Reads the latest snapshot and updates the menubar icon. Cheap enough to run
-    /// every second.
+    /// Refreshes the menubar icon on the 1s timer. Re-decodes the state file only
+    /// when it actually changed (the daemon rewrites it ~every 30s), but still
+    /// recomputes the icon each tick so staleness can flip it to gray from the
+    /// cached snapshot. Repaints the button only when the icon actually differs,
+    /// avoiding an NSImage allocation every second.
     private func refresh() {
-        snapshot = StateReader.read()
+        let mtime = StateReader.modificationTime()
+        if mtime != lastMtime {
+            lastMtime = mtime
+            snapshot = StateReader.read()
+        }
         guard let button = statusItem.button else { return }
         let (symbol, color, help) = iconFor(snapshot)
+        let key = "\(symbol)|\(help)"
+        guard key != lastIconKey else { return }
+        lastIconKey = key
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "dezhban: \(help)")
         image?.isTemplate = true
         button.image = image
@@ -38,10 +56,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.toolTip = "dezhban — \(help)"
     }
 
+    /// The age past which a snapshot reads as stopped, derived from the daemon's own
+    /// poll cadence (3× the interval) so it scales with a custom pollInterval, floored
+    /// at staleFloor. Falls back to the floor when the field is absent (older daemon).
+    private func staleThreshold(_ s: Snapshot) -> TimeInterval {
+        guard let p = s.pollIntervalSeconds, p > 0 else { return staleFloor }
+        return max(staleFloor, TimeInterval(p) * 3)
+    }
+
+    /// Whether a snapshot represents a live, enforcing daemon (fresh and not
+    /// stopped). Single source of truth for both the icon and the menu's gating.
+    private func isLive(_ s: Snapshot?) -> Bool {
+        guard let s = s else { return false }
+        return s.age <= staleThreshold(s) && s.posture != "stopped"
+    }
+
     /// Maps a snapshot (or its absence/staleness) to an SF Symbol + tint + label.
     private func iconFor(_ s: Snapshot?) -> (symbol: String, color: NSColor, help: String) {
-        guard let s = s, s.age <= staleAfter, s.posture != "stopped" else {
+        guard let s = s, isLive(s) else {
             return ("shield", .systemGray, "stopped")
+        }
+        // A failed firewall action means the intended posture was NOT achieved (e.g. a
+        // failed block leaves posture "allow" during a live leak). Surface it as a
+        // warning regardless of posture so a green shield never masks a failed enforce.
+        if let e = s.enforcementErr, !e.isEmpty {
+            return ("exclamationmark.triangle.fill", .systemRed, "enforcement error")
         }
         switch s.posture {
         case "block", "full-block":
@@ -62,10 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    private var isRunning: Bool {
-        guard let s = snapshot else { return false }
-        return s.age <= staleAfter && s.posture != "stopped"
-    }
+    private var isRunning: Bool { isLive(snapshot) }
 
     // MARK: - menu
 
@@ -82,6 +118,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 addInfo("IP: \(ip) (\(cc)\(prov))")
             } else if let err = s.lookupErr, !err.isEmpty {
                 addInfo("Last lookup failed: \(err)")
+            }
+            if let e = s.enforcementErr, !e.isEmpty {
+                addInfo("⚠︎ Enforcement failed: \(e)")
             }
             addInfo("Mode: \(s.mode == "vpn" ? "VPN guard" : "legacy")")
             if s.mode == "vpn" {
@@ -141,13 +180,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - actions
 
-    @objc private func startService() { DezhbanCLI.runPrivileged(["start"]); refresh() }
-    @objc private func stopService() { DezhbanCLI.runPrivileged(["stop"]); refresh() }
-    @objc private func blockNow() { DezhbanCLI.runPrivileged(["block"]); refresh() }
-    @objc private func unblockNow() { DezhbanCLI.runPrivileged(["unblock"]); refresh() }
+    @objc private func startService() { runAction(["start"], "start the kill switch") }
+    @objc private func stopService() { runAction(["stop"], "stop the kill switch") }
+    @objc private func blockNow() { runAction(["block"], "block") }
+    @objc private func unblockNow() { runAction(["unblock"], "unblock") }
+
+    /// Runs a privileged CLI action OFF the main thread — `runPrivileged` blocks
+    /// through the admin-password prompt and the command's full run, which would
+    /// otherwise freeze the menubar. Refreshes and surfaces failures back on the main
+    /// queue; a cancelled prompt or a non-zero exit is reported instead of swallowed.
+    private func runAction(_ args: [String], _ label: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let ok = DezhbanCLI.runPrivileged(args)
+            DispatchQueue.main.async {
+                if !ok { self?.notifyFailure(label) }
+                self?.refresh()
+            }
+        }
+    }
+
+    private func notifyFailure(_ label: String) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "dezhban: couldn’t \(label)"
+        alert.informativeText = "The command failed or was cancelled. If it needs elevated rights, approve the admin prompt; otherwise check Console.app for details."
+        alert.runModal()
+    }
 
     @objc private func openConfig() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: DezhbanCLI.configPath))
+        NSWorkspace.shared.open(URL(fileURLWithPath: DezhbanCLI.resolvedConfigPath()))
     }
 
     @objc private func viewLogs() {

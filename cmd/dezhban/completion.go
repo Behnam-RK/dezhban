@@ -89,7 +89,7 @@ compdef _dezhban dezhban
 const fishCompletion = `# dezhban fish completion
 complete -c dezhban -f
 # subcommands (only as the first argument)
-complete -c dezhban -n '__fish_use_subcommand' -a 'run block unblock status validate monitor print-rules doctor panic install uninstall start stop detect-vpn setup config completion version help'
+complete -c dezhban -n '__fish_use_subcommand' -a '` + completionCommands + `'
 # flag values
 complete -c dezhban -l mode -x -a 'guard fullblock legacy'
 complete -c dezhban -l config -r

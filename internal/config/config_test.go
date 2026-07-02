@@ -242,6 +242,58 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// A config saved with the guard disabled must keep its tunnel/endpoint fields —
+// otherwise re-enabling the guard later would fail validation or lock the host
+// out. Regression test for toFileConfig dropping the vpn block when !Enabled.
+func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
+	cfg := Default()
+	cfg.VPN = VPN{
+		Enabled:          false,
+		TunnelInterfaces: []string{"utun4"},
+		Endpoints:        []string{"203.0.113.5"},
+		Autodetect:       true,
+	}
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	if err := Save(path, &cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.VPN.Enabled {
+		t.Error("VPN.Enabled = true, want false")
+	}
+	if g := got.VPN.TunnelInterfaces; len(g) != 1 || g[0] != "utun4" {
+		t.Errorf("VPN.TunnelInterfaces = %v, want [utun4]", g)
+	}
+	if g := got.VPN.Endpoints; len(g) != 1 || g[0] != "203.0.113.5" {
+		t.Errorf("VPN.Endpoints = %v, want [203.0.113.5]", g)
+	}
+	if !got.VPN.Autodetect {
+		t.Error("VPN.Autodetect = false, want true")
+	}
+}
+
+// Save must canonicalize (upper-case, trim, de-dupe) blocked countries — that
+// normalization lives in config.Normalize and runs on every write path, so
+// callers (config set, the setup wizard) don't each re-implement it.
+func TestSaveNormalizesCountries(t *testing.T) {
+	cfg := Default()
+	cfg.BlockedCountries = []string{" ir ", "IR", "ru"}
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	if err := Save(path, &cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := []string{"IR", "RU"}; !reflect.DeepEqual(got.BlockedCountries, want) {
+		t.Errorf("BlockedCountries = %v, want %v", got.BlockedCountries, want)
+	}
+}
+
 // Save must reject an invalid Config rather than persist it.
 func TestSaveValidates(t *testing.T) {
 	bad := Default()
