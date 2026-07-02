@@ -300,6 +300,17 @@ func (o Options) runVPN(ctx context.Context) error {
 
 	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
 
+	// tunnelUp tracks the last tunnel edge from the watcher. While the tunnel is
+	// down and we are still guarding, egress can only leave through the (down)
+	// tunnel, so every direct geo lookup is guaranteed to time out — pure WARN
+	// spam, and worse: fail-closed would drive the Decider to FULL BLOCK, which
+	// renders no passes and closes the very endpoints the guard keeps open for
+	// reconnect. So a down tunnel suppresses the GUARD-posture geo step (see the
+	// geoTick case). Defaults to true so the startup observation and the window
+	// before the first watcher edge still run; with no watcher it stays true, so
+	// the loop behaves exactly as before.
+	tunnelUp := true
+
 	// Last-known observation and tunnel state, retained so a tunnel edge or
 	// endpoint refresh publishes a full snapshot without blanking the IP/country
 	// from the most recent poll. snapshot() closes over these plus the (mutable)
@@ -345,6 +356,7 @@ func (o Options) runVPN(ctx context.Context) error {
 				tunCh = nil
 				continue
 			}
+			tunnelUp = st.Up
 			if st.Up {
 				o.Log.Info("vpn tunnel up", "detail", st.Detail)
 			} else {
@@ -373,6 +385,17 @@ func (o Options) runVPN(ctx context.Context) error {
 				snapshot()
 			}
 		case <-geoTick.C:
+			// While the tunnel is down and we are still guarding, skip the geo
+			// step: the lookup would leave through the down tunnel and can only
+			// fail, and a failed lookup fail-closes to FULL BLOCK — closing the
+			// endpoints the guard holds open for reconnect. The standing guard
+			// already cuts a leak, so there is nothing to observe and nothing to
+			// enforce until the tunnel returns. While blocked we still probe: the
+			// bounded recovery probe is the only path back out of FULL BLOCK.
+			if o.Watcher != nil && !tunnelUp && !blocked {
+				o.Log.Debug("vpn tunnel down — skipping geo lookup (guard holds, endpoints open for reconnect)")
+				continue
+			}
 			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
 			snapshot()
 		}

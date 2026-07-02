@@ -539,6 +539,20 @@ func (idleMonitor) Once(ctx context.Context) (monitor.Reading, error) {
 	return monitor.Reading{}, ctx.Err()
 }
 
+// steadyMonitor always returns the same country with no error, so a test can run
+// the VPN loop for a fixed wall-clock window (cancelling via a timeout context)
+// without depending on the monitor exhausting a fixed slice of readings.
+type steadyMonitor struct{ cc string }
+
+func (steadyMonitor) Poll(ctx context.Context) <-chan monitor.Result {
+	ch := make(chan monitor.Result)
+	go func() { <-ctx.Done(); close(ch) }()
+	return ch
+}
+func (m steadyMonitor) Once(context.Context) (monitor.Reading, error) {
+	return monitor.Reading{CountryCode: m.cc}, nil
+}
+
 func downWatcher() *netdetect.Watcher {
 	return &netdetect.Watcher{
 		Interval: time.Millisecond,
@@ -582,11 +596,13 @@ func TestLegacyTunnelDownBlocks(t *testing.T) {
 // startup guard should appear, plus cleanup.
 func TestVPNWatcherObservabilityOnly(t *testing.T) {
 	be := &fakeBackend{}
-	ctx, cancel := context.WithCancel(context.Background())
+	// steadyMonitor always reports US (allowed), so the guard holds throughout and
+	// the loop is bounded by the timeout, not by a fixed reading slice — the skip
+	// added for a down tunnel would otherwise stop the geo ticks that drained it.
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
 	o := Options{
-		Monitor: &fakeMonitor{cancel: cancel, results: []monitor.Result{
-			reading("US"), reading("US"), reading("US"),
-		}},
+		Monitor:   steadyMonitor{cc: "US"},
 		Decider:   decision.New([]string{"IR"}, true, 1),
 		Backend:   be,
 		Log:       discardLog(),
@@ -612,6 +628,43 @@ func TestVPNWatcherObservabilityOnly(t *testing.T) {
 	}
 	if guards != 1 {
 		t.Errorf("apply-guard count = %d, want 1 (startup only); calls = %v", guards, be.calls)
+	}
+}
+
+// While the tunnel is down and still guarding, the geo step must be skipped: a
+// lookup can only leave through the down tunnel and fail, and a failed lookup
+// fail-closes to FULL BLOCK — which renders no passes and closes the very
+// endpoints the guard holds open for reconnect. So a failing monitor must NOT
+// drive a full block while the tunnel is down; the standing guard just holds.
+func TestVPNTunnelDownSkipsGeoStep(t *testing.T) {
+	be := &fakeBackend{}
+	// US at startup keeps the initial guard (blocked=false); any further Once call
+	// — reachable only if the skip is broken — exhausts the slice and returns an
+	// error, which under fail-closed hysteresis=1 would immediately full-block.
+	mon := &fakeMonitor{results: []monitor.Result{reading("US")}}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:   mon,
+		Decider:   decision.New([]string{"IR"}, true, 1), // fail-closed, no hysteresis
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  100 * time.Millisecond, // geo ticks land long after the down edge (~1ms)
+		VPN:       true,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:   downWatcher(), // samples down every 1ms → down edge within a few ms
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range be.calls {
+		if c == "apply-fullblock" {
+			t.Fatalf("a down tunnel in GUARD must not full-block on failed lookups; calls = %v", be.calls)
+		}
+	}
+	if mon.idx != 1 {
+		t.Errorf("monitor Once calls = %d, want 1 (startup only; geo step skipped while tunnel down)", mon.idx)
 	}
 }
 
