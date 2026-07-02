@@ -10,12 +10,15 @@ import (
 	"fmt"
 	"log/slog"
 	"net/netip"
+	"os"
+	"strings"
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 // probeEgressBudget caps how long the VPN recovery probe may hold the guard
@@ -23,6 +26,11 @@ import (
 // timeout so a normal lookup completes, while bounding the leak window if the
 // tunnel hangs or quorum fans out across several providers.
 const probeEgressBudget = 8 * time.Second
+
+// publishBuffer sizes the background state-writer queue. It comfortably absorbs
+// a transient slow write at the daemon's event rate (a poll every few tens of
+// seconds); only a sustained write stall fills it and reintroduces back-pressure.
+const publishBuffer = 64
 
 // Monitor is the monitor surface the runner consumes. *monitor.Monitor
 // satisfies it; an interface keeps the loop testable without real HTTP. Poll
@@ -74,6 +82,87 @@ type Options struct {
 	// Block — including each tick while blocked — so rotated provider IPs stay
 	// reachable for recovery detection. Legacy mode only.
 	Allowlist func() firewall.Allowlist
+
+	// Publish, when non-nil, receives a fresh snapshot of the daemon's posture
+	// after each poll, verdict transition, tunnel edge, and endpoint refresh. It
+	// is best-effort observability (the menubar app / `status --json` read it) and
+	// must never affect enforcement — the wiring in main logs write failures at
+	// debug. Run invokes it from a background writer goroutine (see publishBuffer),
+	// so a slow write never stalls the enforcement loop; it may run concurrently
+	// with the loop and need not be fast. nil → no-op (tests / legacy callers).
+	Publish func(state.Snapshot)
+	// BlockedCountries is copied verbatim into each published snapshot so an
+	// observer can show what the daemon is configured to block. Informational only.
+	BlockedCountries []string
+}
+
+// tunnelSnapshot maps a watcher edge to the published tunnel state. Name comes
+// from the interface the watcher identified; on a down/unknown edge it carries
+// no name, so fall back to the configured tunnel(s) the guard is watching.
+func tunnelSnapshot(st netdetect.TunnelState, tunnels []string) []state.Tunnel {
+	name := st.Name
+	if name == "" {
+		name = strings.Join(tunnels, ",")
+	}
+	return []state.Tunnel{{Name: name, Up: st.Up, Detail: st.Detail}}
+}
+
+// modeName is the snapshot's mode string.
+func modeName(vpn bool) string {
+	if vpn {
+		return "vpn"
+	}
+	return "legacy"
+}
+
+// postureName maps (mode, blocked) to the snapshot's posture string.
+func postureName(vpn, blocked bool) string {
+	switch {
+	case vpn && blocked:
+		return "full-block"
+	case vpn:
+		return "guard"
+	case blocked:
+		return "block"
+	default:
+		return "allow"
+	}
+}
+
+// publish builds a full snapshot from the current posture and last-known reading
+// and hands it to o.Publish. It no-ops when Publish is nil, so the hot path pays
+// only a nil check when observability is off. Each call emits a complete snapshot
+// (the file is replaced atomically), so callers pass the last-known reading even
+// on tunnel/endpoint events to avoid blanking IP/country between polls.
+func (o Options) publish(blocked bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr) {
+	if o.Publish == nil {
+		return
+	}
+	snap := state.Snapshot{
+		Time:                time.Now(),
+		Mode:                modeName(o.VPN),
+		Posture:             postureName(o.VPN, blocked),
+		Blocked:             blocked,
+		CountryCode:         r.CountryCode,
+		Provider:            r.Provider,
+		BlockedCountries:    o.BlockedCountries,
+		Tunnels:             tunnels,
+		PollIntervalSeconds: int(o.Interval.Seconds()),
+		PID:                 os.Getpid(),
+	}
+	if r.IP.IsValid() {
+		snap.IP = r.IP.String()
+	}
+	if lookupErr != nil {
+		snap.LookupErr = lookupErr.Error()
+	}
+	if enfErr != nil {
+		snap.EnforcementErr = enfErr.Error()
+	}
+	for _, e := range endpoints {
+		snap.Endpoints = append(snap.Endpoints, e.String())
+	}
+	o.Publish(snap)
 }
 
 // Run executes the monitor→decision→enforcement loop until ctx is cancelled,
@@ -89,10 +178,82 @@ func Run(ctx context.Context, o Options) error {
 		}
 	}()
 
-	if o.VPN {
-		return o.runVPN(ctx)
+	// Decouple best-effort publishing from the enforcement loop: hand snapshots to
+	// a background writer over a buffered channel, so a stalled disk write
+	// (full/hung/NFS-backed state dir) can't delay handling the next tunnel or geo
+	// event. The producer NEVER blocks: on a full buffer it drops the OLDEST queued
+	// snapshot and enqueues the newest (latest-wins). Coalescing is invisible to
+	// observers — they only ever read the single, atomically-renamed state file, so a
+	// snapshot a later one supersedes could never be observed anyway. Nil Publish
+	// stays a plain no-op.
+	if o.Publish != nil {
+		sink := o.Publish
+		ch := make(chan state.Snapshot, publishBuffer)
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			for snap := range ch {
+				sink(snap)
+			}
+		}()
+		o.Publish = func(s state.Snapshot) {
+			for {
+				select {
+				case ch <- s:
+					return
+				default:
+					// Full: drop the oldest so the newest always lands. The drain may
+					// race the consumer (both receive on ch); harmless — only "latest
+					// eventually lands" matters, never an exact drop count.
+					select {
+					case <-ch:
+					default:
+					}
+				}
+			}
+		}
+		defer func() {
+			close(ch)
+			// Bound the flush: a wedged writer must not block this defer, because it
+			// runs BEFORE the deferred Cleanup() (LIFO) — an unbounded wait here would
+			// prevent rule teardown, the one invariant that keeps the host from being
+			// locked out. On timeout the stuck writer goroutine leaks, acceptable on a
+			// process that is exiting.
+			select {
+			case <-done:
+			case <-time.After(2 * time.Second):
+			}
+		}()
 	}
-	return o.runLegacy(ctx)
+
+	var runErr error
+	if o.VPN {
+		runErr = o.runVPN(ctx)
+	} else {
+		runErr = o.runLegacy(ctx)
+	}
+	// Publish one final "stopped" snapshot before teardown so observers (the
+	// menubar app, `status --json`) flip to stopped at once on a clean shutdown
+	// instead of waiting out the staleness window. It's queued on the same channel
+	// and flushed by the defer above; a hard crash still relies on staleness.
+	o.publishStopped()
+	return runErr
+}
+
+// publishStopped emits a terminal snapshot marking the daemon as no longer
+// enforcing. Cleanup (deferred) removes the rules right after.
+func (o Options) publishStopped() {
+	if o.Publish == nil {
+		return
+	}
+	o.Publish(state.Snapshot{
+		Time:                time.Now(),
+		Mode:                modeName(o.VPN),
+		Posture:             "stopped",
+		Blocked:             false,
+		PollIntervalSeconds: int(o.Interval.Seconds()),
+		PID:                 os.Getpid(),
+	})
 }
 
 // runVPN installs the always-on guard immediately at startup (so a tunnel drop
@@ -139,6 +300,18 @@ func (o Options) runVPN(ctx context.Context) error {
 
 	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
 
+	// Last-known observation and tunnel state, retained so a tunnel edge or
+	// endpoint refresh publishes a full snapshot without blanking the IP/country
+	// from the most recent poll. snapshot() closes over these plus the (mutable)
+	// endpoints and blocked, so it always emits the current posture.
+	var lastRes monitor.Result
+	var lastTun []state.Tunnel
+	// enfErr is the last firewall-action failure (a failed FULL BLOCK / guard restore,
+	// or a probe re-cut that left egress open), published so observers don't read a
+	// failed transition as a healthy guard. Sticky across tunnel/endpoint snapshots.
+	var enfErr error
+	snapshot := func() { o.publish(blocked, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints) }
+
 	// Observability watcher: a tunnel drop is already cut by the standing guard
 	// rule (physical egress is blocked except the endpoints), so the watcher takes
 	// NO firewall action here — it just surfaces the drop/restore for logging and
@@ -160,7 +333,8 @@ func (o Options) runVPN(ctx context.Context) error {
 
 	// Observe once immediately so an already-bad exit is caught at startup rather
 	// than one interval later.
-	o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+	lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+	snapshot()
 
 	for {
 		select {
@@ -177,6 +351,8 @@ func (o Options) runVPN(ctx context.Context) error {
 				o.Log.Warn("vpn tunnel down — guard holds the line (physical egress stays blocked, "+
 					"endpoints open for reconnect)", "detail", st.Detail)
 			}
+			lastTun = tunnelSnapshot(st, o.Tunnels)
+			snapshot()
 		case <-epTick.C:
 			next, changed := reconcileEndpoints(endpoints, o.resolveEndpoints(ctx), blocked)
 			if changed {
@@ -194,9 +370,11 @@ func (o Options) runVPN(ctx context.Context) error {
 				} else {
 					o.Log.Debug("vpn endpoints updated while blocked; applied on next guard", "endpoints", len(endpoints))
 				}
+				snapshot()
 			}
 		case <-geoTick.C:
-			o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+			snapshot()
 		}
 	}
 }
@@ -213,11 +391,15 @@ func (o Options) vpnPolicies(endpoints []netip.Addr) (guard, fullBlock firewall.
 // vpnGeoStep performs one geo observation and applies the resulting transition.
 // While blocked it observes through the bounded recovery probe; otherwise it
 // reads directly. Probe readings feed the same hysteresis streak, so recovery
-// takes `Hysteresis` consecutive allowed probes.
-func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Policy, blocked *bool) {
+// takes `Hysteresis` consecutive allowed probes. It returns the observed result
+// so the caller can publish the last-known reading. The second return is the last
+// firewall-action failure (a failed FULL BLOCK / guard restore, or a probe re-cut
+// that left egress open), or nil when the intended posture was achieved.
+func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Policy, blocked *bool) (monitor.Result, error) {
 	var res monitor.Result
+	var enfErr error
 	if *blocked {
-		res = o.probe(ctx, guard, fullBlock)
+		res, enfErr = o.probe(ctx, guard, fullBlock)
 	} else {
 		r, err := o.Monitor.Once(ctx)
 		res = monitor.Result{Reading: r, Err: err}
@@ -232,22 +414,28 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 		if !*blocked {
 			if err := o.Backend.Apply(fullBlock); err != nil {
 				o.Log.Error("full block failed", "err", err, "country", cc)
+				enfErr = err
 			} else {
 				o.Log.Info("FULL BLOCK", "country", cc)
 				*blocked = true
+				enfErr = nil
 			}
 		}
-		// Already blocked: the probe above re-cut to FULL BLOCK, nothing to do.
+		// Already blocked: the probe above re-cut to FULL BLOCK; enfErr carries any
+		// re-cut failure it reported.
 	case decision.Allow:
 		if *blocked {
 			if err := o.Backend.Apply(guard); err != nil {
 				o.Log.Error("guard restore failed", "err", err, "country", cc)
+				enfErr = err
 			} else {
 				o.Log.Info("GUARD", "country", cc)
 				*blocked = false
+				enfErr = nil
 			}
 		}
 	}
+	return res, enfErr
 }
 
 // probe is the VPN recovery probe: briefly lift the guard so a single geo lookup
@@ -255,12 +443,17 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 // window is one bounded lookup (probeEgressBudget) — the accepted recovery
 // semantics. A failed re-cut leaves egress open; it is logged at error and the
 // next tick re-applies the block.
-func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) monitor.Result {
+// It returns the observed result plus any re-cut failure: a failed re-cut leaves
+// egress open until the next tick, so it is surfaced as an enforcement error. A
+// failed guard LIFT is not — the guard still holds, egress stays cut — so that path
+// returns a nil enforcement error and reports the miss as a lookup failure instead.
+func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) (monitor.Result, error) {
 	if err := o.Backend.Apply(guard); err != nil {
 		// Could not open the tunnel to look — report as a lookup failure so the
 		// Decider treats the country as undeterminable (fail-closed keeps blocking).
+		// The guard still holds, so this is not an open-egress enforcement failure.
 		o.Log.Error("recovery probe: lift guard failed", "err", err)
-		return monitor.Result{Err: fmt.Errorf("probe lift failed: %w", err)}
+		return monitor.Result{Err: fmt.Errorf("probe lift failed: %w", err)}, nil
 	}
 	// Bound the open-guard window: while the guard is lifted, egress flows to the
 	// (possibly forbidden) exit. A hung tunnel or a quorum lookup over several
@@ -270,10 +463,12 @@ func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) mo
 	pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
 	r, err := o.Monitor.Once(pctx)
 	cancel()
+	var enfErr error
 	if cerr := o.Backend.Apply(fullBlock); cerr != nil {
 		o.Log.Error("recovery probe: re-cut to full block failed — egress may be open until next tick", "err", cerr)
+		enfErr = cerr
 	}
-	return monitor.Result{Reading: r, Err: err}
+	return monitor.Result{Reading: r, Err: err}, enfErr
 }
 
 // runLegacy is the direct-connection model: dst-IP allowlist Block on entering a
@@ -283,6 +478,10 @@ func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) mo
 // idempotent, so re-applying the refreshed allowlist never stacks rules.
 func (o Options) runLegacy(ctx context.Context) error {
 	blocked := false
+	// enfErr is the last firewall-action failure, published so observers don't read a
+	// failed block as a healthy "allow". Sticky: set on a Block/Unblock error, cleared
+	// on the next success, and carried through non-enforcing (tunnel/geo) snapshots.
+	var enfErr error
 
 	// block applies (or refreshes) the dst-IP allowlist block. The allowlist is
 	// re-resolved on every call so a provider that rotates its CDN IP mid-block
@@ -294,13 +493,17 @@ func (o Options) runLegacy(ctx context.Context) error {
 	block := func(reason, cc string) {
 		al := o.Allowlist()
 		if blocked && len(al.Hosts) == 0 {
+			// Deliberate safety no-op (keep the existing block), not a failure — leave
+			// enfErr untouched.
 			o.Log.Warn("allowlist refresh resolved no provider IPs; keeping existing block", "reason", reason, "country", cc)
 			return
 		}
 		if err := o.Backend.Block(al); err != nil {
 			o.Log.Error("block failed", "err", err, "reason", reason, "country", cc)
+			enfErr = err
 			return
 		}
+		enfErr = nil
 		if !blocked {
 			o.Log.Info("BLOCKING", "reason", reason, "country", cc, "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 			blocked = true
@@ -318,6 +521,12 @@ func (o Options) runLegacy(ctx context.Context) error {
 		tunCh = o.Watcher.Watch(ctx)
 	}
 
+	// Last-known reading and tunnel state, retained so a tunnel edge publishes a
+	// full snapshot without blanking the IP/country from the most recent poll.
+	var last monitor.Result
+	var lastTun []state.Tunnel
+	snapshot := func() { o.publish(blocked, last.Reading, last.Err, enfErr, lastTun, nil) }
+
 	results := o.Monitor.Poll(ctx)
 	for {
 		select {
@@ -334,6 +543,8 @@ func (o Options) runLegacy(ctx context.Context) error {
 				o.Log.Warn("vpn tunnel down — blocking immediately (kill switch)", "detail", st.Detail)
 				block("tunnel-down", "")
 			}
+			lastTun = tunnelSnapshot(st, o.Tunnels)
+			snapshot()
 		case res, ok := <-results:
 			if !ok {
 				return nil
@@ -341,21 +552,27 @@ func (o Options) runLegacy(ctx context.Context) error {
 			if res.Err != nil {
 				o.Log.Warn("country lookup failed", "err", res.Err)
 			}
+			last = res
 			cc := res.Reading.CountryCode
 			switch o.Decider.Evaluate(res) {
 			case decision.Block:
 				block("country", cc)
 			case decision.Allow:
-				if !blocked {
-					continue
+				// Only act when currently blocked; an allowed reading while already
+				// allowing is a no-op. An unblock error leaves blocked=true so the
+				// next allowed reading retries — same posture as before publishing.
+				if blocked {
+					if err := o.Backend.Unblock(); err != nil {
+						o.Log.Error("unblock failed", "err", err, "country", cc)
+						enfErr = err
+					} else {
+						enfErr = nil
+						o.Log.Info("ALLOWING", "country", cc)
+						blocked = false
+					}
 				}
-				if err := o.Backend.Unblock(); err != nil {
-					o.Log.Error("unblock failed", "err", err, "country", cc)
-					continue
-				}
-				o.Log.Info("ALLOWING", "country", cc)
-				blocked = false
 			}
+			snapshot()
 		}
 	}
 }

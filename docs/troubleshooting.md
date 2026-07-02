@@ -90,4 +90,4 @@ dezhban print-rules --mode legacy --config <config>
 dezhban validate --config <config>     # prints the precise validation error
 ```
 
-See [CONFIG.md](CONFIG.md) for every field and its constraints.
+See [config.md](config.md) for every field and its constraints.

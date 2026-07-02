@@ -26,7 +26,8 @@ MODE   ?= guard
 
 .PHONY: build vet test build-all clean lint \
         run-dry validate rules doctor \
-        install-local reinstall uninstall-local panic
+        install-local reinstall uninstall-local panic \
+        gui-macos
 
 build: ## Build for the host platform into ./$(BINARY)
 	go build $(LDFLAGS) -o $(BINARY) $(PKG)
@@ -85,5 +86,10 @@ build-all: ## Cross-compile every platform into ./$(DIST)
 	done
 	@echo "done -> $(DIST)/"
 
+# --- macOS menubar GUI (separate Swift toolchain; not part of build-all) -----
+
+gui-macos: ## Build the macOS menubar app into ./$(DIST)/Dezhban.app (macOS only)
+	sh macos-gui/build-app.sh $(abspath $(DIST))
+
 clean: ## Remove build artifacts
-	rm -rf $(DIST) $(BINARY)
+	rm -rf $(DIST) $(BINARY) macos-gui/.build

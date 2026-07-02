@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -188,6 +189,117 @@ func TestValidateErrors(t *testing.T) {
 				t.Errorf("Load(%s) = nil error, want validation error", body)
 			}
 		})
+	}
+}
+
+// Save then Load must reproduce the same validated Config. Both configs pass
+// through the Load pipeline so nil/empty-slice representations match.
+func TestSaveLoadRoundTrip(t *testing.T) {
+	cases := map[string]string{
+		"legacy": `{
+			"pollInterval": "5s",
+			"blockedCountries": ["RU", "IR"],
+			"failClosed": false,
+			"hysteresis": 2,
+			"allowlist": {"dns": ["1.1.1.1"], "hosts": ["9.9.9.9"]},
+			"providerQuorum": true,
+			"logLevel": "debug"
+		}`,
+		"vpn": `{
+			"vpn": {
+				"enabled": true,
+				"tunnelInterfaces": ["utun4"],
+				"endpoints": ["vpn.example.com", "203.0.113.5"],
+				"autoDiscoverEndpoints": true,
+				"endpointRefresh": "2m",
+				"tunnelWatch": "500ms"
+			}
+		}`,
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			src := filepath.Join(t.TempDir(), "src.json")
+			if err := os.WriteFile(src, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg1, err := Load(src)
+			if err != nil {
+				t.Fatalf("Load src: %v", err)
+			}
+
+			out := filepath.Join(t.TempDir(), "nested", "out.json")
+			if err := Save(out, cfg1); err != nil {
+				t.Fatalf("Save: %v", err)
+			}
+			cfg2, err := Load(out)
+			if err != nil {
+				t.Fatalf("Load saved: %v", err)
+			}
+			if !reflect.DeepEqual(cfg1, cfg2) {
+				t.Errorf("round-trip mismatch:\n before = %+v\n after  = %+v", cfg1, cfg2)
+			}
+		})
+	}
+}
+
+// A config saved with the guard disabled must keep its tunnel/endpoint fields —
+// otherwise re-enabling the guard later would fail validation or lock the host
+// out. Regression test for toFileConfig dropping the vpn block when !Enabled.
+func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
+	cfg := Default()
+	cfg.VPN = VPN{
+		Enabled:          false,
+		TunnelInterfaces: []string{"utun4"},
+		Endpoints:        []string{"203.0.113.5"},
+		Autodetect:       true,
+	}
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	if err := Save(path, &cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if got.VPN.Enabled {
+		t.Error("VPN.Enabled = true, want false")
+	}
+	if g := got.VPN.TunnelInterfaces; len(g) != 1 || g[0] != "utun4" {
+		t.Errorf("VPN.TunnelInterfaces = %v, want [utun4]", g)
+	}
+	if g := got.VPN.Endpoints; len(g) != 1 || g[0] != "203.0.113.5" {
+		t.Errorf("VPN.Endpoints = %v, want [203.0.113.5]", g)
+	}
+	if !got.VPN.Autodetect {
+		t.Error("VPN.Autodetect = false, want true")
+	}
+}
+
+// Save must canonicalize (upper-case, trim, de-dupe) blocked countries — that
+// normalization lives in config.Normalize and runs on every write path, so
+// callers (config set, the setup wizard) don't each re-implement it.
+func TestSaveNormalizesCountries(t *testing.T) {
+	cfg := Default()
+	cfg.BlockedCountries = []string{" ir ", "IR", "ru"}
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	if err := Save(path, &cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if want := []string{"IR", "RU"}; !reflect.DeepEqual(got.BlockedCountries, want) {
+		t.Errorf("BlockedCountries = %v, want %v", got.BlockedCountries, want)
+	}
+}
+
+// Save must reject an invalid Config rather than persist it.
+func TestSaveValidates(t *testing.T) {
+	bad := Default()
+	bad.PollInterval = 0
+	if err := Save(filepath.Join(t.TempDir(), "x.json"), &bad); err == nil {
+		t.Error("Save(invalid) = nil error, want validation error")
 	}
 }
 

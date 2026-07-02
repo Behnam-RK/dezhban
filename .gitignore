@@ -8,6 +8,9 @@
 # Go
 vendor/
 
+# Swift (macOS menubar GUI)
+macos-gui/.build/
+
 # Runtime state
 /var/run/dezhban/
 state.json

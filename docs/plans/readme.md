@@ -106,6 +106,7 @@ each phase doc on real macOS/Linux/Windows hosts).
 | 5 | [phase-5-cross-platform.md](./phase-5-cross-platform.md) | ✅ | Linux `nft` + Windows WFP backends |
 | 6 | [phase-6-persistence.md](./phase-6-persistence.md) | ✅ | Run as service: launchd / systemd / Windows Service |
 | 7 | [phase-7-safety-packaging.md](./phase-7-safety-packaging.md) | ✅ | Panic-unblock, manual override, logging polish, cross-compile |
+| 8 | [phase-8-macos-gui.md](./phase-8-macos-gui.md) | ✅ | macOS menubar app: live status, controls, login autostart (state-file IPC) |
 
 Each phase is independently buildable & verifiable. Implement one at a time;
 verify before moving on.

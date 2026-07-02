@@ -8,6 +8,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -30,6 +31,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/netdetect"
 	"github.com/behnam-rk/dezhban/internal/privilege"
 	"github.com/behnam-rk/dezhban/internal/runner"
+	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/svc"
 )
 
@@ -39,6 +41,10 @@ var version = "dev"
 // verbose is the global -v/--verbose flag, stripped from args before dispatch.
 // When set it overrides the configured log level to debug.
 var verbose bool
+
+// noSudo is the global --no-sudo flag: when set, privileged commands do NOT
+// auto-re-exec under sudo and instead print the "must run as root" error.
+var noSudo bool
 
 const usage = `dezhban — network kill switch
 
@@ -60,10 +66,20 @@ Commands:
   start       Start the installed service
   stop        Stop the installed service (removes firewall rules)
   detect-vpn  Print detected VPN tunnel interfaces to help fill the vpn config
+  setup       Interactive wizard to create or update the config
+  config      Inspect or change the config without hand-editing JSON
+  completion  Print a shell completion script (bash|zsh|fish)
   version     Print the version
 
 Global flags:
   -v, --verbose   Override the configured log level to debug
+  --no-sudo       Don't auto-elevate; print the root error instead
+
+Privileged commands re-run themselves under sudo automatically when not root
+(unix, interactive terminal). Use --no-sudo (or DEZHBAN_NO_SUDO=1) to opt out.
+
+Config resolution (when --config is omitted): $DEZHBAN_CONFIG, else the system
+path (see "dezhban config path"), else built-in defaults.
 
 Run "dezhban <command> -h" for command flags.`
 
@@ -102,6 +118,12 @@ func run(args []string) int {
 		return cmdService(cmd, rest)
 	case "detect-vpn":
 		return cmdDetectVPN(rest)
+	case "setup":
+		return cmdSetup(rest)
+	case "config":
+		return cmdConfig(rest)
+	case "completion":
+		return cmdCompletion(rest)
 	case "version", "--version":
 		fmt.Println("dezhban", version)
 		return 0
@@ -123,6 +145,8 @@ func stripVerbose(args []string) []string {
 		switch a {
 		case "-v", "--v", "-verbose", "--verbose":
 			verbose = true
+		case "-no-sudo", "--no-sudo":
+			noSudo = true
 		default:
 			out = append(out, a)
 		}
@@ -143,18 +167,49 @@ func newLogger(cfg *config.Config) *slog.Logger {
 	return logging.New(effectiveLevel(cfg))
 }
 
-// requireRoot prints a clear error and returns false if not privileged.
+// requireRoot ensures the command runs as root. When it isn't, it auto-re-execs
+// the whole invocation under sudo (unix, unless --no-sudo / no TTY); that call
+// replaces the process and never returns. If elevation is unavailable it prints
+// a clear error and returns false.
 func requireRoot(cmd string) bool {
 	if privilege.IsPrivileged() {
 		return true
+	}
+	if canElevate() {
+		fmt.Fprintf(os.Stderr, "dezhban %s needs root — re-running with sudo…\n", cmd)
+		if err := reexecElevated(); err != nil {
+			fmt.Fprintln(os.Stderr, "auto-sudo failed:", err)
+		}
 	}
 	fmt.Fprintf(os.Stderr, "dezhban %s must run as root (try: sudo dezhban %s ...)\n", cmd, cmd)
 	return false
 }
 
-// loadConfig is a small helper shared by the commands that take --config.
+// loadConfig is a small helper shared by the commands that take --config. It
+// resolves the path (so --config can be omitted) before loading.
 func loadConfig(path string) (*config.Config, error) {
-	return config.Load(path)
+	return config.Load(resolveConfigPath(path))
+}
+
+// resolveConfigPath decides which config file a command reads when its --config
+// flag is empty, so the flag can usually be omitted. Precedence:
+//  1. an explicit --config value
+//  2. $DEZHBAN_CONFIG
+//  3. the canonical system path (defaultConfigPath), if the file exists
+//  4. "" — built-in defaults (config.Load treats an empty path as defaults)
+func resolveConfigPath(flagVal string) string {
+	if flagVal != "" {
+		return flagVal
+	}
+	if env := strings.TrimSpace(os.Getenv("DEZHBAN_CONFIG")); env != "" {
+		return env
+	}
+	if p := defaultConfigPath(); p != "" {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	return ""
 }
 
 func cmdRun(args []string) int {
@@ -247,6 +302,16 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 	epSrc := buildEndpointSource(cfg, log, tunnels, true)
 	watcher := buildWatcher(cfg, log, tunnels, ov)
 
+	// Publish live posture to the state file for out-of-process observers (the
+	// macOS menubar app, `status --json`). Best-effort: a write failure is logged
+	// at debug and never affects enforcement.
+	statePath := defaultStatePath()
+	publish := func(s state.Snapshot) {
+		if err := state.Write(statePath, s); err != nil {
+			log.Debug("state publish failed", "path", statePath, "err", err)
+		}
+	}
+
 	log.Info("run loop started",
 		"interval", cfg.PollInterval,
 		"providers", len(providers),
@@ -271,7 +336,9 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		Watcher:          watcher,
 		// Re-resolve the allowlist at each Block so rotated provider IPs stay
 		// reachable for recovery detection while egress is cut.
-		Allowlist: func() firewall.Allowlist { return buildAllowlist(cfg, log) },
+		Allowlist:        func() firewall.Allowlist { return buildAllowlist(cfg, log) },
+		Publish:          publish,
+		BlockedCountries: cfg.BlockedCountries,
 	}, nil
 }
 
@@ -659,6 +726,21 @@ func defaultConfigPath() string {
 	return "/etc/dezhban/dezhban.json"
 }
 
+// defaultStatePath is where the running daemon publishes its live posture and
+// where observers (`status --json`, the macOS menubar app) read it. It sits in
+// the same OS state dir the firewall backends already use, world-readable so the
+// unprivileged logged-in user can read what the root daemon wrote.
+func defaultStatePath() string {
+	if runtime.GOOS == "windows" {
+		pd := os.Getenv("ProgramData")
+		if pd == "" {
+			pd = `C:\ProgramData`
+		}
+		return filepath.Join(pd, "dezhban", "state.json")
+	}
+	return "/var/db/dezhban/state.json"
+}
+
 // cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
 // interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
 // NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
@@ -723,9 +805,9 @@ func cmdValidate(args []string) int {
 		fmt.Fprintln(os.Stderr, "config invalid:", err)
 		return 1
 	}
-	src := *cfgPath
+	src := resolveConfigPath(*cfgPath)
 	if src == "" {
-		src = "(defaults — no --config given)"
+		src = "(built-in defaults — no config file found)"
 	}
 	blocked := cfg.BlockedCountries
 	if len(blocked) == 0 {
@@ -1025,12 +1107,17 @@ func cmdDoctor(args []string) int {
 func cmdStatus(args []string) int {
 	fs := flag.NewFlagSet("status", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON (merges the live state file with service/config status)")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
+	}
+
+	if *jsonOut {
+		return statusJSON(cfg)
 	}
 
 	blocked := cfg.BlockedCountries
@@ -1067,5 +1154,43 @@ func cmdStatus(args []string) int {
 	} else {
 		fmt.Println("blocked:         ", blocked)
 	}
+	return 0
+}
+
+// statusJSON prints a machine-readable status: the live posture from the state
+// file (if the daemon is running and has published one) merged with service and
+// config status. It is the stable contract for tooling and scripts that want
+// authoritative service state alongside the snapshot. Read-only, no root required.
+func statusJSON(cfg *config.Config) int {
+	statePath := defaultStatePath()
+	out := struct {
+		Version          string          `json:"version"`
+		Privileged       bool            `json:"privileged"`
+		Service          string          `json:"service"`
+		StatePath        string          `json:"statePath"`
+		State            *state.Snapshot `json:"state,omitempty"`    // nil when no snapshot has been published yet
+		StateAge         string          `json:"stateAge,omitempty"` // wall-clock age of the snapshot
+		PollInterval     string          `json:"pollInterval"`
+		BlockedCountries []string        `json:"blockedCountries"`
+		VPNEnabled       bool            `json:"vpnEnabled"`
+	}{
+		Version:          version,
+		Privileged:       privilege.IsPrivileged(),
+		Service:          svc.Status(),
+		StatePath:        statePath,
+		PollInterval:     cfg.PollInterval.String(),
+		BlockedCountries: cfg.BlockedCountries,
+		VPNEnabled:       cfg.VPN.Enabled,
+	}
+	if snap, err := state.Read(statePath); err == nil {
+		out.State = &snap
+		out.StateAge = time.Since(snap.Time).Round(time.Second).String()
+	}
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "status json:", err)
+		return 1
+	}
+	fmt.Println(string(data))
 	return 0
 }

@@ -8,6 +8,32 @@ running it:
 dezhban validate --config path/to/config.json
 ```
 
+## Where the config lives
+
+`--config` is optional. When omitted, dezhban resolves the path in this order:
+
+1. the `--config` flag, if given
+2. `$DEZHBAN_CONFIG`
+3. the canonical **system path** — `/etc/dezhban/dezhban.json` (unix),
+   `%ProgramData%\dezhban\dezhban.json` (windows) — if the file exists
+4. built-in defaults (no file)
+
+The system path is deliberate: both the root daemon (`sudo dezhban run`) and your
+unprivileged inspect commands (`dezhban monitor`/`validate`) resolve the *same*
+file. `dezhban config path` prints whichever won.
+
+Author it without editing JSON:
+
+```sh
+sudo dezhban setup                              # interactive wizard
+sudo dezhban config set blockedCountries IR,RU  # or targeted edits
+dezhban config show                             # print the effective config
+```
+
+Writing to the system path needs root; on a permission error the CLI prints a
+`sudo` hint. See [usage.md](usage.md#create--manage-the-config) for the full
+command set.
+
 ## Fields
 
 | Field | Type | Default | Notes |
@@ -51,7 +77,7 @@ is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you ou
 ### Getting `vpn.endpoints` right
 
 A wrong or tunnel-internal endpoint is the #1 lockout cause — see
-[TROUBLESHOOTING.md](TROUBLESHOOTING.md). Endpoints may now be **hostnames** (handy
+[troubleshooting.md](troubleshooting.md). Endpoints may now be **hostnames** (handy
 for self-hosted WireGuard/V2Ray with a stable name) and, on macOS,
 `autoDiscoverEndpoints` learns the live server IP so you need not type one at all.
 Verify what will actually be opened before enabling:

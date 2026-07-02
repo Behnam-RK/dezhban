@@ -14,6 +14,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 // fakeMonitor is a deterministic Monitor for tests. Poll (legacy loop) drains
@@ -57,10 +58,14 @@ func (f *fakeMonitor) Once(context.Context) (monitor.Reading, error) {
 	return r.Reading, r.Err
 }
 
-// fakeBackend records the sequence of calls made against it.
+// fakeBackend records the sequence of calls made against it. blockErr/applyErr, when
+// set, make the corresponding action fail (the call is still recorded) so tests can
+// exercise enforcement-failure paths.
 type fakeBackend struct {
 	calls    []string
 	policies []firewall.Policy
+	blockErr error
+	applyErr error
 }
 
 func (b *fakeBackend) Apply(p firewall.Policy) error {
@@ -70,11 +75,11 @@ func (b *fakeBackend) Apply(p firewall.Policy) error {
 	} else {
 		b.calls = append(b.calls, "apply-fullblock")
 	}
-	return nil
+	return b.applyErr
 }
 func (b *fakeBackend) Block(a firewall.Allowlist) error {
 	b.calls = append(b.calls, "block")
-	return nil
+	return b.blockErr
 }
 func (b *fakeBackend) Unblock() error {
 	b.calls = append(b.calls, "unblock")
@@ -111,6 +116,148 @@ func equal(a, b []string) bool {
 		}
 	}
 	return true
+}
+
+// --- state publishing ---
+
+func TestPostureName(t *testing.T) {
+	cases := []struct {
+		vpn, blocked bool
+		want         string
+	}{
+		{false, false, "allow"},
+		{false, true, "block"},
+		{true, false, "guard"},
+		{true, true, "full-block"},
+	}
+	for _, c := range cases {
+		if got := postureName(c.vpn, c.blocked); got != c.want {
+			t.Errorf("postureName(vpn=%v, blocked=%v) = %q, want %q", c.vpn, c.blocked, got, c.want)
+		}
+	}
+}
+
+// TestLegacyPublishesPostureTransitions asserts a snapshot fires on every poll
+// with the correct posture as the daemon crosses allow→block→allow, then a
+// terminal "stopped" snapshot on shutdown so observers flip immediately.
+func TestLegacyPublishesPostureTransitions(t *testing.T) {
+	var snaps []state.Snapshot
+	be := &fakeBackend{}
+	o := Options{
+		Monitor: &fakeMonitor{results: []monitor.Result{
+			reading("US"), // allow
+			reading("IR"), // block (enter)
+			reading("US"), // allow (unblock)
+		}},
+		Decider:          decision.New([]string{"IR"}, false, 1),
+		Backend:          be,
+		Log:              discardLog(),
+		Allowlist:        oneHostAL,
+		BlockedCountries: []string{"IR"},
+		Publish:          func(s state.Snapshot) { snaps = append(snaps, s) },
+	}
+	if err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+
+	var postures []string
+	for _, s := range snaps {
+		postures = append(postures, s.Posture)
+		if s.Mode != "legacy" {
+			t.Errorf("mode = %q, want legacy", s.Mode)
+		}
+	}
+	// Three poll transitions plus one terminal "stopped" on shutdown.
+	if want := []string{"allow", "block", "allow", "stopped"}; !equal(postures, want) {
+		t.Fatalf("postures = %v, want %v", postures, want)
+	}
+	// The poll snapshots carry the blocklist; the terminal stopped snapshot need not.
+	for _, s := range snaps[:3] {
+		if len(s.BlockedCountries) != 1 || s.BlockedCountries[0] != "IR" {
+			t.Errorf("blockedCountries = %v, want [IR]", s.BlockedCountries)
+		}
+	}
+	if snaps[0].Blocked || !snaps[1].Blocked || snaps[2].Blocked {
+		t.Errorf("blocked flags = [%v %v %v], want [false true false]",
+			snaps[0].Blocked, snaps[1].Blocked, snaps[2].Blocked)
+	}
+	if last := snaps[3]; last.Posture != "stopped" || last.Blocked {
+		t.Errorf("terminal snapshot = {posture:%q blocked:%v}, want {stopped false}", last.Posture, last.Blocked)
+	}
+}
+
+// TestLegacyBlockFailurePublishesEnforcementErr asserts that when the backend
+// rejects a Block, the published snapshot surfaces the failure (EnforcementErr set)
+// instead of a healthy-looking "allow" — otherwise the menubar would show a green
+// shield during an active leak where the kill switch failed to engage.
+func TestLegacyBlockFailurePublishesEnforcementErr(t *testing.T) {
+	var snaps []state.Snapshot
+	be := &fakeBackend{blockErr: errors.New("pfctl: cannot load rules")}
+	o := Options{
+		Monitor:   &fakeMonitor{results: []monitor.Result{reading("IR")}}, // decision Block → Block fails
+		Decider:   decision.New([]string{"IR"}, false, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Allowlist: oneHostAL,
+		Publish:   func(s state.Snapshot) { snaps = append(snaps, s) },
+	}
+	if err := Run(context.Background(), o); err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) == 0 {
+		t.Fatal("no snapshots published")
+	}
+	s := snaps[0] // the poll snapshot for the failed block (before the terminal stopped)
+	if s.Posture != "allow" || s.Blocked {
+		t.Errorf("posture=%q blocked=%v, want allow/false (block failed, nothing in force)", s.Posture, s.Blocked)
+	}
+	if s.EnforcementErr == "" {
+		t.Error("EnforcementErr empty; want the block failure surfaced so the leak isn't shown as healthy")
+	}
+}
+
+// TestPublishStallDoesNotBlockEnforcement asserts the core invariant behind the
+// non-blocking publish: a wedged state-file writer (sink that never returns) must not
+// stall the enforcement loop, and Cleanup must still run on shutdown despite it.
+// (signalBackend is the concurrency-safe backend defined below.)
+func TestPublishStallDoesNotBlockEnforcement(t *testing.T) {
+	release := make(chan struct{})
+	be := &signalBackend{blockCh: make(chan struct{}, 1)}
+	o := Options{
+		Monitor:   &fakeMonitor{results: []monitor.Result{reading("IR")}}, // triggers Block
+		Decider:   decision.New([]string{"IR"}, false, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Allowlist: oneHostAL,
+		// Sink wedges on every publish until released — simulating a hung state-dir volume.
+		Publish: func(s state.Snapshot) { <-release },
+	}
+	errc := make(chan error, 1)
+	go func() { errc <- Run(context.Background(), o) }()
+
+	// Enforcement must reach Block even though the publish sink is wedged.
+	select {
+	case <-be.blockCh:
+	case <-time.After(2 * time.Second):
+		close(release) // unwedge so the goroutine can exit
+		t.Fatal("enforcement stalled: Block not called while publish sink was blocked")
+	}
+
+	// Let the wedged writer drain so Run's bounded flush returns promptly rather than
+	// waiting out its 2s timeout.
+	close(release)
+	select {
+	case err := <-errc:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run did not return after the sink was released")
+	}
+	// Cleanup must have run on shutdown regardless of the stalled writer.
+	if !be.has("cleanup") {
+		t.Error("Cleanup did not run despite the stalled publish writer")
+	}
 }
 
 // --- legacy mode ---
