@@ -3,6 +3,7 @@ package state
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -55,6 +56,14 @@ func TestWriteReadRoundTrip(t *testing.T) {
 }
 
 func TestWriteIsWorldReadable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Windows has no POSIX mode bits: os.Chmod only honors the write bit and
+		// os.Stat reports 0666/0444, so the 0644 contract is meaningless here.
+		// File access on Windows is governed by ACLs, not the Unix mode. The
+		// world-readable requirement only matters for the root-daemon/unprivileged-
+		// reader split on Unix.
+		t.Skip("permission bits are not POSIX on Windows")
+	}
 	path := filepath.Join(t.TempDir(), "state.json")
 	if err := Write(path, Snapshot{Posture: "allow"}); err != nil {
 		t.Fatalf("Write: %v", err)
