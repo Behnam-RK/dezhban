@@ -181,16 +181,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // VPN mode: show current mode with a checkmark; live toggling needs
-        // tunnel/endpoint config the user must set deliberately, so the action
-        // opens the config rather than risk a validation failure that stops the
-        // daemon (see plan §B5).
-        let vpnItem = addAction("VPN guard mode", #selector(openConfig))
-        vpnItem.state = (s?.mode == "vpn") ? .on : .off
-        vpnItem.toolTip = "Edit vpn.enabled + tunnels/endpoints in the config, then restart."
+        // Diagnostics / panic / install-uninstall (Phase 10). All reuse the
+        // output-capture plumbing in DezhbanCLI + OutputPanel.
+        addAction("Run diagnostics…", #selector(runDiagnostics), enabled: DezhbanCLI.binaryPath() != nil)
+        addAction("Panic — force unblock…", #selector(confirmPanic), enabled: DezhbanCLI.binaryPath() != nil)
+        if DezhbanCLI.serviceInstalled() {
+            addAction("Uninstall service…", #selector(uninstallService))
+        } else {
+            addAction("Install service…", #selector(installService), enabled: DezhbanCLI.binaryPath() != nil)
+        }
 
-        addAction("Open config…", #selector(openConfig))
-        addAction("View logs…", #selector(viewLogs))
+        menu.addItem(.separator())
+
+        // VPN mode: show current mode with a checkmark; opens the validated
+        // in-app config panel (Phase 11) rather than a blind file edit.
+        let vpnItem = addAction("VPN guard mode", #selector(openVPNConfigPanel))
+        vpnItem.state = (s?.mode == "vpn") ? .on : .off
+        vpnItem.toolTip = "Configure vpn.enabled + tunnels/endpoints, then apply (restarts dezhban)."
+
+        addAction("Open config file…", #selector(openConfig))
+        addLogsMenu()
+
+        menu.addItem(.separator())
+        addAction("About Dezhban…", #selector(showAbout))
 
         menu.addItem(.separator())
 
@@ -199,6 +212,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
         addAction("Quit", #selector(quit))
+    }
+
+    /// Builds the "View logs…" submenu: a scoped `log show`/`log stream`
+    /// against the output panel (no hand-written predicate for the user to
+    /// type), plus the old full-app Console.app escape hatch.
+    private func addLogsMenu() {
+        let parent = NSMenuItem(title: "View logs…", action: nil, keyEquivalent: "")
+        let sub = NSMenu()
+
+        let showItem = NSMenuItem(title: "Show last hour", action: #selector(showRecentLogs), keyEquivalent: "")
+        showItem.target = self
+        showItem.isEnabled = DezhbanCLI.binaryPath() != nil
+        sub.addItem(showItem)
+
+        let streamItem = NSMenuItem(title: "Stream live…", action: #selector(streamLogs), keyEquivalent: "")
+        streamItem.target = self
+        streamItem.isEnabled = DezhbanCLI.binaryPath() != nil
+        sub.addItem(streamItem)
+
+        sub.addItem(.separator())
+
+        let consoleItem = NSMenuItem(title: "Open in Console.app", action: #selector(openConsole), keyEquivalent: "")
+        consoleItem.target = self
+        sub.addItem(consoleItem)
+
+        parent.submenu = sub
+        menu.addItem(parent)
     }
 
     // MARK: - actions
@@ -213,30 +253,167 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Runs a privileged CLI action OFF the main thread — `runPrivileged` blocks
     /// through the admin-password prompt and the command's full run, which would
     /// otherwise freeze the menubar. Refreshes and surfaces failures back on the main
-    /// queue; a cancelled prompt or a non-zero exit is reported instead of swallowed.
+    /// queue; a cancelled prompt or a non-zero exit is reported (with real output)
+    /// instead of swallowed.
     private func runAction(_ args: [String], _ label: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let ok = DezhbanCLI.runPrivileged(args)
+            let result = DezhbanCLI.runPrivileged(args)
             DispatchQueue.main.async {
-                if !ok { self?.notifyFailure(label) }
+                if !result.ok { self?.notifyFailure(label, output: result.output) }
                 self?.refresh()
             }
         }
     }
 
-    private func notifyFailure(_ label: String) {
+    /// Failure alert with the captured output in a small scrollable accessory
+    /// view when there is any — real stderr/exit info instead of silence.
+    private func notifyFailure(_ label: String, output: String) {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "dezhban: couldn’t \(label)"
-        alert.informativeText = "The command failed or was cancelled. If it needs elevated rights, approve the admin prompt; otherwise check Console.app for details."
+        alert.informativeText = "The command failed or was cancelled. If it needs elevated rights, approve the admin prompt."
+        let trimmed = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            alert.accessoryView = makeOutputAccessory(trimmed)
+        }
         alert.runModal()
+    }
+
+    /// A small scrollable, monospaced text view for embedding captured CLI
+    /// output in an NSAlert (short-output case; the shared OutputPanel handles
+    /// the longer/unbounded cases like diagnostics and log streaming).
+    private func makeOutputAccessory(_ text: String) -> NSView {
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 420, height: 140))
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        let tv = NSTextView(frame: scroll.bounds)
+        tv.isEditable = false
+        tv.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        tv.string = text
+        scroll.documentView = tv
+        return scroll
+    }
+
+    /// Unprivileged, read-only `doctor` run → shared output panel.
+    @objc private func runDiagnostics() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = DezhbanCLI.run(["doctor", "--config", DezhbanCLI.resolvedConfigPath()])
+            DispatchQueue.main.async {
+                OutputPanel.shared.show(title: "dezhban — diagnostics", text: result.output.isEmpty ? "(no output)" : result.output)
+                self?.refresh()
+            }
+        }
+    }
+
+    /// Panic is the last-resort override, so — unlike Block/Unblock — it asks
+    /// for confirmation before tearing down every dezhban rule.
+    @objc private func confirmPanic() {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Force unblock all firewall rules?"
+        alert.informativeText = "This immediately removes all dezhban firewall rules, including VPN-guard rules. Continue?"
+        alert.addButton(withTitle: "Panic — Force Unblock")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        runCapturedPrivileged(["panic"], title: "dezhban — panic")
+    }
+
+    /// Runs one privileged command and shows its captured output in the shared
+    /// panel — the single-command counterpart to `runSequence` below.
+    private func runCapturedPrivileged(_ args: [String], title: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = DezhbanCLI.runPrivileged(args)
+            DispatchQueue.main.async {
+                OutputPanel.shared.show(title: title, text: result.output.isEmpty ? "(no output)" : result.output)
+                self?.refresh()
+            }
+        }
+    }
+
+    /// Mirrors `install-local.sh`'s ordering: rules teardown (`panic`) and
+    /// `stop` before `uninstall`, since a launchd unload can leave stale rules
+    /// behind if they aren't torn down first.
+    @objc private func installService() {
+        runSequence([["install", "--config", DezhbanCLI.resolvedConfigPath()], ["start"]], title: "dezhban — install service")
+    }
+
+    @objc private func uninstallService() {
+        runSequence([["panic"], ["stop"], ["uninstall"]], title: "dezhban — uninstall service")
+    }
+
+    /// Runs a sequence of privileged commands, stopping at (and reporting) the
+    /// first failure rather than plowing ahead once something's gone wrong.
+    private func runSequence(_ commands: [[String]], title: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var log = ""
+            for cmd in commands {
+                let result = DezhbanCLI.runPrivileged(cmd)
+                log += "$ dezhban \(cmd.joined(separator: " "))\n\(result.output)\n\n"
+                if !result.ok { break }
+            }
+            DispatchQueue.main.async {
+                OutputPanel.shared.show(title: title, text: log)
+                self?.refresh()
+            }
+        }
+    }
+
+    /// Real-data About panel: version, resolved config path, binary path, and
+    /// current service status from the last-read snapshot — no new CLI calls
+    /// beyond `version` (everything else is already fetched for the main menu).
+    /// Reuses the shared output panel rather than a bespoke About window.
+    @objc private func showAbout() {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let version = DezhbanCLI.run(["version"]).output.trimmingCharacters(in: .whitespacesAndNewlines)
+            let cfgPath = DezhbanCLI.resolvedConfigPath()
+            let binPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                let status = self.isRunning ? self.humanPosture(self.snapshot!) : "stopped"
+                let text = """
+                \(version.isEmpty ? "dezhban (version unknown)" : version)
+
+                Config path:     \(cfgPath)
+                Binary path:     \(binPath)
+                Service status:  \(status)
+                """
+                OutputPanel.shared.show(title: "About Dezhban", text: text)
+            }
+        }
     }
 
     @objc private func openConfig() {
         NSWorkspace.shared.open(URL(fileURLWithPath: DezhbanCLI.resolvedConfigPath()))
     }
 
-    @objc private func viewLogs() {
+    @objc private func openVPNConfigPanel() {
+        VPNConfigPanel.shared.open()
+    }
+
+    @objc private func showRecentLogs() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = DezhbanCLI.showRecentLogs()
+            DispatchQueue.main.async {
+                OutputPanel.shared.show(title: "dezhban — logs (last hour)", text: result.output.isEmpty ? "(no matching log lines)" : result.output)
+            }
+        }
+    }
+
+    private var activeLogStream: StreamingProcess?
+
+    @objc private func streamLogs() {
+        let proc = StreamingProcess(DezhbanCLI.logBinary, DezhbanCLI.streamLogsArgs)
+        activeLogStream = proc
+        OutputPanel.shared.showStreaming(title: "dezhban — live logs") { [weak self] in
+            proc.stop()
+            self?.activeLogStream = nil
+        }
+        if !proc.start(onOutput: { text in OutputPanel.shared.append(text) }) {
+            OutputPanel.shared.append("failed to start log stream\n")
+        }
+    }
+
+    @objc private func openConsole() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
     }
 
