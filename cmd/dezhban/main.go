@@ -331,6 +331,7 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		Interval:         cfg.PollInterval,
 		VPN:              cfg.VPN.Enabled,
 		Tunnels:          tunnels,
+		AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
 		ResolveEndpoints: func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
 		EndpointRefresh:  cfg.VPN.EndpointRefresh,
 		Watcher:          watcher,
@@ -953,17 +954,19 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 	switch mode {
 	case "guard":
 		return firewall.Policy{
-			Mode:         firewall.ModeGuard,
-			Allowlist:    al,
-			TunnelIfaces: tunnels,
-			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
+			Mode:             firewall.ModeGuard,
+			Allowlist:        al,
+			TunnelIfaces:     tunnels,
+			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
+			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
 		}, nil
 	case "fullblock":
 		return firewall.Policy{
-			Mode:         firewall.ModeFullBlock,
-			Allowlist:    al,
-			TunnelIfaces: tunnels,
-			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
+			Mode:             firewall.ModeFullBlock,
+			Allowlist:        al,
+			TunnelIfaces:     tunnels,
+			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
+			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
 		}, nil
 	case "legacy":
 		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.

@@ -61,6 +61,15 @@ config (or use `autoDiscoverEndpoints` on macOS). A wrong or tunnel-internal
 endpoint is the #1 lockout cause; [troubleshooting.md](troubleshooting.md) has the
 runbook. `panic` tears down both GUARD and FULL-BLOCK rules.
 
+**Fail-closed in guard mode.** In guard mode the standing GUARD rule is itself
+the fail-closed block for physical leaks, so an **undeterminable** country
+*holds* the current posture — it never escalates GUARD→FULL BLOCK. Escalating on
+an unknown would cut the tunnel's own egress and livelock the reconnect. Only a
+*successful* reading of a blocked country produces FULL BLOCK. (`failClosed`
+still governs the fallback/legacy model below.) If your endpoints are hostnames,
+set `vpn.allowPhysicalDNS: true` so the client can re-resolve its server while
+the tunnel is down.
+
 ## Country-blocklist — the fallback mode
 
 For hosts **not** behind a full tunnel. dezhban watches your public IP's country

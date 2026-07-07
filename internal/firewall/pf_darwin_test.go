@@ -138,3 +138,40 @@ func TestRenderRulesetVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	}
 	assertDefaultDenyLast(t, rs)
 }
+
+func TestRenderRulesetAllowPhysicalDNS(t *testing.T) {
+	const dnsRule = "pass out quick proto { udp tcp } to any port 53 no state"
+
+	// Guard + AllowPhysicalDNS: the DNS pass appears.
+	guard := renderRuleset(Policy{
+		Mode:             ModeGuard,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(guard, dnsRule) {
+		t.Errorf("guard+allowPhysicalDNS must emit the DNS pass:\n%s", guard)
+	}
+	assertDefaultDenyLast(t, guard)
+
+	// VPN full block + AllowPhysicalDNS: the DNS pass appears (reconnect aid).
+	fb := renderRuleset(Policy{
+		Mode:             ModeFullBlock,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(fb, dnsRule) {
+		t.Errorf("vpn-full-block+allowPhysicalDNS must emit the DNS pass:\n%s", fb)
+	}
+
+	// Off by default: no DNS pass.
+	off := renderRuleset(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "port 53") {
+		t.Errorf("guard without allowPhysicalDNS must NOT emit a DNS pass:\n%s", off)
+	}
+}

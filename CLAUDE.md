@@ -58,8 +58,13 @@ The design depends on these invariants (rationale in
 - `Cleanup()` must always be safe to call and is wired to run on shutdown
   (`defer` + `signal.NotifyContext`). A stale block-all rule can lock the user
   out — `panic` removes rules even with no daemon.
-- Default to **fail-closed**: block when the country is undeterminable, but keep
-  the allowlist (loopback + DNS + geo-API egress) open so recovery can fire.
+- Default to **fail-closed** *in the fallback/legacy model*: block when the
+  country is undeterminable, but keep the allowlist (loopback + DNS + geo-API
+  egress) open so recovery can fire. **In VPN guard mode this is scoped
+  differently:** the standing guard rule is itself the fail-closed block for
+  physical leaks, so an undeterminable country *holds* the current posture — only
+  a *successful* blocked-country reading escalates to FULL BLOCK. Escalating on
+  an unknown would cut the tunnel's own egress and livelock the reconnect.
 - The `guard` / `fullblock` / `legacy` mode strings and the state-file JSON keys
   are stable identifiers (used by `print-rules --mode` and `status --json`) — do
   not rename them. "Primary" / "fallback" are documentation words only.

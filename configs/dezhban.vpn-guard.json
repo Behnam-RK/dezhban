@@ -18,6 +18,7 @@
     "endpoints": ["vpn.example.com", "203.0.113.10"],
     "autodetect": false,
     "autoDiscoverEndpoints": true,
+    "allowPhysicalDNS": false,
     "endpointRefresh": "5m",
     "tunnelWatch": "1s"
   },

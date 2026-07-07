@@ -67,6 +67,10 @@ type Options struct {
 	// callers); normal runs supply ResolveEndpoints.
 	Tunnels   []string
 	Endpoints []netip.Addr
+	// AllowPhysicalDNS mirrors config vpn.allowPhysicalDNS onto the guard and
+	// VPN full-block policies (opt-in plain-DNS pass for hostname re-resolution
+	// while the tunnel is down).
+	AllowPhysicalDNS bool
 	// ResolveEndpoints recomputes the VPN endpoint set (literals + resolved
 	// hostnames + live discovery). Called once at startup and on each
 	// EndpointRefresh tick. nil → fall back to the static Endpoints above.
@@ -408,8 +412,8 @@ func (o Options) runVPN(ctx context.Context) error {
 // set. FULL BLOCK under a tunnel cuts the tunnel too: the dst-IP allowlist is
 // meaningless on encrypted outer packets, so it is omitted.
 func (o Options) vpnPolicies(endpoints []netip.Addr) (guard, fullBlock firewall.Policy) {
-	guard = firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: o.Tunnels, VPNEndpoints: endpoints}
-	fullBlock = firewall.Policy{Mode: firewall.ModeFullBlock, TunnelIfaces: o.Tunnels, VPNEndpoints: endpoints}
+	guard = firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: o.Tunnels, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
+	fullBlock = firewall.Policy{Mode: firewall.ModeFullBlock, TunnelIfaces: o.Tunnels, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
 	return guard, fullBlock
 }
 
@@ -431,6 +435,14 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 	}
 	if res.Err != nil {
 		o.Log.Warn("country lookup failed", "err", res.Err)
+		// Undeterminable country: hold the current posture. The standing guard
+		// already blocks physical leaks, so an unknown must not escalate
+		// GUARD→FULL BLOCK (which cuts tunnel egress and livelocks the
+		// reconnect) nor lift an active FULL BLOCK on a blip. Only a
+		// *successful* reading moves the state machine. (This makes failClosed
+		// a no-op in VPN guard mode — the guard itself is the fail-closed
+		// block for physical leaks.)
+		return res, enfErr
 	}
 	cc := res.Reading.CountryCode
 

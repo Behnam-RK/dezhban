@@ -40,7 +40,7 @@ command set.
 |---|---|---|---|
 | `pollInterval` | duration string | `"30s"` | How often the public IP / country is checked. Must be > 0. |
 | `blockedCountries` | `[]string` | `[]` | ISO-3166 alpha-2 codes (e.g. `"RU"`, `"IR"`). Upper-cased on load; each must be exactly 2 letters. A match triggers a block. |
-| `failClosed` | bool | `true` | When the country can't be determined, block anyway (security-first). The allowlist stays open so recovery still works. |
+| `failClosed` | bool | `true` | **Fallback (non-VPN) mode:** when the country can't be determined, block anyway (security-first); the allowlist stays open so recovery still works. **In VPN guard mode this is a no-op** — the standing guard is itself the fail-closed block for physical leaks, so an undeterminable country *holds* the current posture rather than escalating to FULL BLOCK (escalating would cut the tunnel's own egress and livelock the reconnect). Only a *successful* reading of a blocked country triggers FULL BLOCK. |
 | `hysteresis` | int | `3` | Consecutive agreeing readings required before toggling block/allow. Must be ≥ 1. Damps flapping. |
 | `providers` | `[]string` | 3 geo-IP URLs | Geo-location endpoints, tried for redundancy. At least one required. |
 | `allowlist.dns` | `[]string` | `[]` | Resolver IPs kept reachable while blocking, so hostname re-resolution works. |
@@ -62,6 +62,7 @@ is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you ou
 | `vpn.endpoints` | `[]string` | `[]` | VPN server addresses reachable on the physical interface — kept open so the tunnel can stay up and reconnect. Each entry may be an **IP or a hostname** (hostnames are re-resolved at runtime). Required when `enabled`, unless `autoDiscoverEndpoints` is set. |
 | `vpn.autodetect` | bool | `false` | Discover the tunnel interface(s) at runtime via `netdetect`. Explicit `tunnelInterfaces` always win. |
 | `vpn.autoDiscoverEndpoints` | bool | `false` | Continuously learn the live VPN server IP from the active socket (**macOS only**; ignored elsewhere, where hostnames/IPs are used). Lets a rotating-pool VPN (NordVPN/ProtonVPN/…) run with no hand-typed endpoint. |
+| `vpn.allowPhysicalDNS` | bool | `false` | Open plain DNS (port 53) egress on the **physical** link in GUARD and VPN FULL BLOCK, so a VPN client can re-resolve its server hostname and reconnect while the tunnel is down. Off by default — the residual leak is DNS-query metadata (which resolver you query, and that you're reconnecting) on the physical path; your actual traffic stays blocked. Recommended when any endpoint is a hostname. |
 | `vpn.endpointRefresh` | duration | `5m` | How often hostnames are re-resolved and live discovery re-run. |
 | `vpn.tunnelWatch` | duration | `1s` | How often the tunnel interface(s) are sampled for up/down. In guard mode this powers logging/`monitor`; in legacy (direct) mode a drop blocks immediately (kill switch). |
 
@@ -80,6 +81,11 @@ A wrong or tunnel-internal endpoint is the #1 lockout cause — see
 [troubleshooting.md](troubleshooting.md). Endpoints may now be **hostnames** (handy
 for self-hosted WireGuard/V2Ray with a stable name) and, on macOS,
 `autoDiscoverEndpoints` learns the live server IP so you need not type one at all.
+If your endpoints are hostnames, set `vpn.allowPhysicalDNS: true` so the client
+can re-resolve them on reconnect while the tunnel is down (otherwise a
+hostname-only config can wedge: the tunnel drops, DNS is cut, and the client
+can't find its server to reconnect).
+
 Verify what will actually be opened before enabling:
 
 ```sh

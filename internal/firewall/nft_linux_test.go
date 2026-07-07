@@ -164,3 +164,36 @@ func TestApplyNftGuardRequiresTunnelIface(t *testing.T) {
 		t.Fatal("Apply(guard, no tunnel ifaces) = nil, want error (would be a total lockout)")
 	}
 }
+
+func TestRenderNftAllowPhysicalDNS(t *testing.T) {
+	guard := renderNftRuleset(Policy{
+		Mode:             ModeGuard,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	for _, w := range []string{"udp dport 53 accept", "tcp dport 53 accept"} {
+		if !strings.Contains(guard, w) {
+			t.Errorf("guard+allowPhysicalDNS must emit %q:\n%s", w, guard)
+		}
+	}
+
+	fb := renderNftRuleset(Policy{
+		Mode:             ModeFullBlock,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(fb, "udp dport 53 accept") {
+		t.Errorf("vpn-full-block+allowPhysicalDNS must emit the DNS accept:\n%s", fb)
+	}
+
+	off := renderNftRuleset(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "dport 53") {
+		t.Errorf("guard without allowPhysicalDNS must NOT emit a DNS accept:\n%s", off)
+	}
+}

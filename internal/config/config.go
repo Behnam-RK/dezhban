@@ -46,6 +46,11 @@ type VPN struct {
 	// VPN (NordVPN/ProtonVPN/…) needs no endpoint typed by hand. On other
 	// platforms it is ignored and the host falls back to Endpoints.
 	AutoDiscoverEndpoints bool
+	// AllowPhysicalDNS opens plain DNS (port 53) egress on the physical link in
+	// guard and VPN full-block rulesets, so a VPN client can re-resolve its
+	// server hostname and reconnect while the tunnel is down. Off by default:
+	// the residual leak is DNS-query metadata on the physical path.
+	AllowPhysicalDNS bool
 	// EndpointRefresh is how often hostnames are re-resolved and live discovery
 	// re-run. Defaults to 5m.
 	EndpointRefresh time.Duration
@@ -100,6 +105,7 @@ type fileVPN struct {
 	Endpoints             []string `json:"endpoints"`
 	Autodetect            bool     `json:"autodetect"`
 	AutoDiscoverEndpoints bool     `json:"autoDiscoverEndpoints"`
+	AllowPhysicalDNS      bool     `json:"allowPhysicalDNS"`
 	EndpointRefresh       string   `json:"endpointRefresh"`
 	TunnelWatch           string   `json:"tunnelWatch"`
 }
@@ -189,6 +195,7 @@ func apply(cfg *Config, fc fileConfig) error {
 			Endpoints:             fc.VPN.Endpoints,
 			Autodetect:            fc.VPN.Autodetect,
 			AutoDiscoverEndpoints: fc.VPN.AutoDiscoverEndpoints,
+			AllowPhysicalDNS:      fc.VPN.AllowPhysicalDNS,
 		}
 		if fc.VPN.EndpointRefresh != "" {
 			d, err := time.ParseDuration(fc.VPN.EndpointRefresh)
@@ -233,6 +240,7 @@ func toFileConfig(c *Config) fileConfig {
 			Endpoints:             c.VPN.Endpoints,
 			Autodetect:            c.VPN.Autodetect,
 			AutoDiscoverEndpoints: c.VPN.AutoDiscoverEndpoints,
+			AllowPhysicalDNS:      c.VPN.AllowPhysicalDNS,
 			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
 			TunnelWatch:           c.VPN.TunnelWatch.String(),
 		},

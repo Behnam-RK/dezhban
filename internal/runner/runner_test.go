@@ -447,6 +447,76 @@ func TestVPNProbeRespectsHysteresis(t *testing.T) {
 	}
 }
 
+// In VPN guard mode an undeterminable country (lookup error) must HOLD the
+// current posture, never escalate GUARD→FULL BLOCK. The standing guard is
+// already the fail-closed block for physical leaks; escalating on an unknown
+// would cut the tunnel's own egress and livelock the reconnect. hysteresis=1
+// so that, without the hold, a single error would immediately FULL BLOCK.
+func TestVPNHoldsGuardOnLookupError(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := Options{
+		Monitor: &fakeMonitor{cancel: cancel, results: []monitor.Result{
+			failResult(), // undeterminable → hold guard (must NOT full block)
+			failResult(), // still undeterminable → still guard
+		}},
+		Decider:   decision.New([]string{"IR"}, true, 1), // failClosed, hysteresis 1
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		VPN:       true,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"apply-guard", "cleanup"} // startup guard held throughout
+	if !equal(be.calls, want) {
+		t.Fatalf("calls = %v, want %v (a lookup error must not FULL BLOCK in guard mode)", be.calls, want)
+	}
+}
+
+// While already in FULL BLOCK, a lookup error during the recovery probe must
+// NOT lift the block: recovery requires a *successful* Allow reading. The probe
+// still lifts+re-cuts each tick (recovery keeps trying), but an error holds the
+// block rather than recovering.
+func TestVPNHoldsFullBlockOnProbeError(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := Options{
+		Monitor: &fakeMonitor{cancel: cancel, results: []monitor.Result{
+			reading("IR"), // enter FULL BLOCK
+			failResult(),  // probe error → hold block
+			failResult(),  // probe error → hold block
+		}},
+		Decider:   decision.New([]string{"IR"}, true, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		VPN:       true,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	// startup guard; IR → full block; each blocked tick probes (lift+re-cut)
+	// but an error never restores guard.
+	want := []string{
+		"apply-guard",     // startup guard
+		"apply-fullblock", // IR → FULL BLOCK
+		"apply-guard",     // probe 1 lift
+		"apply-fullblock", // probe 1 re-cut (error → hold block)
+		"apply-guard",     // probe 2 lift
+		"apply-fullblock", // probe 2 re-cut (error → hold block)
+		"cleanup",
+	}
+	if !equal(be.calls, want) {
+		t.Fatalf("calls = %v, want %v (a probe error must not lift FULL BLOCK)", be.calls, want)
+	}
+}
+
 func TestVPNStartupGuardFailureAborts(t *testing.T) {
 	be := &failingGuardBackend{}
 	o := Options{

@@ -187,6 +187,7 @@ func renderBlockScript(p Policy) string {
 		if len(p.VPNEndpoints) > 0 {
 			rule("endpoint", "-RemoteAddress "+psAddrList(p.VPNEndpoints))
 		}
+		emitAllowPhysicalDNSRules(rule, p)
 	default: // ModeFullBlock
 		if len(p.TunnelIfaces) == 0 {
 			if dns := psAddrList(p.Allowlist.DNS); dns != "" {
@@ -196,13 +197,16 @@ func renderBlockScript(p Policy) string {
 			if hosts := psAddrList(p.Allowlist.Hosts); hosts != "" {
 				rule("hosts", "-RemoteAddress "+hosts)
 			}
-		} else if ep := psAddrList(p.VPNEndpoints); ep != "" {
+		} else {
 			// VPN full block: no tunnel-iface allow, so no user traffic leaks to a
 			// forbidden exit — but keep the endpoint allow so the encrypted
 			// handshake reaches the server and the tunnel can reconnect (a cut
 			// endpoint would livelock recovery). Identical to ModeGuard minus the
 			// tunnel-iface allow.
-			rule("endpoint", "-RemoteAddress "+ep)
+			if ep := psAddrList(p.VPNEndpoints); ep != "" {
+				rule("endpoint", "-RemoteAddress "+ep)
+			}
+			emitAllowPhysicalDNSRules(rule, p)
 		}
 	}
 
@@ -210,6 +214,18 @@ func renderBlockScript(p Policy) string {
 	fmt.Fprintf(&b, "Set-NetFirewallProfile -Name %s -DefaultOutboundAction Block\n",
 		strings.Join(fwProfiles, ","))
 	return b.String()
+}
+
+// emitAllowPhysicalDNSRules renders the opt-in plain-DNS pass
+// (vpn.allowPhysicalDNS) so a VPN client can re-resolve its server hostname
+// while the tunnel is down. Deliberately unscoped by address — resolution must
+// work regardless of which resolver the system uses on reconnect.
+func emitAllowPhysicalDNSRules(rule func(name, args string), p Policy) {
+	if !p.AllowPhysicalDNS {
+		return
+	}
+	rule("dns-any-udp", "-Protocol UDP -RemotePort 53")
+	rule("dns-any-tcp", "-Protocol TCP -RemotePort 53")
 }
 
 // removeGroupScript removes the dezhban rule group. Idempotent: missing rules

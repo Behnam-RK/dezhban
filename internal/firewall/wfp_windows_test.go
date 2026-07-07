@@ -123,3 +123,36 @@ func TestApplyWfpGuardRequiresTunnelIface(t *testing.T) {
 		t.Fatal("Apply(guard, no tunnel ifaces) = nil, want error (would be a total lockout)")
 	}
 }
+
+func TestRenderBlockScriptAllowPhysicalDNS(t *testing.T) {
+	guard := renderBlockScript(Policy{
+		Mode:             ModeGuard,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	for _, w := range []string{"-Protocol UDP -RemotePort 53", "-Protocol TCP -RemotePort 53"} {
+		if !strings.Contains(guard, w) {
+			t.Errorf("guard+allowPhysicalDNS must emit %q:\n%s", w, guard)
+		}
+	}
+
+	fb := renderBlockScript(Policy{
+		Mode:             ModeFullBlock,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(fb, "-Protocol UDP -RemotePort 53") {
+		t.Errorf("vpn-full-block+allowPhysicalDNS must emit the DNS allow:\n%s", fb)
+	}
+
+	off := renderBlockScript(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "RemotePort 53") {
+		t.Errorf("guard without allowPhysicalDNS must NOT emit a DNS allow:\n%s", off)
+	}
+}

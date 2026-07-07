@@ -141,6 +141,7 @@ func renderNftRuleset(p Policy) string {
 			rule(fmt.Sprintf("oifname %s accept", nftIfaceSet(p.TunnelIfaces)))
 		}
 		emitDaddrAccepts(rule, p.VPNEndpoints, "")
+		emitAllowPhysicalDNS(rule, p)
 	default: // ModeFullBlock
 		if len(p.TunnelIfaces) == 0 {
 			// DNS: same dst IPs over udp and tcp port 53.
@@ -155,9 +156,22 @@ func renderNftRuleset(p Policy) string {
 			// tunnel-iface accept — a cut endpoint would livelock recovery (the
 			// VPN could never re-establish to be re-evaluated).
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
+			emitAllowPhysicalDNS(rule, p)
 		}
 	}
 	return b.String()
+}
+
+// emitAllowPhysicalDNS renders the opt-in plain-DNS pass (vpn.allowPhysicalDNS)
+// so a VPN client can re-resolve its server hostname while the tunnel is down.
+// Deliberately unscoped (`to any`): resolution must work regardless of which
+// resolver the system uses on reconnect.
+func emitAllowPhysicalDNS(rule func(string), p Policy) {
+	if !p.AllowPhysicalDNS {
+		return
+	}
+	rule("udp dport 53 accept")
+	rule("tcp dport 53 accept")
 }
 
 // emitDaddrAccepts emits accept rules for addrs, split by family (nft needs

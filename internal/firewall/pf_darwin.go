@@ -221,6 +221,9 @@ func renderRuleset(p Policy) string {
 		if len(p.VPNEndpoints) > 0 {
 			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 		}
+		if p.AllowPhysicalDNS {
+			b.WriteString(allowPhysicalDNSRule)
+		}
 	default: // ModeFullBlock
 		if len(p.TunnelIfaces) == 0 {
 			if len(p.Allowlist.DNS) > 0 {
@@ -229,18 +232,29 @@ func renderRuleset(p Policy) string {
 			if len(p.Allowlist.Hosts) > 0 {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.Allowlist.Hosts))
 			}
-		} else if len(p.VPNEndpoints) > 0 {
+		} else {
 			// VPN full block: no tunnel-iface pass, so no user traffic leaks to a
 			// forbidden exit — but keep the endpoint pass so the encrypted
 			// handshake reaches the server and the tunnel can reconnect (a cut
 			// endpoint would livelock recovery). Identical to ModeGuard minus the
 			// tunnel-iface pass.
-			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
+			if len(p.VPNEndpoints) > 0 {
+				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
+			}
+			if p.AllowPhysicalDNS {
+				b.WriteString(allowPhysicalDNSRule)
+			}
 		}
 	}
 	b.WriteString("block drop out all\n")
 	return b.String()
 }
+
+// allowPhysicalDNSRule is the opt-in plain-DNS pass (vpn.allowPhysicalDNS): a
+// VPN client that re-resolves its server hostname on reconnect can do so while
+// the tunnel is down. `to any` deliberately — resolution must work regardless
+// of which resolver the system uses on reconnect.
+const allowPhysicalDNSRule = "pass out quick proto { udp tcp } to any port 53 no state\n"
 
 func joinAddrs(addrs []netip.Addr) string {
 	parts := make([]string, len(addrs))

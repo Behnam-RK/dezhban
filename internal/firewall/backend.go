@@ -51,6 +51,12 @@ type Policy struct {
 	// VPNEndpoints are the VPN server IPs reachable on the physical interface,
 	// kept open so the tunnel can stay up / reconnect.
 	VPNEndpoints []netip.Addr
+	// AllowPhysicalDNS adds a plain-DNS (port 53) egress pass to guard and VPN
+	// full-block rulesets so a VPN client can re-resolve its server hostname
+	// while the tunnel is down. Deliberately `to any`: resolution must work
+	// regardless of which resolver the system uses on reconnect. The residual
+	// leak is DNS-query metadata only, gated behind a default-off config flag.
+	AllowPhysicalDNS bool
 }
 
 // FirewallBackend is the per-OS firewall driver. Implementations must be
