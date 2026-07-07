@@ -49,8 +49,8 @@ func (b *nftBackend) Apply(p Policy) error {
 	// Guard mode with no tunnel interface would render only loopback + a default
 	// drop — a total lockout with no guard at all. Reject it at the backend seam
 	// so a programmatic caller (the daemon) cannot self-inflict it, mirroring pf.
-	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 {
-		return fmt.Errorf("guard mode requires at least one tunnel interface")
+	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 && len(p.TunnelGroups) == 0 {
+		return fmt.Errorf("guard mode requires at least one tunnel interface or group")
 	}
 	ruleset := renderNftRuleset(p)
 	// `nft -c -f -` checks the ruleset without committing it, so a bad allowlist
@@ -136,30 +136,64 @@ func renderNftRuleset(p Policy) string {
 	rule(`oifname "lo" accept`)
 
 	switch p.Mode {
+	case ModeSwitchWindow:
+		if len(p.WindowProtos) == 0 && len(p.WindowPorts) == 0 {
+			rule("accept") // unrestricted: pass all outbound for the bounded window
+		} else {
+			if len(p.TunnelIfaces) > 0 {
+				rule(fmt.Sprintf("oifname %s accept", nftIfaceSet(p.TunnelIfaces)))
+			}
+			for _, g := range p.TunnelGroups {
+				rule(fmt.Sprintf("oifname %q accept", g+"*"))
+			}
+			emitDaddrAccepts(rule, p.VPNEndpoints, "")
+			rule("udp dport 53 accept")
+			rule("tcp dport 53 accept")
+			emitWindowPortAccepts(rule, p)
+		}
 	case ModeGuard:
 		if len(p.TunnelIfaces) > 0 {
 			rule(fmt.Sprintf("oifname %s accept", nftIfaceSet(p.TunnelIfaces)))
 		}
+		for _, g := range p.TunnelGroups {
+			// Wildcard oifname: matches every current/future interface of this
+			// class (utun*), so a new tunnel needs no rule reload. Safe — tunnels
+			// re-encapsulate onto the still-blocked physical interface.
+			rule(fmt.Sprintf("oifname %q accept", g+"*"))
+		}
 		emitDaddrAccepts(rule, p.VPNEndpoints, "")
 		emitAllowPhysicalDNS(rule, p)
 	default: // ModeFullBlock
-		if len(p.TunnelIfaces) == 0 {
-			// DNS: same dst IPs over udp and tcp port 53.
+		if isVPNPolicy(p) {
+			// VPN full block (including the zero-tunnel standing posture): drop the
+			// tunnel-iface accept so no user traffic can egress to a forbidden exit,
+			// but KEEP the endpoint accepts so the encrypted handshake still reaches
+			// the server and the tunnel can reconnect. A cut endpoint would livelock
+			// recovery (the VPN could never re-establish to be re-evaluated).
+			emitDaddrAccepts(rule, p.VPNEndpoints, "")
+			emitAllowPhysicalDNS(rule, p)
+		} else {
+			// Legacy direct model: dst-IP allowlist over udp and tcp port 53.
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "udp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "tcp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.Hosts, "")
-		} else {
-			// VPN full block: drop the tunnel-iface accept so no user traffic can
-			// egress to a forbidden exit, but KEEP the endpoint accepts so the
-			// encrypted handshake still reaches the server and the tunnel can
-			// reconnect. The only difference from ModeGuard is the missing
-			// tunnel-iface accept — a cut endpoint would livelock recovery (the
-			// VPN could never re-establish to be re-evaluated).
-			emitDaddrAccepts(rule, p.VPNEndpoints, "")
-			emitAllowPhysicalDNS(rule, p)
 		}
 	}
 	return b.String()
+}
+
+// emitWindowPortAccepts renders the proto/port passes for a restricted switch
+// window (nft). Protocols default to udp+tcp when unspecified.
+func emitWindowPortAccepts(rule func(string), p Policy) {
+	protos := p.WindowProtos
+	if len(protos) == 0 {
+		protos = []string{"udp", "tcp"}
+	}
+	for _, proto := range protos {
+		for _, port := range p.WindowPorts {
+			rule(fmt.Sprintf("%s dport %d accept", proto, port))
+		}
+	}
 }
 
 // emitAllowPhysicalDNS renders the opt-in plain-DNS pass (vpn.allowPhysicalDNS)

@@ -34,6 +34,16 @@ const (
 	// interface(s) plus the handshake to the VPN endpoint(s), and block all
 	// other outbound — so a tunnel drop cuts traffic with no leak window.
 	ModeGuard
+	// ModeSwitchWindow is a bounded, explicitly-triggered relaxation used when
+	// connecting a brand-new VPN whose server address isn't known yet: by default
+	// it passes ALL outbound (so any VPN's handshake to any server can complete),
+	// relying on the daemon's short timer + early-close for safety rather than a
+	// port filter (a filter that admits the VPNs this project targets — many on
+	// 443 — necessarily admits phone-home leaks too; see docs/modes.md). When
+	// WindowProtos/WindowPorts are set it instead passes loopback + tunnel +
+	// endpoints + DNS + the given proto/port set. The daemon reverts to the prior
+	// posture when the window closes.
+	ModeSwitchWindow
 )
 
 // Policy describes one enforcement state for a backend to Apply. It generalizes
@@ -57,6 +67,27 @@ type Policy struct {
 	// regardless of which resolver the system uses on reconnect. The residual
 	// leak is DNS-query metadata only, gated behind a default-off config flag.
 	AllowPhysicalDNS bool
+	// TunnelGroups are tunnel-interface *class* names (e.g. "utun") rendered as a
+	// pf interface group / nft wildcard ("utun*") so every current and future
+	// interface of that class is passed in ModeGuard without a rule reload when a
+	// new tunnel appears. Safe: a tunnel re-encapsulates onto the physical
+	// interface, where egress is still blocked unless the destination is an
+	// allowed endpoint. Windows (exact InterfaceAlias only) ignores this.
+	TunnelGroups []string
+	// WindowProtos / WindowPorts optionally restrict ModeSwitchWindow to the given
+	// protocols ("udp"/"tcp") and destination ports instead of passing all
+	// outbound. Empty (the default) = pass all outbound for the window.
+	WindowProtos []string
+	WindowPorts  []int
+}
+
+// isVPNPolicy reports whether a ModeFullBlock policy is a VPN posture (endpoints
+// open) rather than the legacy direct model (dst-IP allowlist). True when the
+// policy carries tunnel interfaces, endpoints, or the physical-DNS pass — the
+// zero-tunnel standing posture (endpoints, no ifaces) still counts. Shared by
+// the pf and nft renderers.
+func isVPNPolicy(p Policy) bool {
+	return len(p.TunnelIfaces) > 0 || len(p.VPNEndpoints) > 0 || p.AllowPhysicalDNS
 }
 
 // FirewallBackend is the per-OS firewall driver. Implementations must be

@@ -76,7 +76,7 @@ func (b *wfpBackend) Block(a Allowlist) error {
 func (b *wfpBackend) Apply(p Policy) error {
 	// Guard mode with no tunnel interface would allow only loopback under a
 	// default-deny — a total lockout. Reject at the seam, mirroring pf/nft.
-	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 {
+	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 && len(p.TunnelGroups) == 0 {
 		return fmt.Errorf("guard mode requires at least one tunnel interface")
 	}
 
@@ -179,7 +179,30 @@ func renderBlockScript(p Policy) string {
 	// Loopback always passes.
 	rule("loopback", "-RemoteAddress 127.0.0.1,::1")
 
+	// defaultAction is the profile's outbound default installed at the end. It is
+	// Block for every posture EXCEPT an unrestricted switch window, which must
+	// allow all outbound so a brand-new VPN's handshake can complete. (Windows
+	// ignores TunnelGroups — it matches interfaces by exact alias only.)
+	defaultAction := "Block"
+
 	switch p.Mode {
+	case ModeSwitchWindow:
+		if len(p.WindowProtos) == 0 && len(p.WindowPorts) == 0 {
+			// Unrestricted: keep only the marker (loopback) rule so the group stays
+			// non-empty for surgical teardown, and flip the default to Allow. The
+			// daemon reverts to guard (default Block) when the window closes.
+			defaultAction = "Allow"
+		} else {
+			if len(p.TunnelIfaces) > 0 {
+				rule("tunnel", "-InterfaceAlias "+psStringList(p.TunnelIfaces))
+			}
+			if ep := psAddrList(p.VPNEndpoints); ep != "" {
+				rule("endpoint", "-RemoteAddress "+ep)
+			}
+			rule("dns-any-udp", "-Protocol UDP -RemotePort 53")
+			rule("dns-any-tcp", "-Protocol TCP -RemotePort 53")
+			emitWindowPortRules(rule, p)
+		}
 	case ModeGuard:
 		if len(p.TunnelIfaces) > 0 {
 			rule("tunnel", "-InterfaceAlias "+psStringList(p.TunnelIfaces))
@@ -189,7 +212,17 @@ func renderBlockScript(p Policy) string {
 		}
 		emitAllowPhysicalDNSRules(rule, p)
 	default: // ModeFullBlock
-		if len(p.TunnelIfaces) == 0 {
+		if isVPNPolicy(p) {
+			// VPN full block (including the zero-tunnel standing posture): no
+			// tunnel-iface allow, so no user traffic leaks to a forbidden exit — but
+			// keep the endpoint allow so the encrypted handshake reaches the server
+			// and the tunnel can reconnect (a cut endpoint would livelock recovery).
+			if ep := psAddrList(p.VPNEndpoints); ep != "" {
+				rule("endpoint", "-RemoteAddress "+ep)
+			}
+			emitAllowPhysicalDNSRules(rule, p)
+		} else {
+			// Legacy direct model: dst-IP allowlist.
 			if dns := psAddrList(p.Allowlist.DNS); dns != "" {
 				rule("dns-udp", "-Protocol UDP -RemotePort 53 -RemoteAddress "+dns)
 				rule("dns-tcp", "-Protocol TCP -RemotePort 53 -RemoteAddress "+dns)
@@ -197,23 +230,29 @@ func renderBlockScript(p Policy) string {
 			if hosts := psAddrList(p.Allowlist.Hosts); hosts != "" {
 				rule("hosts", "-RemoteAddress "+hosts)
 			}
-		} else {
-			// VPN full block: no tunnel-iface allow, so no user traffic leaks to a
-			// forbidden exit — but keep the endpoint allow so the encrypted
-			// handshake reaches the server and the tunnel can reconnect (a cut
-			// endpoint would livelock recovery). Identical to ModeGuard minus the
-			// tunnel-iface allow.
-			if ep := psAddrList(p.VPNEndpoints); ep != "" {
-				rule("endpoint", "-RemoteAddress "+ep)
-			}
-			emitAllowPhysicalDNSRules(rule, p)
 		}
 	}
 
-	// Default-deny last, once the allow rules are in place.
-	fmt.Fprintf(&b, "Set-NetFirewallProfile -Name %s -DefaultOutboundAction Block\n",
-		strings.Join(fwProfiles, ","))
+	// Set the profile outbound default last, once the allow rules are in place.
+	fmt.Fprintf(&b, "Set-NetFirewallProfile -Name %s -DefaultOutboundAction %s\n",
+		strings.Join(fwProfiles, ","), defaultAction)
 	return b.String()
+}
+
+// emitWindowPortRules renders the proto/port allows for a restricted switch
+// window (WFP). Protocols default to udp+tcp when unspecified.
+func emitWindowPortRules(rule func(name, args string), p Policy) {
+	protos := p.WindowProtos
+	if len(protos) == 0 {
+		protos = []string{"udp", "tcp"}
+	}
+	for _, proto := range protos {
+		for _, port := range p.WindowPorts {
+			up := strings.ToUpper(proto)
+			rule(fmt.Sprintf("win-%s-%d", strings.ToLower(proto), port),
+				fmt.Sprintf("-Protocol %s -RemotePort %d", up, port))
+		}
+	}
 }
 
 // emitAllowPhysicalDNSRules renders the opt-in plain-DNS pass
