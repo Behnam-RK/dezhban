@@ -130,6 +130,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if let eps = s.endpoints, !eps.isEmpty {
                     addInfo("Endpoints: \(eps.joined(separator: ", "))")
                 }
+                if let p = s.activeProfile, !p.isEmpty {
+                    addInfo("VPN: \(p)")
+                }
+                if let sw = s.switch, sw.open {
+                    addInfo("⏳ Switch window OPEN until \(shortTime(sw.until))")
+                }
             }
             if let bc = s.blockedCountries, !bc.isEmpty {
                 addInfo("Blocking: \(bc.joined(separator: ", "))")
@@ -155,6 +161,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let blocked = s?.blocked ?? false
         addAction("Block now", #selector(blockNow), enabled: isRunning && !blocked)
         addAction("Unblock", #selector(unblockNow), enabled: isRunning && blocked)
+
+        // Switch window: connect a brand-new VPN whose server isn't known yet.
+        if s?.mode == "vpn" {
+            if let sw = s?.switch, sw.open {
+                let left = max(0, sw.until.timeIntervalSinceNow)
+                addAction("Cancel VPN switch (\(mmss(left)) left)", #selector(cancelSwitch),
+                          enabled: isRunning)
+            } else {
+                addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
+            }
+        }
 
         menu.addItem(.separator())
 
@@ -184,6 +201,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func stopService() { runAction(["stop"], "stop the kill switch") }
     @objc private func blockNow() { runAction(["block"], "block") }
     @objc private func unblockNow() { runAction(["unblock"], "unblock") }
+    @objc private func openSwitch() { runAction(["switch", "--no-wait"], "open a switch window") }
+    @objc private func cancelSwitch() { runAction(["switch", "--cancel"], "cancel the switch window") }
 
     /// Runs a privileged CLI action OFF the main thread — `runPrivileged` blocks
     /// through the admin-password prompt and the command's full run, which would
@@ -240,5 +259,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = Int(seconds.rounded())
         if s < 60 { return "\(s)s ago" }
         return "\(s / 60)m ago"
+    }
+
+    private func mmss(_ seconds: TimeInterval) -> String {
+        let s = Int(seconds.rounded())
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    private func shortTime(_ t: Date) -> String {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f.string(from: t)
     }
 }

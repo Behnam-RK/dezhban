@@ -7,12 +7,19 @@ struct Tunnel: Codable {
     let detail: String?
 }
 
+/// An open switch window — mirrors Go's `state.SwitchState`.
+struct SwitchState: Codable {
+    let open: Bool
+    let until: Date
+    let profile: String?
+}
+
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.
 /// JSON keys match the lowerCamelCase struct tags in internal/state/state.go.
 struct Snapshot: Codable {
     let time: Date
     let mode: String            // "vpn" | "legacy"
-    let posture: String         // "allow" | "block" | "guard" | "full-block" | "stopped"
+    let posture: String         // "allow" | "block" | "guard" | "full-block" | "switch-window" | "stopped"
     let blocked: Bool
     let ip: String?
     let countryCode: String?
@@ -24,6 +31,8 @@ struct Snapshot: Codable {
     let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness
     let blockedCountries: [String]?
     let pid: Int?
+    let activeProfile: String?      // matched VPN profile name, nil if unknown
+    let `switch`: SwitchState?      // present only while a switch window is open
 
     /// Wall-clock age of this snapshot.
     var age: TimeInterval { Date().timeIntervalSince(time) }
