@@ -170,14 +170,22 @@ func TestClassifyTarget(t *testing.T) {
 
 func TestValidateErrors(t *testing.T) {
 	cases := map[string]string{
-		"bad interval":     `{"pollInterval": "0s"}`,
-		"bad hyst":         `{"hysteresis": 0}`,
-		"bad country":      `{"blockedCountries": ["USA"]}`,
-		"no providers":     `{"providers": []}`,
-		"vpn no ifaces":    `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"]}}`,
-		"vpn no endpoints": `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"]}}`,
-		"vpn bad endpoint": `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["bad endpoint!"]}}`,
-		"vpn bad refresh":  `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "endpointRefresh": "soon"}}`,
+		"bad interval":           `{"pollInterval": "0s"}`,
+		"bad hyst":               `{"hysteresis": 0}`,
+		"bad country":            `{"blockedCountries": ["USA"]}`,
+		"no providers":           `{"providers": []}`,
+		"vpn no endpoints":       `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"]}}`,
+		"vpn bad endpoint":       `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["bad endpoint!"]}}`,
+		"vpn bad refresh":        `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "endpointRefresh": "soon"}}`,
+		"profile dup name":       `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": ["1.2.3.4"]}, {"name": "A", "endpoints": ["5.6.7.8"]}]}}`,
+		"profile no endpoints":   `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": []}]}}`,
+		"profile bad name":       `{"vpn": {"enabled": true, "profiles": [{"name": "a b", "endpoints": ["1.2.3.4"]}]}}`,
+		"profile bad endpoint":   `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": ["bad ep!"]}]}}`,
+		"switch window too low":  `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "switchWindow": "1s"}}`,
+		"switch window too high": `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "switchWindow": "10m"}}`,
+		"advanced bad proto":     `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "advanced": {"windowProtocols": ["icmp"]}}}`,
+		"advanced bad port":      `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "advanced": {"windowPorts": [99999]}}}`,
+		"advanced bad duration":  `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "advanced": {"commandFreshness": "soon"}}}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -213,6 +221,31 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 				"autoDiscoverEndpoints": true,
 				"endpointRefresh": "2m",
 				"tunnelWatch": "500ms"
+			}
+		}`,
+		"profiles": `{
+			"vpn": {
+				"enabled": true,
+				"autodetect": true,
+				"autoDiscoverEndpoints": true,
+				"switchWindow": "90s",
+				"profiles": [
+					{"name": "proton", "endpoints": ["nl.proton.me"]},
+					{"name": "home-wg", "endpoints": ["203.0.113.7"], "ifaceHint": "wg"}
+				]
+			}
+		}`,
+		"advanced": `{
+			"vpn": {
+				"enabled": true,
+				"endpoints": ["1.2.3.4"],
+				"advanced": {
+					"switchWindowMax": "3m",
+					"commandFreshness": "15s",
+					"learnedMaxPerProfile": 8,
+					"windowProtocols": ["udp"],
+					"windowPorts": [51820]
+				}
 			}
 		}`,
 	}
@@ -310,5 +343,114 @@ func TestLoadInvalidJSON(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Error("Load(invalid json) = nil error, want parse error")
+	}
+}
+
+func TestLoadVPNProfilesAndSwitchWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{
+		"vpn": {
+			"enabled": true,
+			"autoDiscoverEndpoints": true,
+			"switchWindow": "90s",
+			"profiles": [
+				{"name": "proton", "endpoints": [" nl.proton.me "]},
+				{"name": "home-wg", "endpoints": ["203.0.113.7"], "ifaceHint": "wg"}
+			]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.VPN.Profiles) != 2 {
+		t.Fatalf("profiles = %d, want 2", len(cfg.VPN.Profiles))
+	}
+	if got := cfg.VPN.Profiles[0].Endpoints[0]; got != "nl.proton.me" {
+		t.Errorf("profile endpoint = %q, want trimmed nl.proton.me", got)
+	}
+	if cfg.VPN.Profiles[1].IfaceHint != "wg" {
+		t.Errorf("ifaceHint = %q, want wg", cfg.VPN.Profiles[1].IfaceHint)
+	}
+	if cfg.VPN.SwitchWindow != 90*time.Second {
+		t.Errorf("switchWindow = %s, want 90s", cfg.VPN.SwitchWindow)
+	}
+	// No explicit tunnelInterfaces → autodetect implied by Normalize.
+	if !cfg.VPN.Autodetect {
+		t.Error("autodetect should be implied when enabled with no tunnelInterfaces")
+	}
+}
+
+// A config with no vpn.advanced block gets every knob defaulted; an explicit
+// block overrides only the fields it sets.
+func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
+	dir := t.TempDir()
+	defPath := filepath.Join(dir, "def.json")
+	if err := os.WriteFile(defPath, []byte(`{"vpn":{"enabled":true,"endpoints":["1.2.3.4"]}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(defPath)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.VPN.SwitchWindow != 2*time.Minute {
+		t.Errorf("default switchWindow = %s, want 2m", cfg.VPN.SwitchWindow)
+	}
+	a := cfg.VPN.Advanced
+	if a.SwitchWindowMax != 5*time.Minute || a.CommandFreshness != 30*time.Second ||
+		a.LearnedMaxPerProfile != 16 || a.PromoteAfterRefreshes != 3 ||
+		a.EndpointWarnThreshold != 256 || a.LearnedEndpointTTL != 720*time.Hour ||
+		a.TunnelPruneAfter != 60*time.Second || a.WindowDiscoveryInterval != 2*time.Second {
+		t.Errorf("advanced defaults not applied: %+v", a)
+	}
+
+	ovPath := filepath.Join(dir, "ov.json")
+	body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"advanced":{"commandFreshness":"15s","learnedMaxPerProfile":8}}}`
+	if err := os.WriteFile(ovPath, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(ovPath)
+	if err != nil {
+		t.Fatalf("Load override: %v", err)
+	}
+	if cfg2.VPN.Advanced.CommandFreshness != 15*time.Second {
+		t.Errorf("commandFreshness = %s, want 15s", cfg2.VPN.Advanced.CommandFreshness)
+	}
+	if cfg2.VPN.Advanced.LearnedMaxPerProfile != 8 {
+		t.Errorf("learnedMaxPerProfile = %d, want 8", cfg2.VPN.Advanced.LearnedMaxPerProfile)
+	}
+	// Untouched knobs keep their defaults.
+	if cfg2.VPN.Advanced.SwitchWindowMax != 5*time.Minute {
+		t.Errorf("switchWindowMax = %s, want default 5m", cfg2.VPN.Advanced.SwitchWindowMax)
+	}
+}
+
+func TestEffectiveEndpoints(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.Endpoints = []string{"1.1.1.1", "dup.example.com"}
+	cfg.VPN.Profiles = []Profile{
+		{Name: "a", Endpoints: []string{"2.2.2.2", "dup.example.com"}},
+		{Name: "b", Endpoints: []string{"3.3.3.3"}},
+	}
+	got := EffectiveEndpoints(&cfg, []string{"4.4.4.4", "1.1.1.1"})
+	want := []string{"1.1.1.1", "dup.example.com", "2.2.2.2", "3.3.3.3", "4.4.4.4"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("EffectiveEndpoints = %v, want %v", got, want)
+	}
+}
+
+// A profiles-only config (no flat endpoints, no autoDiscover) is valid because
+// the union has endpoints.
+func TestValidateProfilesOnlyValid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn":{"enabled":true,"profiles":[{"name":"a","endpoints":["1.2.3.4"]}]}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err != nil {
+		t.Errorf("Load profiles-only: %v, want success", err)
 	}
 }
