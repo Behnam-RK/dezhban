@@ -2,6 +2,7 @@ package netdetect
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -64,5 +65,42 @@ func TestWatchInitialDown(t *testing.T) {
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("timed out waiting for initial state")
+	}
+}
+
+// A new tunnel appearing while another is already up is a set change with no
+// up/down edge — it must be emitted immediately so the runner can guard it.
+func TestWatchSetGrowthEmitsImmediately(t *testing.T) {
+	one := TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+	two := TunnelState{Up: true, Name: "utun4", Names: []string{"utun4", "utun6"}}
+	script := []TunnelState{one, one, two, two}
+
+	var mu sync.Mutex
+	i := 0
+	sample := func([]string) TunnelState {
+		mu.Lock()
+		defer mu.Unlock()
+		st := script[i]
+		if i < len(script)-1 {
+			i++
+		}
+		return st
+	}
+	w := &Watcher{Interval: time.Millisecond, DownDebounce: 2, Sample: sample}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ch := w.Watch(ctx)
+
+	// initial {utun4}, then immediately {utun4,utun6} on growth.
+	wantNames := [][]string{{"utun4"}, {"utun4", "utun6"}}
+	for n, want := range wantNames {
+		select {
+		case st := <-ch:
+			if strings.Join(st.Names, ",") != strings.Join(want, ",") {
+				t.Fatalf("event %d: Names = %v, want %v", n, st.Names, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("timed out waiting for event %d (want %v)", n, want)
+		}
 	}
 }

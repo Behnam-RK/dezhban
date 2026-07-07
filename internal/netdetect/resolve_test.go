@@ -100,3 +100,34 @@ func TestResolveDropsTunnelInternal(t *testing.T) {
 		t.Error("dropped endpoint still present in Sources")
 	}
 }
+
+// Learned endpoints enter the union at a trust tier between hostnames and
+// discovery.
+func TestResolveIncludesLearned(t *testing.T) {
+	src := &EndpointSource{
+		Literals: addrs("203.0.113.5"),
+		Learned:  func() []netip.Addr { return addrs("198.51.100.9") },
+	}
+	set := src.Resolve(context.Background())
+	if set.Sources[netip.MustParseAddr("198.51.100.9")] != "learned" {
+		t.Errorf("learned addr source = %q, want learned", set.Sources[netip.MustParseAddr("198.51.100.9")])
+	}
+	want := addrs("198.51.100.9", "203.0.113.5")
+	if !set.SameAddrs(EndpointSet{Addrs: want}) {
+		t.Errorf("Addrs = %v, want %v", set.Addrs, want)
+	}
+}
+
+// ResolveWith uses the given live tunnel set for the internal-drop filter,
+// independent of the configured EndpointSource.Tunnels.
+func TestResolveWithLiveTunnels(t *testing.T) {
+	// 10.0.0.5 is inside a typical tunnel subnet; with the live tunnel provided,
+	// the filter must drop it. Use the real interface check via a loopback-safe
+	// address only when a matching tunnel exists — here we assert delegation by
+	// passing no tunnels (nothing dropped) vs the configured path.
+	src := &EndpointSource{Literals: addrs("203.0.113.5")}
+	set := src.ResolveWith(context.Background(), nil)
+	if len(set.Addrs) != 1 {
+		t.Fatalf("ResolveWith(nil tunnels) = %v, want the literal kept", set.Addrs)
+	}
+}

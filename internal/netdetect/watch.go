@@ -4,6 +4,7 @@ import (
 	"context"
 	"log/slog"
 	"net"
+	"sort"
 	"strings"
 	"time"
 )
@@ -13,8 +14,13 @@ import (
 // interface that satisfied the check (empty when none is up or enumeration
 // failed). Detail carries a short human reason for logs.
 type TunnelState struct {
-	Up     bool
-	Name   string
+	Up bool
+	// Name is the first (sorted) tunnel that satisfied the check, kept for
+	// backward-compatible logging; "" when none is up.
+	Name string
+	// Names is every interface that satisfied isTunnelIface this sample, sorted.
+	// The runner uses set changes here to grow/prune its dynamic tunnel set.
+	Names  []string
 	Detail string
 }
 
@@ -60,7 +66,7 @@ func (w *Watcher) Watch(ctx context.Context) <-chan TunnelState {
 		defer close(ch)
 
 		cur := sample(w.Tunnels)
-		emittedUp := cur.Up
+		emitted := cur
 		downStreak := 0
 		if !cur.Up {
 			downStreak = downDebounce
@@ -77,28 +83,51 @@ func (w *Watcher) Watch(ctx context.Context) <-chan TunnelState {
 				return
 			case <-t.C:
 				st := sample(w.Tunnels)
-				if st.Up {
+				// Grow / down→up is emitted immediately (a new tunnel must be
+				// guarded at once); a set that lost members or went down is
+				// debounced (a flapping reconnect must not churn rule reloads).
+				grew := setGrew(emitted.Names, st.Names)
+				shrankOrDown := (!st.Up && emitted.Up) || setShrank(emitted.Names, st.Names)
+				if st.Up && (grew || (!emitted.Up)) {
 					downStreak = 0
-					if !emittedUp { // down→up: emit immediately
-						emittedUp = true
+					emitted = st
+					if !w.send(ctx, ch, st) {
+						return
+					}
+				} else if shrankOrDown {
+					downStreak++
+					if downStreak >= downDebounce {
+						downStreak = 0
+						emitted = st
 						if !w.send(ctx, ch, st) {
 							return
 						}
 					}
 				} else {
-					downStreak++
-					if emittedUp && downStreak >= downDebounce { // up→down: debounced
-						emittedUp = false
-						if !w.send(ctx, ch, st) {
-							return
-						}
-					}
+					downStreak = 0
 				}
 			}
 		}
 	}()
 	return ch
 }
+
+// setGrew reports whether next contains a name not in prev.
+func setGrew(prev, next []string) bool {
+	have := make(map[string]bool, len(prev))
+	for _, n := range prev {
+		have[n] = true
+	}
+	for _, n := range next {
+		if !have[n] {
+			return true
+		}
+	}
+	return false
+}
+
+// setShrank reports whether prev contains a name not in next.
+func setShrank(prev, next []string) bool { return setGrew(next, prev) }
 
 // send delivers st unless ctx is cancelled. Returns false if it should stop.
 func (w *Watcher) send(ctx context.Context, ch chan<- TunnelState, st TunnelState) bool {
@@ -129,6 +158,7 @@ func liveSample(tunnels []string) TunnelState {
 	for _, t := range tunnels {
 		want[strings.TrimSpace(t)] = true
 	}
+	var names []string
 	for _, ifc := range ifaces {
 		if len(tunnels) > 0 && !want[ifc.Name] {
 			continue
@@ -138,8 +168,12 @@ func liveSample(tunnels []string) TunnelState {
 			continue
 		}
 		if isTunnelIface(ifc.Name, ifc.Flags, addrs) {
-			return TunnelState{Up: true, Name: ifc.Name, Detail: ifc.Name + " up"}
+			names = append(names, ifc.Name)
 		}
 	}
-	return TunnelState{Up: false, Detail: "no configured tunnel is up"}
+	if len(names) == 0 {
+		return TunnelState{Up: false, Detail: "no configured tunnel is up"}
+	}
+	sort.Strings(names)
+	return TunnelState{Up: true, Name: names[0], Names: names, Detail: strings.Join(names, ",") + " up"}
 }
