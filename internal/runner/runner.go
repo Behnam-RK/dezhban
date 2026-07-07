@@ -11,9 +11,11 @@ import (
 	"log/slog"
 	"net/netip"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
@@ -71,6 +73,39 @@ type Options struct {
 	// VPN full-block policies (opt-in plain-DNS pass for hostname re-resolution
 	// while the tunnel is down).
 	AllowPhysicalDNS bool
+	// TunnelGroups are tunnel-interface class names (e.g. "utun") passed as an
+	// interface group / wildcard so a newly-appeared tunnel is covered with no
+	// rule reload (pf/nft only). Optional.
+	TunnelGroups []string
+	// Autodetect enables runtime tunnel re-detection: the watcher samples all
+	// tunnel-like interfaces and the runner grows/prunes its guard set as VPNs
+	// come and go. Explicit Tunnels are pinned (never pruned). Also relaxes the
+	// startup gates (an empty tunnel/endpoint set is allowed — the standing
+	// posture is a total cut until the first VPN/switch window).
+	Autodetect bool
+	// SwitchWindow is the default duration of a switch window; SwitchWindowMax
+	// caps it. WindowProtos/WindowPorts optionally restrict the window. A switch
+	// window is only available when SwitchWindow > 0 AND PollCommand != nil.
+	SwitchWindow    time.Duration
+	SwitchWindowMax time.Duration
+	WindowProtos    []string
+	WindowPorts     []int
+	// WindowDiscoveryInterval is how often endpoints are re-resolved while a
+	// switch window is open (fast, to learn the new server quickly). <=0 → 2s.
+	WindowDiscoveryInterval time.Duration
+	// PollCommand, when non-nil, is polled on CommandPoll for a control command
+	// (open/cancel switch window). Returns (cmd, true) when one was consumed.
+	PollCommand func() (command.Command, bool)
+	// CommandPoll is the PollCommand cadence. <=0 → 1s.
+	CommandPoll time.Duration
+	// Learn, when non-nil, records discovered endpoints for a profile after a
+	// switch window closes on a successful (geo-allow) verdict, so the VPN stays
+	// reachable across restarts. Called from the run-loop goroutine only.
+	Learn func(profile, iface string, addrs []netip.Addr)
+	// ResolveEndpointsWith recomputes the endpoint set using an explicit live
+	// tunnel set for the tunnel-internal drop filter. nil → ResolveEndpoints /
+	// static fallback (the tunnel set is then ignored).
+	ResolveEndpointsWith func(ctx context.Context, tunnels []string) netdetect.EndpointSet
 	// ResolveEndpoints recomputes the VPN endpoint set (literals + resolved
 	// hostnames + live discovery). Called once at startup and on each
 	// EndpointRefresh tick. nil → fall back to the static Endpoints above.
@@ -119,9 +154,11 @@ func modeName(vpn bool) string {
 	return "legacy"
 }
 
-// postureName maps (mode, blocked) to the snapshot's posture string.
-func postureName(vpn, blocked bool) string {
+// postureName maps (mode, blocked, window) to the snapshot's posture string.
+func postureName(vpn, blocked, window bool) string {
 	switch {
+	case vpn && window:
+		return "switch-window"
 	case vpn && blocked:
 		return "full-block"
 	case vpn:
@@ -138,14 +175,15 @@ func postureName(vpn, blocked bool) string {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-func (o Options) publish(blocked bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr) {
+func (o Options) publish(blocked bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string) {
 	if o.Publish == nil {
 		return
 	}
+	windowOpen := win != nil && win.Open
 	snap := state.Snapshot{
 		Time:                time.Now(),
 		Mode:                modeName(o.VPN),
-		Posture:             postureName(o.VPN, blocked),
+		Posture:             postureName(o.VPN, blocked, windowOpen),
 		Blocked:             blocked,
 		CountryCode:         r.CountryCode,
 		Provider:            r.Provider,
@@ -153,6 +191,8 @@ func (o Options) publish(blocked bool, r monitor.Reading, lookupErr error, enfEr
 		Tunnels:             tunnels,
 		PollIntervalSeconds: int(o.Interval.Seconds()),
 		PID:                 os.Getpid(),
+		ActiveProfile:       profile,
+		Switch:              win,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -268,72 +308,213 @@ func (o Options) publishStopped() {
 // the same hysteresis streak in the Decider, so one allowed reading does not
 // lift the block — it takes `Hysteresis` consecutive allowed probes.
 func (o Options) runVPN(ctx context.Context) error {
-	// Resolve the initial endpoint set (literals + hostnames + live discovery).
-	set := o.resolveEndpoints(ctx)
-	if len(set.Addrs) == 0 {
-		return errors.New("refusing to start: no usable vpn endpoints — set vpn.endpoints (IP or hostname) " +
-			"or enable vpn.autoDiscoverEndpoints with the VPN connected; a guard with no way to reach the " +
+	switchEnabled := o.SwitchWindow > 0 && o.PollCommand != nil
+	// relaxed startup gates: with runtime autodetect or an available switch
+	// window, an empty tunnel/endpoint set is legal — the standing posture is a
+	// total cut (lo0 + block-all) until the first VPN connects or a switch window
+	// learns one. A plain pinned config keeps the strict gates.
+	relaxed := o.Autodetect || switchEnabled
+
+	// Mutable tunnel set; explicit config names are pinned (never pruned).
+	tunnels := append([]string(nil), o.Tunnels...)
+	pinned := make(map[string]bool, len(o.Tunnels))
+	for _, t := range o.Tunnels {
+		pinned[t] = true
+	}
+
+	set := o.resolveEndpointsWith(ctx, tunnels)
+	endpoints := set.Addrs
+	lastSet := set
+	if len(endpoints) == 0 && !relaxed {
+		return errors.New("refusing to start: no usable vpn endpoints — set vpn.endpoints (IP or hostname), " +
+			"vpn.profiles, or enable vpn.autoDiscoverEndpoints/vpn.autodetect; a guard with no way to reach the " +
 			"server can never let the tunnel reconnect")
 	}
-	endpoints := set.Addrs
 
-	// A VPN endpoint must be reachable on the PHYSICAL interface. An endpoint that
-	// is itself a tunnel-internal address can't be — the physical-side pass-to rule
-	// is futile, and cutting the tunnel cuts the only path to the endpoint, so it
-	// can never reconnect and the host locks itself out. Refuse to start BEFORE
-	// touching the firewall rather than discover it at the next FULL BLOCK: a warn
-	// scrolls past in a service log, but a config that cannot recover must not run.
-	// (run `dezhban doctor` for the full picture, including a stale-but-public
-	// endpoint this check can't see.) A read error — can't classify — is non-fatal.
-	if bad, err := netdetect.CheckEndpointRouting(endpoints, o.Tunnels); err != nil {
-		o.Log.Debug("could not check endpoint routing", "err", err)
-	} else if len(bad) > 0 {
-		for _, br := range bad {
-			o.Log.Error("vpn endpoint is inside the tunnel's own subnet — guaranteed lockout if blocked; "+
-				"set vpn.endpoints to the server IP reachable on the physical interface",
-				"endpoint", br.Endpoint, "subnet", br.Subnet, "iface", br.Iface)
+	// A VPN endpoint must be reachable on the PHYSICAL interface. A tunnel-internal
+	// endpoint can't be, and blocking cuts the only path to it — a guaranteed
+	// lockout. Refuse to start rather than discover it at the next FULL BLOCK.
+	if len(endpoints) > 0 {
+		if bad, err := netdetect.CheckEndpointRouting(endpoints, tunnels); err != nil {
+			o.Log.Debug("could not check endpoint routing", "err", err)
+		} else if len(bad) > 0 {
+			for _, br := range bad {
+				o.Log.Error("vpn endpoint is inside the tunnel's own subnet — guaranteed lockout if blocked; "+
+					"set vpn.endpoints to the server IP reachable on the physical interface",
+					"endpoint", br.Endpoint, "subnet", br.Subnet, "iface", br.Iface)
+			}
+			return fmt.Errorf("refusing to start: %d vpn endpoint(s) are tunnel-internal and would lock the host out on full block (run `dezhban doctor` to fix)", len(bad))
 		}
-		return fmt.Errorf("refusing to start: %d vpn endpoint(s) are tunnel-internal and would lock the host out on full block (run `dezhban doctor` to fix)", len(bad))
 	}
 
-	guard, fullBlock := o.vpnPolicies(endpoints)
+	guard, fullBlock := o.vpnPolicies(tunnels, endpoints)
 	if err := o.Backend.Apply(guard); err != nil {
 		return fmt.Errorf("install startup guard: %w", err)
 	}
-	o.Log.Info("vpn guard active (startup)", "tunnels", o.Tunnels, "endpoints", len(endpoints))
+	o.Log.Info("vpn guard active (startup)", "tunnels", tunnels, "endpoints", len(endpoints), "switch", switchEnabled)
 
 	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
 
-	// tunnelUp tracks the last tunnel edge from the watcher. While the tunnel is
-	// down and we are still guarding, egress can only leave through the (down)
-	// tunnel, so every direct geo lookup is guaranteed to time out — pure WARN
-	// spam, and worse: fail-closed would drive the Decider to FULL BLOCK, which
-	// renders no passes and closes the very endpoints the guard keeps open for
-	// reconnect. So a down tunnel suppresses the GUARD-posture geo step (see the
-	// geoTick case). Defaults to true so the startup observation and the window
-	// before the first watcher edge still run; with no watcher it stays true, so
-	// the loop behaves exactly as before.
-	tunnelUp := true
+	// Switch-window state. windowActive is the authoritative flag; the timer +
+	// deadline enforce the bound (belt and braces).
+	var (
+		windowActive      bool
+		windowDeadline    time.Time
+		windowPrevBlocked bool
+		windowProfile     string
+		windowTimer       *time.Timer
+		windowTimerC      <-chan time.Time
+		winDiscTick       *time.Ticker
+		winDiscC          <-chan time.Time
+	)
 
-	// Last-known observation and tunnel state, retained so a tunnel edge or
-	// endpoint refresh publishes a full snapshot without blanking the IP/country
-	// from the most recent poll. snapshot() closes over these plus the (mutable)
-	// endpoints and blocked, so it always emits the current posture.
+	tunnelUp := true
 	var lastRes monitor.Result
 	var lastTun []state.Tunnel
-	// enfErr is the last firewall-action failure (a failed FULL BLOCK / guard restore,
-	// or a probe re-cut that left egress open), published so observers don't read a
-	// failed transition as a healthy guard. Sticky across tunnel/endpoint snapshots.
 	var enfErr error
-	snapshot := func() { o.publish(blocked, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints) }
 
-	// Observability watcher: a tunnel drop is already cut by the standing guard
-	// rule (physical egress is blocked except the endpoints), so the watcher takes
-	// NO firewall action here — it just surfaces the drop/restore for logging and
-	// the `monitor` view. Forcing a posture change on a drop is pointless: GUARD
-	// already blocks the physical leak while keeping the endpoints open for
-	// reconnect, and FULL BLOCK (which now also keeps the endpoints open) would
-	// only cut the tunnel-interface egress a down tunnel isn't carrying anyway.
+	winInterval := o.WindowDiscoveryInterval
+	if winInterval <= 0 {
+		winInterval = 2 * time.Second
+	}
+
+	switchState := func() *state.SwitchState {
+		if !windowActive {
+			return nil
+		}
+		return &state.SwitchState{Open: true, Until: windowDeadline, Profile: windowProfile}
+	}
+	snapshot := func() {
+		o.publish(blocked, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), "")
+	}
+	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints) }
+
+	// reapplyStanding re-applies the guard after a tunnel/endpoint change, unless a
+	// window owns the rules or we are in FULL BLOCK (which renders no tunnel pass —
+	// the new set lands on the next guard restore).
+	reapplyStanding := func(reason string) {
+		rebuild()
+		if windowActive || blocked {
+			return
+		}
+		if err := o.Backend.Apply(guard); err != nil {
+			enfErr = err
+			o.Log.Error("re-apply guard failed", "reason", reason, "err", err)
+		} else {
+			enfErr = nil
+			o.Log.Info("vpn guard updated", "reason", reason, "tunnels", tunnels, "endpoints", len(endpoints))
+		}
+	}
+
+	stopWindowTimers := func() {
+		if windowTimer != nil {
+			windowTimer.Stop()
+			windowTimer = nil
+		}
+		windowTimerC = nil
+		if winDiscTick != nil {
+			winDiscTick.Stop()
+			winDiscTick = nil
+		}
+		winDiscC = nil
+	}
+
+	openWindow := func(now time.Time, dur time.Duration, profile string) {
+		if windowActive {
+			// Extend the deadline (still capped by the caller's clamp).
+			windowDeadline = now.Add(dur)
+			windowProfile = profile
+			if windowTimer != nil {
+				windowTimer.Stop()
+			}
+			windowTimer = time.NewTimer(dur)
+			windowTimerC = windowTimer.C
+			o.Log.Info("switch window extended", "until", windowDeadline, "profile", profile)
+			snapshot()
+			return
+		}
+		if err := o.Backend.Apply(o.windowPolicy(tunnels, endpoints)); err != nil {
+			enfErr = err
+			o.Log.Error("open switch window failed — staying in prior posture", "err", err)
+			snapshot()
+			return
+		}
+		windowPrevBlocked = blocked
+		windowActive = true
+		windowProfile = profile
+		windowDeadline = now.Add(dur)
+		windowTimer = time.NewTimer(dur)
+		windowTimerC = windowTimer.C
+		winDiscTick = time.NewTicker(winInterval)
+		winDiscC = winDiscTick.C
+		enfErr = nil
+		o.Log.Warn("SWITCH WINDOW OPEN — all outbound allowed; connect your VPN now (real IP exposed until it closes)",
+			"until", windowDeadline, "profile", profile)
+		snapshot()
+	}
+
+	// closeWindowRevert reverts to the prior posture (expiry / cancel). Session-
+	// discovered endpoints stay in `endpoints` (grow-only during the window), so if
+	// a handshake was mid-flight the restored guard holds its endpoint open and the
+	// tunnel can still complete under GUARD.
+	closeWindowRevert := func(reason string) {
+		stopWindowTimers()
+		windowActive = false
+		rebuild()
+		target := guard
+		blocked = windowPrevBlocked
+		if windowPrevBlocked {
+			target = fullBlock
+		}
+		if err := o.Backend.Apply(target); err != nil {
+			enfErr = err
+			o.Log.Error("restore posture after switch window failed", "reason", reason, "err", err)
+		} else {
+			enfErr = nil
+		}
+		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(true, blocked, false))
+		snapshot()
+	}
+
+	// tryCloseWindowVerified attempts an early success close: a tunnel is up and an
+	// endpoint is known, AND a bounded geo lookup reads a NON-blocked exit. Only
+	// then do we close toward GUARD and learn the discovered endpoint. A blocked or
+	// failed reading keeps the window open (it may be a physical-path leak reading,
+	// or the exit really is forbidden — either way, not safe to trust yet). We
+	// never feed this reading into the Decider's hysteresis streak (path-ambiguous).
+	tryCloseWindowVerified := func() {
+		if !windowActive || len(tunnels) == 0 || len(endpoints) == 0 {
+			return
+		}
+		pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
+		r, err := o.Monitor.Once(pctx)
+		cancel()
+		if err != nil || r.CountryCode == "" || blockedContains(o.BlockedCountries, r.CountryCode) {
+			o.Log.Debug("switch window: exit not yet confirmed allowed, holding window open",
+				"country", r.CountryCode, "err", err)
+			return
+		}
+		stopWindowTimers()
+		windowActive = false
+		rebuild()
+		if err := o.Backend.Apply(guard); err != nil {
+			enfErr = err
+			o.Log.Error("close switch window to guard failed", "err", err)
+		} else {
+			blocked = false
+			enfErr = nil
+		}
+		lastRes = monitor.Result{Reading: r}
+		if o.Learn != nil {
+			if disc := discoveredAddrs(lastSet); len(disc) > 0 {
+				o.Learn(windowProfile, firstOr(tunnels), disc)
+				o.Log.Info("learned vpn endpoint(s) from switch window", "profile", windowProfile, "count", len(disc))
+			}
+		}
+		o.Log.Info("switch window closed early (exit verified)", "country", r.CountryCode, "tunnels", tunnels)
+		snapshot()
+	}
+
 	var tunCh <-chan netdetect.TunnelState
 	if o.Watcher != nil {
 		tunCh = o.Watcher.Watch(ctx)
@@ -348,9 +529,24 @@ func (o Options) runVPN(ctx context.Context) error {
 	geoTick := time.NewTicker(o.Interval)
 	defer geoTick.Stop()
 
-	// Observe once immediately so an already-bad exit is caught at startup rather
-	// than one interval later.
-	lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+	var cmdC <-chan time.Time
+	if switchEnabled {
+		cmdInterval := o.CommandPoll
+		if cmdInterval <= 0 {
+			cmdInterval = time.Second
+		}
+		cmdTick := time.NewTicker(cmdInterval)
+		defer cmdTick.Stop()
+		cmdC = cmdTick.C
+		// A stale command file left by a prior run is the CLI's responsibility to
+		// discard at startup; the poll here only acts on fresh commands.
+	}
+
+	// Startup observation: only meaningful with a tunnel up and an endpoint known.
+	// With zero tunnels (standing posture) a lookup egresses nowhere useful.
+	if len(tunnels) > 0 && len(endpoints) > 0 {
+		lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+	}
 	snapshot()
 
 	for {
@@ -369,35 +565,60 @@ func (o Options) runVPN(ctx context.Context) error {
 				o.Log.Warn("vpn tunnel down — guard holds the line (physical egress stays blocked, "+
 					"endpoints open for reconnect)", "detail", st.Detail)
 			}
-			lastTun = tunnelSnapshot(st, o.Tunnels)
+			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
+				tunnels = next
+				reapplyStanding("tunnel set changed")
+			}
+			lastTun = tunnelSnapshot(st, tunnels)
+			if windowActive {
+				tryCloseWindowVerified()
+			}
 			snapshot()
-		case <-epTick.C:
-			next, changed := reconcileEndpoints(endpoints, o.resolveEndpoints(ctx), blocked)
-			if changed {
-				endpoints = next
-				guard, fullBlock = o.vpnPolicies(endpoints)
-				// FULL BLOCK renders no passes, so the endpoint set only matters for
-				// GUARD: re-apply now if guarding, otherwise the refreshed set is used
-				// the next time the probe/verdict restores the guard.
-				if !blocked {
-					if err := o.Backend.Apply(guard); err != nil {
-						o.Log.Error("re-apply guard after endpoint refresh failed", "err", err)
-					} else {
-						o.Log.Info("vpn endpoints updated", "endpoints", len(endpoints))
-					}
-				} else {
-					o.Log.Debug("vpn endpoints updated while blocked; applied on next guard", "endpoints", len(endpoints))
+		case <-cmdC:
+			cmd, ok := o.PollCommand()
+			if !ok {
+				continue
+			}
+			now := time.Now()
+			switch cmd.Op {
+			case command.OpOpenSwitchWindow:
+				dur := o.clampWindow(cmd.Duration)
+				openWindow(now, dur, cmd.Profile)
+			case command.OpCancelSwitchWindow:
+				if windowActive {
+					closeWindowRevert("cancelled")
 				}
+			default:
+				o.Log.Debug("ignoring unsupported command", "op", cmd.Op)
+			}
+		case <-windowTimerC:
+			if windowActive {
+				closeWindowRevert("expired")
+			}
+		case <-winDiscC:
+			// Fast in-window discovery: grow the endpoint set as the new server's
+			// socket appears, then try to close.
+			fresh := o.resolveEndpointsWith(ctx, tunnels)
+			lastSet = fresh
+			if next, changed := reconcileEndpoints(endpoints, fresh, true); changed {
+				endpoints = next
+			}
+			tryCloseWindowVerified()
+		case <-epTick.C:
+			fresh := o.resolveEndpointsWith(ctx, tunnels)
+			lastSet = fresh
+			if next, changed := reconcileEndpoints(endpoints, fresh, blocked); changed {
+				endpoints = next
+				reapplyStanding("endpoint refresh")
 				snapshot()
 			}
 		case <-geoTick.C:
-			// While the tunnel is down and we are still guarding, skip the geo
-			// step: the lookup would leave through the down tunnel and can only
-			// fail, and a failed lookup fail-closes to FULL BLOCK — closing the
-			// endpoints the guard holds open for reconnect. The standing guard
-			// already cuts a leak, so there is nothing to observe and nothing to
-			// enforce until the tunnel returns. While blocked we still probe: the
-			// bounded recovery probe is the only path back out of FULL BLOCK.
+			if windowActive {
+				continue // window suppresses the geo state machine
+			}
+			if len(tunnels) == 0 {
+				continue // standing posture: nothing to observe until a tunnel exists
+			}
 			if o.Watcher != nil && !tunnelUp && !blocked {
 				o.Log.Debug("vpn tunnel down — skipping geo lookup (guard holds, endpoints open for reconnect)")
 				continue
@@ -411,10 +632,82 @@ func (o Options) runVPN(ctx context.Context) error {
 // vpnPolicies builds the GUARD and FULL BLOCK policies for the given endpoint
 // set. FULL BLOCK under a tunnel cuts the tunnel too: the dst-IP allowlist is
 // meaningless on encrypted outer packets, so it is omitted.
-func (o Options) vpnPolicies(endpoints []netip.Addr) (guard, fullBlock firewall.Policy) {
-	guard = firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: o.Tunnels, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
-	fullBlock = firewall.Policy{Mode: firewall.ModeFullBlock, TunnelIfaces: o.Tunnels, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
+// vpnPolicies builds the GUARD (standing) and FULL BLOCK policies for the given
+// tunnel and endpoint sets. The GUARD side is the standing posture: normal
+// ModeGuard when at least one tunnel exists, else a ModeFullBlock endpoints-open
+// shape (physically fail-closed, handshake paths open) so the daemon can run
+// before any VPN is connected without the backend rejecting an empty-iface
+// guard. FULL BLOCK cuts the tunnel too — the dst-IP allowlist is meaningless on
+// encrypted outer packets, so it is omitted.
+func (o Options) vpnPolicies(tunnels []string, endpoints []netip.Addr) (guard, fullBlock firewall.Policy) {
+	fullBlock = firewall.Policy{Mode: firewall.ModeFullBlock, TunnelIfaces: tunnels, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
+	if len(tunnels) == 0 && len(o.TunnelGroups) == 0 {
+		// Zero-tunnel standing posture: reuse the FULL BLOCK shape (endpoints open,
+		// everything else cut). Applying ModeGuard with no ifaces would be rejected
+		// at the backend seam (a total-lockout guard).
+		guard = fullBlock
+		return guard, fullBlock
+	}
+	guard = firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: tunnels, TunnelGroups: o.TunnelGroups, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
 	return guard, fullBlock
+}
+
+// windowPolicy builds the switch-window policy from the current tunnel/endpoint
+// sets plus any configured restriction knobs.
+func (o Options) windowPolicy(tunnels []string, endpoints []netip.Addr) firewall.Policy {
+	return firewall.Policy{
+		Mode:         firewall.ModeSwitchWindow,
+		TunnelIfaces: tunnels,
+		TunnelGroups: o.TunnelGroups,
+		VPNEndpoints: endpoints,
+		WindowProtos: o.WindowProtos,
+		WindowPorts:  o.WindowPorts,
+	}
+}
+
+// reconcileTunnels merges the observed tunnel set into the current one: every
+// pinned (explicit-config) name is always kept; observed names are added; and
+// non-pinned names no longer observed are dropped (the watcher already debounced
+// the shrink). The result is never empty — an empty next keeps the current set.
+// Returns the new set and whether it changed.
+func reconcileTunnels(current, observed []string, pinned map[string]bool) ([]string, bool) {
+	seen := make(map[string]bool)
+	var next []string
+	add := func(n string) {
+		if n == "" || seen[n] {
+			return
+		}
+		seen[n] = true
+		next = append(next, n)
+	}
+	for _, n := range current {
+		if pinned[n] {
+			add(n)
+		}
+	}
+	for _, n := range observed {
+		add(n)
+	}
+	sort.Strings(next)
+	if len(next) == 0 {
+		return current, false
+	}
+	if sameStrings(current, next) {
+		return current, false
+	}
+	return next, true
+}
+
+func sameStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // vpnGeoStep performs one geo observation and applies the resulting transition.
@@ -567,7 +860,7 @@ func (o Options) runLegacy(ctx context.Context) error {
 	// full snapshot without blanking the IP/country from the most recent poll.
 	var last monitor.Result
 	var lastTun []state.Tunnel
-	snapshot := func() { o.publish(blocked, last.Reading, last.Err, enfErr, lastTun, nil) }
+	snapshot := func() { o.publish(blocked, last.Reading, last.Err, enfErr, lastTun, nil, nil, "") }
 
 	results := o.Monitor.Poll(ctx)
 	for {
@@ -631,6 +924,70 @@ func (o Options) resolveEndpoints(ctx context.Context) netdetect.EndpointSet {
 		set.Sources[a] = "literal"
 	}
 	return set
+}
+
+// resolveEndpointsWith resolves the endpoint set using the given live tunnel set
+// for the tunnel-internal drop filter. Prefers ResolveEndpointsWith (wired by
+// main), falls back to ResolveEndpoints, then the static list.
+func (o Options) resolveEndpointsWith(ctx context.Context, tunnels []string) netdetect.EndpointSet {
+	if o.ResolveEndpointsWith != nil {
+		return o.ResolveEndpointsWith(ctx, tunnels)
+	}
+	return o.resolveEndpoints(ctx)
+}
+
+// clampWindow parses a requested switch-window duration and clamps it to
+// [minSwitchWindow, SwitchWindowMax]. An empty/invalid request falls back to the
+// configured default SwitchWindow.
+func (o Options) clampWindow(req string) time.Duration {
+	dur := o.SwitchWindow
+	if req != "" {
+		if d, err := time.ParseDuration(req); err == nil && d > 0 {
+			dur = d
+		}
+	}
+	const minSwitchWindow = 10 * time.Second
+	max := o.SwitchWindowMax
+	if max <= 0 {
+		max = 5 * time.Minute
+	}
+	if dur < minSwitchWindow {
+		dur = minSwitchWindow
+	}
+	if dur > max {
+		dur = max
+	}
+	return dur
+}
+
+// blockedContains reports whether cc (case-insensitive) is in the blocked list.
+func blockedContains(blocked []string, cc string) bool {
+	for _, b := range blocked {
+		if strings.EqualFold(b, cc) {
+			return true
+		}
+	}
+	return false
+}
+
+// discoveredAddrs returns the addresses in set whose source is live discovery —
+// the ones worth persisting as learned endpoints after a verified switch.
+func discoveredAddrs(set netdetect.EndpointSet) []netip.Addr {
+	var out []netip.Addr
+	for _, a := range set.Addrs {
+		if set.Sources[a] == "discovered" {
+			out = append(out, a)
+		}
+	}
+	return out
+}
+
+// firstOr returns the first element of s, or "" if empty.
+func firstOr(s []string) string {
+	if len(s) == 0 {
+		return ""
+	}
+	return s[0]
 }
 
 // reconcileEndpoints decides the endpoint set to use after a refresh, enforcing
