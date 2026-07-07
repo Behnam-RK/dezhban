@@ -28,7 +28,9 @@ Keys (dotted; list values are comma-separated):
   pollInterval blockedCountries failClosed hysteresis providers
   allowlist.dns allowlist.hosts providerQuorum logLevel
   vpn.enabled vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
-  vpn.autoDiscoverEndpoints vpn.endpointRefresh vpn.tunnelWatch`
+  vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.switchWindow
+  vpn.endpointRefresh vpn.tunnelWatch
+  (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
 
 // configField is a get/set pair for one dotted config key.
 type configField struct {
@@ -102,6 +104,14 @@ var configFields = map[string]configField{
 	"vpn.autoDiscoverEndpoints": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AutoDiscoverEndpoints) },
 		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AutoDiscoverEndpoints, v) },
+	},
+	"vpn.allowPhysicalDNS": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AllowPhysicalDNS) },
+		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AllowPhysicalDNS, v) },
+	},
+	"vpn.switchWindow": {
+		get: func(c *config.Config) string { return c.VPN.SwitchWindow.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.SwitchWindow, v) },
 	},
 	"vpn.endpointRefresh": {
 		get: func(c *config.Config) string { return c.VPN.EndpointRefresh.String() },
