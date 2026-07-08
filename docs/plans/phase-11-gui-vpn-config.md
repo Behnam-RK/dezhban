@@ -10,8 +10,8 @@ draft that proposed a new `dezhban config apply` Go subcommand — see
 
 ## Background
 
-Today "Open config…" (`AppDelegate.swift:210`) just hands the raw JSON file to
-the default app (`NSWorkspace.shared.open`). Flipping `vpn.enabled` safely
+Today "Open config file…" (`AppDelegate.openConfig`) just hands the raw JSON
+file to the default app (`NSWorkspace.shared.open`). Flipping `vpn.enabled` safely
 requires also setting `vpn.tunnelInterfaces` / `vpn.endpoints` correctly, or
 `config.Validate()` rejects the result and the daemon won't start — exactly
 the self-lockout risk the scope note flagged. A blind text-edit workflow gives

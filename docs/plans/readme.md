@@ -92,12 +92,13 @@ behavior is the legacy destination-IP model, unchanged):
 
 ## Phases
 
-**Status: phases 0–11 complete and merged to `main`.** Remaining core-daemon
-work is privileged per-OS acceptance (run the `## Acceptance / verification`
-steps in each phase doc on real macOS/Linux/Windows hosts). Phases 10–11 extend
-the macOS GUI (diagnostics/output capture/panic/install-uninstall and the in-app
-VPN config panel); their code is landed, with the manual on-host acceptance
-checks in each phase doc still to be run.
+**Status: phases 0–9 complete and merged to `main`; phases 10–11 complete on
+this branch, pending merge.** Remaining core-daemon work is privileged per-OS
+acceptance (run the `## Acceptance / verification` steps in each phase doc on
+real macOS/Linux/Windows hosts). Phases 10–11 extend the macOS GUI
+(diagnostics/output capture/panic/install-uninstall and the in-app VPN config
+panel); their code is landed, with the manual on-host acceptance checks in each
+phase doc still to be run.
 
 | Phase | Doc | Status | Theme |
 |---|---|---|---|

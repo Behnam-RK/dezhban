@@ -276,7 +276,9 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
     /// deliberately shares the same rules-come-down path as `stop`), so this
     /// is disclosed plainly rather than papered over as seamless.
     private func confirmRestart(log: String) {
-        applyButton.isEnabled = true
+        // Apply stays disabled (set in applyTapped) through the restart so a
+        // second config-write/restart can't be kicked off concurrently. It is
+        // re-enabled only when we stop here (cancel) or when the restart finishes.
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Restart dezhban to apply this change?"
@@ -284,6 +286,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         alert.addButton(withTitle: "Restart")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else {
+            applyButton.isEnabled = true
             statusLabel.stringValue = "Config saved; restart later to apply."
             OutputPanel.shared.show(title: "VPN config — saved (not restarted)", text: log)
             return
@@ -303,6 +306,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
 
             guard stopResult.ok, startResult.ok else {
                 DispatchQueue.main.async {
+                    self.applyButton.isEnabled = true
                     self.statusLabel.stringValue = "Restart failed — see output."
                     OutputPanel.shared.show(title: "VPN config — restart failed", text: fullLog)
                 }
@@ -326,6 +330,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
                 break
             }
             DispatchQueue.main.async {
+                self.applyButton.isEnabled = true
                 if let posture = reportedPosture {
                     self.statusLabel.stringValue = "Restarted — posture: \(posture)."
                     OutputPanel.shared.show(title: "VPN config — restarted", text: fullLog + "resolved posture: \(posture)\n")

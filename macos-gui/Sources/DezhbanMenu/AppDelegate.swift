@@ -384,9 +384,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
 
-    /// Real-data About panel: version, resolved config path, binary path, and
-    /// current service status from the last-read snapshot — no new CLI calls
-    /// beyond `version` (everything else is already fetched for the main menu).
+    /// Real-data About panel: version, resolved config path, binary path, the
+    /// enforcement posture (from the last-read snapshot), and whether the OS
+    /// service is installed (cached) — no new CLI calls beyond `version`
+    /// (everything else is already fetched for the main menu).
     /// Reuses the shared output panel rather than a bespoke About window.
     @objc private func showAbout() {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
@@ -395,13 +396,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let binPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
             DispatchQueue.main.async {
                 guard let self = self else { return }
-                let status = self.isRunning ? self.humanPosture(self.snapshot!) : "stopped"
+                // Two distinct concepts, labeled separately: the enforcement
+                // posture (from the state snapshot) and whether the OS service
+                // is installed (the cached `status --json` service field).
+                let posture = self.isRunning ? self.humanPosture(self.snapshot!) : "stopped"
+                let service = self.serviceIsInstalled ? "installed" : "not installed"
                 let text = """
                 \(version.isEmpty ? "dezhban (version unknown)" : version)
 
                 Config path:     \(cfgPath)
                 Binary path:     \(binPath)
-                Service status:  \(status)
+                Posture:         \(posture)
+                Service:         \(service)
                 """
                 OutputPanel.shared.show(title: "About Dezhban", text: text)
             }
