@@ -46,6 +46,22 @@ const (
 	ModeSwitchWindow
 )
 
+// String returns the stable mode identifier used in logs; it matches the
+// print-rules --mode names ("fullblock", "guard", "switch"). Note that a VPN
+// full block and the legacy direct block are both ModeFullBlock.
+func (m Mode) String() string {
+	switch m {
+	case ModeFullBlock:
+		return "fullblock"
+	case ModeGuard:
+		return "guard"
+	case ModeSwitchWindow:
+		return "switch"
+	default:
+		return "unknown"
+	}
+}
+
 // Policy describes one enforcement state for a backend to Apply. It generalizes
 // the original dst-IP Block so the same backend can drive both the legacy direct
 // model and the VPN-aware interface guard. See docs/plans VPN mode.

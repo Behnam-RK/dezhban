@@ -423,7 +423,18 @@ func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov run
 	if len(tunnels) == 0 && !cfg.VPN.Autodetect && !ov.tunnelDownSet {
 		return nil
 	}
-	w := &netdetect.Watcher{Tunnels: tunnels, Interval: cfg.VPN.TunnelWatch, Log: log}
+	// In autodetect mode the watcher must sample ALL tunnel-like interfaces, not
+	// just the set known at startup: utunN names change across reconnects, so
+	// pinning the watcher to the start-time list (which liveSample treats as an
+	// allowlist) would blind it to a renumbered or newly-created tunnel and stop
+	// the runner growing/pruning its guarded set. An empty Tunnels makes
+	// liveSample consider every interface; the runner still starts from `tunnels`.
+	// With autodetect off, explicit pins keep their allowlist semantics.
+	watchTunnels := tunnels
+	if cfg.VPN.Autodetect {
+		watchTunnels = nil
+	}
+	w := &netdetect.Watcher{Tunnels: watchTunnels, Interval: cfg.VPN.TunnelWatch, Log: log}
 	if ov.tunnelDownSet {
 		log.Warn("SIMULATION: tunnel will be reported down", "after", ov.tunnelDownAfter)
 		w.Sample = simTunnelSample(ov.tunnelDownAfter)

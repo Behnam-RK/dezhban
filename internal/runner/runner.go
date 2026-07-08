@@ -351,7 +351,10 @@ func (o Options) runVPN(ctx context.Context) error {
 	if err := o.Backend.Apply(guard); err != nil {
 		return fmt.Errorf("install startup guard: %w", err)
 	}
-	o.Log.Info("vpn guard active (startup)", "tunnels", tunnels, "endpoints", len(endpoints), "switch", switchEnabled)
+	// guard is the standing posture: usually ModeGuard, but the zero-tunnel
+	// standing posture is a ModeFullBlock shape — log the actual applied mode
+	// rather than claiming "guard" unconditionally.
+	o.Log.Info("vpn posture active (startup)", "mode", guard.Mode, "tunnels", tunnels, "endpoints", len(endpoints), "switch", switchEnabled)
 
 	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
 

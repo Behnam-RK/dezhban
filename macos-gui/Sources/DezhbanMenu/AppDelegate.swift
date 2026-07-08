@@ -262,7 +262,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func mmss(_ seconds: TimeInterval) -> String {
-        let s = Int(seconds.rounded())
+        // Round up so a countdown never briefly shows MORE time than is left
+        // (e.g. 59.6s must read "1:00", not jump back up after ticking to 0:59).
+        let s = max(0, Int(seconds.rounded(.up)))
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 

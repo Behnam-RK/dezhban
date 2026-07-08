@@ -191,6 +191,20 @@ func cmdVPNList(args []string) int {
 			fmt.Printf("  %-9s %s\n", e.Name, strings.Join(eps, ", "))
 		}
 	}
+	// Live daemon state (best-effort; silent when no daemon is running or the
+	// snapshot is unreadable). Matches the "active state" the command advertises.
+	if snap, err := state.Read(defaultStatePath()); err == nil {
+		if snap.Switch != nil && snap.Switch.Open {
+			line := fmt.Sprintf("\nswitch window OPEN until %s", snap.Switch.Until.Format(time.Kitchen))
+			if snap.Switch.Profile != "" {
+				line += fmt.Sprintf(" (profile %q)", snap.Switch.Profile)
+			}
+			fmt.Println(line)
+		}
+		if snap.ActiveProfile != "" {
+			fmt.Printf("last verified profile: %s\n", snap.ActiveProfile)
+		}
+	}
 	return 0
 }
 
