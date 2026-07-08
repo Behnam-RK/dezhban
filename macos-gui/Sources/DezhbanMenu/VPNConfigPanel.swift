@@ -354,14 +354,17 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         alert.runModal()
     }
 
-    /// Superficial "looks like a Go duration" check: one or more
-    /// number(.number)?unit chunks, e.g. "30s", "5m", "1h30m", "500ms". Not a
-    /// full parser — time.ParseDuration (via `config set`) remains the
-    /// authority; this only catches obviously-wrong input before spending a
-    /// privileged round trip.
+    /// Superficial "looks like a Go duration" check: an optional sign, then
+    /// either a bare "0" or one or more number(.number)?unit chunks, e.g. "30s",
+    /// "5m", "1h30m", "500ms", "-1.5h", "0". Not a full parser — time.ParseDuration
+    /// (via `config set`) remains the authority, so this errs permissive (it
+    /// accepts everything ParseDuration does) and only exists to catch obviously
+    /// wrong input before spending a privileged round trip.
     private static func looksLikeGoDuration(_ s: String) -> Bool {
         guard !s.isEmpty else { return false }
-        let pattern = #"^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"#
+        // Mirror ParseDuration: optional [-+], the special bare "0", or repeated
+        // decimal-number + unit chunks. Units: ns, us/µs/μs, ms, s, m, h.
+        let pattern = #"^[-+]?(0|([0-9]*(\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$"#
         return s.range(of: pattern, options: .regularExpression) != nil
     }
 

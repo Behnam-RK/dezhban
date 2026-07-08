@@ -124,15 +124,17 @@ enum DezhbanCLI {
     static func resolvedConfigPath() -> String {
         guard let bin = binaryPath() else { return configPath }
         let r = exec(bin, ["config", "path"])
-        // `config path` prints a single line: the winning path, optionally
-        // followed by a trailing note like " (not present — using built-in
-        // defaults)". Take the first line and strip that trailing parenthetical
-        // — never split on spaces, which would truncate a valid path containing
+        // `config path` prints a single line: the winning path, or (when no file
+        // is present) the default path followed by this exact fixed note. Strip
+        // only that exact suffix — not any trailing parenthetical — so a real
+        // path that itself ends in ")" (a directory with parentheses) survives.
+        // Never split on spaces either: that truncates a valid path containing
         // them (e.g. "~/Library/Application Support/…").
+        let absentNote = " (not present — using built-in defaults)"
         var path = (r.out.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "")
             .trimmingCharacters(in: .whitespaces)
-        if path.hasSuffix(")"), let note = path.range(of: " (", options: .backwards) {
-            path = String(path[..<note.lowerBound]).trimmingCharacters(in: .whitespaces)
+        if path.hasSuffix(absentNote) {
+            path = String(path.dropLast(absentNote.count)).trimmingCharacters(in: .whitespaces)
         }
         return (r.status == 0 && !path.isEmpty) ? path : configPath
     }
