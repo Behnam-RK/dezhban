@@ -45,7 +45,7 @@ Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
   "pollIntervalSeconds": 30,            // daemon poll cadence, for sizing staleness
   "blockedCountries": ["IR"],
   "pid": 4242,
-  "activeProfile": "proton",            // (vpn) matched profile name, omitted if unknown
+  "activeProfile": "proton",            // (vpn) profile of the last completed switch window; omitted until one completes
   "switch": {                            // (vpn) present only while a switch window is open
     "open": true,
     "until": "2026-07-01T12:02:00Z",

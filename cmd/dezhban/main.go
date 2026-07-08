@@ -1026,13 +1026,21 @@ func cmdMonitor(args []string) int {
 // source print-rules renders from. NOTE: keep in sync with runner.runVPN; a
 // future refactor should extract a shared constructor in the firewall package.
 func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
-	al := buildAllowlist(cfg, log)
 	tunnels := resolveTunnels(cfg, log)
+	// The physical dst-IP allowlist belongs only to the legacy (non-VPN) model.
+	// The runner's VPN guard/full-block (runner.vpnPolicies) never sets it — a VPN
+	// posture opens endpoints, not a physical allowlist. Populate it only for
+	// non-VPN configs; otherwise a VPN config with no static tunnels/endpoints
+	// (autoDiscover-only) would fail isVPNPolicy and render phantom physical egress.
+	vpnAllowlist := firewall.Allowlist{}
+	if !cfg.VPN.Enabled {
+		vpnAllowlist = buildAllowlist(cfg, log)
+	}
 	switch mode {
 	case "guard":
 		return firewall.Policy{
 			Mode:             firewall.ModeGuard,
-			Allowlist:        al,
+			Allowlist:        vpnAllowlist,
 			TunnelIfaces:     tunnels,
 			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
 			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
@@ -1040,7 +1048,7 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 	case "fullblock":
 		return firewall.Policy{
 			Mode:             firewall.ModeFullBlock,
-			Allowlist:        al,
+			Allowlist:        vpnAllowlist,
 			TunnelIfaces:     tunnels,
 			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
 			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
@@ -1055,7 +1063,7 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 		}, nil
 	case "legacy":
 		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.
-		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: al}, nil
+		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: buildAllowlist(cfg, log)}, nil
 	default:
 		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, switch, legacy)", mode)
 	}

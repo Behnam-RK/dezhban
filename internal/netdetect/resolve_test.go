@@ -118,16 +118,33 @@ func TestResolveIncludesLearned(t *testing.T) {
 	}
 }
 
-// ResolveWith uses the given live tunnel set for the internal-drop filter,
-// independent of the configured EndpointSource.Tunnels.
+// ResolveWith drives the internal-drop filter from the tunnel set passed to it,
+// independent of the configured EndpointSource.Tunnels: an endpoint inside a
+// live tunnel's subnet is dropped, while with no live tunnels the filter is
+// skipped and the same endpoint survives.
 func TestResolveWithLiveTunnels(t *testing.T) {
-	// 10.0.0.5 is inside a typical tunnel subnet; with the live tunnel provided,
-	// the filter must drop it. Use the real interface check via a loopback-safe
-	// address only when a matching tunnel exists — here we assert delegation by
-	// passing no tunnels (nothing dropped) vs the configured path.
-	src := &EndpointSource{Literals: addrs("203.0.113.5")}
-	set := src.ResolveWith(context.Background(), nil)
-	if len(set.Addrs) != 1 {
-		t.Fatalf("ResolveWith(nil tunnels) = %v, want the literal kept", set.Addrs)
+	// Stub the interface reader so no live network is needed: utun7 carries a
+	// tunnel-internal /24, so 10.9.0.5 is internal to it but 203.0.113.5 is not.
+	orig := ifaceAddrs
+	ifaceAddrs = func(name string) ([]net.Addr, error) {
+		if name == "utun7" {
+			return []net.Addr{&net.IPNet{IP: net.ParseIP("10.9.0.1"), Mask: net.CIDRMask(24, 32)}}, nil
+		}
+		return nil, errors.New("no such interface " + name)
+	}
+	defer func() { ifaceAddrs = orig }()
+
+	src := &EndpointSource{Literals: addrs("203.0.113.5", "10.9.0.5")}
+
+	// No live tunnels → filter is skipped → both literals kept.
+	none := src.ResolveWith(context.Background(), nil)
+	if !none.SameAddrs(EndpointSet{Addrs: addrs("10.9.0.5", "203.0.113.5")}) {
+		t.Fatalf("ResolveWith(nil tunnels) = %v, want both literals kept", none.Addrs)
+	}
+
+	// utun7 live → the tunnel-internal 10.9.0.5 is dropped, the public one stays.
+	live := src.ResolveWith(context.Background(), []string{"utun7"})
+	if !live.SameAddrs(EndpointSet{Addrs: addrs("203.0.113.5")}) {
+		t.Fatalf("ResolveWith([utun7]) = %v, want only the public literal kept", live.Addrs)
 	}
 }

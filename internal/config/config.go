@@ -83,9 +83,9 @@ type Profile struct {
 	// Endpoints are the profile's VPN server addresses (≥1 required).
 	Endpoints []string
 	// IfaceHint is an optional tunnel-interface name prefix (e.g. "wg",
-	// "nordlynx") used only to label the active profile in status/doctor output.
-	// It never gates enforcement — pinning an interface by name goes stale across
-	// reconnects, so the hint is advisory only.
+	// "nordlynx") shown in `vpn list` output to help identify a profile. It never
+	// gates enforcement — pinning an interface by name goes stale across
+	// reconnects, so the hint is advisory / display-only.
 	IfaceHint string
 }
 

@@ -200,7 +200,7 @@ func cmdVPNAdd(args []string) int {
 	fs.Var(&eps, "endpoint", "VPN server host or IP (repeatable)")
 	from := fs.String("from", "", "import endpoints from a WireGuard/OpenVPN/V2Ray config file")
 	hint := fs.String("iface-hint", "", "tunnel interface name prefix (display only)")
-	yes := fs.Bool("yes", false, "skip the confirmation")
+	yes := fs.Bool("yes", false, "don't print the endpoint preview before adding")
 	cfgPath, rest := stripConfigFlag(args)
 	pos := parseInterspersed(fs, rest)
 	if len(pos) < 1 {

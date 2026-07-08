@@ -50,7 +50,9 @@ type Snapshot struct {
 	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
 	BlockedCountries    []string `json:"blockedCountries,omitempty"`
 	PID                 int      `json:"pid,omitempty"`
-	// ActiveProfile is the matched VPN profile name (VPN mode), "" if unknown.
+	// ActiveProfile is the profile the most recent switch window verified onto
+	// (VPN mode); "" until a switch window has completed. Normal guard operation
+	// and switching between already-known profiles do not set it.
 	ActiveProfile string `json:"activeProfile,omitempty"`
 	// Switch describes an open switch window, present only while one is active.
 	Switch *SwitchState `json:"switch,omitempty"`

@@ -123,11 +123,17 @@ func Consume(path string, now time.Time, freshness time.Duration, check OwnerChe
 		return Command{}, false, fmt.Errorf("command: missing op")
 	}
 	skew := now.Sub(c.IssuedAt)
-	if skew < 0 {
-		skew = -skew
+	age := skew
+	if age < 0 {
+		age = -age
 	}
-	if skew > freshness {
-		return Command{}, false, fmt.Errorf("command: stale (issued %s ago, freshness %s)", now.Sub(c.IssuedAt), freshness)
+	if age > freshness {
+		if skew < 0 {
+			// Future-dated command (clock skew / bad writer): report the offset
+			// as a positive duration rather than a confusing negative "ago".
+			return Command{}, false, fmt.Errorf("command: rejected (issued %s in the future, freshness %s)", age, freshness)
+		}
+		return Command{}, false, fmt.Errorf("command: stale (issued %s ago, freshness %s)", age, freshness)
 	}
 	return c, true, nil
 }
