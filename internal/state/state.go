@@ -31,7 +31,7 @@ type Tunnel struct {
 type Snapshot struct {
 	Time        time.Time `json:"time"`
 	Mode        string    `json:"mode"`         // "vpn" | "legacy"
-	Posture     string    `json:"posture"`      // "allow" | "block" | "guard" | "full-block" | "stopped"
+	Posture     string    `json:"posture"`      // "allow" | "block" | "guard" | "full-block" | "switch-window" | "stopped"
 	Blocked     bool      `json:"blocked"`      // egress currently cut
 	IP          string    `json:"ip,omitempty"` // last observed public IP
 	CountryCode string    `json:"countryCode,omitempty"`
@@ -50,6 +50,19 @@ type Snapshot struct {
 	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
 	BlockedCountries    []string `json:"blockedCountries,omitempty"`
 	PID                 int      `json:"pid,omitempty"`
+	// ActiveProfile is the profile the most recent switch window verified onto
+	// (VPN mode); "" until a switch window has completed. Normal guard operation
+	// and switching between already-known profiles do not set it.
+	ActiveProfile string `json:"activeProfile,omitempty"`
+	// Switch describes an open switch window, present only while one is active.
+	Switch *SwitchState `json:"switch,omitempty"`
+}
+
+// SwitchState describes an open switch window for observers (status, menubar).
+type SwitchState struct {
+	Open    bool      `json:"open"`
+	Until   time.Time `json:"until"`
+	Profile string    `json:"profile,omitempty"`
 }
 
 // Write atomically persists s to path as JSON. It creates the parent directory

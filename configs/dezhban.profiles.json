@@ -14,11 +14,14 @@
   },
   "vpn": {
     "enabled": true,
-    "tunnelInterfaces": ["utun4"],
-    "endpoints": ["vpn.example.com", "203.0.113.10"],
-    "autodetect": false,
+    "autodetect": true,
     "autoDiscoverEndpoints": true,
-    "allowPhysicalDNS": false,
+    "allowPhysicalDNS": true,
+    "switchWindow": "2m",
+    "profiles": [
+      { "name": "proton", "endpoints": ["nl-free-01.protonvpn.net"] },
+      { "name": "home-wg", "endpoints": ["203.0.113.7"], "ifaceHint": "wg" }
+    ],
     "endpointRefresh": "5m",
     "tunnelWatch": "1s"
   },

@@ -85,6 +85,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch s.posture {
         case "block", "full-block":
             return ("shield.slash.fill", .systemRed, humanPosture(s))
+        case "switch-window":
+            // The switch window relaxes egress (all outbound, or a proto/port subset
+            // if restricted) — the real IP may be exposed. Never show a green "safe"
+            // shield here; warn so the user notices it's open.
+            return ("exclamationmark.shield.fill", .systemYellow, humanPosture(s))
         default: // allow, guard
             return ("shield.fill", .systemGreen, humanPosture(s))
         }
@@ -96,6 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "block": return "blocking"
         case "guard": return "guarding (VPN)"
         case "full-block": return "full block (VPN)"
+        case "switch-window": return "switch window — egress relaxed (real IP may be exposed)"
         case "stopped": return "stopped"
         default: return s.posture
         }
@@ -130,6 +136,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if let eps = s.endpoints, !eps.isEmpty {
                     addInfo("Endpoints: \(eps.joined(separator: ", "))")
                 }
+                if let p = s.activeProfile, !p.isEmpty {
+                    addInfo("VPN: \(p)")
+                }
+                if let sw = s.switch, sw.open {
+                    addInfo("⏳ Switch window OPEN until \(shortTime(sw.until))")
+                }
             }
             if let bc = s.blockedCountries, !bc.isEmpty {
                 addInfo("Blocking: \(bc.joined(separator: ", "))")
@@ -155,6 +167,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let blocked = s?.blocked ?? false
         addAction("Block now", #selector(blockNow), enabled: isRunning && !blocked)
         addAction("Unblock", #selector(unblockNow), enabled: isRunning && blocked)
+
+        // Switch window: connect a brand-new VPN whose server isn't known yet.
+        if s?.mode == "vpn" {
+            if let sw = s?.switch, sw.open {
+                let left = max(0, sw.until.timeIntervalSinceNow)
+                addAction("Cancel VPN switch (\(mmss(left)) left)", #selector(cancelSwitch),
+                          enabled: isRunning)
+            } else {
+                addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
+            }
+        }
 
         menu.addItem(.separator())
 
@@ -184,6 +207,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func stopService() { runAction(["stop"], "stop the kill switch") }
     @objc private func blockNow() { runAction(["block"], "block") }
     @objc private func unblockNow() { runAction(["unblock"], "unblock") }
+    @objc private func openSwitch() { runAction(["switch", "--no-wait"], "open a switch window") }
+    @objc private func cancelSwitch() { runAction(["switch", "--cancel"], "cancel the switch window") }
 
     /// Runs a privileged CLI action OFF the main thread — `runPrivileged` blocks
     /// through the admin-password prompt and the command's full run, which would
@@ -240,5 +265,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = Int(seconds.rounded())
         if s < 60 { return "\(s)s ago" }
         return "\(s / 60)m ago"
+    }
+
+    private func mmss(_ seconds: TimeInterval) -> String {
+        // Round DOWN so the countdown never shows more time than is actually left
+        // (e.g. 59.6s reads "0:59", not "1:00"). For this switch-window exposure
+        // timer, under-stating the remaining time is the safe direction.
+        let s = max(0, Int(seconds.rounded(.down)))
+        return String(format: "%d:%02d", s / 60, s % 60)
+    }
+
+    private static let shortTimeFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.timeStyle = .short
+        return f
+    }()
+
+    private func shortTime(_ t: Date) -> String {
+        AppDelegate.shortTimeFormatter.string(from: t)
     }
 }

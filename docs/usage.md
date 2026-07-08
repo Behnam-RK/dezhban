@@ -18,6 +18,8 @@ Commands:
   start        Start the installed service                        (root)
   stop         Stop the installed service (removes firewall rules) (root)
   detect-vpn   Print detected VPN tunnel interfaces for config
+  switch       Open a bounded window to connect a brand-new VPN    (root)
+  vpn          Manage VPN profiles and learned endpoints (list/add/remove/import/promote/forget)
   setup        Interactive wizard to create or update the config
   config       Inspect or change the config without hand-editing JSON
   completion   Print a shell completion script (bash|zsh|fish)
@@ -99,6 +101,30 @@ sudo dezhban config edit           # open the config in $EDITOR, re-validated on
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+## Connect & switch VPNs
+
+After a one-time `setup`, run dezhban (or install the service) and connect any
+VPN. Known VPNs need no ceremony; a brand-new one uses a switch window.
+
+```sh
+# Known VPNs — register once, then just connect/switch in the VPN's own app:
+dezhban vpn add proton --endpoint nl-01.protonvpn.net
+dezhban vpn import ~/wg0.conf          # WireGuard .conf / OpenVPN .ovpn / V2Ray JSON
+dezhban vpn list                        # profiles + learned endpoints + active state
+
+# A brand-new VPN whose server dezhban has never seen:
+sudo dezhban switch                     # open a ~2m window; connect it in its app now
+sudo dezhban switch --for 90s --name windscribe   # custom duration + attribution
+sudo dezhban switch --cancel            # close the window early
+dezhban switch --status                 # is a window open?
+sudo dezhban vpn promote <name>         # make a learned endpoint permanent (see: vpn list)
+sudo dezhban vpn forget <name>          # drop a learned endpoint
+```
+
+`switch` writes a root-owned control file the daemon consumes, then narrates the
+window from the state file until it closes. See [modes.md](modes.md#switch-window--connecting-a-brand-new-vpn)
+for the posture and the real-IP-exposure trade-off.
 
 ## Shell completion
 

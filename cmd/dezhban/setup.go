@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/netip"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -16,6 +17,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/vpnimport"
 )
 
 // commonBlocked are the codes offered as checkboxes in the wizard; any others can
@@ -47,6 +49,7 @@ func cmdSetup(args []string) int {
 	// Seed from the current config so setup edits rather than clobbers; fall back
 	// to defaults if none exists or the current file is unreadable/invalid.
 	cfg, err := loadConfig(*cfgPath)
+	configExisted := err == nil
 	if err != nil {
 		d := config.Default()
 		cfg = &d
@@ -91,7 +94,8 @@ func cmdSetup(args []string) int {
 			Value(&otherCountries),
 		huh.NewSelect[string]().Title("Log level").
 			Options(huh.NewOptions("debug", "info", "warn", "error")...).Value(&logLevel),
-		huh.NewConfirm().Title("Fail closed?").Description("Block when the country can't be determined (recommended).").
+		huh.NewConfirm().Title("Fail closed?").
+			Description("Block when the country can't be determined — applies in fallback (non-VPN) mode. In VPN guard mode the standing guard is itself the fail-closed block.").
 			Value(&failClosed),
 		huh.NewConfirm().Title("Require provider quorum?").Description("Only act when a majority of providers agree.").
 			Value(&quorum),
@@ -105,21 +109,79 @@ func cmdSetup(args []string) int {
 
 	// --- VPN branch ---
 	var tunnels []string
+	autoMode := true
 	endpoints := strings.Join(cfg.VPN.Endpoints, ",")
+	profileFiles := ""
+	macOS := runtime.GOOS == "darwin"
+	// Preserve an existing config's choice; only default ON for a brand-new macOS
+	// config (the recommended path). Re-running setup must never silently flip a
+	// user's explicit autoDiscoverEndpoints=false back to true — the confirm below
+	// (macOS only) makes it an explicit, seeded decision.
 	autoDiscover := cfg.VPN.AutoDiscoverEndpoints
+	if macOS && !configExisted {
+		autoDiscover = true
+	}
+	allowPhysicalDNS := cfg.VPN.AllowPhysicalDNS
+	var profiles []config.Profile
 	if vpnEnabled {
-		detected, _ := netdetect.TunnelInterfaces()
-		tunnelField := tunnelSelector(detected, cfg.VPN.TunnelInterfaces, &tunnels)
+		// Recommended path: automatic detection (no pinned interface names that go
+		// stale across reconnects). The old pin-specific-interfaces flow survives
+		// behind an advanced opt-out.
 		if err := runForm(huh.NewForm(huh.NewGroup(
-			tunnelField,
-			huh.NewConfirm().Title("Auto-discover the VPN endpoint?").
-				Description("macOS only: learn the server IP from the live socket (good for rotating-pool VPNs).").
-				Value(&autoDiscover),
-			huh.NewInput().Title("VPN endpoint(s)").
-				Description("Server IP(s)/hostname(s) on the physical link, comma-separated. Leave blank only if auto-discovering.").
-				Value(&endpoints),
+			huh.NewConfirm().Title("Use automatic VPN detection? (recommended)").
+				Description("dezhban finds your tunnel and, on macOS, learns the server address itself — works with any VPN and survives reconnects.").
+				Value(&autoMode),
 		))); err != nil {
 			return formExit(err)
+		}
+		if !autoMode {
+			detected, _ := netdetect.TunnelInterfaces()
+			if err := runForm(huh.NewForm(huh.NewGroup(
+				tunnelSelector(detected, cfg.VPN.TunnelInterfaces, &tunnels),
+			))); err != nil {
+				return formExit(err)
+			}
+		}
+		// Profiles + endpoints + reconnect DNS. On Linux/Windows (no live
+		// discovery) at least one profile/endpoint is the reliable path.
+		epTitle := "VPN endpoint(s)"
+		epDesc := "Server IP(s)/hostname(s), comma-separated. Optional on macOS (auto-discovered); needed elsewhere."
+		if !macOS {
+			epDesc = "Server IP(s)/hostname(s), comma-separated. Required on this platform (no live discovery)."
+		}
+		if err := runForm(huh.NewForm(huh.NewGroup(
+			huh.NewInput().Title("Self-hosted VPN config files").
+				Description("Comma-separated paths to WireGuard/.conf, OpenVPN/.ovpn, or V2Ray JSON to import as profiles (optional).").
+				Value(&profileFiles),
+			huh.NewInput().Title(epTitle).Description(epDesc).Value(&endpoints),
+			huh.NewConfirm().Title("Allow DNS on the physical link while the tunnel is down?").
+				Description("Lets a VPN client re-resolve its server hostname to reconnect. Leaks only DNS-query metadata; your traffic stays blocked. Recommended if any endpoint is a hostname.").
+				Value(&allowPhysicalDNS),
+		))); err != nil {
+			return formExit(err)
+		}
+		// Live endpoint discovery is macOS-only. Make it an explicit, seeded choice
+		// so re-running setup never silently flips an existing preference.
+		if macOS {
+			if err := runForm(huh.NewForm(huh.NewGroup(
+				huh.NewConfirm().Title("Auto-discover the VPN server address? (recommended)").
+					Description("dezhban watches the live tunnel socket to learn the server IP, so you don't pin one that changes. macOS only.").
+					Value(&autoDiscover),
+			))); err != nil {
+				return formExit(err)
+			}
+		}
+		// Import any named config files into profiles (best-effort; a bad file is
+		// reported but doesn't abort the wizard).
+		for _, f := range splitList(profileFiles) {
+			eps, format, ierr := vpnimport.Extract(f)
+			if ierr != nil {
+				fmt.Fprintf(os.Stderr, "  skipping %s: %v\n", f, ierr)
+				continue
+			}
+			name := baseName(f)
+			fmt.Fprintf(os.Stderr, "  imported %s (%s): %s\n", name, format, strings.Join(eps, ", "))
+			profiles = append(profiles, config.Profile{Name: name, Endpoints: eps})
 		}
 	}
 
@@ -128,8 +190,9 @@ func cmdSetup(args []string) int {
 		pollInterval: pollInterval, hysteresis: hysteresis, logLevel: logLevel,
 		failClosed: failClosed, quorum: quorum,
 		countries:  append(checkedCountries, splitList(otherCountries)...),
-		vpnEnabled: vpnEnabled, tunnels: tunnels, endpoints: splitList(endpoints),
-		autoDiscover: autoDiscover,
+		vpnEnabled: vpnEnabled, autoMode: autoMode, tunnels: tunnels,
+		endpoints: splitList(endpoints), profiles: profiles,
+		autoDiscover: autoDiscover && macOS, allowPhysicalDNS: allowPhysicalDNS,
 	})
 
 	config.Normalize(cfg)
@@ -186,8 +249,25 @@ func cmdSetup(args []string) int {
 		return saveError(path, err)
 	}
 	fmt.Printf("saved %s\n", path)
+
+	// --- close the one-time-setup loop: offer to install + start the service ---
+	installNow := true
+	if err := runForm(huh.NewForm(huh.NewGroup(
+		huh.NewConfirm().Title("Install and start dezhban as a system service now?").
+			Description("Runs it at boot and re-enforces on crash (admin password required).").
+			Value(&installNow),
+	))); err != nil {
+		return formExit(err)
+	}
+	if installNow {
+		if code := cmdService("install", []string{"--config", path}); code == 0 {
+			_ = cmdService("start", []string{"--config", path})
+		}
+	} else {
+		fmt.Println("later, enable it with: sudo dezhban install && sudo dezhban start")
+	}
 	if vpnEnabled {
-		fmt.Println("start the guard with: sudo dezhban run   (or install it: sudo dezhban install && sudo dezhban start)")
+		fmt.Println("to connect a brand-new VPN whose server isn't known yet: sudo dezhban switch, then connect it.")
 	}
 	return 0
 }
@@ -227,8 +307,11 @@ type wizardInput struct {
 	failClosed, quorum                 bool
 	countries                          []string
 	vpnEnabled                         bool
+	autoMode                           bool // automatic tunnel detection (no pinned interfaces)
 	tunnels, endpoints                 []string
+	profiles                           []config.Profile
 	autoDiscover                       bool
+	allowPhysicalDNS                   bool
 }
 
 // applyWizard writes collected answers onto cfg. Validation happens after.
@@ -246,9 +329,17 @@ func applyWizard(cfg *config.Config, in wizardInput) {
 
 	cfg.VPN.Enabled = in.vpnEnabled
 	if in.vpnEnabled {
-		cfg.VPN.TunnelInterfaces = in.tunnels
+		if in.autoMode {
+			// Automatic detection: no pinned interface names (Normalize implies
+			// autodetect), plus live discovery where supported.
+			cfg.VPN.TunnelInterfaces = nil
+		} else {
+			cfg.VPN.TunnelInterfaces = in.tunnels
+		}
 		cfg.VPN.Endpoints = in.endpoints
+		cfg.VPN.Profiles = in.profiles
 		cfg.VPN.AutoDiscoverEndpoints = in.autoDiscover
+		cfg.VPN.AllowPhysicalDNS = in.allowPhysicalDNS
 	}
 }
 
@@ -256,7 +347,7 @@ func applyWizard(cfg *config.Config, in wizardInput) {
 // inside a tunnel's own subnet — the #1 lockout cause.
 func endpointLockoutWarning(cfg *config.Config) string {
 	var addrs []netip.Addr
-	for _, ep := range cfg.VPN.Endpoints {
+	for _, ep := range config.EffectiveEndpoints(cfg, nil) {
 		if a, err := netip.ParseAddr(ep); err == nil {
 			addrs = append(addrs, a)
 		}

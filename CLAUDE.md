@@ -58,11 +58,29 @@ The design depends on these invariants (rationale in
 - `Cleanup()` must always be safe to call and is wired to run on shutdown
   (`defer` + `signal.NotifyContext`). A stale block-all rule can lock the user
   out — `panic` removes rules even with no daemon.
-- Default to **fail-closed**: block when the country is undeterminable, but keep
-  the allowlist (loopback + DNS + geo-API egress) open so recovery can fire.
-- The `guard` / `fullblock` / `legacy` mode strings and the state-file JSON keys
-  are stable identifiers (used by `print-rules --mode` and `status --json`) — do
-  not rename them. "Primary" / "fallback" are documentation words only.
+- Default to **fail-closed** *in the fallback/legacy model*: block when the
+  country is undeterminable, but keep the allowlist (loopback + DNS + geo-API
+  egress) open so recovery can fire. **In VPN guard mode this is scoped
+  differently:** the standing guard rule is itself the fail-closed block for
+  physical leaks, so an undeterminable country *holds* the current posture — only
+  a *successful* blocked-country reading escalates to FULL BLOCK. Escalating on
+  an unknown would cut the tunnel's own egress and livelock the reconnect.
+- The `guard` / `fullblock` / `legacy` / `switch` mode strings and the state-file
+  JSON keys (including `switch-window`, `activeProfile`, `switch`) are stable
+  identifiers (used by `print-rules --mode` and `status --json`) — do not rename
+  them. "Primary" / "fallback" are documentation words only.
+- **The switch window is the ONLY sanctioned relaxation of the guard.** It is
+  bounded (default 2m, capped 5m), explicitly root-triggered (via the root-owned
+  command file, never automatic), closes early on a confirmed good exit, and
+  auto-reverts to the prior fail-closed posture on cancel/expiry. Never widen it,
+  never let it open without an explicit command, and never let it outlive its
+  deadline. The daemon owns all `Backend.Apply` calls from the single run-loop
+  goroutine — keep it that way (window timer, command poll, watcher, and geo
+  ticks are all select cases; no other goroutine applies rules).
+- The tunnel-interface set is runtime-mutable (autodetect grows/prunes it), but
+  **explicit `vpn.tunnelInterfaces` are pinned and never auto-pruned**, and the
+  set never narrows to empty. Learned endpoints live in a daemon-owned
+  `learned.json`, never written into the user's config.
 
 ## Conventions
 

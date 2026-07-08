@@ -46,6 +46,11 @@ type VPN struct {
 	// VPN (NordVPN/ProtonVPN/…) needs no endpoint typed by hand. On other
 	// platforms it is ignored and the host falls back to Endpoints.
 	AutoDiscoverEndpoints bool
+	// AllowPhysicalDNS opens plain DNS (port 53) egress on the physical link in
+	// guard and VPN full-block rulesets, so a VPN client can re-resolve its
+	// server hostname and reconnect while the tunnel is down. Off by default:
+	// the residual leak is DNS-query metadata on the physical path.
+	AllowPhysicalDNS bool
 	// EndpointRefresh is how often hostnames are re-resolved and live discovery
 	// re-run. Defaults to 5m.
 	EndpointRefresh time.Duration
@@ -53,6 +58,75 @@ type VPN struct {
 	// a drop cuts the network at once instead of waiting for the next geo poll.
 	// Defaults to 1s.
 	TunnelWatch time.Duration
+	// Profiles are named VPNs whose server endpoints are always kept reachable
+	// (the guard passes the union of all profiles' endpoints), so switching
+	// between known VPNs needs no reconfiguration. See Profile.
+	Profiles []Profile
+	// SwitchWindow is the default duration of a `dezhban switch` window — a
+	// bounded, explicitly-triggered relaxation during which a brand-new VPN's
+	// handshake to an as-yet-unknown server is allowed so its endpoint can be
+	// learned. Defaults to 2m; validated to [10s, Advanced.SwitchWindowMax].
+	SwitchWindow time.Duration
+	// Advanced holds tunables for behaviors that are otherwise baked-in design
+	// decisions. Every field defaults in Normalize; an absent `advanced` block
+	// keeps the recommended defaults. Touch only if you know why.
+	Advanced Advanced
+}
+
+// Profile is a named VPN whose server endpoint(s) dezhban keeps reachable on the
+// physical link. Endpoints use the same grammar as VPN.Endpoints (IP literal or
+// hostname, no port).
+type Profile struct {
+	// Name uniquely identifies the profile (case-insensitive). Charset
+	// [A-Za-z0-9._-], 1–64 chars.
+	Name string
+	// Endpoints are the profile's VPN server addresses (≥1 required).
+	Endpoints []string
+	// IfaceHint is an optional tunnel-interface name prefix (e.g. "wg",
+	// "nordlynx") shown in `vpn list` output to help identify a profile. It never
+	// gates enforcement — pinning an interface by name goes stale across
+	// reconnects, so the hint is advisory / display-only.
+	IfaceHint string
+}
+
+// Advanced holds tunables for VPN guard / switch-window / endpoint-learning
+// behaviors. These are design-decision constants surfaced as knobs; the defaults
+// (applied in Normalize) are the recommended values.
+type Advanced struct {
+	// SwitchWindowMax caps any switch window, including a `--for` override.
+	// Default 5m.
+	SwitchWindowMax time.Duration
+	// CommandFreshness is how recent a control-file command must be to be acted
+	// on (replay/stale-file guard). Default 30s.
+	CommandFreshness time.Duration
+	// WindowDiscoveryInterval is how often endpoint discovery runs while a switch
+	// window is open (fast, to learn the new server quickly). Default 2s.
+	WindowDiscoveryInterval time.Duration
+	// TunnelPruneAfter is how long a dynamically-detected tunnel interface must be
+	// absent from the system before it is dropped from the guard set. Explicit
+	// TunnelInterfaces are never pruned. Default 60s.
+	TunnelPruneAfter time.Duration
+	// LearnedEndpointTTL is how long an unused learned endpoint is retained before
+	// pruning. Default 720h (30 days).
+	LearnedEndpointTTL time.Duration
+	// LearnedMaxPerProfile caps learned endpoints per profile (LRU by last-seen).
+	// Default 16.
+	LearnedMaxPerProfile int
+	// PromoteAfterRefreshes is how many consecutive endpoint refreshes a
+	// discovered address must appear in (while the tunnel is up and the last
+	// verdict was allow) before it is promoted to a learned endpoint during
+	// normal guard. Default 3.
+	PromoteAfterRefreshes int
+	// EndpointWarnThreshold is the union-size at which doctor warns about
+	// rule-list bloat. Default 256.
+	EndpointWarnThreshold int
+	// WindowProtocols / WindowPorts optionally restrict a switch window to the
+	// given protocols ("udp"/"tcp") and destination ports instead of allowing all
+	// outbound. Empty (default) = allow all outbound for the window's duration.
+	// Only useful when every VPN you switch to uses a known fixed port set (e.g.
+	// WireGuard on 51820); leaving it empty is the honest default (see modes.md).
+	WindowProtocols []string
+	WindowPorts     []int
 }
 
 // Config is dezhban's validated runtime configuration.
@@ -95,13 +169,36 @@ type fileConfig struct {
 // fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
 // absent block keep defaults.
 type fileVPN struct {
-	Enabled               bool     `json:"enabled"`
-	TunnelInterfaces      []string `json:"tunnelInterfaces"`
-	Endpoints             []string `json:"endpoints"`
-	Autodetect            bool     `json:"autodetect"`
-	AutoDiscoverEndpoints bool     `json:"autoDiscoverEndpoints"`
-	EndpointRefresh       string   `json:"endpointRefresh"`
-	TunnelWatch           string   `json:"tunnelWatch"`
+	Enabled               bool          `json:"enabled"`
+	TunnelInterfaces      []string      `json:"tunnelInterfaces"`
+	Endpoints             []string      `json:"endpoints"`
+	Autodetect            bool          `json:"autodetect"`
+	AutoDiscoverEndpoints bool          `json:"autoDiscoverEndpoints"`
+	AllowPhysicalDNS      bool          `json:"allowPhysicalDNS"`
+	EndpointRefresh       string        `json:"endpointRefresh"`
+	TunnelWatch           string        `json:"tunnelWatch"`
+	Profiles              []fileProfile `json:"profiles,omitempty"`
+	SwitchWindow          string        `json:"switchWindow,omitempty"`
+	Advanced              *fileAdvanced `json:"advanced,omitempty"`
+}
+
+type fileProfile struct {
+	Name      string   `json:"name"`
+	Endpoints []string `json:"endpoints"`
+	IfaceHint string   `json:"ifaceHint,omitempty"`
+}
+
+type fileAdvanced struct {
+	SwitchWindowMax         string   `json:"switchWindowMax,omitempty"`
+	CommandFreshness        string   `json:"commandFreshness,omitempty"`
+	WindowDiscoveryInterval string   `json:"windowDiscoveryInterval,omitempty"`
+	TunnelPruneAfter        string   `json:"tunnelPruneAfter,omitempty"`
+	LearnedEndpointTTL      string   `json:"learnedEndpointTTL,omitempty"`
+	LearnedMaxPerProfile    int      `json:"learnedMaxPerProfile,omitempty"`
+	PromoteAfterRefreshes   int      `json:"promoteAfterRefreshes,omitempty"`
+	EndpointWarnThreshold   int      `json:"endpointWarnThreshold,omitempty"`
+	WindowProtocols         []string `json:"windowProtocols,omitempty"`
+	WindowPorts             []int    `json:"windowPorts,omitempty"`
 }
 
 // Default returns a Config with safe, security-first defaults.
@@ -189,6 +286,7 @@ func apply(cfg *Config, fc fileConfig) error {
 			Endpoints:             fc.VPN.Endpoints,
 			Autodetect:            fc.VPN.Autodetect,
 			AutoDiscoverEndpoints: fc.VPN.AutoDiscoverEndpoints,
+			AllowPhysicalDNS:      fc.VPN.AllowPhysicalDNS,
 		}
 		if fc.VPN.EndpointRefresh != "" {
 			d, err := time.ParseDuration(fc.VPN.EndpointRefresh)
@@ -204,9 +302,68 @@ func apply(cfg *Config, fc fileConfig) error {
 			}
 			v.TunnelWatch = d
 		}
+		if fc.VPN.SwitchWindow != "" {
+			d, err := time.ParseDuration(fc.VPN.SwitchWindow)
+			if err != nil {
+				return fmt.Errorf("vpn.switchWindow: %w", err)
+			}
+			v.SwitchWindow = d
+		}
+		for _, p := range fc.VPN.Profiles {
+			v.Profiles = append(v.Profiles, Profile{
+				Name:      p.Name,
+				Endpoints: p.Endpoints,
+				IfaceHint: p.IfaceHint,
+			})
+		}
+		if fc.VPN.Advanced != nil {
+			adv, err := applyAdvanced(fc.VPN.Advanced)
+			if err != nil {
+				return err
+			}
+			v.Advanced = adv
+		}
 		cfg.VPN = v
 	}
 	return nil
+}
+
+// applyAdvanced converts the on-disk advanced DTO to the runtime struct. Empty
+// duration strings and zero ints stay zero here; Normalize fills the defaults.
+func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
+	var a Advanced
+	parse := func(name, s string, dst *time.Duration) error {
+		if s == "" {
+			return nil
+		}
+		d, err := time.ParseDuration(s)
+		if err != nil {
+			return fmt.Errorf("vpn.advanced.%s: %w", name, err)
+		}
+		*dst = d
+		return nil
+	}
+	if err := parse("switchWindowMax", fa.SwitchWindowMax, &a.SwitchWindowMax); err != nil {
+		return a, err
+	}
+	if err := parse("commandFreshness", fa.CommandFreshness, &a.CommandFreshness); err != nil {
+		return a, err
+	}
+	if err := parse("windowDiscoveryInterval", fa.WindowDiscoveryInterval, &a.WindowDiscoveryInterval); err != nil {
+		return a, err
+	}
+	if err := parse("tunnelPruneAfter", fa.TunnelPruneAfter, &a.TunnelPruneAfter); err != nil {
+		return a, err
+	}
+	if err := parse("learnedEndpointTTL", fa.LearnedEndpointTTL, &a.LearnedEndpointTTL); err != nil {
+		return a, err
+	}
+	a.LearnedMaxPerProfile = fa.LearnedMaxPerProfile
+	a.PromoteAfterRefreshes = fa.PromoteAfterRefreshes
+	a.EndpointWarnThreshold = fa.EndpointWarnThreshold
+	a.WindowProtocols = fa.WindowProtocols
+	a.WindowPorts = fa.WindowPorts
+	return a, nil
 }
 
 // toFileConfig is the inverse of apply: it projects a validated Config onto the
@@ -233,10 +390,80 @@ func toFileConfig(c *Config) fileConfig {
 			Endpoints:             c.VPN.Endpoints,
 			Autodetect:            c.VPN.Autodetect,
 			AutoDiscoverEndpoints: c.VPN.AutoDiscoverEndpoints,
+			AllowPhysicalDNS:      c.VPN.AllowPhysicalDNS,
 			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
 			TunnelWatch:           c.VPN.TunnelWatch.String(),
+			Profiles:              toFileProfiles(c.VPN.Profiles),
+			SwitchWindow:          durString(c.VPN.SwitchWindow),
+			Advanced:              toFileAdvanced(c.VPN.Advanced),
 		},
 	}
+}
+
+func toFileProfiles(ps []Profile) []fileProfile {
+	if len(ps) == 0 {
+		return nil
+	}
+	out := make([]fileProfile, len(ps))
+	for i, p := range ps {
+		out[i] = fileProfile{Name: p.Name, Endpoints: p.Endpoints, IfaceHint: p.IfaceHint}
+	}
+	return out
+}
+
+// durString serializes a duration, or "" when zero so omitempty drops it.
+func durString(d time.Duration) string {
+	if d <= 0 {
+		return ""
+	}
+	return d.String()
+}
+
+// toFileAdvanced projects the runtime Advanced onto the on-disk DTO, emitting
+// only fields that differ from their Normalize defaults so a config that never
+// set `advanced` round-trips without gaining the block.
+func toFileAdvanced(a Advanced) *fileAdvanced {
+	fa := fileAdvanced{
+		WindowProtocols: a.WindowProtocols,
+		WindowPorts:     a.WindowPorts,
+	}
+	nonDefault := len(a.WindowProtocols) > 0 || len(a.WindowPorts) > 0
+	if a.SwitchWindowMax != defaultSwitchWindowMax {
+		fa.SwitchWindowMax = durString(a.SwitchWindowMax)
+		nonDefault = true
+	}
+	if a.CommandFreshness != defaultCommandFreshness {
+		fa.CommandFreshness = durString(a.CommandFreshness)
+		nonDefault = true
+	}
+	if a.WindowDiscoveryInterval != defaultWindowDiscoveryInterval {
+		fa.WindowDiscoveryInterval = durString(a.WindowDiscoveryInterval)
+		nonDefault = true
+	}
+	if a.TunnelPruneAfter != defaultTunnelPruneAfter {
+		fa.TunnelPruneAfter = durString(a.TunnelPruneAfter)
+		nonDefault = true
+	}
+	if a.LearnedEndpointTTL != defaultLearnedEndpointTTL {
+		fa.LearnedEndpointTTL = durString(a.LearnedEndpointTTL)
+		nonDefault = true
+	}
+	if a.LearnedMaxPerProfile != defaultLearnedMaxPerProfile {
+		fa.LearnedMaxPerProfile = a.LearnedMaxPerProfile
+		nonDefault = true
+	}
+	if a.PromoteAfterRefreshes != defaultPromoteAfterRefreshes {
+		fa.PromoteAfterRefreshes = a.PromoteAfterRefreshes
+		nonDefault = true
+	}
+	if a.EndpointWarnThreshold != defaultEndpointWarnThreshold {
+		fa.EndpointWarnThreshold = a.EndpointWarnThreshold
+		nonDefault = true
+	}
+	if !nonDefault {
+		return nil
+	}
+	return &fa
 }
 
 // Marshal canonicalizes c, validates it, and returns its pretty-printed on-disk
@@ -300,6 +527,21 @@ func Normalize(cfg *Config) {
 	for i, ep := range cfg.VPN.Endpoints {
 		cfg.VPN.Endpoints[i] = strings.TrimSpace(ep)
 	}
+	for pi := range cfg.VPN.Profiles {
+		cfg.VPN.Profiles[pi].Name = strings.TrimSpace(cfg.VPN.Profiles[pi].Name)
+		cfg.VPN.Profiles[pi].IfaceHint = strings.TrimSpace(cfg.VPN.Profiles[pi].IfaceHint)
+		for ei := range cfg.VPN.Profiles[pi].Endpoints {
+			cfg.VPN.Profiles[pi].Endpoints[ei] = strings.TrimSpace(cfg.VPN.Profiles[pi].Endpoints[ei])
+		}
+	}
+	// Autodetect is the recommended default: when the guard is enabled with no
+	// explicit tunnel interfaces, discover them at runtime. This keeps a config
+	// from pinning a stale utunN across reconnects. Explicit TunnelInterfaces
+	// still win. (Strictly compat-safe: a config previously rejected for having
+	// neither now validates; one that already had either is unchanged.)
+	if cfg.VPN.Enabled && len(cfg.VPN.TunnelInterfaces) == 0 {
+		cfg.VPN.Autodetect = true
+	}
 	// VPN guard cadence defaults. Set unconditionally — these are only read in
 	// VPN mode, but defaulting here keeps Validate and the runner simple.
 	if cfg.VPN.EndpointRefresh <= 0 {
@@ -308,7 +550,63 @@ func Normalize(cfg *Config) {
 	if cfg.VPN.TunnelWatch <= 0 {
 		cfg.VPN.TunnelWatch = 1 * time.Second
 	}
+	if cfg.VPN.SwitchWindow <= 0 {
+		cfg.VPN.SwitchWindow = defaultSwitchWindow
+	}
+	normalizeAdvanced(&cfg.VPN.Advanced)
 }
+
+// normalizeAdvanced fills each Advanced knob with its recommended default when
+// unset, so the rest of the code never special-cases a zero value.
+func normalizeAdvanced(a *Advanced) {
+	if a.SwitchWindowMax <= 0 {
+		a.SwitchWindowMax = defaultSwitchWindowMax
+	}
+	if a.CommandFreshness <= 0 {
+		a.CommandFreshness = defaultCommandFreshness
+	}
+	if a.WindowDiscoveryInterval <= 0 {
+		a.WindowDiscoveryInterval = defaultWindowDiscoveryInterval
+	}
+	if a.TunnelPruneAfter <= 0 {
+		a.TunnelPruneAfter = defaultTunnelPruneAfter
+	}
+	if a.LearnedEndpointTTL <= 0 {
+		a.LearnedEndpointTTL = defaultLearnedEndpointTTL
+	}
+	if a.LearnedMaxPerProfile <= 0 {
+		a.LearnedMaxPerProfile = defaultLearnedMaxPerProfile
+	}
+	if a.PromoteAfterRefreshes <= 0 {
+		a.PromoteAfterRefreshes = defaultPromoteAfterRefreshes
+	}
+	if a.EndpointWarnThreshold <= 0 {
+		a.EndpointWarnThreshold = defaultEndpointWarnThreshold
+	}
+	// Canonicalize protocol strings so validation and pf/nft/WFP rendering agree:
+	// the renderers emit these values verbatim, so a stray space or capital (" UDP",
+	// "Tcp") would otherwise leak into the ruleset. Normalize runs before Validate.
+	for i, p := range a.WindowProtocols {
+		a.WindowProtocols[i] = strings.ToLower(strings.TrimSpace(p))
+	}
+}
+
+// Switch-window / learning defaults. These are the recommended values; the
+// vpn.advanced config block overrides any of them.
+const (
+	defaultSwitchWindow            = 2 * time.Minute
+	defaultSwitchWindowMax         = 5 * time.Minute
+	defaultCommandFreshness        = 30 * time.Second
+	defaultWindowDiscoveryInterval = 2 * time.Second
+	defaultTunnelPruneAfter        = 60 * time.Second
+	defaultLearnedEndpointTTL      = 720 * time.Hour // 30 days
+	defaultLearnedMaxPerProfile    = 16
+	defaultPromoteAfterRefreshes   = 3
+	defaultEndpointWarnThreshold   = 256
+
+	minSwitchWindow = 10 * time.Second // floor for switchWindow / --for
+	maxProfileName  = 64
+)
 
 // targetKind classifies an allowlist/endpoint entry.
 type targetKind int
@@ -401,19 +699,17 @@ func (c *Config) Validate() error {
 		}
 	}
 	if c.VPN.Enabled {
-		// Guard mode needs tunnel interface(s): either explicit, or discovered at
-		// runtime by netdetect when Autodetect is set. A wrong/empty set would lock
-		// the host out, so fail loudly here rather than at block time. Endpoints are
-		// always explicit — autodetecting them is unsafe (a wrong endpoint leaks),
-		// so netdetect never supplies them.
-		if len(c.VPN.TunnelInterfaces) == 0 && !c.VPN.Autodetect {
-			return errors.New("vpn.enabled requires vpn.tunnelInterfaces or vpn.autodetect")
-		}
-		// At least one endpoint OR auto-discovery: a rotating-pool VPN may carry no
-		// hand-typed endpoint and rely entirely on live discovery, but a guard with
-		// no way to learn the server address can never let the tunnel reconnect.
-		if len(c.VPN.Endpoints) == 0 && !c.VPN.AutoDiscoverEndpoints {
-			return errors.New("vpn.enabled requires at least one vpn.endpoints entry or vpn.autoDiscoverEndpoints")
+		// Tunnel interfaces are discovered at runtime when Autodetect is set
+		// (Normalize implies it when none are pinned), so there is no
+		// "tunnelInterfaces or autodetect" gate any more — an enabled guard always
+		// has a way to find its tunnel.
+		//
+		// At least one endpoint across the UNION of legacy endpoints, profile
+		// endpoints, and auto-discovery: a guard with no way to learn any server
+		// address can never let the tunnel reconnect. learned.json is deliberately
+		// NOT consulted here — validation must be deterministic offline.
+		if len(c.VPN.Endpoints) == 0 && !c.VPN.AutoDiscoverEndpoints && !anyProfileHasEndpoint(c.VPN.Profiles) {
+			return errors.New("vpn.enabled requires at least one endpoint (vpn.endpoints or vpn.profiles[].endpoints) or vpn.autoDiscoverEndpoints")
 		}
 		// Endpoints may be IP literals or hostnames; hostnames are resolved at
 		// runtime. Reject only entries that are neither.
@@ -422,6 +718,123 @@ func (c *Config) Validate() error {
 				return fmt.Errorf("vpn.endpoints: %q is neither an IP address nor a valid hostname", ep)
 			}
 		}
+		if err := validateProfiles(c.VPN.Profiles); err != nil {
+			return err
+		}
+		// Validate the advanced block first: validateSwitchWindow bounds
+		// vpn.switchWindow against advanced.switchWindowMax, so an invalid max must
+		// surface as its own direct error rather than a confusing derived range.
+		if err := validateAdvanced(c.VPN.Advanced); err != nil {
+			return err
+		}
+		if err := validateSwitchWindow(c.VPN); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+func anyProfileHasEndpoint(ps []Profile) bool {
+	for _, p := range ps {
+		if len(p.Endpoints) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+func validateProfiles(ps []Profile) error {
+	seen := make(map[string]bool, len(ps))
+	for i, p := range ps {
+		if p.Name == "" {
+			return fmt.Errorf("vpn.profiles[%d]: name is required", i)
+		}
+		if !isValidProfileName(p.Name) {
+			return fmt.Errorf("vpn.profiles[%q]: name must be 1-%d chars of [A-Za-z0-9._-]", p.Name, maxProfileName)
+		}
+		key := strings.ToLower(p.Name)
+		if seen[key] {
+			return fmt.Errorf("vpn.profiles: duplicate profile name %q", p.Name)
+		}
+		seen[key] = true
+		if len(p.Endpoints) == 0 {
+			return fmt.Errorf("vpn.profiles[%q]: at least one endpoint is required", p.Name)
+		}
+		for _, ep := range p.Endpoints {
+			if classifyTarget(ep) == kindInvalid {
+				return fmt.Errorf("vpn.profiles[%q]: endpoint %q is neither an IP address nor a valid hostname", p.Name, ep)
+			}
+		}
+	}
+	return nil
+}
+
+func isValidProfileName(name string) bool {
+	if len(name) == 0 || len(name) > maxProfileName {
+		return false
+	}
+	for _, r := range name {
+		ok := (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '.' || r == '_' || r == '-'
+		if !ok {
+			return false
+		}
+	}
+	return true
+}
+
+func validateSwitchWindow(v VPN) error {
+	max := v.Advanced.SwitchWindowMax
+	if max <= 0 {
+		max = defaultSwitchWindowMax
+	}
+	if v.SwitchWindow < minSwitchWindow || v.SwitchWindow > max {
+		return fmt.Errorf("vpn.switchWindow %s out of range [%s, %s]", v.SwitchWindow, minSwitchWindow, max)
+	}
+	return nil
+}
+
+func validateAdvanced(a Advanced) error {
+	if a.SwitchWindowMax > 0 && a.SwitchWindowMax < minSwitchWindow {
+		return fmt.Errorf("vpn.advanced.switchWindowMax %s must be >= %s", a.SwitchWindowMax, minSwitchWindow)
+	}
+	for _, p := range a.WindowProtocols {
+		switch strings.ToLower(strings.TrimSpace(p)) {
+		case "udp", "tcp":
+		default:
+			return fmt.Errorf("vpn.advanced.windowProtocols: %q must be \"udp\" or \"tcp\"", p)
+		}
+	}
+	for _, port := range a.WindowPorts {
+		if port < 1 || port > 65535 {
+			return fmt.Errorf("vpn.advanced.windowPorts: %d out of range 1-65535", port)
+		}
+	}
+	return nil
+}
+
+// EffectiveEndpoints returns the deduplicated union of the flat vpn.endpoints,
+// all profile endpoints, and any extra addresses (e.g. learned entries the
+// caller loaded), preserving first-seen order. It is the single source the
+// runner, print-rules, doctor, and the setup lockout check all use, so a preview
+// can never disagree with what enforcement will open.
+func EffectiveEndpoints(cfg *Config, extra []string) []string {
+	seen := make(map[string]bool)
+	var out []string
+	add := func(items []string) {
+		for _, e := range items {
+			e = strings.TrimSpace(e)
+			if e == "" || seen[e] {
+				continue
+			}
+			seen[e] = true
+			out = append(out, e)
+		}
+	}
+	add(cfg.VPN.Endpoints)
+	for _, p := range cfg.VPN.Profiles {
+		add(p.Endpoints)
+	}
+	add(extra)
+	return out
 }

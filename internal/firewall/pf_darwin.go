@@ -75,8 +75,8 @@ func (b *pfBackend) Apply(p Policy) error {
 	// deny — a total lockout with no guard at all. cmdBlock checks this, but a
 	// programmatic caller (the Phase 3 daemon) must not be able to self-inflict
 	// it, so reject it at the backend seam.
-	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 {
-		return fmt.Errorf("guard mode requires at least one tunnel interface")
+	if p.Mode == ModeGuard && len(p.TunnelIfaces) == 0 && len(p.TunnelGroups) == 0 {
+		return fmt.Errorf("guard mode requires at least one tunnel interface or group")
 	}
 	ruleset := renderRuleset(p)
 	// Validate the generated ruleset (-n parses without loading) BEFORE touching
@@ -214,33 +214,101 @@ func renderRuleset(p Policy) string {
 	// admit that existing connection.
 	b.WriteString("pass quick on lo0 all no state\n")
 	switch p.Mode {
+	case ModeSwitchWindow:
+		if len(p.WindowProtos) == 0 && len(p.WindowPorts) == 0 {
+			// Unrestricted: pass all outbound for the (daemon-bounded) window so
+			// any VPN's handshake to any server can complete.
+			b.WriteString("pass out quick all no state\n")
+		} else {
+			// Restricted: keep the standing passes plus the given proto/port set.
+			if len(p.TunnelIfaces) > 0 {
+				fmt.Fprintf(&b, "pass out quick on { %s } all no state\n", strings.Join(p.TunnelIfaces, " "))
+			}
+			if groups := ifaceGroups(p.TunnelGroups); groups != "" {
+				fmt.Fprintf(&b, "pass out quick on { %s } all no state\n", groups)
+			}
+			if len(p.VPNEndpoints) > 0 {
+				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
+			}
+			b.WriteString(allowPhysicalDNSRule) // resolution during a restricted window
+			if ports := joinPorts(p.WindowPorts); ports != "" {
+				fmt.Fprintf(&b, "pass out quick proto { %s } to any port { %s } no state\n", windowProtoSet(p.WindowProtos), ports)
+			}
+		}
 	case ModeGuard:
 		if len(p.TunnelIfaces) > 0 {
 			fmt.Fprintf(&b, "pass out quick on { %s } all no state\n", strings.Join(p.TunnelIfaces, " "))
 		}
+		if groups := ifaceGroups(p.TunnelGroups); groups != "" {
+			// Interface-group pass: matches every current and future interface of
+			// this class (e.g. every utunN), so a new tunnel is covered with no rule
+			// reload. Safe because tunnels re-encapsulate onto the still-blocked
+			// physical interface.
+			fmt.Fprintf(&b, "pass out quick on { %s } all no state\n", groups)
+		}
 		if len(p.VPNEndpoints) > 0 {
 			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 		}
+		if p.AllowPhysicalDNS {
+			b.WriteString(allowPhysicalDNSRule)
+		}
 	default: // ModeFullBlock
-		if len(p.TunnelIfaces) == 0 {
+		if isVPNPolicy(p) {
+			// VPN full block (including the zero-tunnel standing posture): no
+			// tunnel-iface pass, so no user traffic leaks to a forbidden exit — but
+			// keep the endpoint pass so the encrypted handshake reaches the server
+			// and the tunnel can reconnect (a cut endpoint would livelock recovery).
+			if len(p.VPNEndpoints) > 0 {
+				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
+			}
+			if p.AllowPhysicalDNS {
+				b.WriteString(allowPhysicalDNSRule)
+			}
+		} else {
+			// Legacy direct model: dst-IP allowlist.
 			if len(p.Allowlist.DNS) > 0 {
 				fmt.Fprintf(&b, "pass out quick proto { udp tcp } to { %s } port 53 no state\n", joinAddrs(p.Allowlist.DNS))
 			}
 			if len(p.Allowlist.Hosts) > 0 {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.Allowlist.Hosts))
 			}
-		} else if len(p.VPNEndpoints) > 0 {
-			// VPN full block: no tunnel-iface pass, so no user traffic leaks to a
-			// forbidden exit — but keep the endpoint pass so the encrypted
-			// handshake reaches the server and the tunnel can reconnect (a cut
-			// endpoint would livelock recovery). Identical to ModeGuard minus the
-			// tunnel-iface pass.
-			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 		}
 	}
 	b.WriteString("block drop out all\n")
 	return b.String()
 }
+
+// ifaceGroups renders a space-separated pf interface-group list, or "" if empty.
+func ifaceGroups(groups []string) string {
+	return strings.Join(groups, " ")
+}
+
+// windowProtoSet renders the pf proto set for a restricted switch window,
+// defaulting to udp+tcp when unspecified.
+func windowProtoSet(protos []string) string {
+	if len(protos) == 0 {
+		return "udp tcp"
+	}
+	return strings.Join(protos, " ")
+}
+
+// joinPorts renders ports as a space-separated pf list, or "" if empty.
+func joinPorts(ports []int) string {
+	var b strings.Builder
+	for i, p := range ports {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		fmt.Fprintf(&b, "%d", p)
+	}
+	return b.String()
+}
+
+// allowPhysicalDNSRule is the opt-in plain-DNS pass (vpn.allowPhysicalDNS): a
+// VPN client that re-resolves its server hostname on reconnect can do so while
+// the tunnel is down. `to any` deliberately — resolution must work regardless
+// of which resolver the system uses on reconnect.
+const allowPhysicalDNSRule = "pass out quick proto { udp tcp } to any port 53 no state\n"
 
 func joinAddrs(addrs []netip.Addr) string {
 	parts := make([]string, len(addrs))

@@ -23,9 +23,11 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
+	"github.com/behnam-rk/dezhban/internal/learned"
 	"github.com/behnam-rk/dezhban/internal/logging"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
@@ -66,6 +68,8 @@ Commands:
   start       Start the installed service
   stop        Stop the installed service (removes firewall rules)
   detect-vpn  Print detected VPN tunnel interfaces to help fill the vpn config
+  switch      Open a bounded window to connect a brand-new VPN (learns its server)
+  vpn         Manage VPN profiles and learned endpoints (list/add/remove/import/…)
   setup       Interactive wizard to create or update the config
   config      Inspect or change the config without hand-editing JSON
   completion  Print a shell completion script (bash|zsh|fish)
@@ -118,6 +122,10 @@ func run(args []string) int {
 		return cmdService(cmd, rest)
 	case "detect-vpn":
 		return cmdDetectVPN(rest)
+	case "switch":
+		return cmdSwitch(rest)
+	case "vpn":
+		return cmdVPN(rest)
 	case "setup":
 		return cmdSetup(rest)
 	case "config":
@@ -302,6 +310,64 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 	epSrc := buildEndpointSource(cfg, log, tunnels, true)
 	watcher := buildWatcher(cfg, log, tunnels, ov)
 
+	// Learned-endpoint store: feed persisted endpoints into resolution, and record
+	// new ones the daemon learns. Load failures are non-fatal (learned data is
+	// convenience, not load-bearing).
+	learnedPath := defaultLearnedPath()
+	adv := cfg.VPN.Advanced
+	// Reload the store from disk on every access rather than caching it in memory,
+	// so external maintenance edits (e.g. `dezhban vpn forget`, which rewrites
+	// learned.json) are respected and never clobbered by a stale in-memory copy.
+	// Both closures run only on the single run-loop goroutine, so there is no race.
+	if _, lerr := learned.Load(learnedPath); lerr != nil {
+		log.Warn("learned endpoints store unreadable; starting empty", "err", lerr)
+	}
+	epSrc.Learned = func() []netip.Addr {
+		store, lerr := learned.Load(learnedPath)
+		if lerr != nil {
+			log.Debug("learned endpoints reload failed; skipping this cycle", "err", lerr)
+			return nil
+		}
+		out := make([]netip.Addr, 0, len(store.Addrs()))
+		for _, s := range store.Addrs() {
+			if a, perr := netip.ParseAddr(s); perr == nil {
+				out = append(out, a)
+			}
+		}
+		return out
+	}
+	learnHook := func(profile, iface string, addrs []netip.Addr) {
+		// Reload before mutating so a concurrent forget/edit is merged with, not
+		// overwritten by, the new entry (Load returns a usable empty store on error).
+		store, lerr := learned.Load(learnedPath)
+		if lerr != nil {
+			log.Warn("learned endpoints unreadable before save; recording onto empty store", "err", lerr)
+		}
+		store.Record(profile, iface, "switch-window", addrs, adv.LearnedMaxPerProfile, time.Now())
+		store.Prune(adv.LearnedEndpointTTL, adv.LearnedMaxPerProfile, time.Now())
+		if serr := store.Save(learnedPath); serr != nil {
+			log.Warn("save learned endpoints failed", "err", serr)
+		}
+	}
+
+	// Switch-window control: poll the root-owned command file. Only active when
+	// the guard is on and a switch window is configured.
+	switchEnabled := cfg.VPN.Enabled && cfg.VPN.SwitchWindow > 0
+	commandPath := defaultCommandPath()
+	if switchEnabled {
+		if derr := command.Discard(commandPath); derr != nil {
+			log.Debug("discard stale command file failed", "err", derr)
+		}
+	}
+	pollCommand := func() (command.Command, bool) {
+		c, ok, cerr := command.Consume(commandPath, time.Now(), adv.CommandFreshness, command.RootOwned)
+		if cerr != nil {
+			log.Warn("rejected control command", "err", cerr)
+			return command.Command{}, false
+		}
+		return c, ok
+	}
+
 	// Publish live posture to the state file for out-of-process observers (the
 	// macOS menubar app, `status --json`). Best-effort: a write failure is logged
 	// at debug and never affects enforcement.
@@ -331,15 +397,36 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		Interval:         cfg.PollInterval,
 		VPN:              cfg.VPN.Enabled,
 		Tunnels:          tunnels,
+		Autodetect:       cfg.VPN.Autodetect,
+		AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
 		ResolveEndpoints: func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
-		EndpointRefresh:  cfg.VPN.EndpointRefresh,
-		Watcher:          watcher,
+		ResolveEndpointsWith: func(ctx context.Context, tuns []string) netdetect.EndpointSet {
+			return epSrc.ResolveWith(ctx, tuns)
+		},
+		EndpointRefresh:         cfg.VPN.EndpointRefresh,
+		Watcher:                 watcher,
+		WindowProtos:            adv.WindowProtocols,
+		WindowPorts:             adv.WindowPorts,
+		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
+		SwitchWindow:            cfg.VPN.SwitchWindow,
+		SwitchWindowMax:         adv.SwitchWindowMax,
+		Learn:                   learnHook,
+		PollCommand:             switchPollOrNil(switchEnabled, pollCommand),
 		// Re-resolve the allowlist at each Block so rotated provider IPs stay
 		// reachable for recovery detection while egress is cut.
 		Allowlist:        func() firewall.Allowlist { return buildAllowlist(cfg, log) },
 		Publish:          publish,
 		BlockedCountries: cfg.BlockedCountries,
 	}, nil
+}
+
+// switchPollOrNil returns the command poller only when the switch window is
+// enabled, so the runner leaves the feature off otherwise.
+func switchPollOrNil(enabled bool, poll func() (command.Command, bool)) func() (command.Command, bool) {
+	if !enabled {
+		return nil
+	}
+	return poll
 }
 
 // buildWatcher constructs the tunnel watcher, or returns nil when there is
@@ -350,7 +437,18 @@ func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov run
 	if len(tunnels) == 0 && !cfg.VPN.Autodetect && !ov.tunnelDownSet {
 		return nil
 	}
-	w := &netdetect.Watcher{Tunnels: tunnels, Interval: cfg.VPN.TunnelWatch, Log: log}
+	// In autodetect mode the watcher must sample ALL tunnel-like interfaces, not
+	// just the set known at startup: utunN names change across reconnects, so
+	// pinning the watcher to the start-time list (which liveSample treats as an
+	// allowlist) would blind it to a renumbered or newly-created tunnel and stop
+	// the runner growing/pruning its guarded set. An empty Tunnels makes
+	// liveSample consider every interface; the runner still starts from `tunnels`.
+	// With autodetect off, explicit pins keep their allowlist semantics.
+	watchTunnels := tunnels
+	if cfg.VPN.Autodetect {
+		watchTunnels = nil
+	}
+	w := &netdetect.Watcher{Tunnels: watchTunnels, Interval: cfg.VPN.TunnelWatch, Log: log}
 	if ov.tunnelDownSet {
 		log.Warn("SIMULATION: tunnel will be reported down", "after", ov.tunnelDownAfter)
 		w.Sample = simTunnelSample(ov.tunnelDownAfter)
@@ -518,7 +616,10 @@ func resolveTunnels(cfg *config.Config, log *slog.Logger) []string {
 func buildEndpointSource(cfg *config.Config, log *slog.Logger, tunnels []string, withDiscovery bool) *netdetect.EndpointSource {
 	var literals []netip.Addr
 	var hostnames []string
-	for _, ep := range cfg.VPN.Endpoints {
+	// The union of the flat vpn.endpoints and all profile endpoints: switching
+	// between known VPNs needs no reconfiguration because every profile's server
+	// stays reachable.
+	for _, ep := range config.EffectiveEndpoints(cfg, nil) {
 		ep = strings.TrimSpace(ep)
 		if ep == "" {
 			continue
@@ -741,6 +842,17 @@ func defaultStatePath() string {
 	return "/var/db/dezhban/state.json"
 }
 
+// stateDir is the directory holding the daemon's state/command/learned files.
+func stateDir() string { return filepath.Dir(defaultStatePath()) }
+
+// defaultCommandPath is the root-owned control file the CLI writes and the daemon
+// consumes (switch-window open/cancel).
+func defaultCommandPath() string { return filepath.Join(stateDir(), "command.json") }
+
+// defaultLearnedPath is the daemon-owned store of endpoints learned from switch
+// windows / live discovery.
+func defaultLearnedPath() string { return filepath.Join(stateDir(), "learned.json") }
+
 // cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
 // interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
 // NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
@@ -767,28 +879,19 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println("verify these belong to your VPN — on macOS the OS also creates system utun*")
 	fmt.Println("interfaces; guarding the wrong one would not protect you.")
 	fmt.Println()
-	fmt.Println("add to your config:")
+	fmt.Println()
+	fmt.Println("recommended config (autodetect handles interface renumbering across reconnects):")
 	fmt.Println(`  "vpn": {`)
 	fmt.Println(`    "enabled": true,`)
-	fmt.Printf("    \"tunnelInterfaces\": [%s],\n", quoteJoin(tunnels))
-	fmt.Println(`    "endpoints": ["vpn.example.com"],`)
+	fmt.Println(`    "autodetect": true,`)
 	fmt.Println(`    "autoDiscoverEndpoints": true`)
 	fmt.Println(`  }`)
 	fmt.Println()
-	fmt.Println("endpoints may be IP(s) OR hostname(s) (re-resolved at runtime). For a")
-	fmt.Println("rotating-pool VPN (NordVPN/ProtonVPN/…), set autoDiscoverEndpoints: true and")
-	fmt.Println("dezhban learns the live server IP from the active socket (macOS). Verify with")
-	fmt.Println("`dezhban monitor` or `dezhban doctor --discover` before enabling the guard.")
+	fmt.Println("For commercial VPNs (Nord/Proton/…) that is all you need on macOS. For")
+	fmt.Println("self-hosted VPNs, add a profile:  dezhban vpn add <name> --endpoint <server>")
+	fmt.Println("(or import one:  dezhban vpn import <config-file>). To connect a brand-new")
+	fmt.Println("VPN whose server isn't known yet:  dezhban switch, then connect it.")
 	return 0
-}
-
-// quoteJoin renders a string slice as a JSON array body: "a", "b".
-func quoteJoin(ss []string) string {
-	q := make([]string, len(ss))
-	for i, s := range ss {
-		q[i] = `"` + s + `"`
-	}
-	return strings.Join(q, ", ")
 }
 
 // cmdValidate loads and validates a config without running anything or touching
@@ -948,28 +1051,54 @@ func cmdMonitor(args []string) int {
 // source print-rules renders from. NOTE: keep in sync with runner.runVPN; a
 // future refactor should extract a shared constructor in the firewall package.
 func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
-	al := buildAllowlist(cfg, log)
 	tunnels := resolveTunnels(cfg, log)
+	// The physical dst-IP allowlist belongs only to the legacy (non-VPN) model.
+	// The runner's VPN guard/full-block (runner.vpnPolicies) never sets it — a VPN
+	// posture opens endpoints, not a physical allowlist. Populate it only for
+	// non-VPN configs; otherwise a VPN config with no static tunnels/endpoints
+	// (autoDiscover-only) would fail isVPNPolicy and render phantom physical egress.
+	vpnAllowlist := firewall.Allowlist{}
+	if !cfg.VPN.Enabled {
+		vpnAllowlist = buildAllowlist(cfg, log)
+	}
 	switch mode {
 	case "guard":
+		// Mirror the runner's zero-tunnel standing posture (runner.vpnPolicies):
+		// applying ModeGuard with no tunnel interfaces is rejected at the backend
+		// seam as a total-lockout guard, so the daemon falls back to the
+		// endpoints-open FULL BLOCK shape. print-rules must render the same thing.
+		guardMode := firewall.ModeGuard
+		if len(tunnels) == 0 {
+			guardMode = firewall.ModeFullBlock
+		}
 		return firewall.Policy{
-			Mode:         firewall.ModeGuard,
-			Allowlist:    al,
-			TunnelIfaces: tunnels,
-			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
+			Mode:             guardMode,
+			Allowlist:        vpnAllowlist,
+			TunnelIfaces:     tunnels,
+			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
+			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
 		}, nil
 	case "fullblock":
 		return firewall.Policy{
-			Mode:         firewall.ModeFullBlock,
-			Allowlist:    al,
+			Mode:             firewall.ModeFullBlock,
+			Allowlist:        vpnAllowlist,
+			TunnelIfaces:     tunnels,
+			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
+			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
+		}, nil
+	case "switch":
+		return firewall.Policy{
+			Mode:         firewall.ModeSwitchWindow,
 			TunnelIfaces: tunnels,
 			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
+			WindowProtos: cfg.VPN.Advanced.WindowProtocols,
+			WindowPorts:  cfg.VPN.Advanced.WindowPorts,
 		}, nil
 	case "legacy":
 		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.
-		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: al}, nil
+		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: buildAllowlist(cfg, log)}, nil
 	default:
-		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, legacy)", mode)
+		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, switch, legacy)", mode)
 	}
 }
 
@@ -980,7 +1109,7 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 func cmdPrintRules(args []string) int {
 	fs := flag.NewFlagSet("print-rules", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
-	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, or legacy")
+	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, switch, or legacy")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)
@@ -1143,7 +1272,24 @@ func cmdStatus(args []string) int {
 			tunnels = []string{"(autodetect)"}
 		}
 		fmt.Println("vpn tunnels:     ", strings.Join(tunnels, ", "))
-		fmt.Println("vpn endpoints:   ", strings.Join(cfg.VPN.Endpoints, ", "))
+		fmt.Println("vpn endpoints:   ", strings.Join(config.EffectiveEndpoints(cfg, nil), ", "))
+		if len(cfg.VPN.Profiles) > 0 {
+			names := make([]string, len(cfg.VPN.Profiles))
+			for i, p := range cfg.VPN.Profiles {
+				names[i] = p.Name
+			}
+			fmt.Println("vpn profiles:    ", strings.Join(names, ", "))
+		}
+		fmt.Println("switch window:   ", cfg.VPN.SwitchWindow)
+		// Live switch-window / active-profile state from the daemon's snapshot.
+		if snap, err := state.Read(defaultStatePath()); err == nil {
+			if snap.Switch != nil && snap.Switch.Open {
+				fmt.Printf("switch state:     OPEN until %s\n", snap.Switch.Until.Format(time.Kitchen))
+			}
+			if snap.ActiveProfile != "" {
+				fmt.Println("active profile:  ", snap.ActiveProfile)
+			}
+		}
 	}
 
 	if fw, err := firewall.New(); err != nil {

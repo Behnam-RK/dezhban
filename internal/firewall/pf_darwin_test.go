@@ -138,3 +138,105 @@ func TestRenderRulesetVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	}
 	assertDefaultDenyLast(t, rs)
 }
+
+func TestRenderRulesetAllowPhysicalDNS(t *testing.T) {
+	const dnsRule = "pass out quick proto { udp tcp } to any port 53 no state"
+
+	// Guard + AllowPhysicalDNS: the DNS pass appears.
+	guard := renderRuleset(Policy{
+		Mode:             ModeGuard,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(guard, dnsRule) {
+		t.Errorf("guard+allowPhysicalDNS must emit the DNS pass:\n%s", guard)
+	}
+	assertDefaultDenyLast(t, guard)
+
+	// VPN full block + AllowPhysicalDNS: the DNS pass appears (reconnect aid).
+	fb := renderRuleset(Policy{
+		Mode:             ModeFullBlock,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(fb, dnsRule) {
+		t.Errorf("vpn-full-block+allowPhysicalDNS must emit the DNS pass:\n%s", fb)
+	}
+
+	// Off by default: no DNS pass.
+	off := renderRuleset(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "port 53") {
+		t.Errorf("guard without allowPhysicalDNS must NOT emit a DNS pass:\n%s", off)
+	}
+}
+
+func TestRenderRulesetSwitchWindowUnrestricted(t *testing.T) {
+	rs := renderRuleset(Policy{Mode: ModeSwitchWindow})
+	if !strings.Contains(rs, "pass out quick all no state") {
+		t.Errorf("unrestricted switch window must pass all outbound:\n%s", rs)
+	}
+	assertDefaultDenyLast(t, rs) // block-all still last so the anchor is never empty
+}
+
+func TestRenderRulesetSwitchWindowRestricted(t *testing.T) {
+	rs := renderRuleset(Policy{
+		Mode:         ModeSwitchWindow,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+		WindowProtos: []string{"udp"},
+		WindowPorts:  []int{51820},
+	})
+	for _, w := range []string{
+		"pass out quick to { 203.0.113.5 }",
+		"port 53",
+		"proto { udp } to any port { 51820 }",
+	} {
+		if !strings.Contains(rs, w) {
+			t.Errorf("restricted switch window missing %q\n--- got ---\n%s", w, rs)
+		}
+	}
+	if strings.Contains(rs, "pass out quick all no state") {
+		t.Errorf("restricted switch window must NOT pass all outbound:\n%s", rs)
+	}
+	assertDefaultDenyLast(t, rs)
+}
+
+func TestRenderRulesetTunnelGroups(t *testing.T) {
+	rs := renderRuleset(Policy{Mode: ModeGuard, TunnelGroups: []string{"utun"}})
+	if !strings.Contains(rs, "pass out quick on { utun } all no state") {
+		t.Errorf("guard with tunnel group must pass the group:\n%s", rs)
+	}
+	assertDefaultDenyLast(t, rs)
+}
+
+func TestRenderRulesetZeroTunnelStandingPosture(t *testing.T) {
+	// FULL BLOCK with endpoints but NO tunnel ifaces (daemon-before-VPN standing
+	// posture): endpoints stay open so a known VPN can handshake, everything else
+	// blocked. Must NOT fall through to the legacy dst-IP allowlist path.
+	rs := renderRuleset(Policy{
+		Mode:         ModeFullBlock,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+		Allowlist:    Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
+	})
+	if !strings.Contains(rs, "pass out quick to { 203.0.113.5 }") {
+		t.Errorf("zero-tunnel standing posture must keep endpoints open:\n%s", rs)
+	}
+	if strings.Contains(rs, "1.1.1.1") {
+		t.Errorf("zero-tunnel standing posture must NOT emit the legacy allowlist:\n%s", rs)
+	}
+	assertDefaultDenyLast(t, rs)
+}
+
+func TestApplyGuardAcceptsTunnelGroupOnly(t *testing.T) {
+	// A guard with only a tunnel group (no explicit iface) is valid — the group
+	// pass covers current and future tunnels.
+	rs := renderRuleset(Policy{Mode: ModeGuard, TunnelGroups: []string{"utun"}})
+	if !strings.Contains(rs, "block drop out all") {
+		t.Errorf("group-only guard should still render:\n%s", rs)
+	}
+}

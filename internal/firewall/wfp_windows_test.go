@@ -123,3 +123,72 @@ func TestApplyWfpGuardRequiresTunnelIface(t *testing.T) {
 		t.Fatal("Apply(guard, no tunnel ifaces) = nil, want error (would be a total lockout)")
 	}
 }
+
+func TestRenderBlockScriptAllowPhysicalDNS(t *testing.T) {
+	guard := renderBlockScript(Policy{
+		Mode:             ModeGuard,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	for _, w := range []string{"-Protocol UDP -RemotePort 53", "-Protocol TCP -RemotePort 53"} {
+		if !strings.Contains(guard, w) {
+			t.Errorf("guard+allowPhysicalDNS must emit %q:\n%s", w, guard)
+		}
+	}
+
+	fb := renderBlockScript(Policy{
+		Mode:             ModeFullBlock,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(fb, "-Protocol UDP -RemotePort 53") {
+		t.Errorf("vpn-full-block+allowPhysicalDNS must emit the DNS allow:\n%s", fb)
+	}
+
+	off := renderBlockScript(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "RemotePort 53") {
+		t.Errorf("guard without allowPhysicalDNS must NOT emit a DNS allow:\n%s", off)
+	}
+}
+
+func TestRenderBlockScriptSwitchWindowUnrestricted(t *testing.T) {
+	s := renderBlockScript(Policy{Mode: ModeSwitchWindow})
+	if !strings.Contains(s, "-DefaultOutboundAction Allow") {
+		t.Errorf("unrestricted switch window must set the profile default to Allow:\n%s", s)
+	}
+}
+
+func TestRenderBlockScriptSwitchWindowRestricted(t *testing.T) {
+	s := renderBlockScript(Policy{
+		Mode:         ModeSwitchWindow,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+		WindowProtos: []string{"udp"},
+		WindowPorts:  []int{51820},
+	})
+	if !strings.Contains(s, "-DefaultOutboundAction Block") {
+		t.Errorf("restricted switch window keeps the default Block:\n%s", s)
+	}
+	if !strings.Contains(s, "-Protocol UDP -RemotePort 51820") {
+		t.Errorf("restricted switch window missing port allow:\n%s", s)
+	}
+}
+
+func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {
+	s := renderBlockScript(Policy{
+		Mode:         ModeFullBlock,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+		Allowlist:    Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
+	})
+	if !strings.Contains(s, "203.0.113.5") {
+		t.Errorf("zero-tunnel standing posture must keep endpoints:\n%s", s)
+	}
+	if strings.Contains(s, "1.1.1.1") {
+		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", s)
+	}
+}

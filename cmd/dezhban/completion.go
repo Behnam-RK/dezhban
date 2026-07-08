@@ -50,7 +50,7 @@ _dezhban() {
         prev="${COMP_WORDS[COMP_CWORD-1]}"
     }
     case "$prev" in
-        --mode) COMPREPLY=( $(compgen -W "guard fullblock legacy" -- "$cur") ); return ;;
+        --mode) COMPREPLY=( $(compgen -W "guard fullblock switch legacy" -- "$cur") ); return ;;
         --config) COMPREPLY=( $(compgen -f -- "$cur") ); return ;;
         completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;
         config) COMPREPLY=( $(compgen -W "path show get set edit" -- "$cur") ); return ;;
@@ -76,7 +76,7 @@ _dezhban() {
         return
     fi
     case "${words[CURRENT-1]}" in
-        --mode) compadd -- guard fullblock legacy; return ;;
+        --mode) compadd -- guard fullblock switch legacy; return ;;
         --config) _files; return ;;
         completion) compadd -- bash zsh fish; return ;;
         config) compadd -- path show get set edit; return ;;
@@ -91,7 +91,7 @@ complete -c dezhban -f
 # subcommands (only as the first argument)
 complete -c dezhban -n '__fish_use_subcommand' -a '` + completionCommands + `'
 # flag values
-complete -c dezhban -l mode -x -a 'guard fullblock legacy'
+complete -c dezhban -l mode -x -a 'guard fullblock switch legacy'
 complete -c dezhban -l config -r
 complete -c dezhban -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 complete -c dezhban -n '__fish_seen_subcommand_from config' -a 'path show get set edit'

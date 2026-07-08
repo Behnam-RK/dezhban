@@ -53,7 +53,11 @@ type EndpointSource struct {
 	Tunnels   []string
 	Resolver  LookupNetIPer                // nil → net.DefaultResolver
 	Discover  func() ([]netip.Addr, error) // nil → no live discovery
-	Log       *slog.Logger
+	// Learned returns endpoints the daemon has persisted from prior switch
+	// windows / discovery (internal/learned). nil → none. Trust tier sits between
+	// re-resolved hostnames and live discovery.
+	Learned func() []netip.Addr
+	Log     *slog.Logger
 }
 
 // Resolve computes the current endpoint set as the union of literals, resolved
@@ -62,6 +66,14 @@ type EndpointSource struct {
 // whatever resolved stands. The caller decides what an empty result means (the
 // runner refuses to start, or keeps the last-known-good set).
 func (s *EndpointSource) Resolve(ctx context.Context) EndpointSet {
+	return s.ResolveWith(ctx, s.Tunnels)
+}
+
+// ResolveWith is Resolve but with an explicit tunnel set for the
+// tunnel-internal drop filter, so a caller with a live (dynamically-detected)
+// tunnel set can keep the filter tracking reality instead of the frozen
+// s.Tunnels. Resolve delegates here with the configured set.
+func (s *EndpointSource) ResolveWith(ctx context.Context, tunnels []string) EndpointSet {
 	set := EndpointSet{Sources: map[netip.Addr]string{}}
 	add := func(a netip.Addr, src string) {
 		a = a.Unmap()
@@ -96,6 +108,12 @@ func (s *EndpointSource) Resolve(ctx context.Context) EndpointSet {
 		}
 	}
 
+	if s.Learned != nil {
+		for _, ip := range s.Learned() {
+			add(ip, "learned")
+		}
+	}
+
 	if s.Discover != nil {
 		ips, err := s.Discover()
 		if err != nil {
@@ -110,8 +128,8 @@ func (s *EndpointSource) Resolve(ctx context.Context) EndpointSet {
 	// A tunnel-internal endpoint can never serve as the physical-side handshake
 	// target — opening it punches a useless hole and the tunnel can't recover
 	// through itself. Drop any such address before it reaches the guard.
-	if len(s.Tunnels) > 0 && len(set.Addrs) > 0 {
-		if bad, err := CheckEndpointRouting(set.Addrs, s.Tunnels); err == nil && len(bad) > 0 {
+	if len(tunnels) > 0 && len(set.Addrs) > 0 {
+		if bad, err := CheckEndpointRouting(set.Addrs, tunnels); err == nil && len(bad) > 0 {
 			drop := make(map[netip.Addr]bool, len(bad))
 			for _, b := range bad {
 				drop[b.Endpoint] = true

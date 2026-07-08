@@ -164,3 +164,79 @@ func TestApplyNftGuardRequiresTunnelIface(t *testing.T) {
 		t.Fatal("Apply(guard, no tunnel ifaces) = nil, want error (would be a total lockout)")
 	}
 }
+
+func TestRenderNftAllowPhysicalDNS(t *testing.T) {
+	guard := renderNftRuleset(Policy{
+		Mode:             ModeGuard,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	for _, w := range []string{"udp dport 53 accept", "tcp dport 53 accept"} {
+		if !strings.Contains(guard, w) {
+			t.Errorf("guard+allowPhysicalDNS must emit %q:\n%s", w, guard)
+		}
+	}
+
+	fb := renderNftRuleset(Policy{
+		Mode:             ModeFullBlock,
+		TunnelIfaces:     []string{"utun4"},
+		VPNEndpoints:     []netip.Addr{mustAddr(t, "203.0.113.5")},
+		AllowPhysicalDNS: true,
+	})
+	if !strings.Contains(fb, "udp dport 53 accept") {
+		t.Errorf("vpn-full-block+allowPhysicalDNS must emit the DNS accept:\n%s", fb)
+	}
+
+	off := renderNftRuleset(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "dport 53") {
+		t.Errorf("guard without allowPhysicalDNS must NOT emit a DNS accept:\n%s", off)
+	}
+}
+
+func TestRenderNftSwitchWindowUnrestricted(t *testing.T) {
+	rs := renderNftRuleset(Policy{Mode: ModeSwitchWindow})
+	if !strings.Contains(rs, "add rule inet dezhban output accept") {
+		t.Errorf("unrestricted switch window must accept all outbound:\n%s", rs)
+	}
+}
+
+func TestRenderNftSwitchWindowRestricted(t *testing.T) {
+	rs := renderNftRuleset(Policy{
+		Mode:         ModeSwitchWindow,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+		WindowProtos: []string{"udp"},
+		WindowPorts:  []int{51820},
+	})
+	if !strings.Contains(rs, "udp dport 51820 accept") {
+		t.Errorf("restricted switch window missing port accept:\n%s", rs)
+	}
+	if strings.Contains(rs, "output accept\n") {
+		t.Errorf("restricted switch window must not accept all outbound:\n%s", rs)
+	}
+}
+
+func TestRenderNftTunnelGroups(t *testing.T) {
+	rs := renderNftRuleset(Policy{Mode: ModeGuard, TunnelGroups: []string{"utun"}})
+	if !strings.Contains(rs, `oifname "utun*" accept`) {
+		t.Errorf("guard with tunnel group must emit wildcard oifname:\n%s", rs)
+	}
+}
+
+func TestRenderNftZeroTunnelStandingPosture(t *testing.T) {
+	rs := renderNftRuleset(Policy{
+		Mode:         ModeFullBlock,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+		Allowlist:    Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
+	})
+	if !strings.Contains(rs, "203.0.113.5") {
+		t.Errorf("zero-tunnel standing posture must keep endpoints:\n%s", rs)
+	}
+	if strings.Contains(rs, "1.1.1.1") {
+		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", rs)
+	}
+}

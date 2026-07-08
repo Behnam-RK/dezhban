@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
@@ -70,9 +71,12 @@ type fakeBackend struct {
 
 func (b *fakeBackend) Apply(p firewall.Policy) error {
 	b.policies = append(b.policies, p)
-	if p.Mode == firewall.ModeGuard {
+	switch p.Mode {
+	case firewall.ModeGuard:
 		b.calls = append(b.calls, "apply-guard")
-	} else {
+	case firewall.ModeSwitchWindow:
+		b.calls = append(b.calls, "apply-switch")
+	default:
 		b.calls = append(b.calls, "apply-fullblock")
 	}
 	return b.applyErr
@@ -122,17 +126,19 @@ func equal(a, b []string) bool {
 
 func TestPostureName(t *testing.T) {
 	cases := []struct {
-		vpn, blocked bool
-		want         string
+		vpn, blocked, window bool
+		want                 string
 	}{
-		{false, false, "allow"},
-		{false, true, "block"},
-		{true, false, "guard"},
-		{true, true, "full-block"},
+		{false, false, false, "allow"},
+		{false, true, false, "block"},
+		{true, false, false, "guard"},
+		{true, true, false, "full-block"},
+		{true, false, true, "switch-window"},
+		{true, true, true, "switch-window"}, // window overrides
 	}
 	for _, c := range cases {
-		if got := postureName(c.vpn, c.blocked); got != c.want {
-			t.Errorf("postureName(vpn=%v, blocked=%v) = %q, want %q", c.vpn, c.blocked, got, c.want)
+		if got := postureName(c.vpn, c.blocked, c.window); got != c.want {
+			t.Errorf("postureName(vpn=%v, blocked=%v, window=%v) = %q, want %q", c.vpn, c.blocked, c.window, got, c.want)
 		}
 	}
 }
@@ -447,6 +453,76 @@ func TestVPNProbeRespectsHysteresis(t *testing.T) {
 	}
 }
 
+// In VPN guard mode an undeterminable country (lookup error) must HOLD the
+// current posture, never escalate GUARD→FULL BLOCK. The standing guard is
+// already the fail-closed block for physical leaks; escalating on an unknown
+// would cut the tunnel's own egress and livelock the reconnect. hysteresis=1
+// so that, without the hold, a single error would immediately FULL BLOCK.
+func TestVPNHoldsGuardOnLookupError(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := Options{
+		Monitor: &fakeMonitor{cancel: cancel, results: []monitor.Result{
+			failResult(), // undeterminable → hold guard (must NOT full block)
+			failResult(), // still undeterminable → still guard
+		}},
+		Decider:   decision.New([]string{"IR"}, true, 1), // failClosed, hysteresis 1
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		VPN:       true,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"apply-guard", "cleanup"} // startup guard held throughout
+	if !equal(be.calls, want) {
+		t.Fatalf("calls = %v, want %v (a lookup error must not FULL BLOCK in guard mode)", be.calls, want)
+	}
+}
+
+// While already in FULL BLOCK, a lookup error during the recovery probe must
+// NOT lift the block: recovery requires a *successful* Allow reading. The probe
+// still lifts+re-cuts each tick (recovery keeps trying), but an error holds the
+// block rather than recovering.
+func TestVPNHoldsFullBlockOnProbeError(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithCancel(context.Background())
+	o := Options{
+		Monitor: &fakeMonitor{cancel: cancel, results: []monitor.Result{
+			reading("IR"), // enter FULL BLOCK
+			failResult(),  // probe error → hold block
+			failResult(),  // probe error → hold block
+		}},
+		Decider:   decision.New([]string{"IR"}, true, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		VPN:       true,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	// startup guard; IR → full block; each blocked tick probes (lift+re-cut)
+	// but an error never restores guard.
+	want := []string{
+		"apply-guard",     // startup guard
+		"apply-fullblock", // IR → FULL BLOCK
+		"apply-guard",     // probe 1 lift
+		"apply-fullblock", // probe 1 re-cut (error → hold block)
+		"apply-guard",     // probe 2 lift
+		"apply-fullblock", // probe 2 re-cut (error → hold block)
+		"cleanup",
+	}
+	if !equal(be.calls, want) {
+		t.Fatalf("calls = %v, want %v (a probe error must not lift FULL BLOCK)", be.calls, want)
+	}
+}
+
 func TestVPNStartupGuardFailureAborts(t *testing.T) {
 	be := &failingGuardBackend{}
 	o := Options{
@@ -707,4 +783,323 @@ func TestReconcileEndpoints(t *testing.T) {
 	if _, ch := reconcileEndpoints(addrsOf("1.1.1.1", "2.2.2.2"), set("1.1.1.1"), true); ch {
 		t.Error("blocked shrink: want no change (must not drop an endpoint while blocked)")
 	}
+}
+
+func TestReconcileTunnels(t *testing.T) {
+	pinned := map[string]bool{"utun4": true}
+	// Growth: a new observed tunnel is added.
+	if got, ch := reconcileTunnels([]string{"utun4"}, []string{"utun4", "utun6"}, pinned); !ch ||
+		!sameStrings(got, []string{"utun4", "utun6"}) {
+		t.Errorf("growth: got %v changed=%v", got, ch)
+	}
+	// Pinned name is kept even when not observed; a non-pinned one is pruned.
+	if got, ch := reconcileTunnels([]string{"utun4", "utun6"}, []string{}, pinned); !ch ||
+		!sameStrings(got, []string{"utun4"}) {
+		t.Errorf("prune non-pinned: got %v changed=%v", got, ch)
+	}
+	// Never narrow to empty (no pinned, nothing observed → keep current).
+	if got, ch := reconcileTunnels([]string{"utun6"}, []string{}, nil); ch ||
+		!sameStrings(got, []string{"utun6"}) {
+		t.Errorf("never empty: got %v changed=%v", got, ch)
+	}
+	// No change when the set is identical.
+	if _, ch := reconcileTunnels([]string{"utun4"}, []string{"utun4"}, pinned); ch {
+		t.Error("identical set reported changed")
+	}
+}
+
+// growWatcher emits {utun4} then {utun4,utun6} (a set-growth event).
+func growWatcher() *netdetect.Watcher {
+	states := []netdetect.TunnelState{
+		{Up: true, Name: "utun4", Names: []string{"utun4"}},
+		{Up: true, Name: "utun4", Names: []string{"utun4", "utun6"}},
+	}
+	i := 0
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			st := states[i]
+			if i < len(states)-1 {
+				i++
+			}
+			return st
+		},
+	}
+}
+
+// A newly-appeared tunnel (autodetect) grows the set and re-applies the guard
+// with the new interface in the pass list.
+func TestVPNNewTunnelReappliesGuard(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:    steadyMonitor{cc: "US"},
+		Decider:    decision.New([]string{"IR"}, true, 1),
+		Backend:    be,
+		Log:        discardLog(),
+		Interval:   time.Hour, // suppress geoTick during the test
+		VPN:        true,
+		Autodetect: true,
+		Tunnels:    []string{"utun4"},
+		Endpoints:  []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:    growWatcher(),
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	// Some applied guard policy must carry utun6 (the grown interface).
+	found := false
+	for _, p := range be.policies {
+		if p.Mode == firewall.ModeGuard {
+			for _, ifc := range p.TunnelIfaces {
+				if ifc == "utun6" {
+					found = true
+				}
+			}
+		}
+	}
+	if !found {
+		t.Errorf("expected a guard policy re-applied with utun6; policies=%d", len(be.policies))
+	}
+}
+
+// With autodetect and zero tunnels up, the standing posture is the endpoints-open
+// FULL BLOCK shape (not a ModeGuard the backend would reject), and the geo step
+// is suppressed (no tunnel to observe through).
+func TestVPNZeroTunnelStandingPosture(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:    steadyMonitor{cc: "US"},
+		Decider:    decision.New([]string{"IR"}, true, 1),
+		Backend:    be,
+		Log:        discardLog(),
+		Interval:   time.Millisecond, // geoTick would fire fast — must be suppressed
+		VPN:        true,
+		Autodetect: true,
+		Tunnels:    nil, // no tunnels
+		Endpoints:  []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if len(be.policies) == 0 || be.policies[0].Mode != firewall.ModeFullBlock {
+		t.Fatalf("startup standing posture = %v, want ModeFullBlock endpoints-open shape", be.policies)
+	}
+	if len(be.policies[0].VPNEndpoints) == 0 {
+		t.Error("standing posture must keep endpoints open")
+	}
+	// Geo suppressed with zero tunnels: no guard should ever be applied.
+	for _, c := range be.calls {
+		if c == "apply-guard" {
+			t.Errorf("zero-tunnel posture must not apply ModeGuard; calls=%v", be.calls)
+		}
+	}
+}
+
+// scriptedCommands returns a PollCommand that yields each command once, in order.
+func scriptedCommands(cmds ...command.Command) func() (command.Command, bool) {
+	i := 0
+	return func() (command.Command, bool) {
+		if i >= len(cmds) {
+			return command.Command{}, false
+		}
+		c := cmds[i]
+		i++
+		return c, true
+	}
+}
+
+// A switch window opens on command and, on cancel, reverts to the prior posture
+// (GUARD) immediately. (Expiry uses the same closeWindowRevert path but the
+// minimum window is 10s — too slow to assert in a unit test, so cancel exercises
+// the revert.)
+func TestSwitchWindowCancelRevertsToGuard(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:         steadyMonitor{cc: "US"},
+		Decider:         decision.New([]string{"IR"}, true, 1),
+		Backend:         be,
+		Log:             discardLog(),
+		Interval:        time.Hour,
+		VPN:             true,
+		Tunnels:         []string{"utun4"},
+		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		SwitchWindow:    20 * time.Second,
+		SwitchWindowMax: time.Minute,
+		CommandPoll:     5 * time.Millisecond,
+		PollCommand: scriptedCommands(
+			command.Command{Op: command.OpOpenSwitchWindow},
+			command.Command{Op: command.OpCancelSwitchWindow},
+		),
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(be.calls, "apply-switch") {
+		t.Fatalf("expected apply-switch (window open); calls=%v", be.calls)
+	}
+	// A guard apply must appear AFTER the switch apply (the cancel revert).
+	if !applyGuardAfterSwitch(be.calls) {
+		t.Fatalf("expected guard restored after window cancel; calls=%v", be.calls)
+	}
+}
+
+// A switch window with a verified allowed exit closes early to GUARD and learns
+// the discovered endpoint.
+func TestSwitchWindowEarlyCloseLearnsEndpoint(t *testing.T) {
+	be := &fakeBackend{}
+	learned := map[string][]netip.Addr{}
+	var snaps []state.Snapshot
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	discovered := netip.MustParseAddr("198.51.100.9")
+	o := Options{
+		Publish:                 func(s state.Snapshot) { snaps = append(snaps, s) },
+		Monitor:                 steadyMonitor{cc: "US"}, // exit verified allowed
+		Decider:                 decision.New([]string{"IR"}, true, 1),
+		Backend:                 be,
+		Log:                     discardLog(),
+		Interval:                time.Hour,
+		VPN:                     true,
+		Tunnels:                 []string{"utun4"},
+		Endpoints:               []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		SwitchWindow:            5 * time.Second, // long; must close EARLY, not on expiry
+		SwitchWindowMax:         time.Minute,
+		CommandPoll:             5 * time.Millisecond,
+		WindowDiscoveryInterval: 5 * time.Millisecond,
+		PollCommand:             scriptedCommands(command.Command{Op: command.OpOpenSwitchWindow, Profile: "newvpn"}),
+		ResolveEndpointsWith: func(context.Context, []string) netdetect.EndpointSet {
+			return netdetect.EndpointSet{
+				Addrs:   []netip.Addr{netip.MustParseAddr("203.0.113.7"), discovered},
+				Sources: map[netip.Addr]string{discovered: "discovered"},
+			}
+		},
+		Learn: func(profile, iface string, addrs []netip.Addr) {
+			learned[profile] = append(learned[profile], addrs...)
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if got := learned["newvpn"]; len(got) != 1 || got[0] != discovered {
+		t.Fatalf("learned[newvpn] = %v, want [%v]", got, discovered)
+	}
+	if !applyGuardAfterSwitch(be.calls) {
+		t.Fatalf("expected guard applied after early close; calls=%v", be.calls)
+	}
+	// The verified close must attribute the active profile so status/GUI can show it.
+	sawActive := false
+	for _, s := range snaps {
+		if s.ActiveProfile == "newvpn" {
+			sawActive = true
+		}
+	}
+	if !sawActive {
+		t.Fatalf("expected a snapshot with ActiveProfile=%q after verified close; got %d snapshots", "newvpn", len(snaps))
+	}
+}
+
+// switchThenGuardFailBackend succeeds the startup guard and the switch-window
+// apply, but fails the guard apply a verified early-close attempts — so the
+// close-to-guard path can be exercised under a firewall that won't cooperate.
+type switchThenGuardFailBackend struct {
+	fakeBackend
+	sawSwitch bool
+}
+
+func (b *switchThenGuardFailBackend) Apply(p firewall.Policy) error {
+	b.policies = append(b.policies, p)
+	switch p.Mode {
+	case firewall.ModeSwitchWindow:
+		b.calls = append(b.calls, "apply-switch")
+		b.sawSwitch = true
+		return nil
+	case firewall.ModeGuard:
+		b.calls = append(b.calls, "apply-guard")
+		if b.sawSwitch {
+			return errors.New("guard apply failed")
+		}
+		return nil
+	default:
+		b.calls = append(b.calls, "apply-fullblock")
+		return nil
+	}
+}
+
+// A verified early-close whose guard apply FAILS must hold the window open: the
+// firewall may still be in switch-window posture, so the runner must not learn,
+// attribute an active profile, or report the window closed — it keeps retrying.
+func TestSwitchWindowVerifiedCloseHoldsOpenOnApplyFailure(t *testing.T) {
+	be := &switchThenGuardFailBackend{}
+	learned := map[string][]netip.Addr{}
+	var snaps []state.Snapshot
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	discovered := netip.MustParseAddr("198.51.100.9")
+	o := Options{
+		Publish:                 func(s state.Snapshot) { snaps = append(snaps, s) },
+		Monitor:                 steadyMonitor{cc: "US"}, // exit would verify allowed
+		Decider:                 decision.New([]string{"IR"}, true, 1),
+		Backend:                 be,
+		Log:                     discardLog(),
+		Interval:                time.Hour,
+		VPN:                     true,
+		Tunnels:                 []string{"utun4"},
+		Endpoints:               []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		SwitchWindow:            5 * time.Second,
+		SwitchWindowMax:         time.Minute,
+		CommandPoll:             5 * time.Millisecond,
+		WindowDiscoveryInterval: 5 * time.Millisecond,
+		PollCommand:             scriptedCommands(command.Command{Op: command.OpOpenSwitchWindow, Profile: "newvpn"}),
+		ResolveEndpointsWith: func(context.Context, []string) netdetect.EndpointSet {
+			return netdetect.EndpointSet{
+				Addrs:   []netip.Addr{netip.MustParseAddr("203.0.113.7"), discovered},
+				Sources: map[netip.Addr]string{discovered: "discovered"},
+			}
+		},
+		Learn: func(profile, iface string, addrs []netip.Addr) {
+			learned[profile] = append(learned[profile], addrs...)
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if len(learned) != 0 {
+		t.Fatalf("learn must not run when the close apply fails; got %v", learned)
+	}
+	for _, s := range snaps {
+		if s.ActiveProfile != "" {
+			t.Fatalf("active profile must not be attributed when the close apply fails; got %q", s.ActiveProfile)
+		}
+	}
+	if !applyGuardAfterSwitch(be.calls) {
+		t.Fatalf("expected a guard-apply attempt after the switch open; calls=%v", be.calls)
+	}
+}
+
+func containsCall(calls []string, want string) bool {
+	for _, c := range calls {
+		if c == want {
+			return true
+		}
+	}
+	return false
+}
+
+func applyGuardAfterSwitch(calls []string) bool {
+	seenSwitch := false
+	for _, c := range calls {
+		if c == "apply-switch" {
+			seenSwitch = true
+		}
+		if seenSwitch && c == "apply-guard" {
+			return true
+		}
+	}
+	return false
 }

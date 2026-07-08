@@ -3,16 +3,25 @@ name: CI
 on:
   push:
     branches: [main]
+  # PR runs are gated on the `run-ci` label so routine review pushes don't burn
+  # CI on every commit. Adding the label fires a `labeled` event that runs CI;
+  # while the label is present, later pushes (synchronize) run too. Remove it to
+  # stop runs again. The per-job `if` below enforces the gate.
   pull_request:
+    types: [opened, reopened, synchronize, labeled]
 
 permissions:
   contents: read
 
+# Gate: jobs run on any push to main, OR a PR carrying the `run-ci` label.
 jobs:
   # Vet + test on every OS. Each runner compiles and tests its OWN build-tagged
   # firewall backend (pf/nft/wfp), so a backend that fails to build — e.g. a
   # missing RenderRules on a non-host OS — is caught here, not at release time.
   test:
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'run-ci')
     strategy:
       fail-fast: false
       matrix:
@@ -33,6 +42,9 @@ jobs:
 
   # Verify gofmt cleanliness once (formatting is OS-independent).
   fmt:
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'run-ci')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -48,6 +60,9 @@ jobs:
 
   # Cross-compile all five release targets and assert every artifact exists.
   build-all:
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'run-ci')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

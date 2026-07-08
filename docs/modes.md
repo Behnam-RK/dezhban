@@ -61,6 +61,54 @@ config (or use `autoDiscoverEndpoints` on macOS). A wrong or tunnel-internal
 endpoint is the #1 lockout cause; [troubleshooting.md](troubleshooting.md) has the
 runbook. `panic` tears down both GUARD and FULL-BLOCK rules.
 
+**Fail-closed in guard mode.** In guard mode the standing GUARD rule is itself
+the fail-closed block for physical leaks, so an **undeterminable** country
+*holds* the current posture — it never escalates GUARD→FULL BLOCK. Escalating on
+an unknown would cut the tunnel's own egress and livelock the reconnect. Only a
+*successful* reading of a blocked country produces FULL BLOCK. (`failClosed`
+still governs the fallback/legacy model below.) If your endpoints are hostnames,
+set `vpn.allowPhysicalDNS: true` so the client can re-resolve its server while
+the tunnel is down.
+
+## Switching between VPNs
+
+The guard passes egress to the **union** of every configured profile's server
+endpoints, so disconnecting one known VPN and connecting another just works —
+each profile's handshake stays reachable on the physical link. Add profiles with
+`dezhban vpn add` / `dezhban vpn import` (see [config.md](config.md)).
+
+### Switch window — connecting a brand-new VPN
+
+A VPN whose server dezhban has never seen is a chicken-and-egg: the guard blocks
+everything except known endpoints, so the new client's handshake to its unknown
+server is dropped, and dezhban can't learn a server it never sees connect. The
+**switch window** breaks this. `dezhban switch` opens a bounded, explicitly
+root-triggered window during which egress is allowed so the handshake can
+complete; dezhban watches for the new tunnel and server, pins the server as a
+*learned* endpoint, and snaps back to GUARD — early, the moment a non-blocked
+exit is confirmed, or at the deadline.
+
+```
+# SWITCH WINDOW (default) — pass quick on lo0 all no state
+#                           pass out quick all no state          # bounded by the daemon timer
+#                           block drop out all
+```
+
+**Why all outbound, honestly.** During the window your real IP is exposed to
+whatever you talk to. A port filter would *not* fix this: the self-hosted VPNs
+this project targets deliberately run on 443 (to blend with HTTPS), and app
+phone-home is overwhelmingly 443/QUIC too — any filter that admits the VPN admits
+the leak. So the safety comes from the window being (a) explicitly root-triggered,
+(b) short (default 2m, capped 5m), (c) closed early the instant a good exit is
+confirmed, and (d) auto-reverting to the prior fail-closed posture. For a
+household where every VPN uses a fixed port (e.g. WireGuard on 51820) you can
+restrict it with `vpn.advanced.windowProtocols`/`windowPorts`. The window is the
+only sanctioned relaxation of the guard, and it never lifts on its own.
+
+If a window expires before the VPN comes up, dezhban reverts to GUARD but keeps
+any endpoint it learned mid-flight open — so a handshake still in progress can
+finish under the guard.
+
 ## Country-blocklist — the fallback mode
 
 For hosts **not** behind a full tunnel. dezhban watches your public IP's country
