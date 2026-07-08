@@ -1004,6 +1004,84 @@ func TestSwitchWindowEarlyCloseLearnsEndpoint(t *testing.T) {
 	}
 }
 
+// switchThenGuardFailBackend succeeds the startup guard and the switch-window
+// apply, but fails the guard apply a verified early-close attempts — so the
+// close-to-guard path can be exercised under a firewall that won't cooperate.
+type switchThenGuardFailBackend struct {
+	fakeBackend
+	sawSwitch bool
+}
+
+func (b *switchThenGuardFailBackend) Apply(p firewall.Policy) error {
+	b.policies = append(b.policies, p)
+	switch p.Mode {
+	case firewall.ModeSwitchWindow:
+		b.calls = append(b.calls, "apply-switch")
+		b.sawSwitch = true
+		return nil
+	case firewall.ModeGuard:
+		b.calls = append(b.calls, "apply-guard")
+		if b.sawSwitch {
+			return errors.New("guard apply failed")
+		}
+		return nil
+	default:
+		b.calls = append(b.calls, "apply-fullblock")
+		return nil
+	}
+}
+
+// A verified early-close whose guard apply FAILS must hold the window open: the
+// firewall may still be in switch-window posture, so the runner must not learn,
+// attribute an active profile, or report the window closed — it keeps retrying.
+func TestSwitchWindowVerifiedCloseHoldsOpenOnApplyFailure(t *testing.T) {
+	be := &switchThenGuardFailBackend{}
+	learned := map[string][]netip.Addr{}
+	var snaps []state.Snapshot
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	discovered := netip.MustParseAddr("198.51.100.9")
+	o := Options{
+		Publish:                 func(s state.Snapshot) { snaps = append(snaps, s) },
+		Monitor:                 steadyMonitor{cc: "US"}, // exit would verify allowed
+		Decider:                 decision.New([]string{"IR"}, true, 1),
+		Backend:                 be,
+		Log:                     discardLog(),
+		Interval:                time.Hour,
+		VPN:                     true,
+		Tunnels:                 []string{"utun4"},
+		Endpoints:               []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		SwitchWindow:            5 * time.Second,
+		SwitchWindowMax:         time.Minute,
+		CommandPoll:             5 * time.Millisecond,
+		WindowDiscoveryInterval: 5 * time.Millisecond,
+		PollCommand:             scriptedCommands(command.Command{Op: command.OpOpenSwitchWindow, Profile: "newvpn"}),
+		ResolveEndpointsWith: func(context.Context, []string) netdetect.EndpointSet {
+			return netdetect.EndpointSet{
+				Addrs:   []netip.Addr{netip.MustParseAddr("203.0.113.7"), discovered},
+				Sources: map[netip.Addr]string{discovered: "discovered"},
+			}
+		},
+		Learn: func(profile, iface string, addrs []netip.Addr) {
+			learned[profile] = append(learned[profile], addrs...)
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if len(learned) != 0 {
+		t.Fatalf("learn must not run when the close apply fails; got %v", learned)
+	}
+	for _, s := range snaps {
+		if s.ActiveProfile != "" {
+			t.Fatalf("active profile must not be attributed when the close apply fails; got %q", s.ActiveProfile)
+		}
+	}
+	if !applyGuardAfterSwitch(be.calls) {
+		t.Fatalf("expected a guard-apply attempt after the switch open; calls=%v", be.calls)
+	}
+}
+
 func containsCall(calls []string, want string) bool {
 	for _, c := range calls {
 		if c == want {

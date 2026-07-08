@@ -29,6 +29,11 @@ import (
 // tunnel hangs or quorum fans out across several providers.
 const probeEgressBudget = 8 * time.Second
 
+// windowRevertRetry re-arms the window timer after a FAILED posture revert, so
+// the daemon keeps trying to close a window whose Backend.Apply is failing
+// rather than leaving egress relaxed while falsely reporting the window closed.
+const windowRevertRetry = 2 * time.Second
+
 // publishBuffer sizes the background state-writer queue. It comfortably absorbs
 // a transient slow write at the daemon's event rate (a poll every few tens of
 // seconds); only a sustained write stall fills it and reintroduces back-pressure.
@@ -457,11 +462,19 @@ func (o Options) runVPN(ctx context.Context) error {
 			// Extend the deadline, but never past windowStart+windowMax — the hard
 			// cap on exposure holds across repeated opens.
 			hardCap := windowStart.Add(windowMax)
-			windowDeadline = now.Add(dur)
-			if windowDeadline.After(hardCap) {
-				windowDeadline = hardCap
+			newDeadline := now.Add(dur)
+			if newDeadline.After(hardCap) {
+				newDeadline = hardCap
 			}
-			windowProfile = profile
+			// Only ever push the deadline OUT — a repeated `switch` with a shorter
+			// --for must not shorten an already-open window's remaining time.
+			if newDeadline.After(windowDeadline) {
+				windowDeadline = newDeadline
+			}
+			// Keep the prior attribution when the new command names no profile.
+			if profile != "" {
+				windowProfile = profile
+			}
 			remaining := windowDeadline.Sub(now)
 			if remaining < 0 {
 				remaining = 0
@@ -471,7 +484,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			}
 			windowTimer = time.NewTimer(remaining)
 			windowTimerC = windowTimer.C
-			o.Log.Info("switch window extended", "until", windowDeadline, "profile", profile)
+			o.Log.Info("switch window extended", "until", windowDeadline, "profile", windowProfile)
 			snapshot()
 			return
 		}
@@ -505,20 +518,31 @@ func (o Options) runVPN(ctx context.Context) error {
 	// a handshake was mid-flight the restored guard holds its endpoint open and the
 	// tunnel can still complete under GUARD.
 	closeWindowRevert := func(reason string) {
-		stopWindowTimers()
-		windowActive = false
 		rebuild()
 		target := guard
-		blocked = windowPrevBlocked
 		if windowPrevBlocked {
 			target = fullBlock
 		}
 		if err := o.Backend.Apply(target); err != nil {
+			// The revert failed, so the firewall may still be in switch-window
+			// posture. Do NOT report the window closed or unsuppress the geo state
+			// machine — keep it active and re-arm a short retry so the daemon keeps
+			// trying to enforce the deadline instead of leaving egress relaxed.
 			enfErr = err
-			o.Log.Error("restore posture after switch window failed", "reason", reason, "err", err)
-		} else {
-			enfErr = nil
+			o.Log.Error("restore posture after switch window failed — holding window open, will retry",
+				"reason", reason, "err", err)
+			if windowTimer != nil {
+				windowTimer.Stop()
+			}
+			windowTimer = time.NewTimer(windowRevertRetry)
+			windowTimerC = windowTimer.C
+			snapshot()
+			return
 		}
+		stopWindowTimers()
+		windowActive = false
+		blocked = windowPrevBlocked
+		enfErr = nil
 		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(true, blocked, false))
 		snapshot()
 	}
@@ -558,16 +582,21 @@ func (o Options) runVPN(ctx context.Context) error {
 				"country", r.CountryCode, "err", err)
 			return
 		}
-		stopWindowTimers()
-		windowActive = false
 		rebuild()
 		if err := o.Backend.Apply(guard); err != nil {
+			// Guard apply failed — the firewall may still be in switch-window
+			// posture. Keep the window active (timers still running, so the
+			// winDisc ticker retries this) and do NOT close state, learn, or set
+			// the active profile: reporting a close now would unsuppress geo and
+			// claim attribution while egress may still be relaxed.
 			enfErr = err
-			o.Log.Error("close switch window to guard failed", "err", err)
-		} else {
-			blocked = false
-			enfErr = nil
+			o.Log.Error("close switch window to guard failed — holding window open, will retry", "err", err)
+			return
 		}
+		stopWindowTimers()
+		windowActive = false
+		blocked = false
+		enfErr = nil
 		lastRes = monitor.Result{Reading: r}
 		// The window verified a good exit for this profile — it is now the active
 		// one, and stays so (sticky) until the next switch names another.
