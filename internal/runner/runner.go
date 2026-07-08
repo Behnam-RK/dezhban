@@ -407,12 +407,15 @@ func (o Options) runVPN(ctx context.Context) error {
 		if windowActive || blocked {
 			return
 		}
+		// The standing posture is usually ModeGuard but is ModeFullBlock in the
+		// zero-tunnel standing case — log the actual mode so autodetect/zero-tunnel
+		// runs aren't misreported as "guard".
 		if err := o.Backend.Apply(guard); err != nil {
 			enfErr = err
-			o.Log.Error("re-apply guard failed", "reason", reason, "err", err)
+			o.Log.Error("re-apply standing posture failed", "reason", reason, "mode", guard.Mode, "err", err)
 		} else {
 			enfErr = nil
-			o.Log.Info("vpn guard updated", "reason", reason, "tunnels", tunnels, "endpoints", len(endpoints))
+			o.Log.Info("vpn standing posture updated", "reason", reason, "mode", guard.Mode, "tunnels", tunnels, "endpoints", len(endpoints))
 		}
 	}
 

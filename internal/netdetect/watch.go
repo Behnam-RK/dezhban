@@ -23,8 +23,10 @@ type TunnelState struct {
 	Names []string
 	// Unknown marks a sample that could not observe the interfaces at all (e.g.
 	// enumeration failed). It is neither an up nor a down edge and carries no
-	// meaningful Names: the watcher must ignore it rather than misread the empty
-	// Names as a set shrink and churn the runner's dynamic tunnel set.
+	// meaningful Names. The watcher's edge/set-change emission logic skips Unknown
+	// samples (so the empty Names is never misread as a set shrink) — but the FIRST
+	// sample is always delivered even when Unknown, so a consumer must treat an
+	// Unknown sample as "no change" and hold its last known tunnel state.
 	Unknown bool
 	Detail  string
 }
