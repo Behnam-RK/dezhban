@@ -136,6 +136,15 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
     private func seedFields() {
         statusLabel.stringValue = "Loading current config…"
         applyButton.isEnabled = false
+        // Clear any values left from a previous open so a failed seed can't leave
+        // stale (and misleading) data on screen while Apply is disabled.
+        enabledCheckbox.state = .off
+        autodetectCheckbox.state = .off
+        autoDiscoverCheckbox.state = .off
+        tunnelInterfacesField.stringValue = ""
+        endpointsField.stringValue = ""
+        endpointRefreshField.stringValue = ""
+        tunnelWatchField.stringValue = ""
         DispatchQueue.global(qos: .userInitiated).async {
             let keys = [
                 Self.keyEnabled, Self.keyTunnelInterfaces, Self.keyEndpoints,
@@ -363,8 +372,10 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
     private static func looksLikeGoDuration(_ s: String) -> Bool {
         guard !s.isEmpty else { return false }
         // Mirror ParseDuration: optional [-+], the special bare "0", or repeated
-        // decimal-number + unit chunks. Units: ns, us/µs/μs, ms, s, m, h.
-        let pattern = #"^[-+]?(0|([0-9]*(\.[0-9]*)?(ns|us|µs|μs|ms|s|m|h))+)$"#
+        // chunks of (number + unit). Each number needs at least one digit (before
+        // or after the dot) so a bare unit like "s"/"ms" is rejected. Units: ns,
+        // us/µs/μs, ms, s, m, h.
+        let pattern = #"^[-+]?(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"#
         return s.range(of: pattern, options: .regularExpression) != nil
     }
 
