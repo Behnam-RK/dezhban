@@ -165,12 +165,22 @@ it with `make gui-macos` (see [development.md](development.md)).
 
 - **Status icon** — 🟢 allow/guard, 🔴 block/full-block, ⚪ stopped or stale;
   repainted about once a second.
-- **Menu** — Start/Stop, Block/Unblock, VPN-mode indicator + Open config, View
-  logs, Launch at login (`SMAppService`), Quit. Items enable/disable from the
-  current state; privileged actions raise a native admin prompt via `osascript`.
+- **Menu** — Start/Stop kill switch, Block now/Unblock, the VPN switch window
+  (Switching VPN… / Cancel) when in VPN mode, **Run diagnostics…**, **Panic —
+  force unblock…**, **Install/Uninstall service**, **VPN guard mode** (opens the
+  validated in-app config panel), Open config file…, View logs, **About
+  Dezhban…**, Launch at login (`SMAppService`), Quit. Items enable/disable from
+  the current state; privileged actions raise a native admin prompt via
+  `osascript`.
+- **Output & diagnostics** — Run diagnostics, panic, and install/uninstall
+  capture their command output in a scrollable panel; View logs streams a scoped
+  `log show`/`log stream` (or opens Console.app).
 
 The app runs no IP/country poller of its own — it reads the daemon's state file
 (see [state.md](state.md)), the single source of truth for what the daemon decided.
-It is unsigned for local use (right-click → Open past Gatekeeper); an in-app
-VPN-mode toggle is deferred (the menu routes to **Open config…**). Design notes:
-[plans/phase-8-macos-gui.md](plans/phase-8-macos-gui.md).
+It is unsigned for local use (right-click → Open past Gatekeeper). The in-app
+**VPN guard mode** panel edits `vpn.enabled` + tunnels/endpoints through the same
+validation as `config set`, then restarts the daemon to apply. Design notes:
+[plans/phase-8-macos-gui.md](plans/phase-8-macos-gui.md),
+[plans/phase-10-gui-diagnostics.md](plans/phase-10-gui-diagnostics.md),
+[plans/phase-11-gui-vpn-config.md](plans/phase-11-gui-vpn-config.md).
