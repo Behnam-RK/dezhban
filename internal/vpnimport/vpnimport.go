@@ -154,6 +154,13 @@ func hostOnly(s string) string {
 	if h, _, err := net.SplitHostPort(s); err == nil {
 		return h
 	}
+	// A bracketed IPv6 literal with no :port suffix (e.g. OpenVPN
+	// `remote [2001:db8::1] 443`, where the port is a separate token) isn't valid
+	// host:port, so SplitHostPort fails above. Strip the surrounding brackets so
+	// the address round-trips through netip and is valid for later consumers.
+	if strings.HasPrefix(s, "[") && strings.HasSuffix(s, "]") {
+		return s[1 : len(s)-1]
+	}
 	return s
 }
 

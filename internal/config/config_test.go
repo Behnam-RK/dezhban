@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -452,6 +453,24 @@ func TestValidateProfilesOnlyValid(t *testing.T) {
 	}
 	if _, err := Load(path); err != nil {
 		t.Errorf("Load profiles-only: %v, want success", err)
+	}
+}
+
+// An invalid switchWindowMax must surface as its own direct error, not a
+// confusing derived switchWindow range: the advanced block is validated before
+// switchWindow is bounded against it.
+func TestValidateAdvancedBeforeSwitchWindow(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"switchWindow":"2m","advanced":{"switchWindowMax":"5s"}}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Load(path)
+	if err == nil {
+		t.Fatal("Load = nil error, want validation error")
+	}
+	if !strings.Contains(err.Error(), "switchWindowMax") {
+		t.Errorf("error = %q, want it to name switchWindowMax directly", err)
 	}
 }
 

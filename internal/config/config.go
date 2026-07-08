@@ -721,10 +721,13 @@ func (c *Config) Validate() error {
 		if err := validateProfiles(c.VPN.Profiles); err != nil {
 			return err
 		}
-		if err := validateSwitchWindow(c.VPN); err != nil {
+		// Validate the advanced block first: validateSwitchWindow bounds
+		// vpn.switchWindow against advanced.switchWindowMax, so an invalid max must
+		// surface as its own direct error rather than a confusing derived range.
+		if err := validateAdvanced(c.VPN.Advanced); err != nil {
 			return err
 		}
-		if err := validateAdvanced(c.VPN.Advanced); err != nil {
+		if err := validateSwitchWindow(c.VPN); err != nil {
 			return err
 		}
 	}

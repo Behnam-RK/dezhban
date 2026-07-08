@@ -57,6 +57,21 @@ cipher AES-256-GCM`
 	}
 }
 
+func TestExtractOpenVPNBracketedIPv6(t *testing.T) {
+	// OpenVPN writes an IPv6 remote in brackets with the port as a separate token;
+	// the brackets must be stripped so the address is valid for later consumers.
+	body := `client
+dev tun
+remote [2001:db8::1] 443 udp`
+	eps, _, err := Extract(writeTemp(t, "v6.ovpn", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(eps) != 1 || eps[0] != "2001:db8::1" {
+		t.Errorf("endpoints = %v, want [2001:db8::1] (brackets stripped)", eps)
+	}
+}
+
 func TestExtractV2RayJSON(t *testing.T) {
 	body := `{
 	  "outbounds": [

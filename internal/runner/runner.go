@@ -659,7 +659,11 @@ func (o Options) runVPN(ctx context.Context) error {
 		case <-epTick.C:
 			fresh := o.resolveEndpointsWith(ctx, tunnels)
 			lastSet = fresh
-			if next, changed := reconcileEndpoints(endpoints, fresh, blocked); changed {
+			// An open window is grow-only like a block: a plain refresh must not
+			// replace (and thus drop) the session/in-window endpoints the window is
+			// keeping open until it closes or reverts.
+			growOnly := blocked || windowActive
+			if next, changed := reconcileEndpoints(endpoints, fresh, growOnly); changed {
 				endpoints = next
 				reapplyStanding("endpoint refresh")
 				snapshot()
