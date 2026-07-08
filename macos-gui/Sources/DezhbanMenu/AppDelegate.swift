@@ -11,6 +11,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var lastMtime: Date?
     private var lastIconKey: String?
 
+    /// Cached result of `DezhbanCLI.serviceInstalled()` (which shells out to
+    /// `status --json`). `menuNeedsUpdate` reads this synchronously so opening
+    /// the menubar menu never blocks on a subprocess; it's refreshed off the
+    /// main thread at launch, after install/uninstall, and on each menu open
+    /// (for the next open).
+    private var serviceIsInstalled = false
+
     /// Floor for the staleness threshold. The daemon's actual poll cadence — carried
     /// in the snapshot as `pollIntervalSeconds` — scales this up (see staleThreshold),
     /// so a deliberately long pollInterval doesn't make an enforcing daemon read as
@@ -26,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.autoenablesItems = false
         statusItem.menu = menu
         refresh()
+        refreshServiceInstalled()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.refresh()
         }
@@ -54,6 +62,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         button.image = image
         button.contentTintColor = color
         button.toolTip = "dezhban — \(help)"
+    }
+
+    /// Recomputes `serviceIsInstalled` off the main thread. Skips the subprocess
+    /// entirely when the CLI is absent (nothing to install a service from).
+    private func refreshServiceInstalled() {
+        guard DezhbanCLI.binaryPath() != nil else {
+            serviceIsInstalled = false
+            return
+        }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let installed = DezhbanCLI.serviceInstalled()
+            DispatchQueue.main.async { self?.serviceIsInstalled = installed }
+        }
     }
 
     /// The age past which a snapshot reads as stopped, derived from the daemon's own
@@ -185,11 +206,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // output-capture plumbing in DezhbanCLI + OutputPanel.
         addAction("Run diagnostics…", #selector(runDiagnostics), enabled: DezhbanCLI.binaryPath() != nil)
         addAction("Panic — force unblock…", #selector(confirmPanic), enabled: DezhbanCLI.binaryPath() != nil)
-        if DezhbanCLI.serviceInstalled() {
+        if serviceIsInstalled {
             addAction("Uninstall service…", #selector(uninstallService))
         } else {
             addAction("Install service…", #selector(installService), enabled: DezhbanCLI.binaryPath() != nil)
         }
+        // Keep the cache honest for the next open without blocking this one.
+        refreshServiceInstalled()
 
         menu.addItem(.separator())
 
@@ -355,6 +378,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             DispatchQueue.main.async {
                 OutputPanel.shared.show(title: title, text: log)
                 self?.refresh()
+                // install/uninstall flips service-installed state — resync the cache.
+                self?.refreshServiceInstalled()
             }
         }
     }
@@ -410,7 +435,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self?.activeLogStream = nil
         }
         if !proc.start(onOutput: { text in OutputPanel.shared.append(text) }) {
-            OutputPanel.shared.append("failed to start log stream\n")
+            // Revert to a non-streaming panel: `show` hides the Stop button and
+            // clears the onStop handler (via stopPreviousStream), so neither
+            // lingers with no process behind it.
+            activeLogStream = nil
+            OutputPanel.shared.show(title: "dezhban — live logs", text: "failed to start log stream\n")
         }
     }
 

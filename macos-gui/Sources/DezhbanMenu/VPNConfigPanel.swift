@@ -147,7 +147,11 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             // fields would let Apply write that error string back via
             // `config set`. Short-circuit on the first failure, leave Apply
             // disabled, and surface the error instead.
-            let results = keys.map { (key: $0, result: DezhbanCLI.run(["config", "get", $0])) }
+            // Read through the same resolved --config path Apply writes/validates
+            // with, so a nonstandard path ($DEZHBAN_CONFIG, etc.) can't seed from
+            // one file and then apply to another.
+            let cfgPath = DezhbanCLI.resolvedConfigPath()
+            let results = keys.map { (key: $0, result: DezhbanCLI.run(["config", "get", $0, "--config", cfgPath])) }
             if let failed = results.first(where: { !$0.result.ok }) {
                 DispatchQueue.main.async { [weak self] in
                     guard let self = self else { return }

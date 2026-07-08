@@ -147,15 +147,21 @@ enum DezhbanCLI {
         } catch {
             return (127, "", "\(error)")
         }
-        // Drain both pipes concurrently. Reading stdout to EOF and only then
-        // stderr can deadlock: if the child fills its stderr pipe buffer it
-        // blocks before exiting, so its stdout never closes and we wait forever.
-        var outData = Data(), errData = Data()
-        let group = DispatchGroup()
-        let q = DispatchQueue(label: "dezhban.exec.read", attributes: .concurrent)
-        q.async(group: group) { outData = outPipe.fileHandleForReading.readDataToEndOfFile() }
-        q.async(group: group) { errData = errPipe.fileHandleForReading.readDataToEndOfFile() }
-        group.wait()
+        // Drain both pipes without letting either block the other. Reading
+        // stdout to EOF and only then stderr can deadlock: if the child fills
+        // its stderr pipe buffer it blocks before exiting, so its stdout never
+        // closes and we wait forever. Read stderr on one background thread and
+        // stdout on this one. `errData` has a single writer (the background
+        // thread) and a single reader (this thread) with the semaphore
+        // establishing the happens-before between them — no shared mutation.
+        var errData = Data()
+        let errReady = DispatchSemaphore(value: 0)
+        DispatchQueue.global(qos: .userInitiated).async {
+            errData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            errReady.signal()
+        }
+        let outData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        errReady.wait()
         p.waitUntilExit()
         return (p.terminationStatus,
                 String(data: outData, encoding: .utf8) ?? "",
