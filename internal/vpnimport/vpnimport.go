@@ -13,6 +13,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -129,12 +130,27 @@ func extractJSON(data []byte) ([]string, error) {
 	return out, nil
 }
 
+// isNumericPort reports whether v is a valid port value: a JSON number (or a
+// numeric string) in 1-65535. A string like "auto", an object, or a missing key
+// (nil) is rejected, so a non-endpoint field named "port" can't misclassify an
+// arbitrary map as a server entry.
+func isNumericPort(v any) bool {
+	switch p := v.(type) {
+	case float64:
+		return p >= 1 && p <= 65535 && p == float64(int64(p))
+	case string:
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		return err == nil && n >= 1 && n <= 65535
+	}
+	return false
+}
+
 func walkJSON(v any, out *[]string) {
 	switch t := v.(type) {
 	case map[string]any:
 		hasPort := false
 		for _, k := range []string{"port", "server_port"} {
-			if _, ok := t[k]; ok {
+			if isNumericPort(t[k]) {
 				hasPort = true
 			}
 		}

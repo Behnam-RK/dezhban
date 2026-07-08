@@ -87,6 +87,26 @@ func TestExtractOpenVPNLongLine(t *testing.T) {
 	}
 }
 
+func TestExtractJSONPortMustBeNumeric(t *testing.T) {
+	// A non-numeric "port" (string "auto" / an object) must NOT qualify a map as a
+	// server entry; a numeric string port is accepted.
+	body := `{
+	  "a": {"address": "reject-me.example.com", "port": "auto"},
+	  "b": {"server": "reject-obj.example.com", "server_port": {"x": 1}},
+	  "c": {"address": "keep.example.com", "port": "8443"},
+	  "d": {"address": "keepnum.example.com", "port": 443}
+	}`
+	eps, _, err := Extract(writeTemp(t, "ports.json", body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sort.Strings(eps)
+	want := []string{"keep.example.com", "keepnum.example.com"}
+	if len(eps) != 2 || eps[0] != want[0] || eps[1] != want[1] {
+		t.Errorf("endpoints = %v, want %v (non-numeric ports rejected)", eps, want)
+	}
+}
+
 func TestExtractV2RayJSON(t *testing.T) {
 	body := `{
 	  "outbounds": [

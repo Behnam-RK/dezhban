@@ -427,8 +427,9 @@ func forgetLearned(name string, all bool) int {
 	path := defaultLearnedPath()
 	store, err := learned.Load(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "vpn forget:", err)
-		return 1
+		// Load returns a usable empty store even on a corrupt/unreadable file;
+		// warn but continue so `vpn forget --all` can overwrite and recover it.
+		fmt.Fprintln(os.Stderr, "vpn forget (continuing on load error):", err)
 	}
 	if all {
 		store.Entries = nil
