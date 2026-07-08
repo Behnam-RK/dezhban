@@ -86,8 +86,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "block", "full-block":
             return ("shield.slash.fill", .systemRed, humanPosture(s))
         case "switch-window":
-            // The switch window allows ALL outbound — the real IP is exposed. Never
-            // show a green "safe" shield here; warn so the user notices it's open.
+            // The switch window relaxes egress (all outbound, or a proto/port subset
+            // if restricted) — the real IP may be exposed. Never show a green "safe"
+            // shield here; warn so the user notices it's open.
             return ("exclamationmark.shield.fill", .systemYellow, humanPosture(s))
         default: // allow, guard
             return ("shield.fill", .systemGreen, humanPosture(s))
@@ -100,7 +101,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "block": return "blocking"
         case "guard": return "guarding (VPN)"
         case "full-block": return "full block (VPN)"
-        case "switch-window": return "switch window — all traffic allowed"
+        case "switch-window": return "switch window — egress relaxed (real IP may be exposed)"
         case "stopped": return "stopped"
         default: return s.posture
         }

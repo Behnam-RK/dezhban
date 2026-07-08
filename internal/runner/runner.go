@@ -411,6 +411,25 @@ func (o Options) runVPN(ctx context.Context) error {
 		}
 	}
 
+	// reapplyWindow re-applies the switch-window policy after a tunnel/endpoint
+	// change while a window is open, but ONLY when the window is restricted: an
+	// unrestricted window already passes all outbound, so a new tunnel/endpoint
+	// needs no rule update. A restricted window filters by proto/port and must
+	// learn the new tunnel/endpoint, or that traffic stays blocked and the
+	// verified early-close can never succeed.
+	reapplyWindow := func(reason string) {
+		if !windowActive || !o.windowRestricted() {
+			return
+		}
+		if err := o.Backend.Apply(o.windowPolicy(tunnels, endpoints)); err != nil {
+			enfErr = err
+			o.Log.Error("re-apply switch window failed", "reason", reason, "err", err)
+		} else {
+			enfErr = nil
+			o.Log.Info("switch window updated", "reason", reason, "tunnels", tunnels, "endpoints", len(endpoints))
+		}
+	}
+
 	stopWindowTimers := func() {
 		if windowTimer != nil {
 			windowTimer.Stop()
@@ -472,7 +491,11 @@ func (o Options) runVPN(ctx context.Context) error {
 		winDiscTick = time.NewTicker(winInterval)
 		winDiscC = winDiscTick.C
 		enfErr = nil
-		o.Log.Warn("SWITCH WINDOW OPEN — all outbound allowed; connect your VPN now (real IP exposed until it closes)",
+		relaxation := "all outbound allowed"
+		if o.windowRestricted() {
+			relaxation = "egress relaxed to configured protocols/ports"
+		}
+		o.Log.Warn("SWITCH WINDOW OPEN — "+relaxation+"; connect your VPN now (real IP may be exposed until it closes)",
 			"until", windowDeadline, "profile", profile)
 		snapshot()
 	}
@@ -620,6 +643,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
 				tunnels = next
 				reapplyStanding("tunnel set changed")
+				reapplyWindow("tunnel set changed")
 			}
 			lastTun = tunnelSnapshot(st, tunnels)
 			if windowActive {
@@ -654,6 +678,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			lastSet = fresh
 			if next, changed := reconcileEndpoints(endpoints, fresh, true); changed {
 				endpoints = next
+				reapplyWindow("in-window endpoint discovery")
 			}
 			tryCloseWindowVerified()
 		case <-epTick.C:
@@ -666,6 +691,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			if next, changed := reconcileEndpoints(endpoints, fresh, growOnly); changed {
 				endpoints = next
 				reapplyStanding("endpoint refresh")
+				reapplyWindow("endpoint refresh")
 				snapshot()
 			}
 		case <-geoTick.C:
@@ -706,6 +732,14 @@ func (o Options) vpnPolicies(tunnels []string, endpoints []netip.Addr) (guard, f
 	}
 	guard = firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: tunnels, TunnelGroups: o.TunnelGroups, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
 	return guard, fullBlock
+}
+
+// windowRestricted reports whether the switch window filters egress by
+// protocol/port. The default (unrestricted) window passes ALL outbound, so a
+// tunnel/endpoint change during it needs no rule update; a restricted window
+// must be re-applied to admit a newly-appeared tunnel or endpoint.
+func (o Options) windowRestricted() bool {
+	return len(o.WindowProtos) > 0 || len(o.WindowPorts) > 0
 }
 
 // windowPolicy builds the switch-window policy from the current tunnel/endpoint
