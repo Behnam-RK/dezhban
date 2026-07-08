@@ -221,14 +221,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let parent = NSMenuItem(title: "View logs…", action: nil, keyEquivalent: "")
         let sub = NSMenu()
 
+        // These run `/usr/bin/log` directly and don't need the dezhban binary,
+        // so keep them available even when the CLI is uninstalled/mislocated —
+        // reading the unified log is exactly the diagnostic you want then.
         let showItem = NSMenuItem(title: "Show last hour", action: #selector(showRecentLogs), keyEquivalent: "")
         showItem.target = self
-        showItem.isEnabled = DezhbanCLI.binaryPath() != nil
         sub.addItem(showItem)
 
         let streamItem = NSMenuItem(title: "Stream live…", action: #selector(streamLogs), keyEquivalent: "")
         streamItem.target = self
-        streamItem.isEnabled = DezhbanCLI.binaryPath() != nil
         sub.addItem(streamItem)
 
         sub.addItem(.separator())

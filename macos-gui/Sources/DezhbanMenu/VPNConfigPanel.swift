@@ -227,10 +227,14 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         statusLabel.stringValue = "Applying…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
+            // Resolve the target path once and pass --config to every write and
+            // the final validate, so all three provably act on the same file
+            // (rather than trusting each subcommand to re-resolve identically).
+            let cfgPath = DezhbanCLI.resolvedConfigPath()
             var log = ""
             for (key, value) in sets {
-                let result = DezhbanCLI.runPrivileged(["config", "set", key, value])
-                log += "$ dezhban config set \(key) \(value)\n\(result.output)\n\n"
+                let result = DezhbanCLI.runPrivileged(["config", "set", key, value, "--config", cfgPath])
+                log += "$ dezhban config set \(key) \(value) --config \(cfgPath)\n\(result.output)\n\n"
                 if !result.ok {
                     DispatchQueue.main.async {
                         self.finishWithoutRestart(log: log, message: "Rejected: \(key) failed to set — no restart attempted.")
@@ -242,7 +246,6 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             // Belt-and-suspenders: each `config set` above already validates the
             // full config on write, but re-validate the file itself once more
             // before ever offering a restart.
-            let cfgPath = DezhbanCLI.resolvedConfigPath()
             let validate = DezhbanCLI.run(["validate", "--config", cfgPath])
             log += "$ dezhban validate --config \(cfgPath)\n\(validate.output)\n\n"
             guard validate.ok else {

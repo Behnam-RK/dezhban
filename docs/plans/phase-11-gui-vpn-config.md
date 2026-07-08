@@ -43,11 +43,11 @@ applied as follows:
    privileged write" round trips). The panel drives `config set` once per
    changed field through the existing `runPrivileged` (Phase 10), so the Go
    side of this phase is **zero new commands** — pure reuse.
-2. **Raw-file seeding.** The panel's initial values must come from
-   `dezhban config show`'s output (the marshaled, already-`Normalize`d
-   `config.Config`) — i.e., the same bytes `config.Marshal` produces — not
-   from a second, hand-maintained Swift struct that mirrors the full config
-   schema. The GUI already has one such mirror for `state.json`
+2. **Raw-file seeding.** The panel's initial values must come from the CLI's
+   own reads of the on-disk config — one `dezhban config get <key>` per
+   rendered field, each returning the marshaled, already-`Normalize`d value the
+   Go side sees — not from a second, hand-maintained Swift struct that mirrors
+   the full config schema. The GUI already has one such mirror for `state.json`
    (`Snapshot.swift`, deliberately kept in sync with `internal/state`); adding
    a second full-schema mirror for the config would double the surface that
    drifts when a field is added on the Go side. So the panel treats config the
