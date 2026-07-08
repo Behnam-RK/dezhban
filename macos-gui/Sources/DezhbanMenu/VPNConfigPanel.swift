@@ -142,7 +142,22 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
                 Self.keyAutodetect, Self.keyAutoDiscoverEndpoints,
                 Self.keyEndpointRefresh, Self.keyTunnelWatch,
             ]
-            let values = keys.map { DezhbanCLI.run(["config", "get", $0]).output.trimmingCharacters(in: .whitespacesAndNewlines) }
+            // Capture each read's success. If any `config get` fails, the raw
+            // output is an error message, not a value — seeding it into the
+            // fields would let Apply write that error string back via
+            // `config set`. Short-circuit on the first failure, leave Apply
+            // disabled, and surface the error instead.
+            let results = keys.map { (key: $0, result: DezhbanCLI.run(["config", "get", $0])) }
+            if let failed = results.first(where: { !$0.result.ok }) {
+                DispatchQueue.main.async { [weak self] in
+                    guard let self = self else { return }
+                    let detail = failed.result.output.trimmingCharacters(in: .whitespacesAndNewlines)
+                    self.statusLabel.stringValue = "Failed to read \(failed.key): \(detail)"
+                    self.applyButton.isEnabled = false
+                }
+                return
+            }
+            let values = results.map { $0.result.output.trimmingCharacters(in: .whitespacesAndNewlines) }
             DispatchQueue.main.async { [weak self] in
                 guard let self = self else { return }
                 self.enabledCheckbox.state = (values[0] == "true") ? .on : .off

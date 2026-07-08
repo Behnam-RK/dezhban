@@ -31,8 +31,10 @@ enum DezhbanCLI {
     }
 
     /// Runs a privileged command via the native admin prompt, capturing what it
-    /// printed. AppleScript's `executeAndReturnError` return value holds stdout
-    /// on success; on failure the NSDictionary error info holds the message
+    /// printed. AppleScript's `executeAndReturnError` return value holds the
+    /// command's combined stdout+stderr on success (the shell command folds
+    /// stderr in via `2>&1`); on failure the NSDictionary error info holds the
+    /// message
     /// (including the shell command's stderr, since `do shell script` folds a
     /// non-zero exit's stderr into the AppleScript error). Every call site gets
     /// real output instead of a bare pass/fail, so a failure alert can show what
@@ -52,7 +54,11 @@ enum DezhbanCLI {
         guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else {
             return CommandResult(ok: false, output: "refused: an argument contained a quote or backslash")
         }
-        let shellCmd = tokens.map { "'\($0)'" }.joined(separator: " ")
+        // Fold stderr into stdout so a command that writes diagnostics to stderr
+        // while exiting 0 still surfaces them: `do shell script` only returns
+        // stderr to us on a *non-zero* exit, so without `2>&1` a successful
+        // command's stderr would be silently dropped.
+        let shellCmd = tokens.map { "'\($0)'" }.joined(separator: " ") + " 2>&1"
         // Embed shellCmd as an AppleScript string literal: escape double-quotes.
         let escaped = shellCmd.replacingOccurrences(of: "\"", with: "\\\"")
         let source = "do shell script \"\(escaped)\" with administrator privileges"

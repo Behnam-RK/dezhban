@@ -92,10 +92,12 @@ behavior is the legacy destination-IP model, unchanged):
 
 ## Phases
 
-**Status: phases 0–9 complete and merged to `main`.** Remaining core-daemon
+**Status: phases 0–11 complete and merged to `main`.** Remaining core-daemon
 work is privileged per-OS acceptance (run the `## Acceptance / verification`
 steps in each phase doc on real macOS/Linux/Windows hosts). Phases 10–11 extend
-the macOS GUI and are planned, not yet built.
+the macOS GUI (diagnostics/output capture/panic/install-uninstall and the in-app
+VPN config panel); their code is landed, with the manual on-host acceptance
+checks in each phase doc still to be run.
 
 | Phase | Doc | Status | Theme |
 |---|---|---|---|
@@ -109,8 +111,8 @@ the macOS GUI and are planned, not yet built.
 | 7 | [phase-7-safety-packaging.md](./phase-7-safety-packaging.md) | ✅ | Panic-unblock, manual override, logging polish, cross-compile |
 | 8 | [phase-8-macos-gui.md](./phase-8-macos-gui.md) | ✅ | macOS menubar app: live status, controls, login autostart (state-file IPC) |
 | 9 | [phase-9-vpn-profiles-switching.md](./phase-9-vpn-profiles-switching.md) | ✅ | VPN profiles, dynamic tunnel re-detection, switch window, endpoint learning, importers |
-| 10 | [phase-10-gui-diagnostics.md](./phase-10-gui-diagnostics.md) | 📝 planned | GUI: output capture, diagnostics, panic button, install/uninstall, about, scoped logs — shippable standalone |
-| 11 | [phase-11-gui-vpn-config.md](./phase-11-gui-vpn-config.md) | 📝 planned | GUI: in-app VPN config panel over existing `config set`, explicit restart-window handling |
+| 10 | [phase-10-gui-diagnostics.md](./phase-10-gui-diagnostics.md) | ✅ | GUI: output capture, diagnostics, panic button, install/uninstall, about, scoped logs — shippable standalone |
+| 11 | [phase-11-gui-vpn-config.md](./phase-11-gui-vpn-config.md) | ✅ | GUI: in-app VPN config panel over existing `config set`, explicit restart-window handling |
 
 Each phase is independently buildable & verifiable. Implement one at a time;
 verify before moving on.

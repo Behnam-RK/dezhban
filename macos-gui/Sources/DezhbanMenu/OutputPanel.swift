@@ -90,7 +90,13 @@ final class OutputPanel: NSObject, NSWindowDelegate {
     /// Appends text to whatever panel is currently open — the streaming
     /// process's output callback.
     func append(_ text: String) {
-        textView.string += text
+        // Append into the backing text storage rather than `textView.string +=`,
+        // which recopies the whole buffer each call — O(n²) over a long-running
+        // `log stream`. `textStorage` grows in place. Carry the view's font so
+        // appended runs keep the monospace styling set at construction.
+        var attrs: [NSAttributedString.Key: Any] = [:]
+        if let font = textView.font { attrs[.font] = font }
+        textView.textStorage?.append(NSAttributedString(string: text, attributes: attrs))
         textView.scrollToEndOfDocument(nil)
     }
 
