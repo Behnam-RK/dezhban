@@ -583,6 +583,12 @@ func normalizeAdvanced(a *Advanced) {
 	if a.EndpointWarnThreshold <= 0 {
 		a.EndpointWarnThreshold = defaultEndpointWarnThreshold
 	}
+	// Canonicalize protocol strings so validation and pf/nft/WFP rendering agree:
+	// the renderers emit these values verbatim, so a stray space or capital (" UDP",
+	// "Tcp") would otherwise leak into the ruleset. Normalize runs before Validate.
+	for i, p := range a.WindowProtocols {
+		a.WindowProtocols[i] = strings.ToLower(strings.TrimSpace(p))
+	}
 }
 
 // Switch-window / learning defaults. These are the recommended values; the

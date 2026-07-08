@@ -49,6 +49,7 @@ func cmdSetup(args []string) int {
 	// Seed from the current config so setup edits rather than clobbers; fall back
 	// to defaults if none exists or the current file is unreadable/invalid.
 	cfg, err := loadConfig(*cfgPath)
+	configExisted := err == nil
 	if err != nil {
 		d := config.Default()
 		cfg = &d
@@ -112,7 +113,14 @@ func cmdSetup(args []string) int {
 	endpoints := strings.Join(cfg.VPN.Endpoints, ",")
 	profileFiles := ""
 	macOS := runtime.GOOS == "darwin"
-	autoDiscover := cfg.VPN.AutoDiscoverEndpoints || macOS
+	// Preserve an existing config's choice; only default ON for a brand-new macOS
+	// config (the recommended path). Re-running setup must never silently flip a
+	// user's explicit autoDiscoverEndpoints=false back to true — the confirm below
+	// (macOS only) makes it an explicit, seeded decision.
+	autoDiscover := cfg.VPN.AutoDiscoverEndpoints
+	if macOS && !configExisted {
+		autoDiscover = true
+	}
 	allowPhysicalDNS := cfg.VPN.AllowPhysicalDNS
 	var profiles []config.Profile
 	if vpnEnabled {
@@ -151,6 +159,17 @@ func cmdSetup(args []string) int {
 				Value(&allowPhysicalDNS),
 		))); err != nil {
 			return formExit(err)
+		}
+		// Live endpoint discovery is macOS-only. Make it an explicit, seeded choice
+		// so re-running setup never silently flips an existing preference.
+		if macOS {
+			if err := runForm(huh.NewForm(huh.NewGroup(
+				huh.NewConfirm().Title("Auto-discover the VPN server address? (recommended)").
+					Description("dezhban watches the live tunnel socket to learn the server IP, so you don't pin one that changes. macOS only.").
+					Value(&autoDiscover),
+			))); err != nil {
+				return formExit(err)
+			}
 		}
 		// Import any named config files into profiles (best-effort; a bad file is
 		// reported but doesn't abort the wizard).

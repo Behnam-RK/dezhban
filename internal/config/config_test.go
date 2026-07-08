@@ -454,3 +454,19 @@ func TestValidateProfilesOnlyValid(t *testing.T) {
 		t.Errorf("Load profiles-only: %v, want success", err)
 	}
 }
+
+// Normalize must canonicalize windowProtocols (trim + lowercase) so the pf/nft/WFP
+// renderers, which emit the strings verbatim, never receive " UDP" or "Tcp".
+func TestNormalizeWindowProtocols(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.Advanced.WindowProtocols = []string{"  UDP", "Tcp"}
+	Normalize(&cfg)
+
+	want := []string{"udp", "tcp"}
+	if got := cfg.VPN.Advanced.WindowProtocols; !reflect.DeepEqual(got, want) {
+		t.Fatalf("WindowProtocols = %v, want %v", got, want)
+	}
+	if err := validateAdvanced(cfg.VPN.Advanced); err != nil {
+		t.Errorf("validateAdvanced after normalize: %v, want success", err)
+	}
+}

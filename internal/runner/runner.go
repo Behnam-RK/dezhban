@@ -602,6 +602,14 @@ func (o Options) runVPN(ctx context.Context) error {
 				tunCh = nil
 				continue
 			}
+			if st.Unknown {
+				// Interface enumeration hiccup, not a real edge: hold the last known
+				// tunnel state. Treating it as an up/down transition would misreport
+				// the tunnel and wrongly gate the tunnel-down geo-skip. The guard's
+				// standing rule still covers a genuine leak.
+				o.Log.Debug("ignoring tunnel sample with unknown state", "detail", st.Detail)
+				continue
+			}
 			tunnelUp = st.Up
 			if st.Up {
 				o.Log.Info("vpn tunnel up", "detail", st.Detail)

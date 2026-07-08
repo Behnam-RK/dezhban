@@ -85,6 +85,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch s.posture {
         case "block", "full-block":
             return ("shield.slash.fill", .systemRed, humanPosture(s))
+        case "switch-window":
+            // The switch window allows ALL outbound — the real IP is exposed. Never
+            // show a green "safe" shield here; warn so the user notices it's open.
+            return ("exclamationmark.shield.fill", .systemYellow, humanPosture(s))
         default: // allow, guard
             return ("shield.fill", .systemGreen, humanPosture(s))
         }
@@ -96,6 +100,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "block": return "blocking"
         case "guard": return "guarding (VPN)"
         case "full-block": return "full block (VPN)"
+        case "switch-window": return "switch window — all traffic allowed"
         case "stopped": return "stopped"
         default: return s.posture
         }
@@ -262,9 +267,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     private func mmss(_ seconds: TimeInterval) -> String {
-        // Round up so a countdown never briefly shows MORE time than is left
-        // (e.g. 59.6s must read "1:00", not jump back up after ticking to 0:59).
-        let s = max(0, Int(seconds.rounded(.up)))
+        // Round DOWN so the countdown never shows more time than is actually left
+        // (e.g. 59.6s reads "0:59", not "1:00"). For this switch-window exposure
+        // timer, under-stating the remaining time is the safe direction.
+        let s = max(0, Int(seconds.rounded(.down)))
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 
