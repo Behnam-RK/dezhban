@@ -187,7 +187,13 @@ func liveSample(tunnels []string) TunnelState {
 		}
 	}
 	if len(names) == 0 {
-		return TunnelState{Up: false, Detail: "no configured tunnel is up"}
+		// "configured" only fits the pinned case; in autodetect mode (empty Tunnels)
+		// nothing is configured, so keep the detail accurate for logs/status.
+		detail := "no tunnel interface is up"
+		if len(tunnels) > 0 {
+			detail = "no configured tunnel is up"
+		}
+		return TunnelState{Up: false, Detail: detail}
 	}
 	sort.Strings(names)
 	return TunnelState{Up: true, Name: names[0], Names: names, Detail: strings.Join(names, ",") + " up"}

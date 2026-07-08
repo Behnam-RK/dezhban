@@ -6,6 +6,7 @@ package vpnimport
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,9 +30,9 @@ func Extract(path string) (endpoints []string, format string, err error) {
 	var hosts []string
 	switch format {
 	case "wireguard":
-		hosts, err = extractWireGuard(strings.NewReader(string(data)))
+		hosts, err = extractWireGuard(bytes.NewReader(data))
 	case "openvpn":
-		hosts, err = extractOpenVPN(strings.NewReader(string(data)))
+		hosts, err = extractOpenVPN(bytes.NewReader(data))
 	case "v2ray":
 		hosts, err = extractJSON(data)
 	default:

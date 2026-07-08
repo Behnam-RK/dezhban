@@ -72,7 +72,7 @@ func cmdSwitch(args []string) int {
 	if *noWait {
 		return 0
 	}
-	return waitForSwitch(statePath, *name)
+	return waitForSwitch(statePath)
 }
 
 // newCommand builds a control command stamped now with a fresh nonce.
@@ -90,7 +90,7 @@ func nonce() string {
 
 // waitForSwitch polls the state file and narrates the window until it closes or a
 // generous timeout elapses. Best-effort: the daemon is the source of truth.
-func waitForSwitch(statePath, profile string) int {
+func waitForSwitch(statePath string) int {
 	deadline := time.Now().Add(6 * time.Minute)
 	sawOpen := false
 	for time.Now().Before(deadline) {
@@ -180,7 +180,10 @@ func cmdVPNList(args []string) int {
 		}
 		fmt.Printf("%-11s %s%s\n", p.Name, strings.Join(p.Endpoints, ", "), hint)
 	}
-	store, _ := learned.Load(defaultLearnedPath())
+	store, lerr := learned.Load(defaultLearnedPath())
+	if lerr != nil {
+		fmt.Fprintln(os.Stderr, "vpn list: learned endpoints unavailable:", lerr)
+	}
 	if len(store.Entries) > 0 {
 		fmt.Println("\nlearned (not yet saved as profiles):")
 		for _, e := range store.Entries {
@@ -301,7 +304,13 @@ func cmdVPNPromote(args []string) int {
 	if !requireRoot("vpn promote") {
 		return 1
 	}
-	store, _ := learned.Load(defaultLearnedPath())
+	store, lerr := learned.Load(defaultLearnedPath())
+	if lerr != nil {
+		// Surface the underlying failure so a corrupt/unreadable learned.json isn't
+		// misreported as "no learned entry".
+		fmt.Fprintln(os.Stderr, "vpn promote: learned endpoints unreadable:", lerr)
+		return 1
+	}
 	var eps []string
 	var found bool
 	for _, e := range store.Entries {
