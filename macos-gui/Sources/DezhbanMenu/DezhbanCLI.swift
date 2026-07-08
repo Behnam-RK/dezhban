@@ -31,12 +31,11 @@ enum DezhbanCLI {
     }
 
     /// Runs a privileged command via the native admin prompt, capturing what it
-    /// printed. AppleScript's `executeAndReturnError` return value holds the
-    /// command's combined stdout+stderr on success (the shell command folds
-    /// stderr in via `2>&1`); on failure the NSDictionary error info holds the
-    /// message
-    /// (including the shell command's stderr, since `do shell script` folds a
-    /// non-zero exit's stderr into the AppleScript error). Every call site gets
+    /// printed. The wrapper captures the command's combined stdout+stderr and
+    /// routes it so both outcomes surface it: on success `executeAndReturnError`
+    /// returns it as stdout; on failure `do shell script` raises an AppleScript
+    /// error whose message is the command's stderr, so the wrapper re-emits the
+    /// captured output to stderr before exiting non-zero. Every call site gets
     /// real output instead of a bare pass/fail, so a failure alert can show what
     /// actually went wrong.
     @discardableResult
@@ -54,11 +53,15 @@ enum DezhbanCLI {
         guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else {
             return CommandResult(ok: false, output: "refused: an argument contained a quote or backslash")
         }
-        // Fold stderr into stdout so a command that writes diagnostics to stderr
-        // while exiting 0 still surfaces them: `do shell script` only returns
-        // stderr to us on a *non-zero* exit, so without `2>&1` a successful
-        // command's stderr would be silently dropped.
-        let shellCmd = tokens.map { "'\($0)'" }.joined(separator: " ") + " 2>&1"
+        // Route the command's combined output so BOTH outcomes surface it.
+        // `do shell script` returns stdout on success but reports a non-zero exit
+        // as an AppleScript *error* whose message is the command's stderr — so a
+        // plain `2>&1` would send failure diagnostics to stdout and leave the
+        // error as a bare "error code N" (notably for `config set` validation
+        // failures). Instead capture stdout+stderr in $out, print it to stdout on
+        // success, and to stderr (then re-exit non-zero) on failure.
+        let quoted = tokens.map { "'\($0)'" }.joined(separator: " ")
+        let shellCmd = "out=$(\(quoted) 2>&1); rc=$?; if [ \"$rc\" -eq 0 ]; then printf '%s' \"$out\"; else printf '%s' \"$out\" >&2; exit \"$rc\"; fi"
         // Embed shellCmd as an AppleScript string literal: escape double-quotes.
         let escaped = shellCmd.replacingOccurrences(of: "\"", with: "\\\"")
         let source = "do shell script \"\(escaped)\" with administrator privileges"
@@ -221,7 +224,17 @@ final class StreamingProcess {
     func start(onOutput: @escaping (String) -> Void) -> Bool {
         pipe.fileHandleForReading.readabilityHandler = { handle in
             let data = handle.availableData
-            guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+            if data.isEmpty {
+                // EOF — the child closed its output. Drop the handler so it
+                // doesn't dangle, firing repeatedly on a closed handle.
+                handle.readabilityHandler = nil
+                return
+            }
+            // String(decoding:as:) never returns nil. availableData can split a
+            // multi-byte UTF-8 sequence across two reads, which would make
+            // String(data:encoding:) nil out and silently drop the whole chunk;
+            // here the worst case is a lone U+FFFD at the split boundary.
+            let text = String(decoding: data, as: UTF8.self)
             DispatchQueue.main.async { onOutput(text) }
         }
         do {

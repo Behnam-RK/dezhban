@@ -238,7 +238,9 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             var log = ""
             for (key, value) in sets {
                 let result = DezhbanCLI.runPrivileged(["config", "set", key, value, "--config", cfgPath])
-                log += "$ dezhban config set \(key) \(value) --config \(cfgPath)\n\(result.output)\n\n"
+                // Quote value/cfgPath (via String(reflecting:)) so the transcript
+                // is unambiguous and copy/paste-runnable when they contain spaces.
+                log += "$ dezhban config set \(key) \(String(reflecting: value)) --config \(String(reflecting: cfgPath))\n\(result.output)\n\n"
                 if !result.ok {
                     DispatchQueue.main.async {
                         self.finishWithoutRestart(log: log, message: "Rejected: \(key) failed to set — no restart attempted.")
@@ -251,7 +253,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             // full config on write, but re-validate the file itself once more
             // before ever offering a restart.
             let validate = DezhbanCLI.run(["validate", "--config", cfgPath])
-            log += "$ dezhban validate --config \(cfgPath)\n\(validate.output)\n\n"
+            log += "$ dezhban validate --config \(String(reflecting: cfgPath))\n\(validate.output)\n\n"
             guard validate.ok else {
                 DispatchQueue.main.async {
                     self.finishWithoutRestart(log: log, message: "Config written but failed final validation — daemon not restarted.")
