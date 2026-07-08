@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -50,12 +51,13 @@ func TestRecordAndSaveRoundTrip(t *testing.T) {
 	if err := s.Save(p); err != nil {
 		t.Fatalf("Save: %v", err)
 	}
-	// 0644 so the unprivileged CLI can read it.
+	// 0644 so the unprivileged CLI can read it. Windows doesn't honor Unix perm
+	// bits (Stat reports 0666), so the exact-mode check is POSIX-only.
 	fi, err := os.Stat(p)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := fi.Mode().Perm(); perm != 0o644 {
+	if perm := fi.Mode().Perm(); runtime.GOOS != "windows" && perm != 0o644 {
 		t.Errorf("perm = %o, want 0644", perm)
 	}
 	got, err := Load(p)
