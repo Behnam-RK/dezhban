@@ -362,6 +362,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		windowDeadline    time.Time
 		windowPrevBlocked bool
 		windowProfile     string
+		activeProfile     string // last profile a switch window verified onto; sticky
 		windowTimer       *time.Timer
 		windowTimerC      <-chan time.Time
 		winDiscTick       *time.Ticker
@@ -385,7 +386,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		return &state.SwitchState{Open: true, Until: windowDeadline, Profile: windowProfile}
 	}
 	snapshot := func() {
-		o.publish(blocked, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), "")
+		o.publish(blocked, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile)
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints) }
 
@@ -505,6 +506,11 @@ func (o Options) runVPN(ctx context.Context) error {
 			enfErr = nil
 		}
 		lastRes = monitor.Result{Reading: r}
+		// The window verified a good exit for this profile — it is now the active
+		// one, and stays so (sticky) until the next switch names another.
+		if windowProfile != "" {
+			activeProfile = windowProfile
+		}
 		if o.Learn != nil {
 			if disc := discoveredAddrs(lastSet); len(disc) > 0 {
 				o.Learn(windowProfile, firstOr(tunnels), disc)

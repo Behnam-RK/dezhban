@@ -24,8 +24,11 @@ Subcommands:
   remove <name>                 Remove a profile ( --learned to drop a learned entry)
   promote <name> [--as NAME]    Promote a learned entry into a saved profile
   forget <name> | --all         Drop learned endpoint entries
+  import FILE [--name N]         Import a profile from a WG/OpenVPN/V2Ray config
+                                  (--dry-run previews without saving)
 
-Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --iface-hint PREFIX`
+Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --iface-hint PREFIX,
+       --as NAME, --name NAME, --dry-run, --all, --learned, --yes`
 
 // cmdSwitch opens (or cancels / inspects) a switch window on the running daemon
 // by writing the root-owned control file. Connecting a brand-new VPN whose server
@@ -247,11 +250,11 @@ func cmdVPNRemove(args []string) int {
 		return 2
 	}
 	name := pos[0]
-	if *fromLearned {
-		return forgetLearned(name, false)
-	}
 	if !requireRoot("vpn remove") {
 		return 1
+	}
+	if *fromLearned {
+		return forgetLearned(name, false)
 	}
 	return mutateConfig(cfgPath, func(c *config.Config) error {
 		out := c.VPN.Profiles[:0]
@@ -288,7 +291,7 @@ func cmdVPNPromote(args []string) int {
 	var eps []string
 	var found bool
 	for _, e := range store.Entries {
-		if e.Name == entryName {
+		if strings.EqualFold(e.Name, entryName) {
 			found = true
 			for _, ep := range e.Endpoints {
 				eps = append(eps, ep.Addr)

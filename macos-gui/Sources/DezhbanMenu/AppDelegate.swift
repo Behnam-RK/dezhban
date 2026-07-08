@@ -266,9 +266,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return String(format: "%d:%02d", s / 60, s % 60)
     }
 
-    private func shortTime(_ t: Date) -> String {
+    private static let shortTimeFormatter: DateFormatter = {
         let f = DateFormatter()
         f.timeStyle = .short
-        return f.string(from: t)
+        return f
+    }()
+
+    private func shortTime(_ t: Date) -> String {
+        AppDelegate.shortTimeFormatter.string(from: t)
     }
 }

@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 )
 
@@ -167,10 +168,11 @@ func (s *Store) Prune(ttl time.Duration, maxPerEntry int, now time.Time) int {
 	return dropped
 }
 
-// Forget removes the entry named `name`. Returns true if it existed.
+// Forget removes the entry named `name` (case-insensitive, matching how
+// profiles are compared elsewhere). Returns true if it existed.
 func (s *Store) Forget(name string) bool {
 	for i := range s.Entries {
-		if s.Entries[i].Name == name {
+		if strings.EqualFold(s.Entries[i].Name, name) {
 			s.Entries = append(s.Entries[:i], s.Entries[i+1:]...)
 			return true
 		}

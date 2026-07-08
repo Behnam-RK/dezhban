@@ -954,10 +954,12 @@ func TestSwitchWindowCancelRevertsToGuard(t *testing.T) {
 func TestSwitchWindowEarlyCloseLearnsEndpoint(t *testing.T) {
 	be := &fakeBackend{}
 	learned := map[string][]netip.Addr{}
+	var snaps []state.Snapshot
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	discovered := netip.MustParseAddr("198.51.100.9")
 	o := Options{
+		Publish:                 func(s state.Snapshot) { snaps = append(snaps, s) },
 		Monitor:                 steadyMonitor{cc: "US"}, // exit verified allowed
 		Decider:                 decision.New([]string{"IR"}, true, 1),
 		Backend:                 be,
@@ -989,6 +991,16 @@ func TestSwitchWindowEarlyCloseLearnsEndpoint(t *testing.T) {
 	}
 	if !applyGuardAfterSwitch(be.calls) {
 		t.Fatalf("expected guard applied after early close; calls=%v", be.calls)
+	}
+	// The verified close must attribute the active profile so status/GUI can show it.
+	sawActive := false
+	for _, s := range snaps {
+		if s.ActiveProfile == "newvpn" {
+			sawActive = true
+		}
+	}
+	if !sawActive {
+		t.Fatalf("expected a snapshot with ActiveProfile=%q after verified close; got %d snapshots", "newvpn", len(snaps))
 	}
 }
 
