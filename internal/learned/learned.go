@@ -3,12 +3,20 @@
 // guard), so a VPN that has been connected once stays reachable across restarts
 // without the user hand-typing its server address.
 //
-// The store lives beside the state file (see cmd/dezhban.defaultStatePath) and is
-// written ONLY by the daemon. It is machine-observed fact, deliberately separate
-// from the user's config (which is user intent): a corrupt learned.json is safe
-// to discard, whereas a corrupt config could brick the kill switch. Callers that
-// only read it (the `vpn list` CLI) need no privilege; edits go through the
-// daemon.
+// The store lives beside the state file (see cmd/dezhban.defaultStatePath). At
+// runtime the daemon is the sole writer. It is machine-observed fact, deliberately
+// separate from the user's config (which is user intent): a corrupt learned.json
+// is safe to discard, whereas a corrupt config could brick the kill switch.
+// Callers that only read it (the `vpn list` CLI) need no privilege.
+//
+// The root-owned maintenance commands `vpn forget` and `vpn promote` edit the
+// file directly rather than through the daemon: they are infrequent, manual
+// operations and every write is a whole-file atomic replace (temp + rename), so a
+// reader never sees a torn file. The one caveat is a lost update if the daemon
+// happens to write (learn a new endpoint) between the CLI's load and save — last
+// writer wins. That race is benign (a re-learn re-adds the endpoint on the next
+// switch window) and practically absent, since learning only happens inside a
+// switch window; prefer running these commands with no window open.
 package learned
 
 import (
@@ -197,9 +205,12 @@ func (s *Store) Addrs() []string {
 	return out
 }
 
+// entry finds an entry by name, case-insensitively — matching how profiles are
+// compared everywhere else (Forget, config add/remove), so Record cannot create
+// a second entry that differs from an existing one only by case.
 func (s *Store) entry(name string) *Entry {
 	for i := range s.Entries {
-		if s.Entries[i].Name == name {
+		if strings.EqualFold(s.Entries[i].Name, name) {
 			return &s.Entries[i]
 		}
 	}

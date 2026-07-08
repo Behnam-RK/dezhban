@@ -86,6 +86,29 @@ func TestRecordRefreshesLastSeenAndDedupes(t *testing.T) {
 	}
 }
 
+// Record must match entry names case-insensitively (like Forget and profile
+// handling), so "Proton" and "proton" merge into one entry rather than bloating
+// the store with case-variant duplicates.
+func TestRecordMergesCaseInsensitively(t *testing.T) {
+	t0 := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
+	s := &Store{}
+	s.Record("Proton", "", "discovery", []netip.Addr{addr(t, "1.2.3.4")}, 16, t0)
+	s.Record("proton", "", "discovery", []netip.Addr{addr(t, "5.6.7.8")}, 16, t0.Add(time.Minute))
+	if n := len(s.Entries); n != 1 {
+		t.Fatalf("entries = %d, want 1 (case-variant names merged)", n)
+	}
+	if n := len(s.Entries[0].Endpoints); n != 2 {
+		t.Fatalf("endpoints = %d, want 2 merged into the one entry", n)
+	}
+	// A case-variant Forget must then drop it.
+	if !s.Forget("PROTON") {
+		t.Fatal("Forget(PROTON) = false, want true (case-insensitive)")
+	}
+	if len(s.Entries) != 0 {
+		t.Fatalf("entries after forget = %d, want 0", len(s.Entries))
+	}
+}
+
 func TestRecordEnforcesPerEntryCap(t *testing.T) {
 	base := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	s := &Store{}

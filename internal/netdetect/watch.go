@@ -20,8 +20,13 @@ type TunnelState struct {
 	Name string
 	// Names is every interface that satisfied isTunnelIface this sample, sorted.
 	// The runner uses set changes here to grow/prune its dynamic tunnel set.
-	Names  []string
-	Detail string
+	Names []string
+	// Unknown marks a sample that could not observe the interfaces at all (e.g.
+	// enumeration failed). It is neither an up nor a down edge and carries no
+	// meaningful Names: the watcher must ignore it rather than misread the empty
+	// Names as a set shrink and churn the runner's dynamic tunnel set.
+	Unknown bool
+	Detail  string
 }
 
 // Watcher samples the tunnel interface(s) on a short interval and emits an event
@@ -83,6 +88,12 @@ func (w *Watcher) Watch(ctx context.Context) <-chan TunnelState {
 				return
 			case <-t.C:
 				st := sample(w.Tunnels)
+				if st.Unknown {
+					// Couldn't observe this tick — not an edge. Hold the last emitted
+					// state and leave the down-streak untouched (an unknown is neither
+					// evidence of down nor of recovery).
+					continue
+				}
 				// Grow / down→up is emitted immediately (a new tunnel must be
 				// guarded at once); a set that lost members or went down is
 				// debounced (a flapping reconnect must not churn rule reloads).
@@ -152,7 +163,11 @@ func SampleTunnels(tunnels []string) TunnelState { return liveSample(tunnels) }
 func liveSample(tunnels []string) TunnelState {
 	ifaces, err := net.Interfaces()
 	if err != nil {
-		return TunnelState{Up: true, Detail: "interface enumeration failed: " + err.Error()}
+		// Can't observe: report Unknown so the watcher holds its last state rather
+		// than treating the empty Names set as a drop/shrink. Up stays true so any
+		// consumer that ignores Unknown still reads "not a drop" (a read hiccup is
+		// not evidence of a leak; guard's standing rule covers a real one).
+		return TunnelState{Up: true, Unknown: true, Detail: "interface enumeration failed: " + err.Error()}
 	}
 	want := make(map[string]bool, len(tunnels))
 	for _, t := range tunnels {

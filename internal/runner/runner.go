@@ -359,6 +359,7 @@ func (o Options) runVPN(ctx context.Context) error {
 	// deadline enforce the bound (belt and braces).
 	var (
 		windowActive      bool
+		windowStart       time.Time // when the current window first opened; anchors the hard cap
 		windowDeadline    time.Time
 		windowPrevBlocked bool
 		windowProfile     string
@@ -420,15 +421,33 @@ func (o Options) runVPN(ctx context.Context) error {
 		winDiscC = nil
 	}
 
+	// windowMax is the absolute cap on real-IP exposure. It anchors to the FIRST
+	// open (windowStart), so repeated "open" commands can never extend a single
+	// window past it — each command's duration is clamped, but without this anchor
+	// their deadlines would stack.
+	windowMax := o.SwitchWindowMax
+	if windowMax <= 0 {
+		windowMax = 5 * time.Minute
+	}
+
 	openWindow := func(now time.Time, dur time.Duration, profile string) {
 		if windowActive {
-			// Extend the deadline (still capped by the caller's clamp).
+			// Extend the deadline, but never past windowStart+windowMax — the hard
+			// cap on exposure holds across repeated opens.
+			hardCap := windowStart.Add(windowMax)
 			windowDeadline = now.Add(dur)
+			if windowDeadline.After(hardCap) {
+				windowDeadline = hardCap
+			}
 			windowProfile = profile
+			remaining := windowDeadline.Sub(now)
+			if remaining < 0 {
+				remaining = 0
+			}
 			if windowTimer != nil {
 				windowTimer.Stop()
 			}
-			windowTimer = time.NewTimer(dur)
+			windowTimer = time.NewTimer(remaining)
 			windowTimerC = windowTimer.C
 			o.Log.Info("switch window extended", "until", windowDeadline, "profile", profile)
 			snapshot()
@@ -442,6 +461,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		}
 		windowPrevBlocked = blocked
 		windowActive = true
+		windowStart = now
 		windowProfile = profile
 		windowDeadline = now.Add(dur)
 		windowTimer = time.NewTimer(dur)
@@ -477,15 +497,32 @@ func (o Options) runVPN(ctx context.Context) error {
 		snapshot()
 	}
 
-	// tryCloseWindowVerified attempts an early success close: a tunnel is up and an
-	// endpoint is known, AND a bounded geo lookup reads a NON-blocked exit. Only
-	// then do we close toward GUARD and learn the discovered endpoint. A blocked or
-	// failed reading keeps the window open (it may be a physical-path leak reading,
-	// or the exit really is forbidden — either way, not safe to trust yet). We
-	// never feed this reading into the Decider's hysteresis streak (path-ambiguous).
+	// tryCloseWindowVerified attempts an early success close: a tunnel is up, a
+	// VPN server socket has actually been DISCOVERED this window, AND a bounded geo
+	// lookup reads a NON-blocked exit. Only then do we close toward GUARD and learn
+	// the discovered endpoint. A blocked or failed reading keeps the window open
+	// (it may be a physical-path leak reading, or the exit really is forbidden —
+	// either way, not safe to trust yet). We never feed this reading into the
+	// Decider's hysteresis streak (path-ambiguous).
+	//
+	// CAVEAT: o.Monitor.Once uses the OS default route (no interface binding), and
+	// while the window is open ALL egress is allowed — so a non-blocked reading is
+	// not by itself proof the exit was reached through the tunnel (a full-tunnel
+	// VPN mid-handshake may not own the default route yet, and a benign physical
+	// exit reads as "allowed"). We reduce that false-positive by requiring live
+	// socket-discovery evidence (a connection to a VPN-server endpoint exists this
+	// window) rather than trusting a stale static endpoint. The residual is bounded
+	// and safe: an early close lands on GUARD, which keeps the discovered endpoint
+	// open so the handshake still completes, and the next GUARD-posture geo tick
+	// re-checks the exit through the Decider. The learned endpoints come from the
+	// socket table, not the geo reading, so attribution stays correct regardless.
 	tryCloseWindowVerified := func() {
-		if !windowActive || len(tunnels) == 0 || len(endpoints) == 0 {
+		if !windowActive || len(tunnels) == 0 {
 			return
+		}
+		disc := discoveredAddrs(lastSet)
+		if len(disc) == 0 {
+			return // no live VPN socket yet — a static endpoint alone can't confirm a connect
 		}
 		pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
 		r, err := o.Monitor.Once(pctx)
@@ -512,10 +549,8 @@ func (o Options) runVPN(ctx context.Context) error {
 			activeProfile = windowProfile
 		}
 		if o.Learn != nil {
-			if disc := discoveredAddrs(lastSet); len(disc) > 0 {
-				o.Learn(windowProfile, firstOr(tunnels), disc)
-				o.Log.Info("learned vpn endpoint(s) from switch window", "profile", windowProfile, "count", len(disc))
-			}
+			o.Learn(windowProfile, firstOr(tunnels), disc)
+			o.Log.Info("learned vpn endpoint(s) from switch window", "profile", windowProfile, "count", len(disc))
 		}
 		o.Log.Info("switch window closed early (exit verified)", "country", r.CountryCode, "tunnels", tunnels)
 		snapshot()

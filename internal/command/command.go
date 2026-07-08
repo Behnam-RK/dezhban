@@ -96,8 +96,11 @@ func Consume(path string, now time.Time, freshness time.Duration, check OwnerChe
 		}
 		return Command{}, false, fmt.Errorf("command: lstat: %w", err)
 	}
-	// Anything read below is untrusted until validated; delete first so no path
-	// leaves the file in place.
+	// Consume-once: the file is removed on every return path (valid, invalid, or
+	// error), so a command can never be replayed and a bad file can't wedge the
+	// tick. The removal is deferred, not immediate — the read below still sees the
+	// file — but no code path leaves it in place. The caller acts only after
+	// Consume returns, so it always acts on an already-deleted file.
 	defer func() { _ = os.Remove(path) }()
 
 	if !fi.Mode().IsRegular() {
