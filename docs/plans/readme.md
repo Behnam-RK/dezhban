@@ -107,6 +107,7 @@ each phase doc on real macOS/Linux/Windows hosts).
 | 6 | [phase-6-persistence.md](./phase-6-persistence.md) | ✅ | Run as service: launchd / systemd / Windows Service |
 | 7 | [phase-7-safety-packaging.md](./phase-7-safety-packaging.md) | ✅ | Panic-unblock, manual override, logging polish, cross-compile |
 | 8 | [phase-8-macos-gui.md](./phase-8-macos-gui.md) | ✅ | macOS menubar app: live status, controls, login autostart (state-file IPC) |
+| 9 | [phase-9-vpn-profiles-switching.md](./phase-9-vpn-profiles-switching.md) | ✅ | VPN profiles, dynamic tunnel re-detection, switch window, endpoint learning, importers |
 
 Each phase is independently buildable & verifiable. Implement one at a time;
 verify before moving on.

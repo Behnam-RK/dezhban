@@ -1,0 +1,30 @@
+{
+  "pollInterval": "30s",
+  "blockedCountries": ["RU", "IR"],
+  "failClosed": true,
+  "hysteresis": 3,
+  "providers": [
+    "https://ipinfo.io/json",
+    "http://ip-api.com/json",
+    "https://ifconfig.co/json"
+  ],
+  "allowlist": {
+    "dns": ["1.1.1.1", "8.8.8.8"],
+    "hosts": []
+  },
+  "vpn": {
+    "enabled": true,
+    "autodetect": true,
+    "autoDiscoverEndpoints": true,
+    "allowPhysicalDNS": true,
+    "switchWindow": "2m",
+    "profiles": [
+      { "name": "proton", "endpoints": ["nl-free-01.protonvpn.net"] },
+      { "name": "home-wg", "endpoints": ["203.0.113.7"], "ifaceHint": "wg" }
+    ],
+    "endpointRefresh": "5m",
+    "tunnelWatch": "1s"
+  },
+  "providerQuorum": false,
+  "logLevel": "info"
+}

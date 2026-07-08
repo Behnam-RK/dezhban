@@ -31,7 +31,7 @@ Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
 {
   "time": "2026-07-01T12:00:00Z",
   "mode": "legacy",                     // "vpn" | "legacy"
-  "posture": "allow",                   // allow | block | guard | full-block | stopped
+  "posture": "allow",                   // allow | block | guard | full-block | switch-window | stopped
   "blocked": false,                     // egress currently cut
   "ip": "203.0.113.45",
   "countryCode": "US",
@@ -44,7 +44,13 @@ Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
   "endpoints": ["198.51.100.7"],        // (vpn) resolved VPN endpoints
   "pollIntervalSeconds": 30,            // daemon poll cadence, for sizing staleness
   "blockedCountries": ["IR"],
-  "pid": 4242
+  "pid": 4242,
+  "activeProfile": "proton",            // (vpn) matched profile name, omitted if unknown
+  "switch": {                            // (vpn) present only while a switch window is open
+    "open": true,
+    "until": "2026-07-01T12:02:00Z",
+    "profile": "newvpn"
+  }
 }
 ```
 

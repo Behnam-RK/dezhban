@@ -60,7 +60,9 @@ is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you ou
 | `vpn.enabled` | bool | `false` | Turns on guard mode. |
 | `vpn.tunnelInterfaces` | `[]string` | `[]` | Tunnel interface names (e.g. `["utun4"]`). Required unless `autodetect` is set. Run `dezhban detect-vpn` to find them. |
 | `vpn.endpoints` | `[]string` | `[]` | VPN server addresses reachable on the physical interface — kept open so the tunnel can stay up and reconnect. Each entry may be an **IP or a hostname** (hostnames are re-resolved at runtime). Required when `enabled`, unless `autoDiscoverEndpoints` is set. |
-| `vpn.autodetect` | bool | `false` | Discover the tunnel interface(s) at runtime via `netdetect`. Explicit `tunnelInterfaces` always win. |
+| `vpn.autodetect` | bool | `false` | Discover the tunnel interface(s) at runtime via `netdetect`, growing/pruning the guard set as VPNs come and go. Explicit `tunnelInterfaces` always win (and are pinned — never pruned). **Implied `true`** when the guard is enabled with no `tunnelInterfaces`, so a config never pins a `utunN` that renumbers across reconnects. |
+| `vpn.profiles` | `[]object` | `[]` | Named VPNs whose server endpoints are always kept reachable (the guard passes the **union** of all profiles' endpoints), so switching between known VPNs needs no reconfiguration. Each: `{name, endpoints[], ifaceHint?}`. `ifaceHint` is display-only. Manage with `dezhban vpn add/remove/import`, not `config set`. |
+| `vpn.switchWindow` | duration | `2m` | Default length of a `dezhban switch` window — a bounded, explicitly-triggered relaxation for connecting a brand-new VPN whose server isn't known yet. Validated to `[10s, advanced.switchWindowMax]`. |
 | `vpn.autoDiscoverEndpoints` | bool | `false` | Continuously learn the live VPN server IP from the active socket (**macOS only**; ignored elsewhere, where hostnames/IPs are used). Lets a rotating-pool VPN (NordVPN/ProtonVPN/…) run with no hand-typed endpoint. |
 | `vpn.allowPhysicalDNS` | bool | `false` | Open plain DNS (port 53) egress on the **physical** link in GUARD and VPN FULL BLOCK, so a VPN client can re-resolve its server hostname and reconnect while the tunnel is down. Off by default — the residual leak is DNS-query metadata (which resolver you query, and that you're reconnecting) on the physical path; your actual traffic stays blocked. Recommended when any endpoint is a hostname. |
 | `vpn.endpointRefresh` | duration | `5m` | How often hostnames are re-resolved and live discovery re-run. |
@@ -72,8 +74,9 @@ is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you ou
 - `hysteresis` ≥ 1
 - at least one `providers` entry
 - every `blockedCountries` code is 2 letters
-- when `vpn.enabled`: `tunnelInterfaces` non-empty **or** `autodetect` true
-- when `vpn.enabled`: at least one `endpoints` entry (IP **or** hostname) **or** `autoDiscoverEndpoints` true
+- when `vpn.enabled`: at least one endpoint across the **union** of `vpn.endpoints`, `vpn.profiles[].endpoints`, **or** `autoDiscoverEndpoints` (tunnel interfaces need not be set — autodetect is implied)
+- `vpn.profiles`: unique names (`[A-Za-z0-9._-]`, ≤64), each with ≥1 valid endpoint
+- `vpn.switchWindow` within `[10s, advanced.switchWindowMax]`
 
 ### Getting `vpn.endpoints` right
 
@@ -111,9 +114,59 @@ sudo dezhban run --simulate-country IR --config <config>       # drive a real bl
 sudo dezhban run --simulate-tunnel-down 8s --config <config>   # exercise the failover path (legacy kill switch)
 ```
 
+## VPN profiles and switching between many VPNs
+
+The target workflow — one-time setup, then connect to **any** VPN and switch
+freely — is served by two mechanisms:
+
+- **Profiles** keep every known VPN's server reachable at once (the guard passes
+  the union), so disconnecting VPN A and connecting VPN B just works with no
+  reconfiguration. Add them from the client's own config file:
+
+  ```sh
+  dezhban vpn add proton --endpoint nl-01.protonvpn.net
+  dezhban vpn import ~/wg0.conf            # WireGuard .conf / OpenVPN .ovpn / V2Ray JSON
+  dezhban vpn list                          # profiles + learned endpoints + active state
+  ```
+
+- **Switch window** handles a *brand-new* VPN whose server isn't known yet. The
+  guard is blocking everything, so its handshake to an unknown IP would be cut —
+  open a bounded window, connect, and dezhban learns and pins the server, then
+  snaps shut:
+
+  ```sh
+  sudo dezhban switch          # opens a ~2m window, watches for the new tunnel + server
+  # …connect your VPN in its app…
+  sudo dezhban vpn promote <name>   # make the learned endpoint permanent (see: dezhban vpn list)
+  ```
+
+  See [modes.md](modes.md) for the window's exact posture and the leak trade-off.
+
+Learned endpoints live in a daemon-owned file (`/var/db/dezhban/learned.json` on
+unix, `%ProgramData%\dezhban\learned.json` on Windows) — separate from your
+config so the daemon never rewrites user intent. `dezhban vpn forget` clears them.
+
+## Advanced tunables (`vpn.advanced`)
+
+An optional block for behaviors that are otherwise recommended defaults. Omit it
+entirely to keep the defaults; set only the knobs you need.
+
+| Field | Default | What it controls |
+|---|---|---|
+| `switchWindowMax` | `5m` | Hard cap on any switch window (incl. `--for`). |
+| `commandFreshness` | `30s` | How recent a control command must be to be acted on (replay guard). |
+| `windowDiscoveryInterval` | `2s` | How often the new server is looked for while a window is open. |
+| `tunnelPruneAfter` | `60s` | How long a dynamically-detected tunnel must be gone before it's dropped. |
+| `learnedEndpointTTL` | `720h` | How long an unused learned endpoint is kept. |
+| `learnedMaxPerProfile` | `16` | Cap on learned endpoints per profile (LRU). |
+| `promoteAfterRefreshes` | `3` | Consecutive sightings before a discovered endpoint is learned under normal guard. |
+| `endpointWarnThreshold` | `256` | Union size at which `doctor` warns about rule-list bloat. |
+| `windowProtocols` / `windowPorts` | (empty = allow all) | Restrict the switch window to these protocols/ports instead of all outbound — only useful when every VPN you switch to uses a fixed port set (e.g. WireGuard on 51820). |
+
 ## Sample configs
 
 - [`configs/dezhban.example.json`](../configs/dezhban.example.json) — reference, legacy (non-VPN) mode.
 - [`configs/dezhban.vpn-guard.json`](../configs/dezhban.vpn-guard.json) — VPN guard mode.
+- [`configs/dezhban.profiles.json`](../configs/dezhban.profiles.json) — autodetect + multiple VPN profiles + switch window.
 - [`configs/dezhban.dev.json`](../configs/dezhban.dev.json) — debug logging, fast poll, no blocking; for local dry-runs.
 - `configs/dezhban.local.json` — your private config (git-ignored; may hold a real endpoint IP).

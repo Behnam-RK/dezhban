@@ -1045,11 +1045,19 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
 			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
 		}, nil
+	case "switch":
+		return firewall.Policy{
+			Mode:         firewall.ModeSwitchWindow,
+			TunnelIfaces: tunnels,
+			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
+			WindowProtos: cfg.VPN.Advanced.WindowProtocols,
+			WindowPorts:  cfg.VPN.Advanced.WindowPorts,
+		}, nil
 	case "legacy":
 		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.
 		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: al}, nil
 	default:
-		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, legacy)", mode)
+		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, switch, legacy)", mode)
 	}
 }
 
@@ -1060,7 +1068,7 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 func cmdPrintRules(args []string) int {
 	fs := flag.NewFlagSet("print-rules", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
-	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, or legacy")
+	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, switch, or legacy")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)
