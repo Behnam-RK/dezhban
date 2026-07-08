@@ -121,10 +121,17 @@ enum DezhbanCLI {
     static func resolvedConfigPath() -> String {
         guard let bin = binaryPath() else { return configPath }
         let r = exec(bin, ["config", "path"])
-        // `config path` prints the winning path (possibly followed by a note like
-        // "(not present — using built-in defaults)"); take the first field.
-        let first = r.out.split(whereSeparator: { $0 == " " || $0 == "\n" }).first.map(String.init) ?? ""
-        return (r.status == 0 && !first.isEmpty) ? first : configPath
+        // `config path` prints a single line: the winning path, optionally
+        // followed by a trailing note like " (not present — using built-in
+        // defaults)". Take the first line and strip that trailing parenthetical
+        // — never split on spaces, which would truncate a valid path containing
+        // them (e.g. "~/Library/Application Support/…").
+        var path = (r.out.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? "")
+            .trimmingCharacters(in: .whitespaces)
+        if path.hasSuffix(")"), let note = path.range(of: " (", options: .backwards) {
+            path = String(path[..<note.lowerBound]).trimmingCharacters(in: .whitespaces)
+        }
+        return (r.status == 0 && !path.isEmpty) ? path : configPath
     }
 
     // MARK: - logs

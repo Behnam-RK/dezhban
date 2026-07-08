@@ -171,7 +171,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
                 self.autoDiscoverCheckbox.state = (values[4] == "true") ? .on : .off
                 self.endpointRefreshField.stringValue = values[5]
                 self.tunnelWatchField.stringValue = values[6]
-                self.statusLabel.stringValue = "Seeded from \(DezhbanCLI.resolvedConfigPath())"
+                self.statusLabel.stringValue = "Seeded from \(cfgPath)"
                 self.applyButton.isEnabled = true
             }
         }
