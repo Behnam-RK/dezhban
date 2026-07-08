@@ -315,11 +315,19 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 	// convenience, not load-bearing).
 	learnedPath := defaultLearnedPath()
 	adv := cfg.VPN.Advanced
-	store, err := learned.Load(learnedPath)
-	if err != nil {
-		log.Warn("learned endpoints store unreadable; starting empty", "err", err)
+	// Reload the store from disk on every access rather than caching it in memory,
+	// so external maintenance edits (e.g. `dezhban vpn forget`, which rewrites
+	// learned.json) are respected and never clobbered by a stale in-memory copy.
+	// Both closures run only on the single run-loop goroutine, so there is no race.
+	if _, lerr := learned.Load(learnedPath); lerr != nil {
+		log.Warn("learned endpoints store unreadable; starting empty", "err", lerr)
 	}
 	epSrc.Learned = func() []netip.Addr {
+		store, lerr := learned.Load(learnedPath)
+		if lerr != nil {
+			log.Debug("learned endpoints reload failed; skipping this cycle", "err", lerr)
+			return nil
+		}
 		out := make([]netip.Addr, 0, len(store.Addrs()))
 		for _, s := range store.Addrs() {
 			if a, perr := netip.ParseAddr(s); perr == nil {
@@ -329,6 +337,12 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		return out
 	}
 	learnHook := func(profile, iface string, addrs []netip.Addr) {
+		// Reload before mutating so a concurrent forget/edit is merged with, not
+		// overwritten by, the new entry (Load returns a usable empty store on error).
+		store, lerr := learned.Load(learnedPath)
+		if lerr != nil {
+			log.Warn("learned endpoints unreadable before save; recording onto empty store", "err", lerr)
+		}
 		store.Record(profile, iface, "switch-window", addrs, adv.LearnedMaxPerProfile, time.Now())
 		store.Prune(adv.LearnedEndpointTTL, adv.LearnedMaxPerProfile, time.Now())
 		if serr := store.Save(learnedPath); serr != nil {
@@ -1049,8 +1063,16 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 	}
 	switch mode {
 	case "guard":
+		// Mirror the runner's zero-tunnel standing posture (runner.vpnPolicies):
+		// applying ModeGuard with no tunnel interfaces is rejected at the backend
+		// seam as a total-lockout guard, so the daemon falls back to the
+		// endpoints-open FULL BLOCK shape. print-rules must render the same thing.
+		guardMode := firewall.ModeGuard
+		if len(tunnels) == 0 {
+			guardMode = firewall.ModeFullBlock
+		}
 		return firewall.Policy{
-			Mode:             firewall.ModeGuard,
+			Mode:             guardMode,
 			Allowlist:        vpnAllowlist,
 			TunnelIfaces:     tunnels,
 			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),

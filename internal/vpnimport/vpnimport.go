@@ -67,10 +67,23 @@ func sniff(path string, data []byte) string {
 	return ""
 }
 
+// maxConfigLine caps a single scanned line. WireGuard/OpenVPN configs can embed
+// long lines (inline certs/keys/blobs) well past bufio.Scanner's default 64K
+// token limit; without a larger buffer, scanning aborts with ErrTooLong and the
+// import fails even when the endpoint line itself is short.
+const maxConfigLine = 8 << 20 // 8 MiB
+
+// newConfigScanner returns a line scanner with a raised token limit.
+func newConfigScanner(r io.Reader) *bufio.Scanner {
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), maxConfigLine)
+	return sc
+}
+
 // extractWireGuard reads `Endpoint = host:port` lines from [Peer] sections.
 func extractWireGuard(r io.Reader) ([]string, error) {
 	var out []string
-	sc := bufio.NewScanner(r)
+	sc := newConfigScanner(r)
 	for sc.Scan() {
 		line := strings.TrimSpace(sc.Text())
 		if !strings.HasPrefix(strings.ToLower(line), "endpoint") {
@@ -90,7 +103,7 @@ func extractWireGuard(r io.Reader) ([]string, error) {
 // extractOpenVPN reads `remote <host> [port] [proto]` lines.
 func extractOpenVPN(r io.Reader) ([]string, error) {
 	var out []string
-	sc := bufio.NewScanner(r)
+	sc := newConfigScanner(r)
 	for sc.Scan() {
 		fields := strings.Fields(strings.TrimSpace(sc.Text()))
 		if len(fields) < 2 || strings.ToLower(fields[0]) != "remote" {

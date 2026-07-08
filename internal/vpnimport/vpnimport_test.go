@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"testing"
 )
 
@@ -69,6 +70,20 @@ remote [2001:db8::1] 443 udp`
 	}
 	if len(eps) != 1 || eps[0] != "2001:db8::1" {
 		t.Errorf("endpoints = %v, want [2001:db8::1] (brackets stripped)", eps)
+	}
+}
+
+func TestExtractOpenVPNLongLine(t *testing.T) {
+	// An inline blob far past bufio.Scanner's default 64K token limit must not
+	// abort the import when the endpoint line itself is short.
+	longBlob := strings.Repeat("A", 200*1024)
+	body := "client\ndev tun\n" + longBlob + "\nremote us1.example.com 1194 udp\n"
+	eps, _, err := Extract(writeTemp(t, "big.ovpn", body))
+	if err != nil {
+		t.Fatalf("Extract with long line: %v", err)
+	}
+	if len(eps) != 1 || eps[0] != "us1.example.com" {
+		t.Errorf("endpoints = %v, want [us1.example.com]", eps)
 	}
 }
 
