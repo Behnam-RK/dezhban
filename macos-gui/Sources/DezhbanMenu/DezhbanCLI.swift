@@ -100,6 +100,21 @@ enum DezhbanCLI {
         return decoded.service.hasPrefix("installed")
     }
 
+    /// The daemon's currently-published enforcement posture from `status --json`,
+    /// or nil if none is reported yet / the read failed. Reads stdout only (via
+    /// `exec`, like `serviceInstalled()`) rather than `run`'s combined output —
+    /// a warning on stderr with a 0 exit would otherwise corrupt the JSON parse.
+    static func reportedPosture() -> String? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["status", "--json"])
+        guard r.status == 0, let data = r.out.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let stateObj = obj["state"] as? [String: Any],
+              let posture = stateObj["posture"] as? String, !posture.isEmpty
+        else { return nil }
+        return posture
+    }
+
     /// The config path the daemon actually uses, asked from the CLI so the GUI
     /// agrees with the `--config` → $DEZHBAN_CONFIG → system-path resolution order
     /// instead of hardcoding one location. Falls back to `configPath`.

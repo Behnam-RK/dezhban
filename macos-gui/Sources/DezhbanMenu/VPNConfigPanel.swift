@@ -299,6 +299,12 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             var fullLog = log
+            // No --config on stop/start: they act on the already-installed
+            // service unit, whose config path was baked in at install time
+            // (cmdService only reads --config for `install`). The service
+            // manager ignores a --config passed to start/stop, so the restarted
+            // daemon reloads its install-time path — which the GUI installs with
+            // resolvedConfigPath(), the same path this panel just wrote to.
             let stopResult = DezhbanCLI.runPrivileged(["stop"])
             fullLog += "$ dezhban stop\n\(stopResult.output)\n\n"
             let startResult = DezhbanCLI.runPrivileged(["start"])
@@ -320,14 +326,10 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             var reportedPosture: String?
             for _ in 0..<10 {
                 Thread.sleep(forTimeInterval: 0.5)
-                let status = DezhbanCLI.run(["status", "--json"])
-                guard status.ok, let data = status.output.data(using: .utf8),
-                      let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let stateObj = obj["state"] as? [String: Any],
-                      let posture = stateObj["posture"] as? String, !posture.isEmpty
-                else { continue }
-                reportedPosture = posture
-                break
+                if let posture = DezhbanCLI.reportedPosture() {
+                    reportedPosture = posture
+                    break
+                }
             }
             DispatchQueue.main.async {
                 self.applyButton.isEnabled = true
