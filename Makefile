@@ -89,7 +89,7 @@ build-all: ## Cross-compile every platform into ./$(DIST)
 # --- macOS menubar GUI (separate Swift toolchain; not part of build-all) -----
 
 gui-macos: ## Build the macOS menubar app into ./$(DIST)/Dezhban.app (macOS only)
-	sh macos-gui/build-app.sh $(abspath $(DIST))
+	DEZHBAN_VERSION=$(VERSION) sh macos-gui/build-app.sh $(abspath $(DIST))
 
 clean: ## Remove build artifacts
 	rm -rf $(DIST) $(BINARY) macos-gui/.build

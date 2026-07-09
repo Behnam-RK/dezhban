@@ -19,6 +19,21 @@ poll. Both modes and how to choose are in [docs/modes.md](docs/modes.md).
 > of your own machine**. Read [docs/safety.md](docs/safety.md) before running
 > `block` for real. The escape hatch is `sudo dezhban panic`.
 
+## Install
+
+Prebuilt binaries for macOS (arm64/amd64), Linux (amd64/arm64), and Windows
+(amd64), plus a macOS menubar app, are published on the
+[Releases page](https://github.com/Behnam-RK/dezhban/releases) — download
+`dezhban-<os>-<arch>` (or `.exe` on Windows) and `Dezhban-macos.app.zip` for the
+GUI. `SHA256SUMS` is attached to each release for verification.
+
+> [!NOTE]
+> `Dezhban.app` is **unsigned** (no Apple Developer certificate) — Gatekeeper
+> blocks a plain double-click on first launch. Right-click → **Open** in
+> Finder, or run `xattr -dr com.apple.quarantine Dezhban.app`.
+
+See [docs/releasing.md](docs/releasing.md) for how releases are cut.
+
 ## Quick start
 
 Requires Go 1.26+.
@@ -67,6 +82,7 @@ Full field reference, the `vpn` block, and validation rules:
 | [docs/safety.md](docs/safety.md) | Kill-switch safety principles and teardown mechanics. |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Lockout recovery and VPN-guard failure runbook. |
 | [docs/development.md](docs/development.md) | Build, cross-compile, dev loop, CI, hooks. |
+| [docs/releasing.md](docs/releasing.md) | Cutting a release, CHANGELOG discipline, unsigned macOS GUI. |
 | [docs/state.md](docs/state.md) | The `state.json` posture file. |
 | [docs/plans/readme.md](docs/plans/readme.md) | Phase-by-phase plans and locked decisions. |
 

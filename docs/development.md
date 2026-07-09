@@ -25,8 +25,10 @@ GOOS=linux GOARCH=amd64 go build ./cmd/dezhban
 
 `make build-all` produces darwin arm64/amd64, linux amd64/arm64, and windows
 amd64, each with the version stamped via `-ldflags -X main.version` (from
-`git describe`). macOS still requires the system `pfctl` at runtime (shelled, not
-linked).
+`git describe`, overridable with `make build-all VERSION=vX.Y.Z`). macOS still
+requires the system `pfctl` at runtime (shelled, not linked). Cutting an actual
+release (tagging, publishing binaries) is a separate, automated flow — see
+[releasing.md](releasing.md).
 
 ```sh
 make gui-macos               # build the macOS menubar app -> ./dist/Dezhban.app
