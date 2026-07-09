@@ -77,6 +77,10 @@ jobs:
               exit 1
             fi
             latest_version="${latest_tag#v}"
+            echo "$latest_version" | grep -Eq "$semver_re" || {
+              echo "error: latest tag $latest_tag is not strict X.Y.Z semver; pass an explicit 'version' input to bump from" >&2
+              exit 1
+            }
             major="$(echo "$latest_version" | cut -d. -f1)"
             minor="$(echo "$latest_version" | cut -d. -f2)"
             patch="$(echo "$latest_version" | cut -d. -f3)"
@@ -136,30 +140,41 @@ jobs:
           date="$(date -u +%Y-%m-%d)"
           repo_url="https://github.com/${GITHUB_REPOSITORY}"
 
+          # Trim trailing blank lines so the first-release ref append below
+          # gets exactly one blank separator.
+          sed -e :a -e '/^\s*$/{$d;N;ba' -e '}' CHANGELOG.md > CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+
           # Single pass: split the Unreleased heading into a fresh empty
-          # Unreleased + the dated version heading, and drop any existing
-          # bottom-of-file link-reference lines (rebuilt below).
-          awk -v date="$date" -v ver="$VERSION" '
+          # Unreleased + the dated version heading, and replace the existing
+          # [Unreleased] compare link (top of the ref block) with a refreshed
+          # [Unreleased] link plus the new version's release link. Existing
+          # version refs below it are preserved so older release headings keep
+          # their links. The END fallback covers a changelog missing the
+          # [Unreleased] ref line entirely.
+          awk -v date="$date" -v ver="$VERSION" -v url="$repo_url" -v tag="$TAG" '
             /^## \[Unreleased\]$/ {
               print "## [Unreleased]"
               print ""
               print "## [" ver "] - " date
               next
             }
-            /^\[Unreleased\]:/ { next }
-            /^\[[0-9]+\.[0-9]+\.[0-9]+\]:/ { next }
+            /^\[Unreleased\]:/ {
+              print "[Unreleased]: " url "/compare/" tag "...HEAD"
+              print "[" ver "]: " url "/releases/tag/" tag
+              refdone = 1
+              next
+            }
             { print }
+            END {
+              if (!refdone) {
+                print ""
+                print "[Unreleased]: " url "/compare/" tag "...HEAD"
+                print "[" ver "]: " url "/releases/tag/" tag
+              }
+            }
           ' CHANGELOG.md > CHANGELOG.md.tmp
           mv CHANGELOG.md.tmp CHANGELOG.md
-
-          # Trim trailing blank lines, then append fresh link references.
-          sed -e :a -e '/^\s*$/{$d;N;ba' -e '}' CHANGELOG.md > CHANGELOG.md.tmp
-          mv CHANGELOG.md.tmp CHANGELOG.md
-          {
-            echo ""
-            echo "[Unreleased]: $repo_url/compare/$TAG...HEAD"
-            echo "[$VERSION]: $repo_url/releases/tag/$TAG"
-          } >> CHANGELOG.md
 
           {
             echo "notes<<CHANGELOG_EOF"
