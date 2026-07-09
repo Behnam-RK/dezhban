@@ -1,0 +1,246 @@
+name: Release
+
+# Manually-dispatched release: resolve a version, roll the CHANGELOG's
+# [Unreleased] section into a dated entry, tag it, cross-compile every
+# platform (+ the macOS GUI), and publish a GitHub Release with checksums.
+#
+# There is no tag-push trigger by design — `prepare` is what creates the tag,
+# so triggering on tag-push would be redundant with this workflow's own push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: >-
+          Exact version to release, e.g. 0.1.0 (no leading "v"). Required for
+          the first release since there is no prior tag to bump from. Leave
+          blank on later releases to auto-bump from the latest tag.
+        required: false
+        type: string
+      bump:
+        description: Version bump to apply to the latest tag (ignored if "version" is set)
+        required: false
+        type: choice
+        default: patch
+        options:
+          - patch
+          - minor
+          - major
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Resolve version
+        id: version
+        run: |
+          set -eu
+          semver_re='^[0-9]+\.[0-9]+\.[0-9]+$'
+
+          input_version="${{ inputs.version }}"
+          input_version="${input_version#v}"
+
+          latest_tag="$(git tag -l 'v*' --sort=-v:refname | head -n1 || true)"
+
+          if [ -n "$input_version" ]; then
+            new_version="$input_version"
+          else
+            if [ -z "$latest_tag" ]; then
+              echo "error: no existing tag to bump from; pass an explicit 'version' input for the first release" >&2
+              exit 1
+            fi
+            latest_version="${latest_tag#v}"
+            major="$(echo "$latest_version" | cut -d. -f1)"
+            minor="$(echo "$latest_version" | cut -d. -f2)"
+            patch="$(echo "$latest_version" | cut -d. -f3)"
+            case "${{ inputs.bump }}" in
+              major) major=$((major + 1)); minor=0; patch=0 ;;
+              minor) minor=$((minor + 1)); patch=0 ;;
+              patch|*) patch=$((patch + 1)) ;;
+            esac
+            new_version="$major.$minor.$patch"
+          fi
+
+          echo "$new_version" | grep -Eq "$semver_re" || {
+            echo "error: '$new_version' is not a valid X.Y.Z semver" >&2
+            exit 1
+          }
+
+          new_tag="v$new_version"
+
+          if [ -n "$latest_tag" ]; then
+            highest="$(printf '%s\n%s\n' "$latest_tag" "$new_tag" | sort -V | tail -n1)"
+            if [ "$highest" != "$new_tag" ] || [ "$latest_tag" = "$new_tag" ]; then
+              echo "error: $new_tag is not greater than the latest tag $latest_tag" >&2
+              exit 1
+            fi
+          fi
+
+          if git rev-parse "$new_tag" >/dev/null 2>&1; then
+            echo "error: tag $new_tag already exists" >&2
+            exit 1
+          fi
+
+          echo "version=$new_version" >> "$GITHUB_OUTPUT"
+          echo "tag=$new_tag" >> "$GITHUB_OUTPUT"
+          echo "releasing $new_tag (latest was: ${latest_tag:-none})"
+
+      - name: Roll CHANGELOG [Unreleased] section
+        id: changelog
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eu
+
+          if ! grep -q '^## \[Unreleased\]$' CHANGELOG.md; then
+            echo "error: CHANGELOG.md has no '## [Unreleased]' heading" >&2
+            exit 1
+          fi
+
+          body="$(awk '/^## \[Unreleased\]$/{flag=1; next} /^## \[/{flag=0} flag' CHANGELOG.md)"
+          # Trim the leading/trailing blank lines the heading split leaves behind.
+          body="$(printf '%s\n' "$body" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+          if [ -z "$(echo "$body" | tr -d '[:space:]')" ]; then
+            echo "error: [Unreleased] section is empty; nothing to release" >&2
+            exit 1
+          fi
+
+          date="$(date -u +%Y-%m-%d)"
+          repo_url="https://github.com/${GITHUB_REPOSITORY}"
+
+          # Single pass: split the Unreleased heading into a fresh empty
+          # Unreleased + the dated version heading, and drop any existing
+          # bottom-of-file link-reference lines (rebuilt below).
+          awk -v date="$date" -v ver="$VERSION" '
+            /^## \[Unreleased\]$/ {
+              print "## [Unreleased]"
+              print ""
+              print "## [" ver "] - " date
+              next
+            }
+            /^\[Unreleased\]:/ { next }
+            /^\[[0-9]+\.[0-9]+\.[0-9]+\]:/ { next }
+            { print }
+          ' CHANGELOG.md > CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+
+          # Trim trailing blank lines, then append fresh link references.
+          sed -e :a -e '/^\s*$/{$d;N;ba' -e '}' CHANGELOG.md > CHANGELOG.md.tmp
+          mv CHANGELOG.md.tmp CHANGELOG.md
+          {
+            echo ""
+            echo "[Unreleased]: $repo_url/compare/$TAG...HEAD"
+            echo "[$VERSION]: $repo_url/releases/tag/$TAG"
+          } >> CHANGELOG.md
+
+          {
+            echo "notes<<CHANGELOG_EOF"
+            echo "$body"
+            echo "CHANGELOG_EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Commit and tag
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -eu
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          git commit -m "chore(release): $TAG [skip ci]"
+          git tag -a "$TAG" -m "$TAG"
+          git push origin HEAD:main
+          git push origin "$TAG"
+
+      - name: Save release notes
+        env:
+          NOTES: ${{ steps.changelog.outputs.notes }}
+        run: printf '%s\n' "$NOTES" > release-notes.md
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-notes
+          path: release-notes.md
+
+  gui:
+    needs: prepare
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: Build Dezhban.app
+        run: make gui-macos VERSION=${{ needs.prepare.outputs.tag }}
+
+      - name: Zip app bundle
+        run: ditto -c -k --keepParent dist/Dezhban.app dist/Dezhban-macos.app.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-macos
+          path: dist/Dezhban-macos.app.zip
+
+  release:
+    needs: [prepare, gui]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Build all CLI platforms
+        run: make build-all VERSION=${{ needs.prepare.outputs.tag }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: gui-macos
+          path: dist
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: release-notes
+          path: .
+
+      - name: Checksums
+        run: |
+          set -eu
+          cd dist
+          shasum -a 256 * > SHA256SUMS
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -eu
+          gh release create "$TAG" \
+            --title "$TAG" \
+            --notes-file release-notes.md \
+            dist/dezhban-darwin-arm64 \
+            dist/dezhban-darwin-amd64 \
+            dist/dezhban-linux-amd64 \
+            dist/dezhban-linux-arm64 \
+            dist/dezhban-windows-amd64.exe \
+            dist/Dezhban-macos.app.zip \
+            dist/SHA256SUMS
