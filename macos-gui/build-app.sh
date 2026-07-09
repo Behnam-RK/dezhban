@@ -31,14 +31,19 @@ if [[ -f "$HERE/AppIcon.icns" ]]; then
 		"$APP/Contents/Info.plist" 2>/dev/null || true
 fi
 # Stamped by `make gui-macos` (DEZHBAN_VERSION=$(VERSION), from `git describe`
-# or an explicit VERSION=vX.Y.Z). Info.plist's checked-in 0.1.0 is only used
-# when this script is invoked directly, bypassing make.
+# or an explicit VERSION=vX.Y.Z). Only a strict X.Y.Z is stamped — CFBundle
+# version fields must be dotted numerics, so a `git describe` value like
+# 0.2.0-3-g<sha> or `dev` is left alone, keeping Info.plist's checked-in 0.1.0.
 if [[ -n "${DEZHBAN_VERSION:-}" ]]; then
 	ver="${DEZHBAN_VERSION#v}"
-	/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ver" \
-		"$APP/Contents/Info.plist"
-	/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $ver" \
-		"$APP/Contents/Info.plist"
+	if [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+		/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ver" \
+			"$APP/Contents/Info.plist"
+		/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $ver" \
+			"$APP/Contents/Info.plist"
+	else
+		echo "    note: DEZHBAN_VERSION='$DEZHBAN_VERSION' is not X.Y.Z; leaving Info.plist version unchanged" >&2
+	fi
 fi
 
 echo "==> built $APP"
