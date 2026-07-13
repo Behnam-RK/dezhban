@@ -1,8 +1,14 @@
-// Package command is the daemon's minimal control channel: a root-owned command
-// file that the `dezhban switch`/`vpn` CLIs write and the running daemon consumes
-// on a tick. There is no long-lived IPC server — this mirrors the one-way state
-// file in the other direction and keeps dezhban dependency-light (stdlib only,
-// cross-platform).
+// Package command is the daemon's ROOT control channel: a root-owned command file
+// that the `dezhban switch`/`vpn` CLIs write and the running daemon consumes on a
+// tick. It mirrors the one-way state file in the other direction and keeps dezhban
+// dependency-light (stdlib only, cross-platform).
+//
+// It is not the only control channel: internal/control adds a live unix socket for
+// routine ops, so an admin need not re-elevate for every block/unblock/switch. The
+// two are complementary and the file path is the stronger one — it requires root,
+// works cross-platform, and is what the CLI falls back to when the daemon's socket
+// is unavailable. Anything reachable over the socket must therefore also be
+// expressible here.
 //
 // Security model: the file lives in the daemon's root-owned directory (0755), so
 // only root can create it. The daemon additionally verifies ownership and
