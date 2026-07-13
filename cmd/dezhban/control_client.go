@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/behnam-rk/dezhban/internal/config"
@@ -37,31 +38,25 @@ func controlSocketPath(cfg *config.Config) string {
 	return filepath.Join(stateDir(), "control.sock")
 }
 
+// noDaemonFlag is the global --no-daemon flag, stripped from args before dispatch
+// by stripVerbose (so it works before or after the subcommand, exactly like
+// --no-sudo, and no per-command FlagSet has to know about it).
+var noDaemonFlag bool
+
 // noDaemon reports whether the socket fast path is suppressed. It mirrors
 // --no-sudo/DEZHBAN_NO_SUDO: an escape hatch for "the daemon is wedged, act on the
 // firewall directly", and what tests use to force the root path.
-func noDaemon(args []string) bool {
-	if v := os.Getenv("DEZHBAN_NO_DAEMON"); v == "1" || strings.EqualFold(v, "true") {
+func noDaemon() bool {
+	if noDaemonFlag {
 		return true
 	}
-	for _, a := range args {
-		if a == "--no-daemon" {
-			return true
-		}
+	if v := os.Getenv("DEZHBAN_NO_DAEMON"); v != "" {
+		// Truthy disables; any unparseable-but-set value also counts as "disable"
+		// (same rule as sudoDisabled, so the two flags behave identically).
+		b, err := strconv.ParseBool(v)
+		return err != nil || b
 	}
 	return false
-}
-
-// stripNoDaemon removes --no-daemon from args so the per-command FlagSets (which
-// don't define it) don't reject it.
-func stripNoDaemon(args []string) []string {
-	out := args[:0:0]
-	for _, a := range args {
-		if a != "--no-daemon" {
-			out = append(out, a)
-		}
-	}
-	return out
 }
 
 // controlStatus is the human-readable answer to "will routine ops ask me for a
@@ -90,7 +85,12 @@ func controlStatus(cfg *config.Config) string {
 // handled=false means no daemon was reachable, so the caller falls back to its
 // existing root path. That is what keeps the CLI working with the daemon stopped.
 func tryControl(cfgPath string, req control.Request) (code int, handled bool) {
-	cfg, err := config.Load(cfgPath)
+	// loadConfig, NOT config.Load: the raw flag is usually empty, and only the
+	// resolver applies $DEZHBAN_CONFIG → the canonical system path. Loading the raw
+	// value would read built-in defaults instead of the user's real config, so a
+	// customized control.socket/group would be missed and the password prompt this
+	// whole path exists to remove would quietly come back.
+	cfg, err := loadConfig(cfgPath)
 	if err != nil || !cfg.Control.Enabled {
 		return 0, false
 	}

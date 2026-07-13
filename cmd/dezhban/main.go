@@ -161,6 +161,8 @@ func stripVerbose(args []string) []string {
 			verbose = true
 		case "-no-sudo", "--no-sudo":
 			noSudo = true
+		case "-no-daemon", "--no-daemon":
+			noDaemonFlag = true
 		default:
 			out = append(out, a)
 		}
@@ -526,12 +528,11 @@ func runDryRun(cfg *config.Config, log *slog.Logger, ov runOverrides) int {
 }
 
 func cmdBlock(args []string) int {
-	skipDaemon := noDaemon(args)
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other egress)")
 	force := fs.Bool("force", false, "force a hard full block of all egress, bypassing the VPN guard state machine")
-	_ = fs.Parse(stripNoDaemon(args))
+	_ = fs.Parse(args)
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
@@ -542,7 +543,7 @@ func cmdBlock(args []string) int {
 	// Passwordless path: ask the running daemon to block. Skipped for --guard and
 	// --force, which are deliberate low-level overrides of the state machine the
 	// daemon owns — those still act on the firewall directly, as root.
-	if !skipDaemon && !*guard && !*force {
+	if !noDaemon() && !*guard && !*force {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpBlock}); handled {
 			if code == 0 {
 				fmt.Println("blocked (via daemon) — held until `dezhban unblock`")
@@ -753,18 +754,17 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 }
 
 func cmdUnblock(args []string) int {
-	skipDaemon := noDaemon(args)
 	fs := flag.NewFlagSet("unblock", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	// unblock already removes dezhban's rules unconditionally; --force is accepted
 	// for symmetry with `block --force` and documents the manual-override intent.
 	force := fs.Bool("force", false, "remove rules unconditionally, bypassing the daemon (unblock is already unconditional)")
-	_ = fs.Parse(stripNoDaemon(args))
+	_ = fs.Parse(args)
 
 	// Passwordless path: ask the daemon to release the block and hand the geo state
 	// machine back the wheel. --force bypasses it and rips the rules out directly —
 	// which also leaves a running daemon free to re-block on its next verdict.
-	if !skipDaemon && !*force {
+	if !noDaemon() && !*force {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpUnblock}); handled {
 			if code == 0 {
 				fmt.Println("unblocked (via daemon) — monitoring resumed")

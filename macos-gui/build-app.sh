@@ -24,7 +24,13 @@ build_slice() {
 }
 
 BUILT="" # temp universal binary, cleaned up on exit
-cleanup() { [[ -n "$BUILT" ]] && rm -f "$BUILT"; }
+# `return 0` is load-bearing: under `set -e`, a trap whose last command reports
+# failure (which `[[ -n "" ]]` does on the non-universal path) can take the whole
+# script's exit status down with it.
+cleanup() {
+	[[ -n "$BUILT" ]] && rm -f "$BUILT"
+	return 0
+}
 trap cleanup EXIT
 
 if [[ "${DEZHBAN_APP_UNIVERSAL:-}" == "1" ]]; then

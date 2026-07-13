@@ -36,7 +36,6 @@ Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --iface-hint PR
 // isn't known yet: open a window, connect, the daemon learns and pins the server,
 // then snaps shut.
 func cmdSwitch(args []string) int {
-	skipDaemon := noDaemon(args)
 	fs := flag.NewFlagSet("switch", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	forDur := fs.Duration("for", 0, "window duration (default: config vpn.switchWindow)")
@@ -44,7 +43,7 @@ func cmdSwitch(args []string) int {
 	doCancel := fs.Bool("cancel", false, "cancel an open switch window")
 	doStatus := fs.Bool("status", false, "print the current switch-window state and exit")
 	noWait := fs.Bool("no-wait", false, "fire the command and return without waiting")
-	_ = fs.Parse(stripNoDaemon(args))
+	_ = fs.Parse(args)
 
 	statePath := defaultStatePath()
 	if *doStatus {
@@ -60,7 +59,7 @@ func cmdSwitch(args []string) int {
 	// control.allowSwitchOps is on (the default). Falls through to the root-owned
 	// command file when no daemon is listening — that path always works, and is the
 	// only one when the operator has turned switch ops off.
-	if !skipDaemon {
+	if !noDaemon() {
 		req := control.Request{Op: control.OpOpenSwitch, Duration: dur, Profile: *name}
 		if *doCancel {
 			req = control.Request{Op: control.OpCancelSwitch}

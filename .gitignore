@@ -27,3 +27,6 @@ state.json
 AGENTS.md
 *.bak
 CLAUDE.md.original.md
+
+# JetBrains IDE settings (per-developer, not project config)
+.idea/

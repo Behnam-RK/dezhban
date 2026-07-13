@@ -76,6 +76,24 @@ func TestTryControlUsesDaemon(t *testing.T) {
 	}
 }
 
+// The normal invocation is `dezhban block` with no --config, so tryControl must
+// resolve the config the same way every other command does ($DEZHBAN_CONFIG, then
+// the system path). Loading the raw empty flag would silently read built-in
+// defaults, miss a customized control.socket, and drop back to a password prompt.
+func TestTryControlResolvesConfigWithoutFlag(t *testing.T) {
+	sock, seen := stubDaemon(t, control.Response{OK: true})
+	cfgPath := writeCfg(t, sock, "")
+	t.Setenv("DEZHBAN_CONFIG", cfgPath)
+
+	code, handled := tryControl("", control.Request{Op: control.OpBlock})
+	if !handled || code != 0 {
+		t.Fatalf("tryControl = (%d, %v) with no --config; the resolved config's socket was ignored", code, handled)
+	}
+	if len(*seen) != 1 {
+		t.Fatalf("daemon saw %v, want the op to have reached the socket named by $DEZHBAN_CONFIG", *seen)
+	}
+}
+
 // A refusal is an answer: the CLI must report it, NOT retry as root. Otherwise the
 // daemon's gating (open switch window, allowSwitchOps=false) would be bypassable by
 // anyone who can type sudo.
@@ -115,23 +133,33 @@ func TestTryControlSkippedWhenDisabled(t *testing.T) {
 	}
 }
 
-// --no-daemon / DEZHBAN_NO_DAEMON is the escape hatch for a wedged daemon.
+// --no-daemon / DEZHBAN_NO_DAEMON is the escape hatch for a wedged daemon. It is a
+// GLOBAL flag like --no-sudo: it must work on either side of the subcommand, and
+// must never reach a per-command FlagSet (none of them define it).
 func TestNoDaemonFlagAndEnv(t *testing.T) {
-	if !noDaemon([]string{"block", "--no-daemon"}) {
-		t.Error("--no-daemon not detected")
+	t.Cleanup(func() { noDaemonFlag = false })
+
+	for _, args := range [][]string{
+		{"block", "--no-daemon"},
+		{"--no-daemon", "block"}, // before the subcommand, like `dezhban --no-sudo block`
+	} {
+		noDaemonFlag = false
+		rest := stripVerbose(args)
+		if !noDaemon() {
+			t.Errorf("--no-daemon not detected in %v", args)
+		}
+		if strings.Join(rest, " ") != "block" {
+			t.Errorf("stripVerbose(%v) = %v; the flag must not reach the command's FlagSet", args, rest)
+		}
 	}
-	if noDaemon([]string{"block"}) {
-		t.Error("--no-daemon detected when absent")
+
+	noDaemonFlag = false
+	if noDaemon() {
+		t.Error("--no-daemon reported when absent")
 	}
 	t.Setenv("DEZHBAN_NO_DAEMON", "1")
-	if !noDaemon([]string{"block"}) {
+	if !noDaemon() {
 		t.Error("DEZHBAN_NO_DAEMON=1 not honored")
-	}
-	// The flag must not survive into the per-command FlagSet, which doesn't define it.
-	got := stripNoDaemon([]string{"--config", "x", "--no-daemon", "--force"})
-	want := []string{"--config", "x", "--force"}
-	if strings.Join(got, " ") != strings.Join(want, " ") {
-		t.Errorf("stripNoDaemon = %v, want %v", got, want)
 	}
 }
 
