@@ -18,6 +18,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// (for the next open).
     private var serviceIsInstalled = false
 
+    /// Whether the daemon's control socket is answering — i.e. whether Block /
+    /// Unblock / Switch will complete without an admin prompt. Cached like
+    /// `serviceIsInstalled` (same refresh points) so opening the menu never blocks
+    /// on a subprocess. Used only for the tooltips: the actions themselves probe
+    /// for real, so a stale cache can never cause a wrong action, just a wrong hint.
+    private var controlIsReachable = false
+
     /// Floor for the staleness threshold. The daemon's actual poll cadence — carried
     /// in the snapshot as `pollIntervalSeconds` — scales this up (see staleThreshold),
     /// so a deliberately long pollInterval doesn't make an enforcing daemon read as
@@ -69,11 +76,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refreshServiceInstalled() {
         guard DezhbanCLI.binaryPath() != nil else {
             serviceIsInstalled = false
+            controlIsReachable = false
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let installed = DezhbanCLI.serviceInstalled()
-            DispatchQueue.main.async { self?.serviceIsInstalled = installed }
+            let control = DezhbanCLI.daemonControlReachable()
+            DispatchQueue.main.async {
+                self?.serviceIsInstalled = installed
+                self?.controlIsReachable = control
+            }
         }
     }
 
@@ -184,10 +196,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                       enabled: DezhbanCLI.binaryPath() != nil)
         }
 
-        // Manual block / unblock, gated on current posture.
+        // Manual block / unblock, gated on current posture. These go to the running
+        // daemon over its control socket, so they normally need no password — say so,
+        // and say the opposite when they'd have to fall back to a direct root action.
         let blocked = s?.blocked ?? false
         addAction("Block now", #selector(blockNow), enabled: isRunning && !blocked)
+            .toolTip = routineHint("Cuts all egress and holds it until you unblock.")
         addAction("Unblock", #selector(unblockNow), enabled: isRunning && blocked)
+            .toolTip = routineHint("Releases a manual block and resumes monitoring.")
 
         // Switch window: connect a brand-new VPN whose server isn't known yet.
         if s?.mode == "vpn" {
@@ -195,8 +211,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 let left = max(0, sw.until.timeIntervalSinceNow)
                 addAction("Cancel VPN switch (\(mmss(left)) left)", #selector(cancelSwitch),
                           enabled: isRunning)
+                    .toolTip = routineHint("Closes the window and restores the guard.")
             } else {
                 addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
+                    .toolTip = routineHint("Briefly relaxes the guard so a new VPN can connect.")
             }
         }
 
@@ -237,6 +255,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         addAction("Quit", #selector(quit))
     }
 
+    /// Appends the password expectation to a routine action's tooltip, so the menu
+    /// tells the truth about what the click will cost before it costs it.
+    private func routineHint(_ what: String) -> String {
+        controlIsReachable
+            ? "\(what) No password needed — the running daemon handles it."
+            : "\(what) Will ask for your password (the daemon isn’t reachable)."
+    }
+
     /// Builds the "View logs…" submenu: a scoped `log show`/`log stream`
     /// against the output panel (no hand-written predicate for the user to
     /// type), plus the old full-app Console.app escape hatch.
@@ -267,12 +293,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: - actions
 
+    // Service lifecycle: a daemon cannot install, start or stop itself, so these
+    // keep the admin prompt. They are install-time/rare, not routine.
     @objc private func startService() { runAction(["start"], "start the kill switch") }
     @objc private func stopService() { runAction(["stop"], "stop the kill switch") }
-    @objc private func blockNow() { runAction(["block"], "block") }
-    @objc private func unblockNow() { runAction(["unblock"], "unblock") }
-    @objc private func openSwitch() { runAction(["switch", "--no-wait"], "open a switch window") }
-    @objc private func cancelSwitch() { runAction(["switch", "--cancel"], "cancel the switch window") }
+
+    // Routine posture ops: handled by the running daemon over its control socket,
+    // with no password. See runRoutineAction.
+    @objc private func blockNow() { runRoutineAction(["block"], "block") }
+    @objc private func unblockNow() { runRoutineAction(["unblock"], "unblock") }
+    @objc private func openSwitch() { runRoutineAction(["switch", "--no-wait"], "open a switch window") }
+    @objc private func cancelSwitch() { runRoutineAction(["switch", "--cancel"], "cancel the switch window") }
 
     /// Runs a privileged CLI action OFF the main thread — `runPrivileged` blocks
     /// through the admin-password prompt and the command's full run, which would
@@ -282,6 +313,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func runAction(_ args: [String], _ label: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let result = DezhbanCLI.runPrivileged(args)
+            DispatchQueue.main.async {
+                if !result.ok { self?.notifyFailure(label, output: result.output) }
+                self?.refresh()
+            }
+        }
+    }
+
+    /// Runs a routine posture op: unprivileged first, so a running daemon handles it
+    /// over the control socket with no password — the normal path.
+    ///
+    /// Escalation is a fallback for exactly one case: no daemon is listening (service
+    /// stopped, or control disabled), where the command must act on the firewall
+    /// directly and that needs root. A daemon REFUSAL is never escalated — the daemon
+    /// gates these ops deliberately (e.g. refusing a block while a switch window is
+    /// open), and re-running as root would route around a decision, not an obstacle.
+    private func runRoutineAction(_ args: [String], _ label: String) {
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            var result = DezhbanCLI.runRoutine(args)
+            if !result.ok && !result.refused {
+                result = DezhbanCLI.runPrivileged(args)
+            }
             DispatchQueue.main.async {
                 if !result.ok { self?.notifyFailure(label, output: result.output) }
                 self?.refresh()

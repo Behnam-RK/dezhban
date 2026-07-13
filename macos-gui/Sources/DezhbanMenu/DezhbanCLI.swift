@@ -6,13 +6,32 @@ import Foundation
 struct CommandResult {
     let ok: Bool
     let output: String
+    /// The CLI's exit code. `refused` reads it to tell "the daemon said no" apart
+    /// from "no daemon was there", which decides whether escalating to an admin
+    /// prompt is legitimate.
+    var status: Int32 = 0
+
+    /// The daemon was reached and deliberately refused (see cmd/dezhban's
+    /// ExitDaemonRefused). Retrying this as root would bypass the daemon's own
+    /// gating, so callers must surface it instead of escalating.
+    var refused: Bool { status == 3 }
 }
 
-/// Locates and invokes the `dezhban` CLI. Read-only inspect commands run
-/// unprivileged; privileged commands (start/stop/block/unblock) are elevated
-/// through the native admin prompt via osascript — no bundled helper tool, no
-/// code-signing infra for the MVP. macOS caches the authorization for ~5 min, so
-/// a burst of actions prompts once.
+/// Locates and invokes the `dezhban` CLI. Three tiers, by what the command needs:
+///
+///   - `run` — read-only inspect (doctor, version, status). Unprivileged.
+///   - `runRoutine` — routine posture ops (block, unblock, switch). Unprivileged:
+///     they reach the running daemon over its admin-group control socket, so they
+///     complete with NO password prompt. This is the common case, and the reason
+///     the socket exists.
+///   - `runPrivileged` — service lifecycle (install/uninstall/start/stop) and
+///     `panic`. Elevated through the native admin prompt via osascript. These
+///     genuinely cannot be daemon-mediated: a daemon can't install, start or stop
+///     itself, and panic must work when no daemon is running at all. They are rare
+///     (install-time or emergency), so a prompt is the right cost.
+///
+/// Routine ops fall back to `runPrivileged` only when no daemon is listening. A
+/// daemon REFUSAL (exit 3) is never escalated — see `CommandResult.refused`.
 enum DezhbanCLI {
     /// Fallback config path if the CLI can't be asked (see cmd/dezhban
     /// defaultConfigPath). Prefer `resolvedConfigPath()`, which honors
@@ -87,7 +106,41 @@ enum DezhbanCLI {
             return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
         }
         let r = exec(bin, args)
-        return CommandResult(ok: r.status == 0, output: combinedOutput(r))
+        return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
+    }
+
+    /// Runs a ROUTINE posture command (block / unblock / switch) unprivileged.
+    ///
+    /// These reach the running daemon over its control socket, which is group-
+    /// writable by admins — so no password is needed. This is the whole point of
+    /// the control socket: the daily operations stop prompting.
+    ///
+    /// The Swift side never speaks the socket protocol itself; the Go CLI is the
+    /// single client, so both `dezhban block` in a terminal and this menu item take
+    /// exactly the same path. DEZHBAN_NO_SUDO=1 makes the failure mode explicit
+    /// rather than latent: with no daemon listening, the CLI reports the root error
+    /// instead of trying to re-exec under sudo from a GUI process with no TTY (which
+    /// could not prompt anyway). The caller then decides whether to escalate through
+    /// the native admin prompt.
+    static func runRoutine(_ args: [String]) -> CommandResult {
+        guard let bin = binaryPath() else {
+            return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
+        }
+        let r = exec(bin, args, env: ["DEZHBAN_NO_SUDO": "1"])
+        return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
+    }
+
+    /// Whether the daemon's control socket is answering — i.e. whether routine ops
+    /// will go through without a password. Parsed from `status`'s "daemon control"
+    /// line, so the GUI and the CLI agree on one source of truth.
+    static func daemonControlReachable() -> Bool {
+        guard let bin = binaryPath() else { return false }
+        let r = exec(bin, ["status"])
+        guard r.status == 0 else { return false }
+        for line in r.out.split(separator: "\n") where line.hasPrefix("daemon control:") {
+            return line.contains("reachable") && !line.contains("unreachable")
+        }
+        return false
     }
 
     /// Whether the OS service is currently registered, per `status --json`'s
@@ -162,10 +215,16 @@ enum DezhbanCLI {
     /// Promoted from `private` so read-only call sites elsewhere in the app
     /// (log show/stream, status JSON parsing) can reuse this one capture path
     /// instead of each writing a second `Process` wrapper.
-    static func exec(_ launchPath: String, _ args: [String]) -> (status: Int32, out: String, err: String) {
+    static func exec(_ launchPath: String, _ args: [String], env: [String: String] = [:]) -> (status: Int32, out: String, err: String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
         p.arguments = args
+        if !env.isEmpty {
+            // Overlay onto the inherited environment rather than replacing it: the
+            // CLI still needs PATH/HOME (and honors $DEZHBAN_CONFIG) to behave the
+            // same way it does in a terminal.
+            p.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
+        }
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe

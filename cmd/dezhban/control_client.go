@@ -11,6 +11,13 @@ import (
 	"github.com/behnam-rk/dezhban/internal/control"
 )
 
+// ExitDaemonRefused is the exit code for "the daemon was reached and said no".
+// It is distinct from a generic failure (1) so a caller — notably the menubar app —
+// can tell a refusal from an unreachable daemon. A refusal must NOT be retried with
+// elevated rights: the daemon's gating (an open switch window, allowSwitchOps=false)
+// is a decision, not an obstacle, and re-running as root would bypass it.
+const ExitDaemonRefused = 3
+
 // verbosef prints a diagnostic only under -v/--verbose. The control fast path
 // falls back silently by design (a stopped daemon is a normal state, not an
 // error), so its reasons are diagnostics, not warnings.
@@ -106,7 +113,7 @@ func tryControl(cfgPath string, req control.Request) (code int, handled bool) {
 	}
 	if !resp.OK {
 		fmt.Fprintln(os.Stderr, "daemon refused:", resp.Error)
-		return 1, true
+		return ExitDaemonRefused, true
 	}
 	return 0, true
 }
