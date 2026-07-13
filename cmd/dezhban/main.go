@@ -25,6 +25,7 @@ import (
 
 	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/learned"
@@ -78,6 +79,11 @@ Commands:
 Global flags:
   -v, --verbose   Override the configured log level to debug
   --no-sudo       Don't auto-elevate; print the root error instead
+  --no-daemon     Don't use the daemon's control socket; act on the firewall directly
+
+block, unblock and switch ask the running daemon over its control socket, which
+needs no password (see the "daemon control" line in dezhban status). With no
+daemon listening they fall back to acting on the firewall directly, needing root.
 
 Privileged commands re-run themselves under sudo automatically when not root
 (unix, interactive terminal). Use --no-sudo (or DEZHBAN_NO_SUDO=1) to opt out.
@@ -389,12 +395,27 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		"auto_discover_endpoints", cfg.VPN.AutoDiscoverEndpoints,
 		"tunnel_watch", watcher != nil,
 	)
+	// The control socket is convenience, never enforcement: if it can't be created
+	// (unresolvable group, unwritable dir), log it and run without it rather than
+	// refusing to start the kill switch. The CLI falls back to the root path.
+	var ctl *control.Server
+	if cfg.Control.Enabled {
+		ctl, err = control.New(controlSocketPath(cfg), cfg.Control.Group, log)
+		if err != nil {
+			log.Warn("control socket unavailable — routine ops will ask for a password", "err", err)
+		} else {
+			log.Info("control socket listening", "path", ctl.Path(), "group", cfg.Control.Group, "switch_ops", cfg.Control.AllowSwitchOps)
+		}
+	}
+
 	return runner.Options{
 		Monitor:          mon,
 		Decider:          decision.New(cfg.BlockedCountries, cfg.FailClosed, cfg.Hysteresis),
 		Backend:          fw,
 		Log:              log,
 		Interval:         cfg.PollInterval,
+		Control:          ctl,
+		AllowSwitchOps:   cfg.Control.AllowSwitchOps,
 		VPN:              cfg.VPN.Enabled,
 		Tunnels:          tunnels,
 		Autodetect:       cfg.VPN.Autodetect,
@@ -505,17 +526,31 @@ func runDryRun(cfg *config.Config, log *slog.Logger, ov runOverrides) int {
 }
 
 func cmdBlock(args []string) int {
+	skipDaemon := noDaemon(args)
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other egress)")
 	force := fs.Bool("force", false, "force a hard full block of all egress, bypassing the VPN guard state machine")
-	_ = fs.Parse(args)
+	_ = fs.Parse(stripNoDaemon(args))
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
 	}
 	log := newLogger(cfg)
+
+	// Passwordless path: ask the running daemon to block. Skipped for --guard and
+	// --force, which are deliberate low-level overrides of the state machine the
+	// daemon owns — those still act on the firewall directly, as root.
+	if !skipDaemon && !*guard && !*force {
+		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpBlock}); handled {
+			if code == 0 {
+				fmt.Println("blocked (via daemon) — held until `dezhban unblock`")
+			}
+			return code
+		}
+	}
+
 	if !requireRoot("block") {
 		return 1
 	}
@@ -718,11 +753,26 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 }
 
 func cmdUnblock(args []string) int {
+	skipDaemon := noDaemon(args)
 	fs := flag.NewFlagSet("unblock", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	// unblock already removes dezhban's rules unconditionally; --force is accepted
 	// for symmetry with `block --force` and documents the manual-override intent.
-	_ = fs.Bool("force", false, "remove rules unconditionally (unblock is already unconditional)")
-	_ = fs.Parse(args)
+	force := fs.Bool("force", false, "remove rules unconditionally, bypassing the daemon (unblock is already unconditional)")
+	_ = fs.Parse(stripNoDaemon(args))
+
+	// Passwordless path: ask the daemon to release the block and hand the geo state
+	// machine back the wheel. --force bypasses it and rips the rules out directly —
+	// which also leaves a running daemon free to re-block on its next verdict.
+	if !skipDaemon && !*force {
+		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpUnblock}); handled {
+			if code == 0 {
+				fmt.Println("unblocked (via daemon) — monitoring resumed")
+			}
+			return code
+		}
+	}
+
 	if !requireRoot("unblock") {
 		return 1
 	}
@@ -1257,6 +1307,7 @@ func cmdStatus(args []string) int {
 	fmt.Println("dezhban", version)
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
 	fmt.Println("service:         ", svc.Status())
+	fmt.Println("daemon control:  ", controlStatus(cfg))
 	fmt.Println("poll interval:   ", cfg.PollInterval)
 	fmt.Println("fail-closed:     ", cfg.FailClosed)
 	fmt.Println("hysteresis:      ", cfg.Hysteresis)

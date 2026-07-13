@@ -30,6 +30,7 @@ Keys (dotted; list values are comma-separated):
   vpn.enabled vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
   vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.switchWindow
   vpn.endpointRefresh vpn.tunnelWatch
+  control.enabled control.socket control.group control.allowSwitchOps
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
 
 // configField is a get/set pair for one dotted config key.
@@ -120,6 +121,22 @@ var configFields = map[string]configField{
 	"vpn.tunnelWatch": {
 		get: func(c *config.Config) string { return c.VPN.TunnelWatch.String() },
 		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.TunnelWatch, v) },
+	},
+	"control.enabled": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.Enabled) },
+		set: func(c *config.Config, v string) error { return setBool(&c.Control.Enabled, v) },
+	},
+	"control.socket": {
+		get: func(c *config.Config) string { return c.Control.Socket },
+		set: func(c *config.Config, v string) error { c.Control.Socket = strings.TrimSpace(v); return nil },
+	},
+	"control.group": {
+		get: func(c *config.Config) string { return c.Control.Group },
+		set: func(c *config.Config, v string) error { c.Control.Group = strings.TrimSpace(v); return nil },
+	},
+	"control.allowSwitchOps": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.AllowSwitchOps) },
+		set: func(c *config.Config, v string) error { return setBool(&c.Control.AllowSwitchOps, v) },
 	},
 }
 
