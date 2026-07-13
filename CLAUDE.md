@@ -70,13 +70,26 @@ The design depends on these invariants (rationale in
   identifiers (used by `print-rules --mode` and `status --json`) — do not rename
   them. "Primary" / "fallback" are documentation words only.
 - **The switch window is the ONLY sanctioned relaxation of the guard.** It is
-  bounded (default 2m, capped 5m), explicitly root-triggered (via the root-owned
-  command file, never automatic), closes early on a confirmed good exit, and
-  auto-reverts to the prior fail-closed posture on cancel/expiry. Never widen it,
-  never let it open without an explicit command, and never let it outlive its
-  deadline. The daemon owns all `Backend.Apply` calls from the single run-loop
-  goroutine — keep it that way (window timer, command poll, watcher, and geo
-  ticks are all select cases; no other goroutine applies rules).
+  bounded (default 2m, capped 5m), never automatic — it opens only on an explicit
+  operator command — closes early on a confirmed good exit, and auto-reverts to the
+  prior fail-closed posture on cancel/expiry. Never widen it, never let it open
+  without an explicit command, and never let it outlive its deadline.
+  Two channels can carry that command: the **root-owned command file**
+  (`internal/command`, always available, root-only) and the **control socket**
+  (`internal/control`, admin-group, gated by `control.allowSwitchOps`, default
+  true). The socket is a deliberate, documented relaxation of "root-triggered" —
+  admins get a passwordless switch — and `control.allowSwitchOps: false` restores
+  root-only. Everything else about the window is unchanged: same clamp, same cap,
+  same auto-revert.
+- The daemon owns all `Backend.Apply` calls from the **single run-loop goroutine** —
+  keep it that way. Window timer, command poll, watcher, geo ticks, **and
+  control-socket requests** are all select cases in that one loop; the socket's
+  accept goroutine only forwards requests over a channel and never touches the
+  Backend. No other goroutine applies rules.
+- **`panic` must never depend on the daemon.** It is the lockout escape hatch, so it
+  is deliberately NOT a control-socket op — it removes rules directly, as root, with
+  no daemon running. Same for service lifecycle (`install`/`uninstall`/`start`/`stop`):
+  a daemon cannot manage its own lifecycle, so those keep requiring root.
 - The tunnel-interface set is runtime-mutable (autodetect grows/prunes it), but
   **explicit `vpn.tunnelInterfaces` are pinned and never auto-pruned**, and the
   set never narrows to empty. Learned endpoints live in a daemon-owned

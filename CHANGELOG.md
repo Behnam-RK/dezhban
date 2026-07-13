@@ -14,9 +14,25 @@ changes.
 
 ### Added
 
+- **Standalone macOS installer** (`dezhban-<version>.pkg`, `make pkg-macos`):
+  installs the CLI, the menubar app, and the launchd service in one step with a
+  single password prompt. It registers the service but deliberately does **not**
+  start enforcement — configure with `sudo dezhban setup`, then `sudo dezhban start`.
+  Ships its own uninstaller (`sudo sh /usr/local/share/dezhban/uninstall.sh`), and
+  the release workflow installs + uninstalls it on a runner before publishing.
+  Unsigned (no Apple Developer certificate); `build-pkg.sh` has the signing seams.
+- **Control socket** (`internal/control`, config `control` block): the daemon
+  listens on a root-owned, admin-group unix socket, so `block`, `unblock` and
+  `switch` are performed BY the running daemon and **need no password**. Both the
+  CLI and the menubar app go through it, falling back to the previous root path when
+  no daemon is listening. `panic` and the service lifecycle deliberately stay
+  root-only. Tighten with `control.allowSwitchOps: false`, `control.group: ""`, or
+  `control.enabled: false`; `dezhban status` reports which mode you're in.
+- A manual `block` now **holds**: the geo state machine is suspended until you
+  `unblock`, so an allowed reading can't quietly undo an operator's block.
 - Always-on **VPN interface guard** (`vpn.enabled: true`): egress is allowed only
   through the tunnel, cutting a tunnel drop with a zero leak window, with a bounded
-  root-triggered **switch window** as the only sanctioned relaxation.
+  **switch window** as the only sanctioned relaxation.
 - **Country-blocklist fallback** (`vpn.enabled: false`): polls the public IP and
   cuts traffic by destination country for hosts not behind a VPN.
 - Cross-platform `FirewallBackend` seam with build-tagged backends: `pfctl`

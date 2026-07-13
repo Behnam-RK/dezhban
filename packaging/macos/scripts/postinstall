@@ -1,0 +1,27 @@
+#!/bin/sh
+# Runs as root, from the macOS Installer, after the CLI payload lands.
+#
+# It registers the LaunchDaemon but deliberately does NOT start enforcement.
+# dezhban is a kill switch: starting it against a config the user has not chosen
+# yet is how you lock someone out of their own network. Configuration is an
+# explicit step (`sudo dezhban setup`, or the menubar app), and starting it is
+# another. Registering the service here is what makes those steps password-free
+# later — the daemon owns the control socket that the CLI and the app talk to.
+set -u
+
+BIN=/usr/local/bin/dezhban
+CONFIG_DIR=/etc/dezhban
+CONFIG="$CONFIG_DIR/dezhban.json"
+
+mkdir -p "$CONFIG_DIR"
+
+# --no-sudo: we are already root, and the Installer gives us no TTY — an attempted
+# sudo re-exec here would fail confusingly rather than doing anything useful.
+"$BIN" --no-sudo install --config "$CONFIG" || {
+	echo "dezhban: could not register the launchd service; run 'sudo dezhban install' to retry" >&2
+}
+
+# Never fail the install for a recoverable condition. The payload is on disk and
+# every step above is re-runnable by hand; a non-zero exit here would instead roll
+# the whole thing back and leave the user with nothing.
+exit 0

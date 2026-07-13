@@ -48,6 +48,42 @@ command set.
 | `providerQuorum` | bool | `false` | Require a majority of providers to agree on the country before acting. |
 | `logLevel` | string | `"info"` | One of `debug`, `info`, `warn`, `error`. The `-v`/`--verbose` flag overrides this to `debug`. |
 | `vpn` | object | disabled | VPN interface-guard config — see below. |
+| `control` | object | enabled | Control socket — the reason routine ops don't ask for a password. See below. |
+
+## `control` block
+
+The daemon listens on a unix socket so `block`, `unblock` and `switch` reach the
+running daemon instead of re-elevating to root every time. **This is why you are
+not prompted for a password during normal use.** The CLI and the menubar app both
+go through it; with no daemon listening they fall back to acting on the firewall
+directly, which does need root.
+
+`dezhban status` prints a `daemon control:` line telling you exactly which of the
+two you are in.
+
+| Field | Type | Default | Notes |
+|---|---|---|---|
+| `control.enabled` | bool | `true` | Turn the socket off to require root for every operation. |
+| `control.socket` | string | `<state dir>/control.sock` | Socket path. Defaults to `/var/db/dezhban/control.sock` (unix). |
+| `control.group` | string | `"admin"` on macOS, `""` elsewhere | The unix group allowed to drive the daemon. The socket is root-owned, mode `0660`, group-owned by this group. `""` means root-only (`0600`) — the passwordless path is off. |
+| `control.allowSwitchOps` | bool | `true` | Whether opening/cancelling a **switch window** may go over the socket. This is the one op that *relaxes* the guard, so it has its own switch: set it `false` to force `switch` back to root-only (`sudo dezhban switch`). |
+
+**What the trade actually is.** There are no peer credentials in the protocol
+(dezhban is stdlib-only), so filesystem permissions are the whole authorization:
+any process running as a member of `control.group` can issue these commands without
+a password. On macOS `admin` is the group every administrator account is already in
+— the same humans macOS would have prompted for a password anyway. What they can do
+is bounded: `block`/`unblock` only move between the daemon's own fail-closed
+postures, and `switch` is bounded by the same 5-minute cap as ever. `panic` is not
+on the socket at all, so the lockout escape hatch never depends on a live daemon.
+
+Tighten it if you want to: `control.group: ""` (root-only), or
+`control.allowSwitchOps: false` (keep passwordless block/unblock, but make relaxing
+the guard require root), or `control.enabled: false` (password for everything).
+
+Off macOS the group defaults to empty — `wheel`, `sudo` and `adm` mean different
+things across distros, and guessing wrong would hand the socket to the wrong people.
+Name a group explicitly to opt in.
 
 ## `vpn` block
 

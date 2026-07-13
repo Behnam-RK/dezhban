@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<array>
+	<dict>
+		<key>BundleHasStrictIdentifier</key>
+		<true/>
+		<!-- false: install to /Applications, always. A relocatable component makes
+		     the Installer search the disk for an existing copy of the bundle and
+		     update THAT instead — so a stray Dezhban.app in ~/Downloads would
+		     quietly become the install target. -->
+		<key>BundleIsRelocatable</key>
+		<false/>
+		<key>BundleIsVersionChecked</key>
+		<true/>
+		<key>BundleOverwriteAction</key>
+		<string>upgrade</string>
+		<key>RootRelativeBundlePath</key>
+		<string>Dezhban.app</string>
+	</dict>
+</array>
+</plist>

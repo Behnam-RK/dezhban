@@ -32,6 +32,40 @@ to a world-readable JSON **state file** via an injected `Publish` callback in
 menubar app drives its icon from it. Full schema, location, and staleness
 contract: [state.md](state.md).
 
+## Control channels
+
+Two one-way channels carry operator commands *into* the running daemon. They are
+complementary, not alternatives — the file always works, the socket removes the
+password prompt from the operations you perform every day.
+
+| | **Command file** (`internal/command`) | **Control socket** (`internal/control`) |
+|---|---|---|
+| Path | `/var/db/dezhban/command.json` | `/var/db/dezhban/control.sock` |
+| Who may write | root only (0600, root-owned dir) | the `control.group` (macOS: `admin`), via mode 0660 root:group |
+| Shape | consume-once file, polled on a tick | unix socket, one JSON request per connection |
+| Carries | switch open/cancel, forget-learned | ping, status, block, unblock, switch open/cancel |
+| Works with no daemon | n/a (daemon consumes it) | no — the CLI falls back to acting on the firewall directly |
+
+**The socket's trust boundary is filesystem permissions, and nothing else.**
+dezhban is stdlib-only, so there is no `SO_PEERCRED` peer-credential check: whoever
+can `open(2)` the socket is authorized. That is a deliberate trade, and it is
+bounded by what the ops can actually do:
+
+- `block` / `unblock` only move between postures the daemon's own state machine
+  already sanctions (GUARD ↔ FULL BLOCK). They can never open egress *past* the
+  guard, so the worst an unwanted caller achieves is cutting their own network.
+- `switch-open` **can** relax the guard, bounded by the same clamp and 5-minute cap
+  as always. It is the one genuinely-privileged op on the socket, which is why it
+  has its own flag: `control.allowSwitchOps: false` forces it back to root-only.
+- `panic` is deliberately **absent**. The lockout escape hatch must not depend on a
+  daemon being alive, so it stays a direct, root-only firewall teardown.
+- Service lifecycle (`install`/`uninstall`/`start`/`stop`) is absent for a simpler
+  reason: a daemon cannot install, start, or stop itself.
+
+If the socket can't be created with the intended ownership, the daemon **fails
+closed on the feature** — it logs a warning, runs without it, and routine ops go
+back to asking for a password. Enforcement never depends on the socket.
+
 ## Rules that must not be broken
 
 These invariants are load-bearing — the whole design depends on them:
@@ -47,6 +81,12 @@ These invariants are load-bearing — the whole design depends on them:
 - Default to **fail-closed**: when the country can't be determined, block. But the
   allowlist (loopback + DNS + geo-API egress) must stay open so recovery detection
   still works, or the machine can lock itself out.
+- **One goroutine applies rules.** Every `Backend.Apply` call comes from the single
+  run-loop goroutine in `internal/runner`. The window timer, command poll, tunnel
+  watcher, geo ticks, and control-socket requests are all *select cases* in that one
+  loop. The socket's accept goroutine parses and forwards over a channel; it never
+  touches the Backend. Adding a new control path means adding a select case, not a
+  goroutine that applies rules.
 
 ## Dependency strategy
 

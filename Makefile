@@ -27,7 +27,7 @@ MODE   ?= guard
 .PHONY: build vet test build-all clean lint \
         run-dry validate rules doctor \
         install-local reinstall uninstall-local panic \
-        gui-macos
+        gui-macos pkg-macos
 
 build: ## Build for the host platform into ./$(BINARY)
 	go build $(LDFLAGS) -o $(BINARY) $(PKG)
@@ -90,6 +90,16 @@ build-all: ## Cross-compile every platform into ./$(DIST)
 
 gui-macos: ## Build the macOS menubar app into ./$(DIST)/Dezhban.app (macOS only)
 	DEZHBAN_VERSION=$(VERSION) sh macos-gui/build-app.sh $(abspath $(DIST))
+
+# --- macOS installer --------------------------------------------------------
+
+# The standalone .pkg: CLI + menubar app + launchd service, one admin prompt.
+# Depends on the cross-compiled darwin binaries (for the universal CLI) and the
+# app bundle, so it builds both — `make pkg-macos` alone is enough.
+pkg-macos: ## Build the macOS installer into ./$(DIST)/dezhban-$(VERSION).pkg (macOS only)
+	$(MAKE) build-all VERSION=$(VERSION)
+	DEZHBAN_APP_UNIVERSAL=1 $(MAKE) gui-macos VERSION=$(VERSION)
+	VERSION=$(VERSION) bash packaging/macos/build-pkg.sh $(abspath $(DIST))
 
 clean: ## Remove build artifacts
 	rm -rf $(DIST) $(BINARY) macos-gui/.build
