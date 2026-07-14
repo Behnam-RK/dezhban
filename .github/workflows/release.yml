@@ -388,15 +388,20 @@ jobs:
           git commit -m "chore(release): $TAG [skip ci]"
           git push origin "$branch"
 
-          cat > pr-body.md <<-EOF
-		Rolls \`## [Unreleased]\` into \`## [$VERSION]\` for
-		[$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG), which is
-		**already published** — this PR is the bookkeeping.
+          # Plain <<EOF, body at the block's own indent. NOT <<-EOF with tabs:
+          # YAML forbids tabs as indentation, so a tab-indented heredoc silently
+          # terminates the `run: |` block scalar and GitHub then fails to parse the
+          # workflow at all (it drops the workflow_dispatch trigger). YAML strips
+          # this indent, so the shell sees the body at column 0.
+          cat > pr-body.md <<EOF
+          Rolls \`## [Unreleased]\` into \`## [$VERSION]\` for
+          [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG), which is
+          **already published** — this PR is the bookkeeping.
 
-		Opened by the Release workflow. It does not push to \`main\` directly: the
-		branch ruleset requires a pull request, and \`github-actions[bot]\` cannot
-		bypass it.
-		EOF
+          Opened by the Release workflow. It does not push to \`main\` directly: the
+          branch ruleset requires a pull request, and \`github-actions[bot]\` cannot
+          bypass it.
+          EOF
 
           url="$(gh pr create \
             --base main \
