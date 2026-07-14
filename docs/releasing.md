@@ -160,6 +160,6 @@ All version resolution, CHANGELOG rolling and notes rendering is in
 **`scripts/release.sh`**, called identically by `.github/workflows/release.yml`
 and by the `task release:*` family. That is deliberate: a local preview cannot
 drift from what CI does, because it is the same code. It runs standalone
-(`sh scripts/release.sh resolve --bump minor`) with no dev tooling.
+(`bash scripts/release.sh resolve --bump minor`) with no dev tooling.
 
 See [development.md](development.md) for the build/version-stamping mechanics.

@@ -19,6 +19,15 @@
 # CHANGELOG, does NOT commit to main, and is published --prerelease so it never
 # becomes "latest". `bump` counts from the last FINAL tag and ignores rc tags,
 # except `--bump rc`, which advances an existing rc line.
+
+# Re-exec under bash when invoked as `sh scripts/release.sh`. /bin/sh is dash on
+# the Ubuntu runners — it has no `set -o pipefail` and dies on the next line — but
+# it is bash on macOS, so the mistake runs fine locally and only fails in CI.
+# Must come before `set -o pipefail`.
+if [ -z "${BASH_VERSION:-}" ]; then
+	exec bash "$0" "$@"
+fi
+
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

@@ -263,7 +263,7 @@ tasks:
   release:check:
     desc: 'Preflight: on main? clean? synced? [Unreleased] filled? CI green?'
     cmds:
-      - sh scripts/release.sh preflight
+      - bash scripts/release.sh preflight
 
   release:preview:
     desc: 'Dry run: print the resolved version, the notes, and the CHANGELOG diff (VERSION=|BUMP=)'
@@ -274,9 +274,9 @@ tasks:
         # VERSION doubles as the build-stamp var (defaulting to `git describe`), so
         # only a release-SHAPED value counts as an explicit request here.
         if [ -n "{{.BUMP | default ""}}" ]; then
-          eval "$(sh scripts/release.sh resolve --bump '{{.BUMP}}')"
+          eval "$(bash scripts/release.sh resolve --bump '{{.BUMP}}')"
         elif echo '{{.VERSION}}' | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
-          eval "$(sh scripts/release.sh resolve --version '{{.VERSION}}')"
+          eval "$(bash scripts/release.sh resolve --version '{{.VERSION}}')"
         else
           echo "pass VERSION=X.Y.Z[-rc.N] or BUMP=patch|minor|major|rc" >&2
           echo "(VERSION is '{{.VERSION}}' — the git-describe default, not a release version)" >&2
@@ -289,7 +289,7 @@ tasks:
         echo "artifacts   dist/dezhban-$VERSION.pkg, 5 CLI binaries, app zip, SHA256SUMS"
         echo
         echo "--- release notes ------------------------------------------------------"
-        sh scripts/release.sh notes "$VERSION" "$KIND"
+        bash scripts/release.sh notes "$VERSION" "$KIND"
         echo "--- end notes ----------------------------------------------------------"
         echo
 
@@ -301,7 +301,7 @@ tasks:
         tmp="$(mktemp -d)"
         trap 'rm -rf "$tmp"' EXIT
         cp CHANGELOG.md "$tmp/CHANGELOG.md.orig"
-        sh scripts/release.sh roll "$VERSION"
+        bash scripts/release.sh roll "$VERSION"
         echo "--- CHANGELOG diff -----------------------------------------------------"
         diff -u "$tmp/CHANGELOG.md.orig" CHANGELOG.md | sed '1,2d' || true
         cp "$tmp/CHANGELOG.md.orig" CHANGELOG.md
@@ -316,10 +316,10 @@ tasks:
         command -v gh >/dev/null 2>&1 || { echo "gh is required to dispatch a release" >&2; exit 1; }
 
         if [ -n "{{.BUMP | default ""}}" ]; then
-          eval "$(sh scripts/release.sh resolve --bump '{{.BUMP}}')"
+          eval "$(bash scripts/release.sh resolve --bump '{{.BUMP}}')"
           dispatch_args="-f bump={{.BUMP}}"
         elif echo '{{.VERSION}}' | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
-          eval "$(sh scripts/release.sh resolve --version '{{.VERSION}}')"
+          eval "$(bash scripts/release.sh resolve --version '{{.VERSION}}')"
           dispatch_args="-f version={{.VERSION}}"
         else
           echo "pass VERSION=X.Y.Z[-rc.N] or BUMP=patch|minor|major|rc" >&2
@@ -327,7 +327,7 @@ tasks:
           exit 2
         fi
 
-        sh scripts/release.sh preflight
+        bash scripts/release.sh preflight
 
         echo
         echo "  about to release   $TAG  ($KIND)"

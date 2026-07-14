@@ -100,7 +100,7 @@ jobs:
           fi
           # resolve emits TAG/VERSION/VERSION_NUM/KIND/PREV_TAG, and fails on a
           # non-semver, already-taken, or non-monotonic version.
-          resolved="$(sh scripts/release.sh resolve $sel)"
+          resolved="$(bash scripts/release.sh resolve $sel)"
           echo "$resolved"
           eval "$resolved"
           {
@@ -159,7 +159,7 @@ jobs:
       # `publish` rolls it — rolling empties the [Unreleased] section these notes
       # are read from.
       - name: Render release notes
-        run: sh scripts/release.sh notes "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.kind }}" > release-notes.md
+        run: bash scripts/release.sh notes "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.kind }}" > release-notes.md
 
       - uses: actions/upload-artifact@v4
         with:
@@ -333,7 +333,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
           if [ "$KIND" = final ]; then
-            sh scripts/release.sh roll "$VERSION"
+            bash scripts/release.sh roll "$VERSION"
             git add CHANGELOG.md
             git commit -m "chore(release): $TAG [skip ci]"
             git tag -a "$TAG" -m "$TAG"
