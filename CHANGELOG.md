@@ -37,8 +37,23 @@ changes.
 - `dezhban restart` — stop + start as one command, for applying a config change
   (there is no live reload). `start` and `stop` are now idempotent.
 
+- **Touch ID for the menubar app's admin prompts.** It now elevates through
+  Authorization Services (the API behind the System Settings padlock), whose prompt
+  offers "Touch ID or password" — and caches the authorization, so a second privileged
+  action a moment later is usually silent. The old `osascript` dialog was password-only
+  and always had been; it remains as a fallback. For the CLI, enable Touch ID for
+  `sudo` (`pam_tid`) — see [docs/usage.md](docs/usage.md#touch-id).
+
 ### Fixed
 
+- **Endpoint auto-discovery reported unrelated hosts as VPN endpoints.** It accepted any
+  socket bound to a physical interface IP with a public peer, on the premise that a
+  full-tunnel VPN routes everything else through the tunnel. That premise is false: apps
+  bind to the physical link all the time. In the wild it returned GitHub, Cloudflare and
+  Google — and those addresses went straight into the guard's pass list, so the kill
+  switch punched **permanent holes to arbitrary hosts** (a leak) while still blocking the
+  real VPN server (a blackout). Discovery now requires the socket to be owned by a
+  process that is plausibly a VPN transport; an unattributable socket is not an endpoint.
 - **The guard could be armed in a state that cut the tunnel's own transport.** With a
   VPN connected but no known server address, the guard's `block drop out all` covers
   the physical interface — which is exactly what carries the VPN's encrypted transport

@@ -25,10 +25,12 @@ struct CommandResult {
 ///     complete with NO password prompt. This is the common case, and the reason
 ///     the socket exists.
 ///   - `runPrivileged` — service lifecycle (install/uninstall/start/stop) and
-///     `panic`. Elevated through the native admin prompt via osascript. These
-///     genuinely cannot be daemon-mediated: a daemon can't install, start or stop
-///     itself, and panic must work when no daemon is running at all. They are rare
-///     (install-time or emergency), so a prompt is the right cost.
+///     `panic`. Elevated through Authorization Services, so the prompt takes **Touch
+///     ID** and is cached for a grace period (see Elevation); falls back to the
+///     password-only osascript dialog if that path is unavailable. These genuinely
+///     cannot be daemon-mediated: a daemon can't install, start or stop itself, and
+///     panic must work when no daemon is running at all. They are rare (install-time
+///     or emergency), so a prompt is the right cost.
 ///
 /// Routine ops fall back to `runPrivileged` only when no daemon is listening. A
 /// daemon REFUSAL (exit 3) is never escalated — see `CommandResult.refused`.
@@ -73,7 +75,21 @@ enum DezhbanCLI {
         // error as a bare "error code N" (notably for `config set` validation
         // failures). Instead capture stdout+stderr in $out, print it to stdout on
         // success, and to stderr (then re-exit non-zero) on failure.
-        return runAsAdmin("out=$(\(quoted) 2>&1)")
+        return elevate("out=$(\(quoted) 2>&1)")
+    }
+
+    /// Runs `script` as root, preferring the Touch ID-capable path.
+    ///
+    /// Authorization Services (Elevation) gets a "Touch ID or password" prompt and caches
+    /// the authorization, so a second action a moment later is usually silent. It returns
+    /// nil only when the path is unusable at all — never for a command that simply failed
+    /// — so falling back here can't mask a real error, and can't turn a cancelled prompt
+    /// into a second prompt.
+    private static func elevate(_ script: String) -> CommandResult {
+        if let result = Elevation.run(shell: script) {
+            return result
+        }
+        return runAsAdmin(script)
     }
 
     /// Runs a SEQUENCE of privileged commands under a SINGLE admin prompt, stopping
@@ -104,7 +120,7 @@ enum DezhbanCLI {
             let display = (["dezhban"] + args).joined(separator: " ")
             steps.append("echo '$ \(display)'; \(quoted); echo")
         }
-        return runAsAdmin("out=$( { set -e; \(steps.joined(separator: "; ")); } 2>&1 )")
+        return elevate("out=$( { set -e; \(steps.joined(separator: "; ")); } 2>&1 )")
     }
 
     /// Quotes tokens for `do shell script`. Defense in depth: the binary is a trusted

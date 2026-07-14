@@ -50,23 +50,30 @@ daemon** over its control socket and need no password at all:
 
 `dezhban status` prints a `daemon control:` line saying which mode you're in.
 
-### Why doesn't the password prompt take Touch ID?
+### Touch ID
 
-The menubar app elevates through `do shell script … with administrator privileges`,
-whose SecurityAgent dialog is **password-only** — it has never supported biometrics.
-Touch ID there would require shipping a privileged helper (`SMAppService`) and going
-through Authorization Services, which is a lot of attack surface to save a few
-keystrokes on operations you should rarely perform. The prompts that remain are
-install-time and emergency ones; the *routine* ops need no authentication at all.
+**The menubar app uses Touch ID** for the prompts it does raise (start, stop,
+install/uninstall, panic, config writes). It elevates through **Authorization
+Services** — the API behind the System Settings padlock — whose prompt offers "Touch
+ID or password" on any Mac that has it.
 
-For the CLI, Touch ID works with `sudo` once you enable it system-wide (macOS 14+):
+It also **caches**: the authorization is held for the life of the app and the system
+grants a grace period, so a second privileged action a moment later usually needs no
+authentication at all.
+
+If your Mac has no Touch ID, or the API is unavailable, the app falls back to the old
+`osascript` dialog — that one is **password-only** and always has been, which is why
+biometrics never worked before.
+
+For the **CLI**, Touch ID comes from `sudo`, and you have to enable it yourself
+(macOS 14+):
 
 ```sh
 sudo sh -c 'echo "auth       sufficient     pam_tid.so" > /etc/pam.d/sudo_local'
 ```
 
-That's a change to your system's `sudo` configuration, not to dezhban — it applies
-to every `sudo` you run, and it survives OS updates (unlike editing `/etc/pam.d/sudo`
+That's a change to your system's `sudo` configuration, not to dezhban — it applies to
+every `sudo` you run, and survives OS updates (unlike editing `/etc/pam.d/sudo`
 directly). dezhban's auto-elevation goes through `sudo`, so `dezhban start` and
 friends pick it up automatically.
 
