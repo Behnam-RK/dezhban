@@ -111,8 +111,18 @@ dezhban config path                # print the resolved config path
 dezhban config show                # print the effective config as JSON
 dezhban config get blockedCountries
 sudo dezhban config set blockedCountries IR,RU   # set, validate, save
+sudo dezhban config set vpn.enabled=true vpn.tunnelInterfaces=utun4 \
+     vpn.autoDiscoverEndpoints=true                # several keys, one atomic write
 sudo dezhban config edit           # open the config in $EDITOR, re-validated on save
 ```
+
+`config set` takes either one `<key> <value>` pair or any number of `key=value`
+pairs. The multi-pair form applies them all to one in-memory config, validates
+**once**, and writes **once** — so there is no ordering to get right (a key that is
+only legal alongside another, like `vpn.enabled`, can come first) and no
+half-applied config if one value is rejected. It is also one privileged write, i.e.
+one password prompt instead of one per key; the menubar app's VPN panel uses it for
+exactly that reason.
 
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to

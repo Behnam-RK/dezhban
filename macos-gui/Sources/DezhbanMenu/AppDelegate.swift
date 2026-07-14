@@ -67,6 +67,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "dezhban: \(help)")
         image?.isTemplate = true
         button.image = image
+        // nil tint = draw the template image in the menu bar's own foreground color,
+        // which follows the wallpaper/appearance (dark on a light bar, light on a dark
+        // one). The states that carry a warning keep an explicit color, but the
+        // resting states must NOT: a fixed gray shield is invisible on a dark menu bar,
+        // which is exactly where "stopped" most needs to be legible.
         button.contentTintColor = color
         button.toolTip = "dezhban — \(help)"
     }
@@ -105,9 +110,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     /// Maps a snapshot (or its absence/staleness) to an SF Symbol + tint + label.
-    private func iconFor(_ s: Snapshot?) -> (symbol: String, color: NSColor, help: String) {
+    /// A nil tint means "use the menu bar's own color", which is the only thing that
+    /// stays legible on both a light and a dark menu bar — see refresh().
+    private func iconFor(_ s: Snapshot?) -> (symbol: String, color: NSColor?, help: String) {
         guard let s = s, isLive(s) else {
-            return ("shield", .systemGray, "stopped")
+            // Stopped is conveyed by the OUTLINE shield (vs. filled when enforcing),
+            // not by a color, so it needs no tint and stays visible on any menu bar.
+            return ("shield", nil, "stopped")
         }
         // A failed firewall action means the intended posture was NOT achieved (e.g. a
         // failed block leaves posture "allow" during a live leak). Surface it as a
@@ -417,18 +426,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runSequence([["panic"], ["stop"], ["uninstall"]], title: "dezhban — uninstall service")
     }
 
-    /// Runs a sequence of privileged commands, stopping at (and reporting) the
-    /// first failure rather than plowing ahead once something's gone wrong.
+    /// Runs a sequence of privileged commands under ONE admin prompt, stopping at
+    /// (and reporting) the first failure rather than plowing ahead once something's
+    /// gone wrong. Elevating per command would make a three-step uninstall ask for
+    /// the password three times.
     private func runSequence(_ commands: [[String]], title: String) {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            var log = ""
-            for cmd in commands {
-                let result = DezhbanCLI.runPrivileged(cmd)
-                log += "$ dezhban \(cmd.joined(separator: " "))\n\(result.output)\n\n"
-                if !result.ok { break }
-            }
+            let result = DezhbanCLI.runPrivileged(batch: commands)
             DispatchQueue.main.async {
-                OutputPanel.shared.show(title: title, text: log)
+                OutputPanel.shared.show(title: title, text: result.output.isEmpty ? "(no output)" : result.output)
                 self?.refresh()
                 // install/uninstall flips service-installed state — resync the cache.
                 self?.refreshServiceInstalled()

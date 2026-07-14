@@ -214,143 +214,116 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             }
         }
 
-        // Write order matters: `config set` validates the WHOLE config on every
-        // write (internal/config.Save → Marshal → Validate), not just the field
-        // being set. So when turning the guard ON, every other field is written
-        // first and vpn.enabled last — the on-disk config is never briefly
-        // "enabled=true" with stale/empty tunnels or endpoints in between. When
-        // turning it OFF, vpn.enabled is written first so the cross-field
-        // invariant (which only applies while enabled) is never checked against
-        // fields not yet updated.
-        var sets: [(key: String, value: String)] = [
-            (Self.keyTunnelInterfaces, tunnelInterfaces),
-            (Self.keyEndpoints, endpoints),
-            (Self.keyAutodetect, autodetect ? "true" : "false"),
-            (Self.keyAutoDiscoverEndpoints, autoDiscover ? "true" : "false"),
-            (Self.keyEndpointRefresh, endpointRefresh),
-            (Self.keyTunnelWatch, tunnelWatch),
+        // One `config set` with every pair: the CLI applies them all to one in-memory
+        // config, validates once, and writes once. That makes this a single atomic
+        // change (no ordering dance to keep the on-disk file legal between writes —
+        // there is no "between") AND, because each elevation is a password prompt, a
+        // single prompt instead of one per field.
+        let pairs = [
+            "\(Self.keyEnabled)=\(enabled)",
+            "\(Self.keyTunnelInterfaces)=\(tunnelInterfaces)",
+            "\(Self.keyEndpoints)=\(endpoints)",
+            "\(Self.keyAutodetect)=\(autodetect)",
+            "\(Self.keyAutoDiscoverEndpoints)=\(autoDiscover)",
+            "\(Self.keyEndpointRefresh)=\(endpointRefresh)",
+            "\(Self.keyTunnelWatch)=\(tunnelWatch)",
         ]
-        if enabled {
-            sets.append((Self.keyEnabled, "true"))
-        } else {
-            sets.insert((Self.keyEnabled, "false"), at: 0)
+
+        // Ask about the restart BEFORE elevating, not after: the write and the restart
+        // then go up as one batch under one prompt. Asking afterwards would mean a
+        // second elevation — the exact thing that made this flow prompt over and over.
+        let restart = confirmRestart()
+
+        // Resolve the target path once and pass --config explicitly, so the write and
+        // the daemon provably act on the same file rather than each re-resolving it.
+        let cfgPath = DezhbanCLI.resolvedConfigPath()
+        let setCmd: [String] = ["config", "set"] + pairs + ["--config", cfgPath]
+        var commands: [[String]] = [setCmd]
+        if restart {
+            // No --config on stop/start: they act on the already-installed service
+            // unit, whose config path was baked in at install time (cmdService only
+            // reads --config for `install`). `set -e` in the batch means these run
+            // only if the write above succeeded — a rejected config never restarts
+            // the daemon.
+            commands.append(["stop"])
+            commands.append(["start"])
         }
 
         applyButton.isEnabled = false
-        statusLabel.stringValue = "Applying…"
+        statusLabel.stringValue = restart ? "Applying and restarting…" : "Applying…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
-            // Resolve the target path once and pass --config to every write and
-            // the final validate, so all three provably act on the same file
-            // (rather than trusting each subcommand to re-resolve identically).
-            let cfgPath = DezhbanCLI.resolvedConfigPath()
-            var log = ""
-            for (key, value) in sets {
-                let result = DezhbanCLI.runPrivileged(["config", "set", key, value, "--config", cfgPath])
-                // Quote value/cfgPath (via String(reflecting:)) so the transcript
-                // is unambiguous and copy/paste-runnable when they contain spaces.
-                log += "$ dezhban config set \(key) \(String(reflecting: value)) --config \(String(reflecting: cfgPath))\n\(result.output)\n\n"
-                if !result.ok {
-                    DispatchQueue.main.async {
-                        self.finishWithoutRestart(log: log, message: "Rejected: \(key) failed to set — no restart attempted.")
-                    }
-                    return
-                }
-            }
-
-            // Belt-and-suspenders: each `config set` above already validates the
-            // full config on write, but re-validate the file itself once more
-            // before ever offering a restart.
-            let validate = DezhbanCLI.run(["validate", "--config", cfgPath])
-            log += "$ dezhban validate --config \(String(reflecting: cfgPath))\n\(validate.output)\n\n"
-            guard validate.ok else {
+            let result = DezhbanCLI.runPrivileged(batch: commands)
+            guard result.ok else {
                 DispatchQueue.main.async {
-                    self.finishWithoutRestart(log: log, message: "Config written but failed final validation — daemon not restarted.")
+                    self.applyButton.isEnabled = true
+                    self.statusLabel.stringValue = "Rejected — see output."
+                    OutputPanel.shared.show(title: "VPN config — not applied", text: result.output)
                 }
                 return
             }
-
-            DispatchQueue.main.async {
-                self.confirmRestart(log: log)
+            guard restart else {
+                DispatchQueue.main.async {
+                    self.applyButton.isEnabled = true
+                    self.statusLabel.stringValue = "Config saved; restart later to apply."
+                    OutputPanel.shared.show(title: "VPN config — saved (not restarted)", text: result.output)
+                }
+                return
             }
+            self.awaitPosture(log: result.output)
         }
-    }
-
-    private func finishWithoutRestart(log: String, message: String) {
-        applyButton.isEnabled = true
-        statusLabel.stringValue = message
-        OutputPanel.shared.show(title: "VPN config — apply", text: log + "\n" + message)
     }
 
     /// The restart-window decision made explicit: no atomic reload exists
     /// (kardianos/service has no SIGHUP-style reconfigure, and Cleanup/panic
     /// deliberately shares the same rules-come-down path as `stop`), so this
     /// is disclosed plainly rather than papered over as seamless.
-    private func confirmRestart(log: String) {
-        // Apply stays disabled (set in applyTapped) through the restart so a
-        // second config-write/restart can't be kicked off concurrently. It is
-        // re-enabled only when we stop here (cancel) or when the restart finishes.
+    private func confirmRestart() -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Restart dezhban to apply this change?"
-        alert.informativeText = "Applying this change restarts dezhban. Network filtering is briefly disabled while it restarts (usually under a few seconds). Continue?"
-        alert.addButton(withTitle: "Restart")
-        alert.addButton(withTitle: "Cancel")
-        guard alert.runModal() == .alertFirstButtonReturn else {
-            applyButton.isEnabled = true
-            statusLabel.stringValue = "Config saved; restart later to apply."
-            OutputPanel.shared.show(title: "VPN config — saved (not restarted)", text: log)
-            return
-        }
-        performRestart(log: log)
+        alert.informativeText = "A config change only takes effect when dezhban restarts. Network filtering is briefly disabled while it does (usually under a few seconds). Choosing “Save only” writes the config now and leaves the running daemon on its old settings."
+        alert.addButton(withTitle: "Save and Restart")
+        alert.addButton(withTitle: "Save Only")
+        return alert.runModal() == .alertFirstButtonReturn
     }
 
-    private func performRestart(log: String) {
-        statusLabel.stringValue = "Restarting…"
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+    /// Waits (bounded, off the main thread) for the restarted daemon to publish a
+    /// posture, rather than assuming the restart worked: launchd can accept the load
+    /// and the daemon still fail to come up. Called only after a successful batch, so
+    /// the config is already written and validated.
+    private func awaitPosture(log: String) {
+        // The daemon applies its startup ruleset and may take a geo reading before it
+        // first publishes, so give it real time. This used to poll for 5s and report
+        // a scary "restart incomplete" on a daemon that was merely still starting.
+        let deadline = Date().addingTimeInterval(20)
+        var posture: String?
+        while Date() < deadline {
+            Thread.sleep(forTimeInterval: 0.5)
+            if let p = DezhbanCLI.reportedPosture() {
+                posture = p
+                break
+            }
+        }
+        DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            var fullLog = log
-            // No --config on stop/start: they act on the already-installed
-            // service unit, whose config path was baked in at install time
-            // (cmdService only reads --config for `install`). The service
-            // manager ignores a --config passed to start/stop, so the restarted
-            // daemon reloads its install-time path — which the GUI installs with
-            // resolvedConfigPath(), the same path this panel just wrote to.
-            let stopResult = DezhbanCLI.runPrivileged(["stop"])
-            fullLog += "$ dezhban stop\n\(stopResult.output)\n\n"
-            let startResult = DezhbanCLI.runPrivileged(["start"])
-            fullLog += "$ dezhban start\n\(startResult.output)\n\n"
+            self.applyButton.isEnabled = true
+            if let posture = posture {
+                self.statusLabel.stringValue = "Restarted — posture: \(posture)."
+                OutputPanel.shared.show(title: "VPN config — restarted", text: log + "resolved posture: \(posture)\n")
+            } else {
+                self.statusLabel.stringValue = "Restarted, but no posture reported — run diagnostics."
+                OutputPanel.shared.show(
+                    title: "VPN config — no posture reported",
+                    text: log + """
+                        The service restarted but published no posture within 20s.
 
-            guard stopResult.ok, startResult.ok else {
-                DispatchQueue.main.async {
-                    self.applyButton.isEnabled = true
-                    self.statusLabel.stringValue = "Restart failed — see output."
-                    OutputPanel.shared.show(title: "VPN config — restart failed", text: fullLog)
-                }
-                return
-            }
+                        The daemon writes its posture to \(StateReader.defaultPath). If that file
+                        is missing or unreadable, check that the service is actually running:
 
-            // Poll status --json (bounded) until a posture is published rather
-            // than assuming success — a config that passed validate should
-            // start, but a service-manager-level failure (e.g. launchd
-            // rejecting the plist) is still possible and must not be swallowed.
-            var reportedPosture: String?
-            for _ in 0..<10 {
-                Thread.sleep(forTimeInterval: 0.5)
-                if let posture = DezhbanCLI.reportedPosture() {
-                    reportedPosture = posture
-                    break
-                }
-            }
-            DispatchQueue.main.async {
-                self.applyButton.isEnabled = true
-                if let posture = reportedPosture {
-                    self.statusLabel.stringValue = "Restarted — posture: \(posture)."
-                    OutputPanel.shared.show(title: "VPN config — restarted", text: fullLog + "resolved posture: \(posture)\n")
-                } else {
-                    self.statusLabel.stringValue = "Restart did not report a posture — check status."
-                    OutputPanel.shared.show(title: "VPN config — restart incomplete", text: fullLog + "no posture reported within 5s of polling `status --json`\n")
-                }
+                            dezhban status
+                            log show --last 5m --predicate 'process == "dezhban"'
+                        """)
             }
         }
     }

@@ -63,13 +63,7 @@ enum DezhbanCLI {
             return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
         }
         let tokens = [bin] + args
-        // Defense in depth: bin is a trusted absolute path and args are hardcoded
-        // literals, but since these run through `do shell script … with
-        // administrator privileges` as root, refuse any token carrying a single
-        // quote or backslash rather than risk breaking the quoting into an
-        // injection. (The alternative — argv without a shell — isn't available
-        // through NSAppleScript's `do shell script`.)
-        guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else {
+        guard let quoted = shellQuote(tokens) else {
             return CommandResult(ok: false, output: "refused: an argument contained a quote or backslash")
         }
         // Route the command's combined output so BOTH outcomes surface it.
@@ -79,10 +73,60 @@ enum DezhbanCLI {
         // error as a bare "error code N" (notably for `config set` validation
         // failures). Instead capture stdout+stderr in $out, print it to stdout on
         // success, and to stderr (then re-exit non-zero) on failure.
-        let quoted = tokens.map { "'\($0)'" }.joined(separator: " ")
-        let shellCmd = "out=$(\(quoted) 2>&1); rc=$?; if [ \"$rc\" -eq 0 ]; then printf '%s' \"$out\"; else printf '%s' \"$out\" >&2; exit \"$rc\"; fi"
-        // Embed shellCmd as an AppleScript string literal: escape double-quotes.
-        let escaped = shellCmd.replacingOccurrences(of: "\"", with: "\\\"")
+        return runAsAdmin("out=$(\(quoted) 2>&1)")
+    }
+
+    /// Runs a SEQUENCE of privileged commands under a SINGLE admin prompt, stopping
+    /// at the first failure, and returns the whole transcript (each command echoed
+    /// above its output, exactly as a terminal would show it).
+    ///
+    /// This exists because the prompt is the expensive thing, not the command. Every
+    /// separate `runPrivileged` is its own elevation, so a multi-step operation —
+    /// applying seven VPN config fields, or panic + stop + uninstall — used to make
+    /// the user type their password once per step. That is the bad UX; batching is
+    /// the fix. `set -e` gives the same stop-at-first-failure semantics the previous
+    /// per-command loops had, so nothing plows ahead after an error.
+    @discardableResult
+    static func runPrivileged(batch commands: [[String]]) -> CommandResult {
+        guard let bin = binaryPath() else {
+            return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
+        }
+        guard !commands.isEmpty else { return CommandResult(ok: true, output: "") }
+
+        var steps: [String] = []
+        for args in commands {
+            guard let quoted = shellQuote([bin] + args) else {
+                return CommandResult(ok: false, output: "refused: an argument contained a quote or backslash")
+            }
+            // Echo the command the way the user would have typed it (`dezhban …`,
+            // not the absolute path), then a blank line after its output, so the
+            // transcript reads like a terminal session.
+            let display = (["dezhban"] + args).joined(separator: " ")
+            steps.append("echo '$ \(display)'; \(quoted); echo")
+        }
+        return runAsAdmin("out=$( { set -e; \(steps.joined(separator: "; ")); } 2>&1 )")
+    }
+
+    /// Quotes tokens for `do shell script`. Defense in depth: the binary is a trusted
+    /// absolute path and the args are hardcoded literals, but this runs as root, so
+    /// refuse any token carrying a single quote or backslash rather than risk breaking
+    /// out of the quoting into an injection. (argv-without-a-shell isn't available
+    /// through NSAppleScript's `do shell script`.) Returns nil on a rejected token.
+    private static func shellQuote(_ tokens: [String]) -> String? {
+        guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else { return nil }
+        return tokens.map { "'\($0)'" }.joined(separator: " ")
+    }
+
+    /// Shared elevation path. `capture` must leave the combined output in `$out` and
+    /// the status in `$?`; this wrapper re-emits it so both success and failure carry
+    /// the real text (see runPrivileged's note on `do shell script`'s error handling).
+    private static func runAsAdmin(_ capture: String) -> CommandResult {
+        let shellCmd = "\(capture); rc=$?; if [ \"$rc\" -eq 0 ]; then printf '%s' \"$out\"; else printf '%s' \"$out\" >&2; exit \"$rc\"; fi"
+        // Embed shellCmd as an AppleScript string literal: escape backslashes first
+        // (so the escape we add for quotes isn't itself re-escaped), then quotes.
+        let escaped = shellCmd
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
         let source = "do shell script \"\(escaped)\" with administrator privileges"
         guard let script = NSAppleScript(source: source) else {
             return CommandResult(ok: false, output: "failed to construct AppleScript")

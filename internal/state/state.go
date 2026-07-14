@@ -65,6 +65,41 @@ type SwitchState struct {
 	Profile string    `json:"profile,omitempty"`
 }
 
+// DirMode is the mode of the daemon's state directory. It MUST stay traversable
+// (0755): the daemon runs as root, but the things inside it are read and reached
+// by the unprivileged logged-in user — state.json (0644) by the menubar app and
+// `status --json`, and control.sock (0660 root:admin) by every routine op. A
+// too-tight directory silently breaks both: the GUI reads no snapshot and reports
+// "stopped" while the daemon is enforcing fine, and the control socket becomes
+// unreachable so every block/unblock falls back to a password prompt.
+//
+// Confidentiality here is per-file, not per-directory: pf.state and command.json
+// are 0600, so the open directory exposes nothing. A restrictive dir buys no
+// secrecy and costs the whole out-of-process contract.
+const DirMode = 0o755
+
+// EnsureDir creates the daemon's state directory and repairs a too-restrictive
+// mode on one that already exists. The repair is the point: MkdirAll is a no-op on
+// an existing directory, so a dir created 0700 by an earlier version (or by
+// whichever component happened to touch it first) would stay 0700 forever and keep
+// the GUI and the control socket locked out. Called once at daemon startup, by the
+// root process that owns the directory.
+func EnsureDir(dir string) error {
+	if err := os.MkdirAll(dir, DirMode); err != nil {
+		return fmt.Errorf("state: create dir %q: %w", dir, err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("state: stat dir %q: %w", dir, err)
+	}
+	if mode := fi.Mode().Perm(); mode&DirMode != DirMode {
+		if err := os.Chmod(dir, DirMode); err != nil {
+			return fmt.Errorf("state: chmod dir %q (%#o → %#o): %w", dir, mode, DirMode, err)
+		}
+	}
+	return nil
+}
+
 // Write atomically persists s to path as JSON. It creates the parent directory
 // (0755) if needed, writes a temp file in the same directory, chmods it 0644
 // (world-readable), then renames it over path — rename is atomic on the same
@@ -72,7 +107,7 @@ type SwitchState struct {
 // never a partial write.
 func Write(path string, s Snapshot) error {
 	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	if err := os.MkdirAll(dir, DirMode); err != nil {
 		return fmt.Errorf("state: create dir %q: %w", dir, err)
 	}
 	data, err := json.MarshalIndent(s, "", "  ")

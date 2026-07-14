@@ -30,6 +30,29 @@ changes.
   `control.enabled: false`; `dezhban status` reports which mode you're in.
 - A manual `block` now **holds**: the geo state machine is suspended until you
   `unblock`, so an allowed reading can't quietly undo an operator's block.
+- `config set` accepts several `key=value` pairs in one validated, atomic write
+  (`dezhban config set vpn.enabled=true vpn.tunnelInterfaces=utun4`). One prompt,
+  one write, and no ordering constraints between interdependent keys.
+
+### Fixed
+
+- **The daemon's state directory (`/var/db/dezhban`) was created `0700`** by the
+  macOS pf backend, which silently broke everything that reads out of it as the
+  logged-in user: the menubar app could not read `state.json` (so it showed "Kill
+  switch stopped" and "no posture reported" while the daemon was enforcing
+  perfectly), and the control socket was unreachable through the directory (so every
+  routine `block`/`unblock` fell back to a password prompt — the very thing the
+  socket exists to prevent). The directory is now `0755` and `state.EnsureDir`
+  repairs an existing too-tight one at daemon startup. Confidentiality was never in
+  the directory bit: the sensitive files inside it are `0600`.
+- **The menubar app asked for a password once per config field.** Applying the VPN
+  panel meant seven separate elevations, plus two more for the restart. The panel now
+  sends the whole change as one batched, privileged invocation — **one prompt**. The
+  same batching makes "Install service…" one prompt instead of two and "Uninstall
+  service…" one instead of three.
+- **The menubar icon was invisible on a dark menu bar** when stopped: it was tinted a
+  fixed gray. Resting states now draw in the menu bar's own adaptive color; only the
+  states that carry a warning keep an explicit color.
 - Always-on **VPN interface guard** (`vpn.enabled: true`): egress is allowed only
   through the tunnel, cutting a tunnel drop with a zero leak window, with a bounded
   **switch window** as the only sanctioned relaxation.

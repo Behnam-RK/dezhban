@@ -94,6 +94,31 @@ not a route probe, and why `--discover` reads live sockets instead. The pf rule
 still matches the provider's physical-side socket, so a correct **public**
 endpoint works even though `route get` is misleading.
 
+## The menubar app says "stopped" — or routine ops started asking for a password again
+
+Both symptoms have one cause: the daemon's state directory `/var/db/dezhban` is not
+traversable by the logged-in user. The daemon runs as root, but everything it
+publishes is read from outside it — `state.json` (0644) by the menubar app and
+`status --json`, and `control.sock` (0660 `root:admin`) by every `block`/`unblock`.
+A `0700` directory silently severs both: the app sees no snapshot and reports
+"stopped" while the daemon is enforcing perfectly, and the control socket can't be
+reached, so routine ops fall back to the root path and prompt for a password.
+
+```sh
+stat -f "%Sp %Su %Sg %N" /var/db/dezhban    # want: drwxr-xr-x root wheel
+dezhban status | grep "daemon control"      # want: reachable — routine ops need no password
+```
+
+Starting the daemon repairs the mode automatically (`state.EnsureDir`). To fix it
+without a restart:
+
+```sh
+sudo chmod 755 /var/db/dezhban
+```
+
+The open directory leaks nothing: the sensitive files inside it (`command.json`,
+`pf.state`) are `0600`.
+
 ## Preview rules before applying them
 
 Never find out what a block does by getting locked out. Render the exact ruleset

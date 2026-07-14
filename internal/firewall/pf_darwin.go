@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 // macOS enforcement via pfctl.
@@ -357,7 +359,12 @@ func backupPfConf() error {
 }
 
 func saveState(s savedState) error {
-	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+	// state.DirMode (0755), not 0700: this is the shared daemon state directory,
+	// and whichever component creates it first fixes its mode for everyone. Creating
+	// it 0700 here locked the unprivileged menubar app out of state.json and every
+	// admin user out of control.sock — see state.EnsureDir. The file itself stays
+	// 0600, which is where this state's confidentiality actually lives.
+	if err := os.MkdirAll(stateDir, state.DirMode); err != nil {
 		return fmt.Errorf("create state dir: %w", err)
 	}
 	data, err := json.Marshal(s)

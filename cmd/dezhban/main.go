@@ -299,6 +299,16 @@ func parseOverrides(simCountry, simTunDown string) (runOverrides, error) {
 // service Start path; the logger is supplied by the caller so service mode can
 // route output to the platform logger.
 func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (runner.Options, error) {
+	// Everything the daemon publishes to the outside world lives under this one
+	// directory — state.json for the menubar app, control.sock for passwordless
+	// routine ops. It must be traversable by the unprivileged user or both silently
+	// stop working, so establish (and repair) its mode once, here, before anything
+	// writes into it. Non-fatal: a stale mode degrades observability, it must never
+	// stop the kill switch from enforcing.
+	if err := state.EnsureDir(stateDir()); err != nil {
+		log.Warn("state directory not reachable by unprivileged readers; the menubar app and control socket may not work", "err", err)
+	}
+
 	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
 	if len(providers) == 0 {
 		return runner.Options{}, fmt.Errorf("no usable geo providers configured")
