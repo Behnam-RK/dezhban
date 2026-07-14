@@ -78,12 +78,18 @@ type SwitchState struct {
 // secrecy and costs the whole out-of-process contract.
 const DirMode = 0o755
 
-// EnsureDir creates the daemon's state directory and repairs a too-restrictive
-// mode on one that already exists. The repair is the point: MkdirAll is a no-op on
-// an existing directory, so a dir created 0700 by an earlier version (or by
+// EnsureDir creates the daemon's state directory and repairs the mode of one that
+// already exists, in BOTH directions. The repair is the point: MkdirAll is a no-op
+// on an existing directory, so a dir created 0700 by an earlier version (or by
 // whichever component happened to touch it first) would stay 0700 forever and keep
-// the GUI and the control socket locked out. Called once at daemon startup, by the
-// root process that owns the directory.
+// the GUI and the control socket locked out.
+//
+// The mode is enforced exactly, not just "at least DirMode". A too-permissive dir
+// (0777, say, from a stray chmod) is as much a defect as a too-restrictive one, and
+// a more dangerous one: this directory gates control.sock, and a group- or
+// world-writable dir lets a local user unlink the socket and bind their own in its
+// place — the authorization boundary is the filesystem here, so the container's bits
+// are part of it. Called once at daemon startup, by the root process that owns it.
 func EnsureDir(dir string) error {
 	if err := os.MkdirAll(dir, DirMode); err != nil {
 		return fmt.Errorf("state: create dir %q: %w", dir, err)
@@ -92,7 +98,7 @@ func EnsureDir(dir string) error {
 	if err != nil {
 		return fmt.Errorf("state: stat dir %q: %w", dir, err)
 	}
-	if mode := fi.Mode().Perm(); mode&DirMode != DirMode {
+	if mode := fi.Mode().Perm(); mode != DirMode {
 		if err := os.Chmod(dir, DirMode); err != nil {
 			return fmt.Errorf("state: chmod dir %q (%#o → %#o): %w", dir, mode, DirMode, err)
 		}

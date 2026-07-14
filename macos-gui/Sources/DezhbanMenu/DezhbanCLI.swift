@@ -86,10 +86,20 @@ enum DezhbanCLI {
     /// — so falling back here can't mask a real error, and can't turn a cancelled prompt
     /// into a second prompt.
     private static func elevate(_ script: String) -> CommandResult {
-        if let result = Elevation.run(shell: script) {
+        switch Elevation.run(shell: script) {
+        case .completed(let result):
             return result
+        case .cancelled:
+            // The user dismissed the prompt (or failed to authenticate). That is an
+            // answer, so it is reported once and not retried: falling through to the
+            // AppleScript path here would put up a SECOND password dialog for the very
+            // request they just declined.
+            return CommandResult(ok: false, output: "cancelled — authorization was not granted", status: 1)
+        case .unavailable:
+            // Authorization Services isn't usable on this system; the user saw no prompt,
+            // so asking them through the legacy dialog is the first ask, not a second.
+            return runAsAdmin(script)
         }
-        return runAsAdmin(script)
     }
 
     /// Runs a SEQUENCE of privileged commands under a SINGLE admin prompt, stopping

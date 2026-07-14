@@ -129,6 +129,32 @@ func TestEnsureDirRepairsTooRestrictiveMode(t *testing.T) {
 	}
 }
 
+// The other direction matters more, and for a different reason. A world-writable
+// state dir lets any local user unlink control.sock and bind their own socket at that
+// path — the daemon's authorization gate IS the filesystem, so the mode of the
+// directory holding the socket is part of the boundary, not decoration around it.
+// "At least traversable" is therefore not the check; the exact mode is.
+func TestEnsureDirTightensTooPermissiveMode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dezhban")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	// MkdirAll honours the umask, so force the mode we actually want to test.
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDir(dir); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != DirMode {
+		t.Fatalf("dir mode = %#o, want %#o — a local user could replace control.sock", got, DirMode)
+	}
+}
+
 func TestEnsureDirCreatesTraversableDir(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "a", "b")
 	if err := EnsureDir(dir); err != nil {

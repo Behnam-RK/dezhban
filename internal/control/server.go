@@ -56,20 +56,11 @@ func New(path, group string, log *slog.Logger) (*Server, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("control: create dir %q: %w", dir, err)
 	}
-	// A socket left behind by a crash (or a KeepAlive restart that skipped the
-	// deferred stop) would make Listen fail with EADDRINUSE, so unlink first. This
-	// is safe: only root can write this directory, and a live daemon holding the
-	// socket is a supervisor-level concern (launchd runs exactly one).
-	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
-		return nil, fmt.Errorf("control: remove stale socket: %w", err)
-	}
-	ln, err := net.Listen("unix", path)
+	// listenSecure publishes the socket at path only once it already carries its
+	// intended ownership and mode, so it is never briefly reachable under a
+	// umask-derived one. It also replaces a socket left behind by a crash.
+	ln, err := listenSecure(path, group)
 	if err != nil {
-		return nil, fmt.Errorf("control: listen %q: %w", path, err)
-	}
-	if err := secureSocket(path, group); err != nil {
-		_ = ln.Close()
-		_ = os.Remove(path)
 		return nil, err
 	}
 	return &Server{

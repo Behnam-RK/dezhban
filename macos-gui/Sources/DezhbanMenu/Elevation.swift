@@ -18,6 +18,23 @@ import Security
 /// Falls back to the AppleScript path (see DezhbanCLI.runPrivileged) whenever any of
 /// this is unavailable, so the app never loses the ability to elevate.
 enum Elevation {
+    /// The outcome of an elevation attempt.
+    ///
+    /// `cancelled` and `unavailable` are deliberately different answers, because the
+    /// caller does opposite things with them. Dismissing the prompt IS an answer: the
+    /// user declined, and falling back to the AppleScript path would put up a SECOND
+    /// password dialog for the request they just refused. Only `unavailable` — the API
+    /// or the authorization machinery being unusable, which the user never saw — may
+    /// fall back. Collapsing both into `nil` is what made a cancel re-prompt.
+    enum Outcome {
+        /// The command ran (whatever its exit status).
+        case completed(CommandResult)
+        /// The user cancelled or failed authentication. Do not re-prompt.
+        case cancelled
+        /// This elevation path can't be used at all. Caller should fall back.
+        case unavailable
+    }
+
     /// Marker the shell appends so we can recover the command's exit status.
     /// `AuthorizationExecuteWithPrivileges` hands back a pipe but NOT the child's exit
     /// code (and no pid to wait on), so the script has to report it in-band. Without
@@ -63,21 +80,28 @@ enum Elevation {
     /// Whether this elevation path is usable at all. When false, callers use AppleScript.
     static var isAvailable: Bool { execWithPrivileges != nil }
 
+    /// The result of acquiring the admin right, mirroring Outcome minus the command.
+    private enum Authorization {
+        case authorized(AuthorizationRef)
+        case cancelled
+        case unavailable
+    }
+
     /// Acquires (once) an AuthorizationRef carrying the admin right, prompting with
     /// Touch ID or password as needed. Subsequent calls reuse the same ref, which is what
     /// makes repeat actions silent within the system's grace period.
-    private static func authorizedRef() -> AuthorizationRef? {
+    private static func authorizedRef() -> Authorization {
         lock.lock()
         defer { lock.unlock() }
 
         if authRef == nil {
             var ref: AuthorizationRef?
             guard AuthorizationCreate(nil, nil, [], &ref) == errAuthorizationSuccess, ref != nil else {
-                return nil
+                return .unavailable
             }
             authRef = ref
         }
-        guard let ref = authRef else { return nil }
+        guard let ref = authRef else { return .unavailable }
 
         // kAuthorizationRightExecute is "system.privilege.admin" — the same right the
         // padlock asks for, and the one whose prompt offers Touch ID. The name must
@@ -86,21 +110,25 @@ enum Elevation {
         defer { free(name) }
         var item = AuthorizationItem(name: name!, valueLength: 0, value: nil, flags: 0)
 
-        return withUnsafeMutablePointer(to: &item) { itemPtr -> AuthorizationRef? in
+        return withUnsafeMutablePointer(to: &item) { itemPtr -> Authorization in
             var rights = AuthorizationRights(count: 1, items: itemPtr)
             // preAuthorize + extendRights: authenticate NOW and keep the right on the ref,
             // so the execute below doesn't put up a second prompt of its own.
             let flags: AuthorizationFlags = [.interactionAllowed, .extendRights, .preAuthorize]
             let status = AuthorizationCopyRights(ref, &rights, nil, flags, nil)
-            if status != errAuthorizationSuccess {
-                // Cancelled or denied. Drop the ref so the next attempt prompts again
-                // rather than silently reusing a ref that carries no rights.
-                if status == errAuthorizationCanceled {
-                    invalidate()
-                }
-                return nil
+            switch status {
+            case errAuthorizationSuccess:
+                return .authorized(ref)
+            case errAuthorizationCanceled, errAuthorizationDenied:
+                // The user answered: dismissed the prompt, or failed to authenticate.
+                // Drop the ref so the next attempt prompts again rather than silently
+                // reusing one that carries no rights — invalidateLocked, not invalidate:
+                // we already hold the lock and NSLock is not reentrant.
+                invalidateLocked()
+                return .cancelled
+            default:
+                return .unavailable
             }
-            return ref
         }
     }
 
@@ -108,6 +136,11 @@ enum Elevation {
     static func invalidate() {
         lock.lock()
         defer { lock.unlock() }
+        invalidateLocked()
+    }
+
+    /// invalidate's body, for callers already holding the lock.
+    private static func invalidateLocked() {
         if let ref = authRef {
             AuthorizationFree(ref, [])
         }
@@ -118,11 +151,18 @@ enum Elevation {
     /// `$out` and its status in `$?` — the same contract DezhbanCLI's AppleScript path
     /// uses, so the two elevation paths are interchangeable.
     ///
-    /// Returns nil when this path is unusable at all (no symbol, no authorization), which
-    /// tells the caller to fall back rather than treating it as a command failure — a
-    /// cancelled prompt and a broken API must not look the same.
-    static func run(shell capture: String) -> CommandResult? {
-        guard let exec = execWithPrivileges, let ref = authorizedRef() else { return nil }
+    /// Returns `.unavailable` when this path is unusable at all (no symbol, no
+    /// authorization machinery), which tells the caller to fall back; `.cancelled` when
+    /// the user declined. A cancelled prompt and a broken API must not look the same —
+    /// falling back on a cancel asks the user a second time for the thing they refused.
+    static func run(shell capture: String) -> Outcome {
+        guard let exec = execWithPrivileges else { return .unavailable }
+        let ref: AuthorizationRef
+        switch authorizedRef() {
+        case .authorized(let r): ref = r
+        case .cancelled: return .cancelled
+        case .unavailable: return .unavailable
+        }
 
         // Emit the captured output, then the status in-band (see rcMarker).
         let script = "\(capture); rc=$?; printf '%s' \"$out\"; printf '\\n\(rcMarker)%d' \"$rc\""
@@ -136,7 +176,17 @@ enum Elevation {
                 exec(ref, tool, [], buf.baseAddress!, &pipe)
             }
         }
-        guard status == errAuthorizationSuccess else { return nil }
+        switch status {
+        case errAuthorizationSuccess:
+            break
+        case errAuthorizationCanceled, errAuthorizationDenied:
+            // Shouldn't happen — the right was pre-authorized above — but if the system
+            // does prompt here and the user declines, that is still an answer, not a
+            // reason to ask again through the fallback.
+            return .cancelled
+        default:
+            return .unavailable
+        }
 
         var data = Data()
         if let p = pipe {
@@ -150,13 +200,13 @@ enum Elevation {
         guard let markerRange = raw.range(of: rcMarker, options: .backwards) else {
             // No marker: the shell died before it could report. Treat as a failure with
             // whatever it managed to print, rather than silently passing.
-            return CommandResult(ok: false, output: raw, status: 1)
+            return .completed(CommandResult(ok: false, output: raw, status: 1))
         }
         let output = String(raw[raw.startIndex..<markerRange.lowerBound])
         let rc = Int32(raw[markerRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1
-        return CommandResult(
+        return .completed(CommandResult(
             ok: rc == 0,
             output: output.trimmingCharacters(in: .newlines),
-            status: rc)
+            status: rc))
     }
 }
