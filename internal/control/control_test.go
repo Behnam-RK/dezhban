@@ -315,3 +315,42 @@ func TestStopLeavesASupersededSocketAlone(t *testing.T) {
 		t.Fatalf("got %+v, want the surviving daemon's response", resp)
 	}
 }
+
+// TestPermissionDeniedIsForbiddenNotUnavailable pins the dial-error classification,
+// which is subtle enough to invite a wrong "fix".
+//
+// A caller that cannot open the socket must get ErrForbidden ("you are not in the
+// group"), never ErrUnavailable ("no daemon"): the CLI silently falls back to a
+// password prompt on the latter, which is exactly the confusion this feature exists
+// to remove.
+//
+// errors.Is IS the right test, despite net.DialTimeout returning a *net.OpError
+// rather than a bare errno: OpError unwraps to os.SyscallError to syscall.Errno, and
+// syscall.Errno implements Is() to match fs.ErrPermission on EACCES/EPERM.
+// os.IsPermission, by contrast, returns FALSE on this same error — it does not
+// unwrap through net.OpError — so "simplifying" classifyDialErr to use it would
+// break the classification and silently reintroduce the sudo fallback. This test
+// fails if anyone tries.
+func TestPermissionDeniedIsForbiddenNotUnavailable(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: permission bits do not gate the dial")
+	}
+	path := tempSocket(t)
+	ln, err := net.Listen("unix", path)
+	if err != nil {
+		t.Fatalf("listen: %v", err)
+	}
+	t.Cleanup(func() { _ = ln.Close() })
+	// Unopenable by anyone but root — stands in for a socket whose group we are not in.
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+
+	if _, err := Do(path, Request{Op: OpStatus}); err == nil {
+		t.Fatal("dial to a 0000 socket unexpectedly succeeded")
+	} else if !errors.Is(err, ErrForbidden) {
+		t.Fatalf("got %v, want ErrForbidden — a socket we may not open must not look like an absent daemon", err)
+	} else if errors.Is(err, ErrUnavailable) {
+		t.Fatalf("got %v, want ErrForbidden only — ErrUnavailable makes the CLI fall back to sudo silently", err)
+	}
+}
