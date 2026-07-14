@@ -19,7 +19,7 @@ cd "$(dirname "$0")/.."
 
 SYS_CONFIG_DIR=/etc/dezhban
 
-make build
+go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o dezhban ./cmd/dezhban
 
 echo "removing dezhban firewall rules (panic teardown) ..."
 # panic force-removes the dezhban-tagged rules even with no daemon running — the

@@ -11,6 +11,7 @@ import (
 
 	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/learned"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/vpnimport"
@@ -36,6 +37,7 @@ Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --iface-hint PR
 // then snaps shut.
 func cmdSwitch(args []string) int {
 	fs := flag.NewFlagSet("switch", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	forDur := fs.Duration("for", 0, "window duration (default: config vpn.switchWindow)")
 	name := fs.String("name", "", "profile name to attribute the learned endpoint to")
 	doCancel := fs.Bool("cancel", false, "cancel an open switch window")
@@ -47,6 +49,37 @@ func cmdSwitch(args []string) int {
 	if *doStatus {
 		return printSwitchStatus(statePath)
 	}
+
+	dur := ""
+	if *forDur > 0 {
+		dur = forDur.String()
+	}
+
+	// Passwordless path first: the daemon opens/cancels the window itself when
+	// control.allowSwitchOps is on (the default). Falls through to the root-owned
+	// command file when no daemon is listening — that path always works, and is the
+	// only one when the operator has turned switch ops off.
+	if !noDaemon() {
+		req := control.Request{Op: control.OpOpenSwitch, Duration: dur, Profile: *name}
+		if *doCancel {
+			req = control.Request{Op: control.OpCancelSwitch}
+		}
+		if code, handled := tryControl(*cfgPath, req); handled {
+			if code != 0 {
+				return code
+			}
+			if *doCancel {
+				fmt.Println("switch window cancelled")
+				return 0
+			}
+			fmt.Println("switch window open — connect your new VPN now.")
+			if *noWait {
+				return 0
+			}
+			return waitForSwitch(statePath)
+		}
+	}
+
 	if !requireRoot("switch") {
 		return 1
 	}
@@ -60,10 +93,6 @@ func cmdSwitch(args []string) int {
 		return 0
 	}
 
-	dur := ""
-	if *forDur > 0 {
-		dur = forDur.String()
-	}
 	if err := command.Write(path, newCommand(command.OpOpenSwitchWindow, dur, *name)); err != nil {
 		fmt.Fprintln(os.Stderr, "switch:", err)
 		return 1

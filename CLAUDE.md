@@ -30,16 +30,18 @@ go test ./...                             # all tests
 go test ./internal/config -run TestLoad   # a single package / test
 
 # safe, root-free dev loop — none of these touch the firewall
-make validate CONFIG=configs/dezhban.dev.json    # parse + validate
-make rules MODE=guard CONFIG=...                  # print the ruleset, don't apply
-make doctor CONFIG=... [ARGS=--discover]          # diagnose VPN guard / lockout risks
+task validate CONFIG=configs/dezhban.dev.json    # parse + validate
+task rules MODE=guard CONFIG=...                 # print the ruleset, don't apply
+task doctor CONFIG=... -- --discover             # diagnose VPN guard / lockout risks
 
-make build-all                            # all 5 targets into dist/, version-stamped
-make gui-macos                            # macOS menubar app → dist/Dezhban.app (macOS only)
+task build:all                            # all 5 targets into dist/, version-stamped
+task gui:build                            # macOS menubar app → dist/Dezhban.app (macOS only)
+task dev:all                              # fast roll: rebuild + swap CLI and app (macOS, sudo)
+task pkg:cycle                            # full roll: build .pkg + install + launch (macOS, sudo)
 ```
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
-`start`, `stop`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
+`start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
 `version`, plus a global `-v`/`--verbose`. `validate`, `print-rules`, `doctor`,
 and `monitor` are read-only (no root, no firewall effects); the rest of the
 privileged set requires root/admin. Full reference: [docs/usage.md](docs/usage.md).
@@ -70,13 +72,26 @@ The design depends on these invariants (rationale in
   identifiers (used by `print-rules --mode` and `status --json`) — do not rename
   them. "Primary" / "fallback" are documentation words only.
 - **The switch window is the ONLY sanctioned relaxation of the guard.** It is
-  bounded (default 2m, capped 5m), explicitly root-triggered (via the root-owned
-  command file, never automatic), closes early on a confirmed good exit, and
-  auto-reverts to the prior fail-closed posture on cancel/expiry. Never widen it,
-  never let it open without an explicit command, and never let it outlive its
-  deadline. The daemon owns all `Backend.Apply` calls from the single run-loop
-  goroutine — keep it that way (window timer, command poll, watcher, and geo
-  ticks are all select cases; no other goroutine applies rules).
+  bounded (default 2m, capped 5m), never automatic — it opens only on an explicit
+  operator command — closes early on a confirmed good exit, and auto-reverts to the
+  prior fail-closed posture on cancel/expiry. Never widen it, never let it open
+  without an explicit command, and never let it outlive its deadline.
+  Two channels can carry that command: the **root-owned command file**
+  (`internal/command`, always available, root-only) and the **control socket**
+  (`internal/control`, admin-group, gated by `control.allowSwitchOps`, default
+  true). The socket is a deliberate, documented relaxation of "root-triggered" —
+  admins get a passwordless switch — and `control.allowSwitchOps: false` restores
+  root-only. Everything else about the window is unchanged: same clamp, same cap,
+  same auto-revert.
+- The daemon owns all `Backend.Apply` calls from the **single run-loop goroutine** —
+  keep it that way. Window timer, command poll, watcher, geo ticks, **and
+  control-socket requests** are all select cases in that one loop; the socket's
+  accept goroutine only forwards requests over a channel and never touches the
+  Backend. No other goroutine applies rules.
+- **`panic` must never depend on the daemon.** It is the lockout escape hatch, so it
+  is deliberately NOT a control-socket op — it removes rules directly, as root, with
+  no daemon running. Same for service lifecycle (`install`/`uninstall`/`start`/`stop`/`restart`):
+  a daemon cannot manage its own lifecycle, so those keep requiring root.
 - The tunnel-interface set is runtime-mutable (autodetect grows/prunes it), but
   **explicit `vpn.tunnelInterfaces` are pinned and never auto-pruned**, and the
   set never narrows to empty. Learned endpoints live in a daemon-owned

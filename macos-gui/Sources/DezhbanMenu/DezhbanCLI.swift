@@ -6,13 +6,34 @@ import Foundation
 struct CommandResult {
     let ok: Bool
     let output: String
+    /// The CLI's exit code. `refused` reads it to tell "the daemon said no" apart
+    /// from "no daemon was there", which decides whether escalating to an admin
+    /// prompt is legitimate.
+    var status: Int32 = 0
+
+    /// The daemon was reached and deliberately refused (see cmd/dezhban's
+    /// ExitDaemonRefused). Retrying this as root would bypass the daemon's own
+    /// gating, so callers must surface it instead of escalating.
+    var refused: Bool { status == 3 }
 }
 
-/// Locates and invokes the `dezhban` CLI. Read-only inspect commands run
-/// unprivileged; privileged commands (start/stop/block/unblock) are elevated
-/// through the native admin prompt via osascript — no bundled helper tool, no
-/// code-signing infra for the MVP. macOS caches the authorization for ~5 min, so
-/// a burst of actions prompts once.
+/// Locates and invokes the `dezhban` CLI. Three tiers, by what the command needs:
+///
+///   - `run` — read-only inspect (doctor, version, status). Unprivileged.
+///   - `runRoutine` — routine posture ops (block, unblock, switch). Unprivileged:
+///     they reach the running daemon over its admin-group control socket, so they
+///     complete with NO password prompt. This is the common case, and the reason
+///     the socket exists.
+///   - `runPrivileged` — service lifecycle (install/uninstall/start/stop) and
+///     `panic`. Elevated through Authorization Services, so the prompt takes **Touch
+///     ID** and is cached for a grace period (see Elevation); falls back to the
+///     password-only osascript dialog if that path is unavailable. These genuinely
+///     cannot be daemon-mediated: a daemon can't install, start or stop itself, and
+///     panic must work when no daemon is running at all. They are rare (install-time
+///     or emergency), so a prompt is the right cost.
+///
+/// Routine ops fall back to `runPrivileged` only when no daemon is listening. A
+/// daemon REFUSAL (exit 3) is never escalated — see `CommandResult.refused`.
 enum DezhbanCLI {
     /// Fallback config path if the CLI can't be asked (see cmd/dezhban
     /// defaultConfigPath). Prefer `resolvedConfigPath()`, which honors
@@ -44,13 +65,7 @@ enum DezhbanCLI {
             return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
         }
         let tokens = [bin] + args
-        // Defense in depth: bin is a trusted absolute path and args are hardcoded
-        // literals, but since these run through `do shell script … with
-        // administrator privileges` as root, refuse any token carrying a single
-        // quote or backslash rather than risk breaking the quoting into an
-        // injection. (The alternative — argv without a shell — isn't available
-        // through NSAppleScript's `do shell script`.)
-        guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else {
+        guard let quoted = shellQuote(tokens) else {
             return CommandResult(ok: false, output: "refused: an argument contained a quote or backslash")
         }
         // Route the command's combined output so BOTH outcomes surface it.
@@ -60,10 +75,84 @@ enum DezhbanCLI {
         // error as a bare "error code N" (notably for `config set` validation
         // failures). Instead capture stdout+stderr in $out, print it to stdout on
         // success, and to stderr (then re-exit non-zero) on failure.
-        let quoted = tokens.map { "'\($0)'" }.joined(separator: " ")
-        let shellCmd = "out=$(\(quoted) 2>&1); rc=$?; if [ \"$rc\" -eq 0 ]; then printf '%s' \"$out\"; else printf '%s' \"$out\" >&2; exit \"$rc\"; fi"
-        // Embed shellCmd as an AppleScript string literal: escape double-quotes.
-        let escaped = shellCmd.replacingOccurrences(of: "\"", with: "\\\"")
+        return elevate("out=$(\(quoted) 2>&1)")
+    }
+
+    /// Runs `script` as root, preferring the Touch ID-capable path.
+    ///
+    /// Authorization Services (Elevation) gets a "Touch ID or password" prompt and caches
+    /// the authorization, so a second action a moment later is usually silent. It returns
+    /// nil only when the path is unusable at all — never for a command that simply failed
+    /// — so falling back here can't mask a real error, and can't turn a cancelled prompt
+    /// into a second prompt.
+    private static func elevate(_ script: String) -> CommandResult {
+        switch Elevation.run(shell: script) {
+        case .completed(let result):
+            return result
+        case .cancelled:
+            // The user dismissed the prompt (or failed to authenticate). That is an
+            // answer, so it is reported once and not retried: falling through to the
+            // AppleScript path here would put up a SECOND password dialog for the very
+            // request they just declined.
+            return CommandResult(ok: false, output: "cancelled — authorization was not granted", status: 1)
+        case .unavailable:
+            // Authorization Services isn't usable on this system; the user saw no prompt,
+            // so asking them through the legacy dialog is the first ask, not a second.
+            return runAsAdmin(script)
+        }
+    }
+
+    /// Runs a SEQUENCE of privileged commands under a SINGLE admin prompt, stopping
+    /// at the first failure, and returns the whole transcript (each command echoed
+    /// above its output, exactly as a terminal would show it).
+    ///
+    /// This exists because the prompt is the expensive thing, not the command. Every
+    /// separate `runPrivileged` is its own elevation, so a multi-step operation —
+    /// applying seven VPN config fields, or panic + stop + uninstall — used to make
+    /// the user type their password once per step. That is the bad UX; batching is
+    /// the fix. `set -e` gives the same stop-at-first-failure semantics the previous
+    /// per-command loops had, so nothing plows ahead after an error.
+    @discardableResult
+    static func runPrivileged(batch commands: [[String]]) -> CommandResult {
+        guard let bin = binaryPath() else {
+            return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
+        }
+        guard !commands.isEmpty else { return CommandResult(ok: true, output: "") }
+
+        var steps: [String] = []
+        for args in commands {
+            guard let quoted = shellQuote([bin] + args) else {
+                return CommandResult(ok: false, output: "refused: an argument contained a quote or backslash")
+            }
+            // Echo the command the way the user would have typed it (`dezhban …`,
+            // not the absolute path), then a blank line after its output, so the
+            // transcript reads like a terminal session.
+            let display = (["dezhban"] + args).joined(separator: " ")
+            steps.append("echo '$ \(display)'; \(quoted); echo")
+        }
+        return elevate("out=$( { set -e; \(steps.joined(separator: "; ")); } 2>&1 )")
+    }
+
+    /// Quotes tokens for `do shell script`. Defense in depth: the binary is a trusted
+    /// absolute path and the args are hardcoded literals, but this runs as root, so
+    /// refuse any token carrying a single quote or backslash rather than risk breaking
+    /// out of the quoting into an injection. (argv-without-a-shell isn't available
+    /// through NSAppleScript's `do shell script`.) Returns nil on a rejected token.
+    private static func shellQuote(_ tokens: [String]) -> String? {
+        guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else { return nil }
+        return tokens.map { "'\($0)'" }.joined(separator: " ")
+    }
+
+    /// Shared elevation path. `capture` must leave the combined output in `$out` and
+    /// the status in `$?`; this wrapper re-emits it so both success and failure carry
+    /// the real text (see runPrivileged's note on `do shell script`'s error handling).
+    private static func runAsAdmin(_ capture: String) -> CommandResult {
+        let shellCmd = "\(capture); rc=$?; if [ \"$rc\" -eq 0 ]; then printf '%s' \"$out\"; else printf '%s' \"$out\" >&2; exit \"$rc\"; fi"
+        // Embed shellCmd as an AppleScript string literal: escape backslashes first
+        // (so the escape we add for quotes isn't itself re-escaped), then quotes.
+        let escaped = shellCmd
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
         let source = "do shell script \"\(escaped)\" with administrator privileges"
         guard let script = NSAppleScript(source: source) else {
             return CommandResult(ok: false, output: "failed to construct AppleScript")
@@ -87,7 +176,41 @@ enum DezhbanCLI {
             return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
         }
         let r = exec(bin, args)
-        return CommandResult(ok: r.status == 0, output: combinedOutput(r))
+        return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
+    }
+
+    /// Runs a ROUTINE posture command (block / unblock / switch) unprivileged.
+    ///
+    /// These reach the running daemon over its control socket, which is group-
+    /// writable by admins — so no password is needed. This is the whole point of
+    /// the control socket: the daily operations stop prompting.
+    ///
+    /// The Swift side never speaks the socket protocol itself; the Go CLI is the
+    /// single client, so both `dezhban block` in a terminal and this menu item take
+    /// exactly the same path. DEZHBAN_NO_SUDO=1 makes the failure mode explicit
+    /// rather than latent: with no daemon listening, the CLI reports the root error
+    /// instead of trying to re-exec under sudo from a GUI process with no TTY (which
+    /// could not prompt anyway). The caller then decides whether to escalate through
+    /// the native admin prompt.
+    static func runRoutine(_ args: [String]) -> CommandResult {
+        guard let bin = binaryPath() else {
+            return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
+        }
+        let r = exec(bin, args, env: ["DEZHBAN_NO_SUDO": "1"])
+        return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
+    }
+
+    /// Whether the daemon's control socket is answering — i.e. whether routine ops
+    /// will go through without a password. Parsed from `status`'s "daemon control"
+    /// line, so the GUI and the CLI agree on one source of truth.
+    static func daemonControlReachable() -> Bool {
+        guard let bin = binaryPath() else { return false }
+        let r = exec(bin, ["status"])
+        guard r.status == 0 else { return false }
+        for line in r.out.split(separator: "\n") where line.hasPrefix("daemon control:") {
+            return line.contains("reachable") && !line.contains("unreachable")
+        }
+        return false
     }
 
     /// Whether the OS service is currently registered, per `status --json`'s
@@ -162,10 +285,16 @@ enum DezhbanCLI {
     /// Promoted from `private` so read-only call sites elsewhere in the app
     /// (log show/stream, status JSON parsing) can reuse this one capture path
     /// instead of each writing a second `Process` wrapper.
-    static func exec(_ launchPath: String, _ args: [String]) -> (status: Int32, out: String, err: String) {
+    static func exec(_ launchPath: String, _ args: [String], env: [String: String] = [:]) -> (status: Int32, out: String, err: String) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
         p.arguments = args
+        if !env.isEmpty {
+            // Overlay onto the inherited environment rather than replacing it: the
+            // CLI still needs PATH/HOME (and honors $DEZHBAN_CONFIG) to behave the
+            // same way it does in a terminal.
+            p.environment = ProcessInfo.processInfo.environment.merging(env) { _, new in new }
+        }
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe

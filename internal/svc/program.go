@@ -137,6 +137,36 @@ func Status() string {
 	}
 }
 
+// Installed and Running report the service manager's view of the service. They are
+// what makes start/stop idempotent: launchd's `launchctl load`/`unload` are edge
+// operations, not level ones — unloading a job that was never loaded fails with a
+// bare "Input/output error", and loading one twice fails too. Asking first turns
+// both into no-ops, so `stop` on an already-stopped service means "you are in the
+// state you asked for", not a failure that aborts whatever came next.
+// Installed reports false ONLY for a definite "not installed" from the service
+// manager. Any other error (a failed query, an unavailable launchctl) leaves this
+// true on purpose: callers use it to refuse an action and send the user to
+// `install`, and doing that to an already-installed service just walks them into
+// kardianos's "Init already exists". An unknown status should let the real action
+// run and fail with its own real error, not be guessed at here.
+func Installed() bool {
+	_, err := status()
+	return !errors.Is(err, service.ErrNotInstalled)
+}
+
+func Running() bool {
+	st, err := status()
+	return err == nil && st == service.StatusRunning
+}
+
+func status() (service.Status, error) {
+	s, err := service.New(&program{}, serviceConfig(""))
+	if err != nil {
+		return service.StatusUnknown, err
+	}
+	return s.Status()
+}
+
 // Control performs an install/uninstall/start/stop (and other kardianos control
 // actions) against the registered service. configPath is embedded so a freshly
 // installed service knows which config to load on boot.

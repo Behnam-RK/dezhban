@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1102,4 +1103,65 @@ func applyGuardAfterSwitch(calls []string) bool {
 		}
 	}
 	return false
+}
+
+// A live tunnel with NO known server address is the one shape the guard must never be
+// armed in: its block-all covers the physical link, which is what carries the tunnel's
+// own encrypted transport. Arming it cuts every packet, kills the VPN, and destroys the
+// very socket endpoint discovery would have learned from — an unrecoverable blackout,
+// not a kill switch. Autodetect/switch-window ("relaxed") must NOT excuse it: relaxed
+// exists for the ZERO-tunnel case, where a total cut is correct and a switch window
+// recovers it.
+func TestVPNRefusesToArmGuardThatWouldCutTheTunnelsOwnTransport(t *testing.T) {
+	be := &fakeBackend{}
+	o := Options{
+		Monitor:  &fakeMonitor{},
+		Decider:  decision.New([]string{"IR"}, true, 1),
+		Backend:  be,
+		Log:      discardLog(),
+		Interval: time.Millisecond,
+		VPN:      true,
+		Tunnels:  []string{"utun4"}, // tunnel is up
+		// Endpoints: none — discovery found nothing (WireGuard's unconnected UDP
+		// socket never shows up as a connected flow).
+		Autodetect: true, // "relaxed" — must not rescue this
+	}
+	err := Run(context.Background(), o)
+	if err == nil {
+		t.Fatal("daemon armed a guard with a live tunnel and no known endpoint; that cuts the tunnel's own transport and blacks the host out")
+	}
+	if !strings.Contains(err.Error(), "refusing to start") {
+		t.Fatalf("err = %v, want a refusal to start", err)
+	}
+	// No rules may be APPLIED: refusing means the user keeps their network. (The
+	// deferred Cleanup still runs, as it must — it is the safety net that guarantees
+	// no dezhban rule can outlive the process, and with nothing applied it is a no-op.)
+	for _, c := range be.calls {
+		if strings.HasPrefix(c, "apply") {
+			t.Fatalf("a ruleset was applied despite the refusal: %v", be.calls)
+		}
+	}
+}
+
+// The zero-tunnel case is the one `relaxed` is for: no VPN is connected, so a total cut
+// is the correct standing posture and a switch window can recover from it.
+func TestVPNArmsStandingPostureWithNoTunnelAndNoEndpoint(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // one pass through startup, then stop
+	o := Options{
+		Monitor:    &fakeMonitor{},
+		Decider:    decision.New([]string{"IR"}, true, 1),
+		Backend:    be,
+		Log:        discardLog(),
+		Interval:   time.Millisecond,
+		VPN:        true,
+		Autodetect: true,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatalf("refused to start with no tunnel and no endpoint; that is the legal standing-cut case: %v", err)
+	}
+	if len(be.calls) == 0 {
+		t.Fatal("no standing posture was applied")
+	}
 }

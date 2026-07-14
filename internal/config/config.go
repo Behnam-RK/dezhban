@@ -149,21 +149,60 @@ type Config struct {
 	LogLevel string
 	// VPN configures the interface-aware guard for full-tunnel VPN hosts.
 	VPN VPN
+	// Control configures the daemon's live control socket (passwordless routine ops).
+	Control Control
+}
+
+// Control configures the daemon's control socket: a unix socket the CLI (and,
+// through it, the menubar app) uses for routine posture changes, so an admin is
+// not prompted for a password on every block/unblock/switch.
+//
+// The trust boundary is filesystem permissions — the socket is root-owned, mode
+// 0660, group-owned by Group. Anyone in that group can drive the ops the daemon
+// exposes. Ops are deliberately limited to postures the daemon's own state machine
+// already sanctions; `panic` is NOT among them, so the lockout escape hatch always
+// requires root and never depends on a running daemon.
+type Control struct {
+	// Enabled turns the control socket on. Default true.
+	Enabled bool
+	// Socket is the socket path. Empty → <state dir>/control.sock.
+	Socket string
+	// Group is the unix group permitted to talk to the daemon (macOS: "admin" —
+	// the machine's administrators). Empty → root-only (0600), which leaves the
+	// socket useless to unprivileged callers: an explicit opt-out.
+	Group string
+	// AllowSwitchOps permits opening/cancelling a switch window over the socket.
+	// Default true — a switch window is the one op that RELAXES the guard, so it
+	// gets its own switch: set it false to force switch ops back to the root-owned
+	// command file (`sudo dezhban switch`).
+	AllowSwitchOps bool
 }
 
 // fileConfig is the on-disk JSON shape. Durations are strings (e.g. "30s")
 // because JSON has no native duration type. Pointer fields distinguish
 // "absent" (keep default) from a zero value the user set deliberately.
 type fileConfig struct {
-	PollInterval     string    `json:"pollInterval"`
-	BlockedCountries []string  `json:"blockedCountries"`
-	FailClosed       *bool     `json:"failClosed"`
-	Hysteresis       *int      `json:"hysteresis"`
-	Providers        []string  `json:"providers"`
-	Allowlist        Allowlist `json:"allowlist"`
-	ProviderQuorum   *bool     `json:"providerQuorum"`
-	LogLevel         string    `json:"logLevel"`
-	VPN              *fileVPN  `json:"vpn"`
+	PollInterval     string       `json:"pollInterval"`
+	BlockedCountries []string     `json:"blockedCountries"`
+	FailClosed       *bool        `json:"failClosed"`
+	Hysteresis       *int         `json:"hysteresis"`
+	Providers        []string     `json:"providers"`
+	Allowlist        Allowlist    `json:"allowlist"`
+	ProviderQuorum   *bool        `json:"providerQuorum"`
+	LogLevel         string       `json:"logLevel"`
+	VPN              *fileVPN     `json:"vpn"`
+	Control          *fileControl `json:"control,omitempty"`
+}
+
+// fileControl is the on-disk shape of the control block. The pointers distinguish
+// "absent" (keep the default — both bools default to true) from a deliberate zero.
+// Group is a pointer for the same reason: an explicit "" means root-only, and must
+// not be mistaken for an absent key that keeps the platform default.
+type fileControl struct {
+	Enabled        *bool   `json:"enabled,omitempty"`
+	Socket         string  `json:"socket,omitempty"`
+	Group          *string `json:"group,omitempty"`
+	AllowSwitchOps *bool   `json:"allowSwitchOps,omitempty"`
 }
 
 // fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
@@ -216,6 +255,12 @@ func Default() Config {
 		Allowlist:      Allowlist{},
 		ProviderQuorum: false,
 		LogLevel:       "info",
+		Control: Control{
+			Enabled: true,
+			// Socket empty → resolved against the daemon's state dir by main.
+			Group:          defaultControlGroup,
+			AllowSwitchOps: true,
+		},
 	}
 }
 
@@ -325,6 +370,20 @@ func apply(cfg *Config, fc fileConfig) error {
 		}
 		cfg.VPN = v
 	}
+	if fc.Control != nil {
+		if fc.Control.Enabled != nil {
+			cfg.Control.Enabled = *fc.Control.Enabled
+		}
+		if fc.Control.Socket != "" {
+			cfg.Control.Socket = fc.Control.Socket
+		}
+		if fc.Control.Group != nil {
+			cfg.Control.Group = *fc.Control.Group
+		}
+		if fc.Control.AllowSwitchOps != nil {
+			cfg.Control.AllowSwitchOps = *fc.Control.AllowSwitchOps
+		}
+	}
 	return nil
 }
 
@@ -375,6 +434,9 @@ func toFileConfig(c *Config) fileConfig {
 	failClosed := c.FailClosed
 	hysteresis := c.Hysteresis
 	quorum := c.ProviderQuorum
+	ctlEnabled := c.Control.Enabled
+	ctlGroup := c.Control.Group
+	ctlSwitchOps := c.Control.AllowSwitchOps
 	return fileConfig{
 		PollInterval:     c.PollInterval.String(),
 		BlockedCountries: c.BlockedCountries,
@@ -396,6 +458,12 @@ func toFileConfig(c *Config) fileConfig {
 			Profiles:              toFileProfiles(c.VPN.Profiles),
 			SwitchWindow:          durString(c.VPN.SwitchWindow),
 			Advanced:              toFileAdvanced(c.VPN.Advanced),
+		},
+		Control: &fileControl{
+			Enabled:        &ctlEnabled,
+			Socket:         c.Control.Socket,
+			Group:          &ctlGroup,
+			AllowSwitchOps: &ctlSwitchOps,
 		},
 	}
 }

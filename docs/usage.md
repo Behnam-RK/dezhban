@@ -17,6 +17,7 @@ Commands:
   uninstall    Remove the OS service                              (root)
   start        Start the installed service                        (root)
   stop         Stop the installed service (removes firewall rules) (root)
+  restart      Restart the installed service — apply a config change (root)
   detect-vpn   Print detected VPN tunnel interfaces for config
   switch       Open a bounded window to connect a brand-new VPN    (root)
   vpn          Manage VPN profiles and learned endpoints (list/add/remove/import/promote/forget)
@@ -33,15 +34,58 @@ Global: -v / --verbose   override the configured log level to debug
 it), then built-in defaults. So `dezhban run` / `monitor` / `validate` normally
 need no path at all.
 
-Privileged commands (`run`, `block`, `unblock`, `panic`, `install`, `uninstall`,
-`start`, `stop`) require root/admin. When run without it from an interactive
-terminal on unix, dezhban **auto-re-runs itself under `sudo`** (prompting for your
-password once) — so you rarely need to type `sudo` yourself. Pass `--no-sudo` (or
-set `DEZHBAN_NO_SUDO=1`) to opt out and get the plain "must run as root" error;
-on Windows, and when there's no terminal (CI/pipes), it never auto-elevates.
-`setup` and `config set`/`edit` elevate just their config write the same way. The
-inspect commands (`validate`, `print-rules`, `doctor`, `monitor`) are read-only —
-no root, no firewall effects.
+## Do I need a password?
+
+Mostly, no. Once the daemon is running, the commands you use day to day go **to the
+daemon** over its control socket and need no password at all:
+
+| Command | Needs a password? |
+|---|---|
+| `block`, `unblock`, `switch` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back to acting on the firewall directly, which needs root. |
+| `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn` | **No** — read-only, no root, no firewall effects. |
+| `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
+| `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
+| `run` | Yes — it *is* the daemon. |
+| `setup`, `config set`/`edit` | Yes, but only for the config write itself. |
+
+`dezhban status` prints a `daemon control:` line saying which mode you're in.
+
+### Touch ID
+
+**The menubar app uses Touch ID** for the prompts it does raise (start, stop,
+install/uninstall, panic, config writes). It elevates through **Authorization
+Services** — the API behind the System Settings padlock — whose prompt offers "Touch
+ID or password" on any Mac that has it.
+
+It also **caches**: the authorization is held for the life of the app and the system
+grants a grace period, so a second privileged action a moment later usually needs no
+authentication at all.
+
+If your Mac has no Touch ID, or the API is unavailable, the app falls back to the old
+`osascript` dialog — that one is **password-only** and always has been, which is why
+biometrics never worked before.
+
+For the **CLI**, Touch ID comes from `sudo`, and you have to enable it yourself
+(macOS 14+):
+
+```sh
+sudo sh -c 'echo "auth       sufficient     pam_tid.so" > /etc/pam.d/sudo_local'
+```
+
+That's a change to your system's `sudo` configuration, not to dezhban — it applies to
+every `sudo` you run, and survives OS updates (unlike editing `/etc/pam.d/sudo`
+directly). dezhban's auto-elevation goes through `sudo`, so `dezhban start` and
+friends pick it up automatically.
+
+When a command does need root and you're on an interactive terminal on unix,
+dezhban **auto-re-runs itself under `sudo`** — so you rarely type `sudo` yourself.
+Pass `--no-sudo` (or `DEZHBAN_NO_SUDO=1`) to opt out and get the plain "must run as
+root" error; on Windows, and when there's no terminal (CI/pipes), it never
+auto-elevates. Pass `--no-daemon` (or `DEZHBAN_NO_DAEMON=1`) to skip the control
+socket and act on the firewall directly — the escape hatch for a wedged daemon.
+
+A manual `block` **holds**: the daemon suspends its geo state machine until you
+`unblock`, so an allowed country won't quietly undo what you asked for.
 
 ```sh
 dezhban status                                    # config + service + block state
@@ -95,8 +139,18 @@ dezhban config path                # print the resolved config path
 dezhban config show                # print the effective config as JSON
 dezhban config get blockedCountries
 sudo dezhban config set blockedCountries IR,RU   # set, validate, save
+sudo dezhban config set vpn.enabled=true vpn.tunnelInterfaces=utun4 \
+     vpn.autoDiscoverEndpoints=true                # several keys, one atomic write
 sudo dezhban config edit           # open the config in $EDITOR, re-validated on save
 ```
+
+`config set` takes either one `<key> <value>` pair or any number of `key=value`
+pairs. The multi-pair form applies them all to one in-memory config, validates
+**once**, and writes **once** — so there is no ordering to get right (a key that is
+only legal alongside another, like `vpn.enabled`, can come first) and no
+half-applied config if one value is rejected. It is also one privileged write, i.e.
+one password prompt instead of one per key; the menubar app's VPN panel uses it for
+exactly that reason.
 
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
@@ -138,6 +192,12 @@ subcommands, and file paths for `--config`.
 
 ## Run as a service
 
+On macOS the [installer](../README.md#install) (`dezhban-<version>.pkg`) does all of
+this for you — it installs the CLI + app and registers the service in one step, with
+one password prompt. It deliberately leaves enforcement stopped; run
+`sudo dezhban setup` then `sudo dezhban start`. Everything below is the manual
+equivalent, and the only path on Linux/Windows.
+
 dezhban can install itself as a boot-persistent background service using one
 cross-platform API (launchd on macOS, systemd/upstart/sysv on Linux, the Windows
 Service manager). The service wraps the `run` loop, restarts on crash, and routes
@@ -161,7 +221,7 @@ while blocked, the rules persist by design (a kill switch must not fail open); u
 On macOS an optional native **menubar app** (`Dezhban.app`) shows the daemon's
 live posture at a glance and offers click-to-control. It's a separate Swift/AppKit
 target, so the Go binary keeps its zero-dependency, `CGO_ENABLED=0` promise. Build
-it with `make gui-macos` (see [development.md](development.md)).
+it with `task gui:build` (see [development.md](development.md)).
 
 - **Status icon** — 🟢 allow/guard, 🔴 block/full-block, ⚪ stopped or stale;
   repainted about once a second.
@@ -170,8 +230,11 @@ it with `make gui-macos` (see [development.md](development.md)).
   force unblock…**, **Install/Uninstall service**, **VPN guard mode** (opens the
   validated in-app config panel), Open config file…, View logs, **About
   Dezhban…**, Launch at login (`SMAppService`), Quit. Items enable/disable from
-  the current state; privileged actions raise a native admin prompt via
-  `osascript`.
+  the current state.
+- **Passwords** — Block, Unblock and the switch window go to the running daemon
+  over its control socket and raise **no prompt at all**. Only the service lifecycle
+  (Install/Uninstall/Start/Stop) and Panic raise the native admin prompt, because
+  neither can be daemon-mediated. Each menu item's tooltip says which it will be.
 - **Output & diagnostics** — Run diagnostics, panic, and install/uninstall
   capture their command output in a scrollable panel; View logs streams a scoped
   `log show`/`log stream` (or opens Console.app).

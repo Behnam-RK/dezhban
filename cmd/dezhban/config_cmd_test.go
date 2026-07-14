@@ -60,6 +60,97 @@ func TestConfigGetHonorsConfigFlag(t *testing.T) {
 	}
 }
 
+// The multi-pair form exists so the GUI can apply a whole panel of fields in ONE
+// privileged invocation — i.e. one password prompt instead of one per field. It must
+// write every pair, in one file write.
+func TestConfigSetAppliesAllPairsInOneWrite(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	// vpn.enabled is deliberately FIRST here even though it is only legal once
+	// autoDiscoverEndpoints is also set. Per-key writes had to be hand-ordered to keep
+	// the file valid at every step; a batch validates once, at the end, so no ordering
+	// is needed — that this passes is the point of the test.
+	code := cmdConfig([]string{
+		"set",
+		"vpn.enabled=true",
+		"vpn.tunnelInterfaces=utun4",
+		"vpn.autodetect=true",
+		"vpn.autoDiscoverEndpoints=true",
+		"logLevel=debug",
+		"--config", p,
+	})
+	if code != 0 {
+		t.Fatalf("config set (multi) exited %d, want 0", code)
+	}
+
+	got, err := config.Load(p)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !got.VPN.Enabled || !got.VPN.Autodetect ||
+		len(got.VPN.TunnelInterfaces) != 1 || got.VPN.TunnelInterfaces[0] != "utun4" ||
+		got.LogLevel != "debug" {
+		t.Fatalf("not every pair was applied: %+v", got.VPN)
+	}
+}
+
+// The batch is all-or-nothing. Validation happens once, after every pair is applied,
+// so a bad value anywhere must leave the file completely untouched — never a
+// half-applied config (which, with vpn.enabled, could mean an enforcing guard with
+// no tunnel).
+func TestConfigSetRejectsWholeBatchOnBadValue(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	code := cmdConfig([]string{
+		"set",
+		"logLevel=debug",                 // valid
+		"vpn.tunnelWatch=not-a-duration", // invalid — must sink the whole batch
+		"--config", p,
+	})
+	if code == 0 {
+		t.Fatal("config set accepted an invalid value")
+	}
+
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Fatal("a rejected batch still wrote to the config file; the earlier pairs were persisted")
+	}
+}
+
+// The two-positional form predates the batch form and is used by scripts and docs.
+func TestConfigSetLegacyTwoArgFormStillWorks(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdConfig([]string{"set", "logLevel", "warn", "--config", p}); code != 0 {
+		t.Fatalf("legacy `config set <key> <value>` exited %d, want 0", code)
+	}
+	got, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.LogLevel != "warn" {
+		t.Errorf("logLevel = %q, want %q", got.LogLevel, "warn")
+	}
+}
+
 func captureStdout(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stdout
@@ -73,4 +164,50 @@ func captureStdout(t *testing.T, fn func()) string {
 	_ = w.Close()
 	data, _ := io.ReadAll(r)
 	return string(data)
+}
+
+// parseSetPairs carries the whole legacy-vs-batch disambiguation, and the GUI depends
+// on its edges: it sends an empty value on every apply (`vpn.endpoints=` clears the
+// list), and a regression that routed `config set logLevel debug` into the pair parser
+// would break every script and doc example.
+func TestParseSetPairs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []setPair
+	}{
+		{"legacy two positionals", []string{"logLevel", "debug"}, []setPair{{"logLevel", "debug"}}},
+		{"legacy value with an equals sign", []string{"providers", "https://x/?a=b"},
+			[]setPair{{"providers", "https://x/?a=b"}}},
+		{"single pair", []string{"vpn.enabled=true"}, []setPair{{"vpn.enabled", "true"}}},
+		{"several pairs", []string{"vpn.enabled=true", "logLevel=warn"},
+			[]setPair{{"vpn.enabled", "true"}, {"logLevel", "warn"}}},
+		{"empty value clears a list", []string{"vpn.endpoints="}, []setPair{{"vpn.endpoints", ""}}},
+		{"value keeps later equals signs", []string{"providers=https://x/?a=b"},
+			[]setPair{{"providers", "https://x/?a=b"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseSetPairs(c.in)
+			if err != nil {
+				t.Fatalf("parseSetPairs(%v) errored: %v", c.in, err)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("parseSetPairs(%v) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+
+	bad := [][]string{
+		{},                               // nothing to set
+		{"logLevel"},                     // a lone key is not a pair
+		{"logLevel", "debug", "extra"},   // 3 args must all be pairs
+		{"=debug"},                       // empty key
+		{"vpn.enabled=true", "logLevel"}, // one good pair, one bare word
+	}
+	for _, in := range bad {
+		if _, err := parseSetPairs(in); err == nil {
+			t.Errorf("parseSetPairs(%v) succeeded; want an error", in)
+		}
+	}
 }

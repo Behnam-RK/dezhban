@@ -27,10 +27,15 @@ land changes — it's what becomes the release notes. The workflow **fails** if
      the file,
    - commits that as `chore(release): vX.Y.Z [skip ci]` to `main` and pushes the
      annotated tag,
-   - cross-compiles the 5 CLI targets (`make build-all`) and the macOS GUI
-     (`make gui-macos`), both version-stamped from the new tag,
+   - cross-compiles the 5 CLI targets (`task build:all`) and the macOS GUI,
+     both version-stamped from the new tag,
+   - builds the macOS installer (`task pkg:build`) and **smoke-tests it on the
+     runner**: installs it, asserts the payload landed and the service was
+     registered but *not started*, then runs the shipped uninstaller and asserts it
+     left nothing behind. A broken installer fails the release instead of shipping,
    - publishes a GitHub Release titled `vX.Y.Z` with the extracted changelog
      entry as the body, and attaches:
+     - `dezhban-X.Y.Z.pkg` ← the macOS installer (the headline asset)
      - `dezhban-darwin-arm64`, `dezhban-darwin-amd64`
      - `dezhban-linux-amd64`, `dezhban-linux-arm64`
      - `dezhban-windows-amd64.exe`
@@ -40,20 +45,42 @@ land changes — it's what becomes the release notes. The workflow **fails** if
 `[skip ci]` in the release commit keeps `ci.yml`'s push-to-`main` trigger from
 firing redundantly on the changelog bump.
 
-## The macOS GUI app is unsigned
+## The macOS artifacts are unsigned
 
-There's no Apple Developer certificate in this project, so `Dezhban.app` is
-**not code-signed or notarized**. On first launch, Gatekeeper will refuse to open
-it via a normal double-click. Either:
+There's no Apple Developer certificate in this project, so neither
+`dezhban-X.Y.Z.pkg` nor `Dezhban.app` is **code-signed or notarized**. Gatekeeper
+will refuse both on a plain double-click.
 
-- right-click (or Control-click) the app in Finder → **Open** → confirm in the
-  dialog, or
-- clear the quarantine attribute from the terminal:
-  ```sh
-  xattr -dr com.apple.quarantine Dezhban.app
-  ```
+For the **installer**, the cleanest path is the terminal, which skips Gatekeeper's
+GUI assessment entirely:
 
-This only needs doing once per downloaded copy.
+```sh
+sudo installer -pkg dezhban-X.Y.Z.pkg -target /
+```
+
+Through the UI: double-click, dismiss the warning, then **System Settings → Privacy
+& Security → Open Anyway**. (macOS 15 removed the old right-click → **Open** bypass
+for packages; on macOS 14 and earlier that still works.)
+
+For the standalone **app zip**: right-click → **Open**, or
+`xattr -dr com.apple.quarantine Dezhban.app`. Once per downloaded copy.
+
+### Adding signing later
+
+`packaging/macos/build-pkg.sh` already has the seams, so signing is a
+two-environment-variable change, not a rewrite:
+
+```sh
+INSTALLER_SIGN_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
+NOTARIZE_PROFILE="my-notary-profile" \
+task pkg:build VERSION=vX.Y.Z
+```
+
+`INSTALLER_SIGN_IDENTITY` alone signs the package; setting `NOTARIZE_PROFILE` as
+well also submits it with `notarytool` and staples the ticket. Both come from an
+Apple Developer account; wire them into the `macos` job as repository secrets when
+one exists. (The app bundle inside would need `codesign` + hardened runtime too —
+add that to `macos-gui/build-app.sh` at the same time.)
 
 ## Requirements for the workflow to succeed
 

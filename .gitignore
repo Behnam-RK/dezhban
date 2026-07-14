@@ -19,6 +19,7 @@ state.json
 /configs/*.local.json
 
 # Tooling
+.task/
 .remember/
 .serena/
 .DS_Store
@@ -27,3 +28,6 @@ state.json
 AGENTS.md
 *.bak
 CLAUDE.md.original.md
+
+# JetBrains IDE settings (per-developer, not project config)
+.idea/

@@ -205,7 +205,10 @@ jobs:
           name: release-notes
           path: release-notes.md
 
-  gui:
+  # Both macOS artifacts come from one runner: the .pkg needs the app bundle and the
+  # cross-compiled darwin binaries anyway, so building the standalone zip alongside
+  # it costs nothing extra.
+  macos:
     needs: prepare
     runs-on: macos-latest
     steps:
@@ -213,19 +216,63 @@ jobs:
         with:
           ref: ${{ needs.prepare.outputs.tag }}
 
-      - name: Build Dezhban.app
-        run: make gui-macos VERSION=${{ needs.prepare.outputs.tag }}
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
 
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      # Builds the darwin CLI slices + the universal app, then the installer.
+      - name: Build installer
+        run: task pkg:build VERSION=${{ needs.prepare.outputs.tag }}
+
+      # The .app zip stays a separate asset for anyone who only wants the menubar
+      # app (e.g. Homebrew users who already have the CLI).
       - name: Zip app bundle
         run: ditto -c -k --keepParent dist/Dezhban.app dist/Dezhban-macos.app.zip
 
+      # Prove the installer actually installs before it ships. GitHub's macOS
+      # runners have passwordless sudo, so this exercises the real flow: the
+      # payload lands, the LaunchDaemon is registered, and — critically —
+      # enforcement is NOT started (a kill switch must not arm itself on install).
+      - name: Smoke-test the installer
+        run: |
+          set -eu
+          pkg="dist/dezhban-${{ needs.prepare.outputs.version }}.pkg"
+          sudo installer -pkg "$pkg" -target /
+
+          test -x /usr/local/bin/dezhban || { echo "CLI not installed" >&2; exit 1; }
+          /usr/local/bin/dezhban version
+          test -d /Applications/Dezhban.app || { echo "app not installed" >&2; exit 1; }
+          test -f /Library/LaunchDaemons/dezhban.plist || { echo "LaunchDaemon not registered" >&2; exit 1; }
+          test -x /usr/local/share/dezhban/uninstall.sh || { echo "uninstaller not installed" >&2; exit 1; }
+
+          if sudo launchctl print system/dezhban >/dev/null 2>&1; then
+            echo "error: the installer started enforcement; it must only register the service" >&2
+            exit 1
+          fi
+
+          sudo sh /usr/local/share/dezhban/uninstall.sh
+          for p in /usr/local/bin/dezhban /Applications/Dezhban.app /Library/LaunchDaemons/dezhban.plist /etc/dezhban /var/db/dezhban; do
+            if [ -e "$p" ]; then echo "error: uninstall left $p behind" >&2; exit 1; fi
+          done
+          if pkgutil --pkgs | grep -q '^com\.behnam-rk\.dezhban'; then
+            echo "error: uninstall left pkg receipts behind" >&2
+            exit 1
+          fi
+
       - uses: actions/upload-artifact@v4
         with:
-          name: gui-macos
-          path: dist/Dezhban-macos.app.zip
+          name: macos-artifacts
+          path: |
+            dist/Dezhban-macos.app.zip
+            dist/dezhban-${{ needs.prepare.outputs.version }}.pkg
 
   release:
-    needs: [prepare, gui]
+    needs: [prepare, macos]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -236,12 +283,20 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: Build all CLI platforms
-        run: make build-all VERSION=${{ needs.prepare.outputs.tag }}
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Build all CLI platforms
+        run: task build:all VERSION=${{ needs.prepare.outputs.tag }}
+
+      # Lands both the .app zip and the .pkg in dist/ BEFORE the checksums step, so
+      # SHA256SUMS covers the installer too — it is the asset most people download,
+      # and an unsigned installer is exactly the one worth verifying by hash.
       - uses: actions/download-artifact@v4
         with:
-          name: gui-macos
+          name: macos-artifacts
           path: dist
 
       - uses: actions/download-artifact@v4
@@ -259,11 +314,13 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           set -eu
           gh release create "$TAG" \
             --title "$TAG" \
             --notes-file release-notes.md \
+            "dist/dezhban-$VERSION.pkg" \
             dist/dezhban-darwin-arm64 \
             dist/dezhban-darwin-amd64 \
             dist/dezhban-linux-amd64 \

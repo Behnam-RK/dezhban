@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/command"
+	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
@@ -107,6 +108,16 @@ type Options struct {
 	// switch window closes on a successful (geo-allow) verdict, so the VPN stays
 	// reachable across restarts. Called from the run-loop goroutine only.
 	Learn func(profile, iface string, addrs []netip.Addr)
+	// Control, when non-nil, is the live control socket. Its accept goroutine only
+	// FORWARDS requests to this loop over a channel — it never touches the Backend —
+	// so the run-loop goroutine remains the sole caller of Backend.Apply. nil → the
+	// passwordless control path is off (tests / legacy callers / Windows).
+	Control *control.Server
+	// AllowSwitchOps permits opening and cancelling a switch window over the control
+	// socket (i.e. without root). It is the one control op that can RELAX the guard,
+	// so it is a distinct switch from the socket itself: set it false to force switch
+	// ops back to the root-owned command file. Mirrors config control.allowSwitchOps.
+	AllowSwitchOps bool
 	// ResolveEndpointsWith recomputes the endpoint set using an explicit live
 	// tunnel set for the tunnel-internal drop filter. nil → ResolveEndpoints /
 	// static fallback (the tunnel set is then ignored).
@@ -275,6 +286,14 @@ func Run(ctx context.Context, o Options) error {
 		}()
 	}
 
+	// The control socket's accept goroutine starts here and stops with ctx. It only
+	// ever hands requests to the loop below over a channel, so no goroutine other
+	// than the run loop can reach the Backend.
+	if o.Control != nil {
+		o.Control.Start(ctx)
+		defer o.Control.Stop()
+	}
+
 	var runErr error
 	if o.VPN {
 		runErr = o.runVPN(ctx)
@@ -336,6 +355,34 @@ func (o Options) runVPN(ctx context.Context) error {
 			"server can never let the tunnel reconnect")
 	}
 
+	// A tunnel is UP and we do not know its server. `relaxed` does NOT cover this.
+	//
+	// The relaxed allowance exists for the zero-tunnel case: no VPN connected, so the
+	// standing posture is a total cut, and that is both correct (nothing may leak) and
+	// recoverable (a switch window opens egress so a VPN can connect and be learned).
+	// With a tunnel already up it is neither. The guard's block-all covers the physical
+	// interface, which carries the tunnel's OWN encrypted transport — so arming it cuts
+	// every packet, including the VPN's handshake and keepalives. The tunnel dies, and
+	// because its socket dies with it, endpoint discovery can never learn the server
+	// either. That is not a kill switch; it is an unrecoverable blackout that we inflict
+	// on a working VPN.
+	//
+	// Refuse, and say exactly how to fix it. Discovery reads CONNECTED sockets from
+	// netstat, and WireGuard (like other NetworkExtension clients) sends from an
+	// unconnected UDP socket — it never appears as a connected flow, so autodiscovery
+	// cannot see it and never will. Naming the server is the fix.
+	if len(tunnels) > 0 && len(endpoints) == 0 {
+		return fmt.Errorf("refusing to start: the VPN tunnel (%s) is up but dezhban does not know its server "+
+			"address, and the guard blocks all egress on the physical link — including the tunnel's own encrypted "+
+			"transport. Arming it would cut ALL traffic, and the tunnel could never re-handshake. "+
+			"Auto-discovery reads connected sockets, and WireGuard/NetworkExtension clients use an unconnected UDP "+
+			"socket, so there is nothing for it to find. Name the server instead:\n"+
+			"    dezhban vpn import <wg0.conf|client.ovpn>   (reads the endpoint from your VPN's own config)\n"+
+			"    dezhban vpn add <name> --endpoint <host-or-ip>\n"+
+			"    dezhban config set vpn.endpoints=<server-ip>\n"+
+			"Then run `dezhban doctor` to confirm.", strings.Join(tunnels, ", "))
+	}
+
 	// A VPN endpoint must be reachable on the PHYSICAL interface. A tunnel-internal
 	// endpoint can't be, and blocking cuts the only path to it — a guaranteed
 	// lockout. Refuse to start rather than discover it at the next FULL BLOCK.
@@ -362,6 +409,12 @@ func (o Options) runVPN(ctx context.Context) error {
 	o.Log.Info("vpn posture active (startup)", "mode", guard.Mode, "tunnels", tunnels, "endpoints", len(endpoints), "switch", switchEnabled)
 
 	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
+
+	// manualBlock records that an operator asked for FULL BLOCK over the control
+	// socket. It HOLDS the block: while set, the geo state machine is suspended, so
+	// a subsequent allowed reading cannot silently lift a block the operator asked
+	// for. Only an explicit unblock (or a daemon restart) clears it.
+	manualBlock := false
 
 	// Switch-window state. windowActive is the authoritative flag; the timer +
 	// deadline enforce the bound (belt and braces).
@@ -614,6 +667,107 @@ func (o Options) runVPN(ctx context.Context) error {
 		snapshot()
 	}
 
+	// handleControl services one control-socket request. It runs INLINE on the run
+	// loop (as a select case), which is what lets it call Backend.Apply at all —
+	// the accept goroutine never does. Every path returns a Response; the server is
+	// waiting on it under a timeout.
+	handleControl := func(req control.Request) control.Response {
+		reply := func(ok bool, msg string) control.Response {
+			return control.Response{
+				OK:      ok,
+				Error:   msg,
+				Mode:    modeName(true),
+				Posture: postureName(true, blocked, windowActive),
+				Blocked: blocked,
+			}
+		}
+		switch req.Op {
+		case control.OpStatus:
+			return reply(true, "")
+
+		case control.OpBlock:
+			if windowActive {
+				// A switch window owns the rules. Silently tearing it down here would
+				// contradict the operator's other explicit request; make them choose.
+				return reply(false, "switch window is open — cancel it first")
+			}
+			if blocked {
+				manualBlock = true // already blocked by geo: adopt and hold it
+				return reply(true, "")
+			}
+			rebuild()
+			if err := o.Backend.Apply(fullBlock); err != nil {
+				enfErr = err
+				o.Log.Error("control: full block failed", "err", err)
+				snapshot()
+				return reply(false, "full block failed: "+err.Error())
+			}
+			blocked = true
+			manualBlock = true
+			enfErr = nil
+			o.Log.Warn("FULL BLOCK (manual, via control socket) — held until unblock")
+			snapshot()
+			return reply(true, "")
+
+		case control.OpUnblock:
+			if windowActive {
+				return reply(false, "switch window is open — cancel it first")
+			}
+			manualBlock = false
+			if !blocked {
+				return reply(true, "")
+			}
+			rebuild()
+			if err := o.Backend.Apply(guard); err != nil {
+				enfErr = err
+				o.Log.Error("control: guard restore failed", "err", err)
+				snapshot()
+				return reply(false, "guard restore failed: "+err.Error())
+			}
+			blocked = false
+			enfErr = nil
+			o.Log.Info("GUARD (manual unblock, via control socket) — geo state machine resumed")
+			snapshot()
+			return reply(true, "")
+
+		case control.OpOpenSwitch:
+			if !o.AllowSwitchOps {
+				return reply(false, "switch ops over the control socket are disabled (control.allowSwitchOps)")
+			}
+			if !switchEnabled {
+				return reply(false, "switch window unavailable (vpn.switchWindow not configured)")
+			}
+			openWindow(time.Now(), o.clampWindow(req.Duration), req.Profile)
+			if !windowActive {
+				return reply(false, "open switch window failed")
+			}
+			// An operator opening a window is taking over from any manual block: the
+			// window's own revert (windowPrevBlocked) restores the posture, and leaving
+			// manualBlock set would suspend geo forever after it closes.
+			manualBlock = false
+			return reply(true, "")
+
+		case control.OpCancelSwitch:
+			if !o.AllowSwitchOps {
+				return reply(false, "switch ops over the control socket are disabled (control.allowSwitchOps)")
+			}
+			if !windowActive {
+				return reply(true, "") // already closed — the caller's intent already holds
+			}
+			closeWindowRevert("cancelled (control socket)")
+			if windowActive {
+				return reply(false, "cancel failed — window held open, revert is being retried")
+			}
+			return reply(true, "")
+		}
+		return reply(false, fmt.Sprintf("unsupported op %q", req.Op))
+	}
+
+	var ctlC <-chan control.ConnRequest
+	if o.Control != nil {
+		ctlC = o.Control.Requests()
+	}
+
 	var tunCh <-chan netdetect.TunnelState
 	if o.Watcher != nil {
 		tunCh = o.Watcher.Watch(ctx)
@@ -699,6 +853,8 @@ func (o Options) runVPN(ctx context.Context) error {
 			default:
 				o.Log.Debug("ignoring unsupported command", "op", cmd.Op)
 			}
+		case cr := <-ctlC:
+			cr.Reply <- handleControl(cr.Req)
 		case <-windowTimerC:
 			if windowActive {
 				closeWindowRevert("expired")
@@ -729,6 +885,13 @@ func (o Options) runVPN(ctx context.Context) error {
 		case <-geoTick.C:
 			if windowActive {
 				continue // window suppresses the geo state machine
+			}
+			if manualBlock {
+				// An operator asked for this block. Recovery must not lift it behind
+				// their back — including the probe, which would briefly open egress to
+				// observe a country nobody is going to act on. Held until `unblock`.
+				o.Log.Debug("manual block held — skipping geo lookup (run `dezhban unblock` to resume)")
+				continue
 			}
 			if len(tunnels) == 0 {
 				continue // standing posture: nothing to observe until a tunnel exists
@@ -984,11 +1147,72 @@ func (o Options) runLegacy(ctx context.Context) error {
 	var lastTun []state.Tunnel
 	snapshot := func() { o.publish(blocked, last.Reading, last.Err, enfErr, lastTun, nil, nil, "") }
 
+	// manualBlock holds an operator-requested block across allowed verdicts, so the
+	// geo poll cannot unblock what an operator explicitly blocked. Cleared only by
+	// an explicit unblock.
+	manualBlock := false
+
+	// handleControl services a control-socket request inline on this loop — the
+	// same reason as in runVPN: the run-loop goroutine is the only one allowed to
+	// drive the Backend. Switch ops are VPN-mode only and are refused here.
+	handleControl := func(req control.Request) control.Response {
+		reply := func(ok bool, msg string) control.Response {
+			return control.Response{
+				OK:      ok,
+				Error:   msg,
+				Mode:    modeName(false),
+				Posture: postureName(false, blocked, false),
+				Blocked: blocked,
+			}
+		}
+		switch req.Op {
+		case control.OpStatus:
+			return reply(true, "")
+		case control.OpBlock:
+			if blocked {
+				manualBlock = true
+				return reply(true, "")
+			}
+			block("manual (control socket)", last.Reading.CountryCode)
+			if !blocked {
+				return reply(false, "block failed")
+			}
+			manualBlock = true
+			return reply(true, "")
+		case control.OpUnblock:
+			manualBlock = false
+			if !blocked {
+				return reply(true, "")
+			}
+			if err := o.Backend.Unblock(); err != nil {
+				enfErr = err
+				o.Log.Error("control: unblock failed", "err", err)
+				snapshot()
+				return reply(false, "unblock failed: "+err.Error())
+			}
+			blocked = false
+			enfErr = nil
+			o.Log.Info("ALLOWING (manual unblock, via control socket)")
+			snapshot()
+			return reply(true, "")
+		case control.OpOpenSwitch, control.OpCancelSwitch:
+			return reply(false, "switch windows are a vpn-mode feature (vpn.enabled is false)")
+		}
+		return reply(false, fmt.Sprintf("unsupported op %q", req.Op))
+	}
+
+	var ctlC <-chan control.ConnRequest
+	if o.Control != nil {
+		ctlC = o.Control.Requests()
+	}
+
 	results := o.Monitor.Poll(ctx)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
+		case cr := <-ctlC:
+			cr.Reply <- handleControl(cr.Req)
 		case st, ok := <-tunCh:
 			if !ok {
 				tunCh = nil
@@ -1018,7 +1242,11 @@ func (o Options) runLegacy(ctx context.Context) error {
 				// Only act when currently blocked; an allowed reading while already
 				// allowing is a no-op. An unblock error leaves blocked=true so the
 				// next allowed reading retries — same posture as before publishing.
-				if blocked {
+				if blocked && manualBlock {
+					// The operator asked for this block; an allowed country does not
+					// override them. `dezhban unblock` is the only way out.
+					o.Log.Debug("manual block held — not unblocking on allowed verdict", "country", cc)
+				} else if blocked {
 					if err := o.Backend.Unblock(); err != nil {
 						o.Log.Error("unblock failed", "err", err, "country", cc)
 						enfErr = err

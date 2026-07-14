@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<installer-gui-script minSpecVersion="2">
+    <title>dezhban</title>
+    <organization>com.behnam-rk</organization>
+    <welcome file="welcome.txt" mime-type="text/plain"/>
+    <conclusion file="conclusion.txt" mime-type="text/plain"/>
+
+    <!-- System-wide install: the CLI goes to /usr/local/bin, the LaunchDaemon is
+         registered for the whole machine. Installing as root is what buys the
+         single admin prompt — everything the postinstall needs is already root. -->
+    <domains enable_anywhere="false" enable_currentUserHome="false" enable_localSystem="true"/>
+
+    <!-- No component selection: the CLI, the app and the service are one product.
+         An install that let you deselect the CLI would leave the app unable to do
+         anything (it drives the CLI), which is not a configuration worth offering. -->
+    <options customize="never" require-scripts="true" hostArchitectures="arm64,x86_64"/>
+
+    <!-- 13.0: the menubar app uses SMAppService (login item), which is macOS 13+. -->
+    <allowed-os-versions>
+        <os-version min="13.0"/>
+    </allowed-os-versions>
+
+    <choices-outline>
+        <line choice="default">
+            <line choice="cli"/>
+            <line choice="app"/>
+        </line>
+    </choices-outline>
+
+    <choice id="default"/>
+    <choice id="cli" visible="false" title="dezhban CLI">
+        <pkg-ref id="com.behnam-rk.dezhban.cli"/>
+    </choice>
+    <choice id="app" visible="false" title="Dezhban menubar app">
+        <pkg-ref id="com.behnam-rk.dezhban.app"/>
+    </choice>
+
+    <pkg-ref id="com.behnam-rk.dezhban.cli" version="@VERSION@" onConclusion="none">dezhban-cli.pkg</pkg-ref>
+    <pkg-ref id="com.behnam-rk.dezhban.app" version="@VERSION@" onConclusion="none">dezhban-app.pkg</pkg-ref>
+</installer-gui-script>

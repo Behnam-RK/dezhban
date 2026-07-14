@@ -1,0 +1,236 @@
+# dezhban task runner — https://taskfile.dev (`brew install go-task`).
+# `task` with no arguments lists everything; that list is the entry point.
+#
+# Two update-roll loops (macOS):
+#   fast : task dev:all    — rebuild CLI+GUI, swap them in place, restart/relaunch
+#   full : task pkg:cycle  — cross-compile, universal app, .pkg, installer, open app
+#
+# Each OS firewall backend is isolated behind build tags (pf/darwin,
+# nftables/linux, wf/windows), so every target compiles only its own backend.
+# The version is stamped via -ldflags; nothing else is linked in.
+#
+# scripts/*.sh stay runnable without task (escape hatches must not depend on
+# dev tooling): `sh scripts/panic.sh` always works.
+
+version: '3'
+
+vars:
+  BINARY: dezhban
+  PKG: ./cmd/dezhban
+  DIST: dist
+  ABS_DIST: '{{.ROOT_DIR}}/{{.DIST}}'
+  # Overridable per invocation: task build:all VERSION=v0.4.0
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  # Dev-loop config knobs, e.g.:
+  #   task rules MODE=fullblock CONFIG=configs/dezhban.vpn-guard.json
+  CONFIG: configs/dezhban.local.json
+  MODE: guard
+  # Installed locations (macOS). Mirror cmd/dezhban + packaging/macos.
+  INSTALL_BIN: /usr/local/bin/dezhban
+  APP_DIR: /Applications/Dezhban.app
+  DAEMON_PLIST: /Library/LaunchDaemons/dezhban.plist
+
+tasks:
+  default:
+    desc: List all tasks
+    silent: true
+    cmds:
+      - task --list
+
+  # --- build & verify ---------------------------------------------------------
+
+  build:
+    desc: Build for the host platform into ./dezhban, version-stamped
+    cmds:
+      - go build -ldflags "-X main.version={{.VERSION}}" -o {{.BINARY}} {{.PKG}}
+
+  build:all:
+    desc: Cross-compile all 5 release targets into ./dist, version-stamped
+    cmds:
+      - |
+        mkdir -p {{.DIST}}
+        for p in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+          os=${p%/*}; arch=${p#*/}; ext=""
+          [ "$os" = windows ] && ext=.exe
+          out={{.DIST}}/{{.BINARY}}-$os-$arch$ext
+          echo "building $out ({{.VERSION}})"
+          GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
+            go build -ldflags "-X main.version={{.VERSION}}" -o "$out" {{.PKG}} || exit 1
+        done
+        echo "done -> {{.DIST}}/"
+
+  vet:
+    desc: Static checks
+    cmds:
+      - go vet ./...
+
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  lint:
+    desc: golangci-lint if installed, else gofmt + go vet
+    cmds:
+      - |
+        if command -v golangci-lint >/dev/null 2>&1; then
+          golangci-lint run
+        else
+          echo "golangci-lint not found; running gofmt + go vet"
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+          go vet ./...
+        fi
+
+  clean:
+    desc: Remove build artifacts (dist/, ./dezhban, ./dezhban.exe, Swift .build)
+    cmds:
+      - rm -rf {{.DIST}} {{.BINARY}} {{.BINARY}}.exe macos-gui/.build
+
+  # --- safe dev loop (no root, no firewall effects) ---------------------------
+
+  run-dry:
+    desc: Build + run the monitor in dry-run — no firewall touch (CONFIG=...)
+    cmds:
+      - CONFIG={{.CONFIG}} sh scripts/dev.sh
+
+  validate:
+    desc: Load + validate CONFIG without side effects
+    cmds:
+      - go run {{.PKG}} validate --config {{.CONFIG}}
+
+  rules:
+    desc: Print the ruleset for MODE (guard|fullblock|legacy) without applying
+    cmds:
+      - go run {{.PKG}} print-rules --mode {{.MODE}} --config {{.CONFIG}}
+
+  doctor:
+    desc: 'Diagnose VPN guard config (extra flags after "--": task doctor -- --discover)'
+    cmds:
+      - go run {{.PKG}} doctor --config {{.CONFIG}} {{.CLI_ARGS}}
+
+  status:
+    desc: Show current posture (installed CLI if present, else go run)
+    silent: true
+    cmds:
+      - |
+        if [ -x {{.INSTALL_BIN}} ]; then {{.INSTALL_BIN}} status; else go run {{.PKG}} status; fi
+
+  # --- service lifecycle from source (scripts prompt for sudo themselves) -----
+
+  install-local:
+    desc: Validate, build, install config + service, start it (sudo inside)
+    cmds:
+      - CONFIG={{.CONFIG}} sh scripts/install-local.sh
+
+  reinstall:
+    desc: Tear down, then install fresh from source (sudo inside)
+    cmds:
+      - CONFIG={{.CONFIG}} sh scripts/reinstall.sh
+
+  uninstall-local:
+    desc: Panic-teardown, unregister service, remove config (KEEP_CONFIG=1 to keep; sudo inside)
+    cmds:
+      - sh scripts/uninstall-local.sh
+
+  panic:
+    desc: Force-remove dezhban's firewall rules — the lockout escape hatch (sudo inside)
+    cmds:
+      - sh scripts/panic.sh
+
+  # --- macOS menubar GUI -------------------------------------------------------
+
+  gui:build:
+    desc: Build the menubar app into ./dist/Dezhban.app (UNIVERSAL=1 for arm64+x86_64)
+    platforms: [darwin]
+    cmds:
+      # build-app.sh checks DEZHBAN_APP_UNIVERSAL for non-emptiness, so it must
+      # stay UNSET (not "0") for a single-arch build.
+      - |
+        if [ "{{.UNIVERSAL}}" = "1" ]; then export DEZHBAN_APP_UNIVERSAL=1; fi
+        DEZHBAN_VERSION={{.VERSION}} bash macos-gui/build-app.sh {{.ABS_DIST}}
+
+  # --- fast dev loop (everyday roll; seconds, not minutes) --------------------
+
+  dev:cli:
+    desc: Rebuild CLI, swap /usr/local/bin/dezhban, restart daemon if registered (sudo)
+    platforms: [darwin]
+    deps: [build]
+    cmds:
+      # install(1) unlinks the destination before writing: never modify a
+      # running (ad-hoc signed) binary in place — the kernel kills such a
+      # process on Apple Silicon. The running daemon keeps its old image
+      # until the restart below.
+      - sudo install -m 0755 ./{{.BINARY}} {{.INSTALL_BIN}}
+      - |
+        if [ -f {{.DAEMON_PLIST}} ]; then
+          echo "restarting daemon..."
+          sudo {{.INSTALL_BIN}} restart
+        else
+          echo "no LaunchDaemon registered; skipping restart (task install-local, or install the .pkg)"
+        fi
+      - '{{.INSTALL_BIN}} version'
+
+  dev:gui:
+    desc: Rebuild menubar app (host arch), swap /Applications/Dezhban.app, relaunch (sudo)
+    platforms: [darwin]
+    cmds:
+      - task: gui:build
+      - osascript -e 'quit app "Dezhban"' 2>/dev/null || true
+      - pkill -x DezhbanMenu 2>/dev/null || true
+      - sleep 1
+      # Root-owned copy, matching what the .pkg installs; ditto preserves
+      # bundle structure and extended attributes.
+      - sudo rm -rf {{.APP_DIR}}
+      - sudo ditto {{.DIST}}/Dezhban.app {{.APP_DIR}}
+      - open {{.APP_DIR}}
+
+  dev:all:
+    desc: 'Fast roll of both: dev:cli then dev:gui (sudo)'
+    platforms: [darwin]
+    cmds:
+      - task: dev:cli
+      - task: dev:gui
+
+  # --- full installer loop -----------------------------------------------------
+
+  pkg:build:
+    desc: Build the macOS installer into ./dist/dezhban-<version>.pkg (universal CLI + app)
+    platforms: [darwin]
+    deps: # independent — run in parallel
+      - build:all
+      - task: gui:build
+        vars: { UNIVERSAL: '1' }
+    cmds:
+      - VERSION={{.VERSION}} bash packaging/macos/build-pkg.sh {{.ABS_DIST}}
+
+  pkg:install:
+    desc: Install ./dist/dezhban-<version>.pkg via the macOS Installer (sudo)
+    platforms: [darwin]
+    preconditions:
+      - sh: test -f {{.DIST}}/dezhban-{{.VERSION}}.pkg
+        msg: 'No {{.DIST}}/dezhban-{{.VERSION}}.pkg — run `task pkg:build` first (note: a dirty/changed tree changes the version suffix).'
+    cmds:
+      - sudo installer -pkg {{.DIST}}/dezhban-{{.VERSION}}.pkg -target /
+
+  pkg:uninstall:
+    desc: Run the uninstaller (repo copy); keeps /etc/dezhban by default, KEEP_CONFIG=0 to purge (sudo)
+    platforms: [darwin]
+    cmds:
+      - sudo env KEEP_CONFIG={{.KEEP_CONFIG | default "1"}} sh packaging/macos/uninstall.sh
+
+  pkg:cycle:
+    desc: 'Full loop: build:all + universal app + .pkg + install (upgrade-in-place) + open app (sudo)'
+    platforms: [darwin]
+    cmds:
+      - task: pkg:build
+      - task: pkg:install
+      - open {{.APP_DIR}}
+
+  pkg:fresh:
+    desc: 'pkg:cycle from a clean slate: uninstall first (config kept), then full loop (sudo)'
+    platforms: [darwin]
+    cmds:
+      - task: pkg:uninstall
+      - task: pkg:cycle

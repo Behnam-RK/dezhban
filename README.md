@@ -21,16 +21,45 @@ poll. Both modes and how to choose are in [docs/modes.md](docs/modes.md).
 
 ## Install
 
-Prebuilt binaries for macOS (arm64/amd64), Linux (amd64/arm64), and Windows
-(amd64), plus a macOS menubar app, are published on the
-[Releases page](https://github.com/Behnam-RK/dezhban/releases) — download
-`dezhban-<os>-<arch>` (or `.exe` on Windows) and `Dezhban-macos.app.zip` for the
-GUI. `SHA256SUMS` is attached to each release for verification.
+### macOS — the installer (recommended)
+
+Download **`dezhban-<version>.pkg`** from the
+[Releases page](https://github.com/Behnam-RK/dezhban/releases). It installs the CLI
+(`/usr/local/bin/dezhban`), the menubar app (`/Applications/Dezhban.app`), and
+registers the background service — **asking for your password exactly once**.
+
+After that, the everyday operations (**block**, **unblock**, **switching VPNs**)
+never ask again: the background service performs them for you over a local control
+socket. See [docs/config.md](docs/config.md#control-block) for the security model
+and how to tighten it.
+
+The installer does **not** start enforcement — a kill switch configured by guesswork
+is how you get locked out of your own machine. Two steps to finish:
+
+```sh
+sudo dezhban setup     # choose your settings
+sudo dezhban start     # arm it
+```
 
 > [!NOTE]
-> `Dezhban.app` is **unsigned** (no Apple Developer certificate) — Gatekeeper
-> blocks a plain double-click on first launch. Right-click → **Open** in
-> Finder, or run `xattr -dr com.apple.quarantine Dezhban.app`.
+> The `.pkg` is **unsigned** (no Apple Developer certificate), so Gatekeeper blocks
+> a double-click. Either install from the terminal —
+> `sudo installer -pkg dezhban-<version>.pkg -target /` — or double-click, dismiss
+> the warning, and approve it in **System Settings → Privacy & Security → Open
+> Anyway**. On macOS 14 and earlier, right-click → **Open** also works.
+
+To remove everything: `sudo sh /usr/local/share/dezhban/uninstall.sh`.
+
+### Other platforms
+
+Prebuilt binaries for macOS (arm64/amd64), Linux (amd64/arm64), and Windows (amd64)
+are on the same Releases page: download `dezhban-<os>-<arch>` (or `.exe` on
+Windows). `Dezhban-macos.app.zip` is the menubar app on its own, for people who
+already have the CLI. `SHA256SUMS` is attached to every release for verification.
+
+> [!NOTE]
+> `Dezhban.app` from the zip is unsigned too — right-click → **Open** in Finder, or
+> `xattr -dr com.apple.quarantine Dezhban.app`.
 
 See [docs/releasing.md](docs/releasing.md) for how releases are cut.
 
@@ -39,7 +68,7 @@ See [docs/releasing.md](docs/releasing.md) for how releases are cut.
 Requires Go 1.26+.
 
 ```sh
-make build                        # host build → ./dezhban
+task build                        # host build → ./dezhban (go-task; or: go build ./cmd/dezhban)
 
 sudo dezhban setup                # interactive wizard — build the config, no JSON by hand
 dezhban validate                  # confirm it (--config is optional; see docs/config.md)

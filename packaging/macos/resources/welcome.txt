@@ -1,0 +1,18 @@
+dezhban is a network kill switch: it cuts your internet the moment your VPN drops
+or your exit lands in a country you have blocked.
+
+This installer sets up everything, in one step:
+
+  • the dezhban command-line tool        (/usr/local/bin/dezhban)
+  • the Dezhban menubar app              (/Applications/Dezhban.app)
+  • the background service                (registered with launchd)
+
+You will be asked for your password ONCE, now. After that, the everyday
+operations — blocking, unblocking, and switching VPNs — never ask again: the
+background service performs them for you.
+
+Nothing is blocked yet. The installer registers the service but deliberately
+leaves it stopped, because a kill switch configured by guesswork is how you get
+locked out of your own machine. You choose the settings, then you start it.
+
+The next screen tells you how.

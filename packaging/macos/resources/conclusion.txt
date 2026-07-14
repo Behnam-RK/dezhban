@@ -1,0 +1,26 @@
+dezhban is installed. It is NOT enforcing anything yet.
+
+Two steps to go. In Terminal:
+
+  1. Configure it:     sudo dezhban setup
+  2. Start it:         sudo dezhban start
+
+Then open Dezhban from your Applications folder — it lives in the menubar, shows
+what the kill switch is doing, and from there Block, Unblock and "Switching VPN…"
+work with no password.
+
+Check it any time with:
+
+    dezhban status
+
+The "daemon control" line tells you whether routine operations will ask for a
+password. Once the service is running, they will not.
+
+If anything goes wrong and you lose network access, this always restores it,
+even with the service dead:
+
+    sudo dezhban panic
+
+To remove dezhban completely:
+
+    sudo sh /usr/local/share/dezhban/uninstall.sh

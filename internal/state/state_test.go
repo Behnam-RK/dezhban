@@ -104,3 +104,67 @@ func TestReadMissingFile(t *testing.T) {
 		t.Errorf("expected not-exist error, got %v", err)
 	}
 }
+
+// The state directory is the daemon's whole out-of-process contract: the menubar app
+// reads state.json out of it and every routine op reaches control.sock through it,
+// both as the unprivileged logged-in user. A 0700 directory silently severs both —
+// the GUI reports "stopped" while the daemon enforces normally, and block/unblock
+// fall back to a password prompt. This regressed exactly that way once (the pf
+// backend created the shared dir 0700 and MkdirAll then no-ops on it forever), which
+// is why EnsureDir must REPAIR the mode, not just create it.
+func TestEnsureDirRepairsTooRestrictiveMode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dezhban")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDir(dir); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != DirMode {
+		t.Fatalf("dir mode = %#o, want %#o — an unprivileged reader still can't traverse it", got, DirMode)
+	}
+}
+
+// The other direction matters more, and for a different reason. A world-writable
+// state dir lets any local user unlink control.sock and bind their own socket at that
+// path — the daemon's authorization gate IS the filesystem, so the mode of the
+// directory holding the socket is part of the boundary, not decoration around it.
+// "At least traversable" is therefore not the check; the exact mode is.
+func TestEnsureDirTightensTooPermissiveMode(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "dezhban")
+	if err := os.MkdirAll(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	// MkdirAll honours the umask, so force the mode we actually want to test.
+	if err := os.Chmod(dir, 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := EnsureDir(dir); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != DirMode {
+		t.Fatalf("dir mode = %#o, want %#o — a local user could replace control.sock", got, DirMode)
+	}
+}
+
+func TestEnsureDirCreatesTraversableDir(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "a", "b")
+	if err := EnsureDir(dir); err != nil {
+		t.Fatalf("EnsureDir: %v", err)
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := fi.Mode().Perm(); got != DirMode {
+		t.Errorf("dir mode = %#o, want %#o", got, DirMode)
+	}
+}

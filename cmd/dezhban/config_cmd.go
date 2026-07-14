@@ -22,6 +22,7 @@ Subcommands:
   show              Print the effective config as JSON
   get <key>         Print one config value
   set <key> <val>   Set a value, validate, and save
+  set k=v [k=v ...] Set several values in one validated, atomic write
   edit              Open the config in $EDITOR (created from defaults if missing)
 
 Keys (dotted; list values are comma-separated):
@@ -30,6 +31,7 @@ Keys (dotted; list values are comma-separated):
   vpn.enabled vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
   vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.switchWindow
   vpn.endpointRefresh vpn.tunnelWatch
+  control.enabled control.socket control.group control.allowSwitchOps
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
 
 // configField is a get/set pair for one dotted config key.
@@ -120,6 +122,22 @@ var configFields = map[string]configField{
 	"vpn.tunnelWatch": {
 		get: func(c *config.Config) string { return c.VPN.TunnelWatch.String() },
 		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.TunnelWatch, v) },
+	},
+	"control.enabled": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.Enabled) },
+		set: func(c *config.Config, v string) error { return setBool(&c.Control.Enabled, v) },
+	},
+	"control.socket": {
+		get: func(c *config.Config) string { return c.Control.Socket },
+		set: func(c *config.Config, v string) error { c.Control.Socket = strings.TrimSpace(v); return nil },
+	},
+	"control.group": {
+		get: func(c *config.Config) string { return c.Control.Group },
+		set: func(c *config.Config, v string) error { c.Control.Group = strings.TrimSpace(v); return nil },
+	},
+	"control.allowSwitchOps": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.AllowSwitchOps) },
+		set: func(c *config.Config, v string) error { return setBool(&c.Control.AllowSwitchOps, v) },
 	},
 }
 
@@ -231,15 +249,22 @@ func configGet(flagVal string, args []string) int {
 	return 0
 }
 
+// configSet applies one or more key/value assignments in a SINGLE load-validate-save
+// cycle: `config set <key> <value>`, or `config set key=value [key=value ...]`.
+//
+// The multi-pair form is not sugar. Each invocation is a privileged write, so a
+// caller with seven fields to change (the menubar app's VPN panel) used to pay seven
+// separate elevations — seven password prompts. It also had to hand-order the writes
+// so the config was never briefly invalid between them, because each write validated
+// the whole file. Applying every pair to one in-memory config and validating once
+// makes both problems disappear: one prompt, one atomic write, no intermediate state
+// that has to be legal.
 func configSet(flagVal string, args []string) int {
-	if len(args) != 2 {
+	pairs, err := parseSetPairs(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, "usage: dezhban config set <key> <value>")
-		return 2
-	}
-	key, val := args[0], args[1]
-	field, ok := configFields[key]
-	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown key %q\nvalid keys: %s\n", key, knownKeys())
+		fmt.Fprintln(os.Stderr, "       dezhban config set <key>=<value> [<key>=<value> ...]")
 		return 2
 	}
 	cfg, err := loadConfig(flagVal)
@@ -247,16 +272,51 @@ func configSet(flagVal string, args []string) int {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
 	}
-	if err := field.set(cfg, val); err != nil {
-		fmt.Fprintln(os.Stderr, "invalid value:", err)
-		return 1
+	for _, p := range pairs {
+		field, ok := configFields[p.key]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "unknown key %q\nvalid keys: %s\n", p.key, knownKeys())
+			return 2
+		}
+		if err := field.set(cfg, p.val); err != nil {
+			// Nothing has been written yet — the whole batch is rejected, so a bad
+			// value in the fifth pair can't leave the first four persisted.
+			fmt.Fprintf(os.Stderr, "invalid value for %s: %v\n", p.key, err)
+			return 1
+		}
 	}
 	path := writeTargetPath(flagVal)
 	if err := writeConfig(path, cfg); err != nil {
 		return saveError(path, err)
 	}
-	fmt.Printf("set %s = %s  (%s)\n", key, field.get(cfg), path)
+	for _, p := range pairs {
+		fmt.Printf("set %s = %s  (%s)\n", p.key, configFields[p.key].get(cfg), path)
+	}
 	return 0
+}
+
+type setPair struct{ key, val string }
+
+// parseSetPairs accepts either the two-positional form (`<key> <value>`, kept so
+// every existing invocation and script still works) or one-or-more `key=value`
+// args. The two are not mixed: a bare 2-arg call whose first arg has no "=" is the
+// legacy form, everything else must be key=value.
+func parseSetPairs(args []string) ([]setPair, error) {
+	if len(args) == 0 {
+		return nil, errors.New("config set: no key given")
+	}
+	if len(args) == 2 && !strings.Contains(args[0], "=") {
+		return []setPair{{key: args[0], val: args[1]}}, nil
+	}
+	pairs := make([]setPair, 0, len(args))
+	for _, a := range args {
+		k, v, ok := strings.Cut(a, "=")
+		if !ok || k == "" {
+			return nil, fmt.Errorf("config set: %q is not key=value", a)
+		}
+		pairs = append(pairs, setPair{key: k, val: v})
+	}
+	return pairs, nil
 }
 
 func configEdit(flagVal string) int {

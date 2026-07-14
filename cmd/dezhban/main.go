@@ -25,6 +25,7 @@ import (
 
 	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/learned"
@@ -67,6 +68,7 @@ Commands:
   uninstall   Remove the OS service
   start       Start the installed service
   stop        Stop the installed service (removes firewall rules)
+  restart     Restart the installed service (apply a config change)
   detect-vpn  Print detected VPN tunnel interfaces to help fill the vpn config
   switch      Open a bounded window to connect a brand-new VPN (learns its server)
   vpn         Manage VPN profiles and learned endpoints (list/add/remove/import/…)
@@ -78,6 +80,11 @@ Commands:
 Global flags:
   -v, --verbose   Override the configured log level to debug
   --no-sudo       Don't auto-elevate; print the root error instead
+  --no-daemon     Don't use the daemon's control socket; act on the firewall directly
+
+block, unblock and switch ask the running daemon over its control socket, which
+needs no password (see the "daemon control" line in dezhban status). With no
+daemon listening they fall back to acting on the firewall directly, needing root.
 
 Privileged commands re-run themselves under sudo automatically when not root
 (unix, interactive terminal). Use --no-sudo (or DEZHBAN_NO_SUDO=1) to opt out.
@@ -118,6 +125,8 @@ func run(args []string) int {
 		return cmdDoctor(rest)
 	case "panic":
 		return cmdPanic(rest)
+	case "restart":
+		return cmdRestart(rest)
 	case "install", "uninstall", "start", "stop":
 		return cmdService(cmd, rest)
 	case "detect-vpn":
@@ -155,6 +164,8 @@ func stripVerbose(args []string) []string {
 			verbose = true
 		case "-no-sudo", "--no-sudo":
 			noSudo = true
+		case "-no-daemon", "--no-daemon":
+			noDaemonFlag = true
 		default:
 			out = append(out, a)
 		}
@@ -291,6 +302,16 @@ func parseOverrides(simCountry, simTunDown string) (runOverrides, error) {
 // service Start path; the logger is supplied by the caller so service mode can
 // route output to the platform logger.
 func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (runner.Options, error) {
+	// Everything the daemon publishes to the outside world lives under this one
+	// directory — state.json for the menubar app, control.sock for passwordless
+	// routine ops. It must be traversable by the unprivileged user or both silently
+	// stop working, so establish (and repair) its mode once, here, before anything
+	// writes into it. Non-fatal: a stale mode degrades observability, it must never
+	// stop the kill switch from enforcing.
+	if err := state.EnsureDir(stateDir()); err != nil {
+		log.Warn("state directory not reachable by unprivileged readers; the menubar app and control socket may not work", "err", err)
+	}
+
 	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
 	if len(providers) == 0 {
 		return runner.Options{}, fmt.Errorf("no usable geo providers configured")
@@ -389,12 +410,27 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		"auto_discover_endpoints", cfg.VPN.AutoDiscoverEndpoints,
 		"tunnel_watch", watcher != nil,
 	)
+	// The control socket is convenience, never enforcement: if it can't be created
+	// (unresolvable group, unwritable dir), log it and run without it rather than
+	// refusing to start the kill switch. The CLI falls back to the root path.
+	var ctl *control.Server
+	if cfg.Control.Enabled {
+		ctl, err = control.New(controlSocketPath(cfg), cfg.Control.Group, log)
+		if err != nil {
+			log.Warn("control socket unavailable — routine ops will ask for a password", "err", err)
+		} else {
+			log.Info("control socket listening", "path", ctl.Path(), "group", cfg.Control.Group, "switch_ops", cfg.Control.AllowSwitchOps)
+		}
+	}
+
 	return runner.Options{
 		Monitor:          mon,
 		Decider:          decision.New(cfg.BlockedCountries, cfg.FailClosed, cfg.Hysteresis),
 		Backend:          fw,
 		Log:              log,
 		Interval:         cfg.PollInterval,
+		Control:          ctl,
+		AllowSwitchOps:   cfg.Control.AllowSwitchOps,
 		VPN:              cfg.VPN.Enabled,
 		Tunnels:          tunnels,
 		Autodetect:       cfg.VPN.Autodetect,
@@ -516,6 +552,19 @@ func cmdBlock(args []string) int {
 		return 1
 	}
 	log := newLogger(cfg)
+
+	// Passwordless path: ask the running daemon to block. Skipped for --guard and
+	// --force, which are deliberate low-level overrides of the state machine the
+	// daemon owns — those still act on the firewall directly, as root.
+	if !noDaemon() && !*guard && !*force {
+		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpBlock}); handled {
+			if code == 0 {
+				fmt.Println("blocked (via daemon) — held until `dezhban unblock`")
+			}
+			return code
+		}
+	}
+
 	if !requireRoot("block") {
 		return 1
 	}
@@ -719,10 +768,24 @@ func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 
 func cmdUnblock(args []string) int {
 	fs := flag.NewFlagSet("unblock", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	// unblock already removes dezhban's rules unconditionally; --force is accepted
 	// for symmetry with `block --force` and documents the manual-override intent.
-	_ = fs.Bool("force", false, "remove rules unconditionally (unblock is already unconditional)")
+	force := fs.Bool("force", false, "remove rules unconditionally, bypassing the daemon (unblock is already unconditional)")
 	_ = fs.Parse(args)
+
+	// Passwordless path: ask the daemon to release the block and hand the geo state
+	// machine back the wheel. --force bypasses it and rips the rules out directly —
+	// which also leaves a running daemon free to re-block on its next verdict.
+	if !noDaemon() && !*force {
+		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpUnblock}); handled {
+			if code == 0 {
+				fmt.Println("unblocked (via daemon) — monitoring resumed")
+			}
+			return code
+		}
+	}
+
 	if !requireRoot("unblock") {
 		return 1
 	}
@@ -766,6 +829,58 @@ func cmdPanic(args []string) int {
 	return 0
 }
 
+// cmdRestart applies a config change to the running daemon — there is no live
+// reload (kardianos has no SIGHUP-style reconfigure), so it is a stop followed by a
+// start. It exists as one command rather than two because the two halves have to
+// agree about the in-between state: `stop` on a service that is installed but not
+// running must be a no-op, not an error. Composing it from two shell invocations put
+// that judgement in the caller, where a failed stop aborted the start and left the
+// daemon down with a new config it never read.
+func cmdRestart(args []string) int {
+	// --config is accepted and ignored, exactly as start/stop do: the installed
+	// service unit already carries the config path it was registered with. Parsing it
+	// (rather than ignoring args wholesale) is what makes a typo'd flag an error
+	// instead of a silent no-op.
+	fs := flag.NewFlagSet("restart", flag.ExitOnError)
+	_ = fs.String("config", "", "ignored — the installed service uses the path it was registered with")
+	_ = fs.Parse(args)
+
+	if !requireRoot("restart") {
+		return 1
+	}
+	if !svc.Installed() {
+		fmt.Fprintln(os.Stderr, "restart: the service is not installed — run `dezhban install` first")
+		return 1
+	}
+	if code := serviceAction("stop", ""); code != 0 {
+		return code
+	}
+	// Wait for the stop to actually settle before starting. `launchctl unload` can
+	// return before launchd has dropped the job, and serviceAction("start") skips the
+	// load when it still sees the service running — which would report a successful
+	// restart while leaving the daemon down with a config it never read.
+	if !waitUntilStopped(5 * time.Second) {
+		fmt.Fprintln(os.Stderr, "restart: the service did not stop within 5s; not starting it again")
+		return 1
+	}
+	return serviceAction("start", "")
+}
+
+// waitUntilStopped polls the service manager until the service is no longer running,
+// or the budget runs out. Reports whether it stopped.
+func waitUntilStopped(budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for {
+		if !svc.Running() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // cmdService handles install/uninstall/start/stop against the OS service manager.
 // `install` embeds the config path into the boot invocation so the service loads
 // the same config on every restart; the path is made absolute because the
@@ -794,6 +909,25 @@ func cmdService(action string, args []string) int {
 		if _, err := os.Stat(path); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: config %q not found — the service will start with defaults until you create it\n", path)
 		}
+	}
+
+	return serviceAction(action, path)
+}
+
+// serviceAction runs one service-manager action, having already established root.
+// start and stop are made IDEMPOTENT here: launchd's load/unload are edge triggers,
+// so unloading a job that was never loaded fails with a bare "Input/output error"
+// and loading one twice fails too. Being asked to reach a state you are already in
+// is not an error — reporting it as one is what broke `restart` (a failing stop
+// aborted the start) and made the GUI's config-apply leave the daemon down.
+func serviceAction(action, path string) int {
+	switch {
+	case action == "stop" && !svc.Running():
+		fmt.Println("dezhban service already stopped")
+		return 0
+	case action == "start" && svc.Running():
+		fmt.Println("dezhban service already running")
+		return 0
 	}
 
 	if err := svc.Control(action, path); err != nil {
@@ -1202,6 +1336,28 @@ func cmdDoctor(args []string) int {
 			fmt.Println("    your VPN server's PUBLIC IP from your VPN client config.")
 		}
 	}
+
+	// The guard blocks ALL egress on the physical link — which is what carries the
+	// tunnel's own encrypted transport. With a tunnel up and no known server address,
+	// arming it cuts every packet, kills the VPN, and leaves no socket for discovery to
+	// learn from: an unrecoverable blackout, not a kill switch. The daemon refuses to
+	// start in this state; doctor's whole job is to say so BEFORE you find out.
+	lockout := cfg.VPN.Enabled && len(tunnels) > 0 && len(endpoints) == 0
+	if lockout {
+		fmt.Println()
+		fmt.Println("LOCKOUT RISK — dezhban will refuse to start:")
+		fmt.Printf("  The VPN guard is on and %s is up, but no server address is known.\n", strings.Join(tunnels, ", "))
+		fmt.Println("  The guard would block the tunnel's own transport and cut ALL traffic.")
+		fmt.Println()
+		fmt.Println("  Auto-discovery reads CONNECTED sockets. WireGuard (and other")
+		fmt.Println("  NetworkExtension clients) send from an UNCONNECTED UDP socket, so they")
+		fmt.Println("  never appear as a connected flow — discovery cannot find them. Name the")
+		fmt.Println("  server explicitly:")
+		fmt.Println()
+		fmt.Println("    dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it")
+		fmt.Println("    dezhban vpn add <name> --endpoint <host-or-ip>")
+		fmt.Println("    sudo dezhban config set vpn.endpoints=<server-ip>")
+	}
 	fmt.Println()
 
 	if *discover {
@@ -1230,6 +1386,14 @@ func cmdDoctor(args []string) int {
 			fmt.Println("  add any missing server IP to vpn.endpoints and drop stale entries.")
 		}
 	}
+
+	// Exit non-zero when a real lockout risk was found. A diagnostic that reports a
+	// guaranteed blackout and still exits 0 is one `make doctor` in a script away from
+	// being ignored — and these are exactly the two conditions the daemon refuses to
+	// start on, so doctor must agree with it.
+	if lockout || len(bad) > 0 {
+		return 1
+	}
 	return 0
 }
 
@@ -1257,6 +1421,7 @@ func cmdStatus(args []string) int {
 	fmt.Println("dezhban", version)
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
 	fmt.Println("service:         ", svc.Status())
+	fmt.Println("daemon control:  ", controlStatus(cfg))
 	fmt.Println("poll interval:   ", cfg.PollInterval)
 	fmt.Println("fail-closed:     ", cfg.FailClosed)
 	fmt.Println("hysteresis:      ", cfg.Hysteresis)
