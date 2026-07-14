@@ -62,19 +62,22 @@ if [[ -f "$HERE/AppIcon.icns" ]]; then
 	/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" \
 		"$APP/Contents/Info.plist" 2>/dev/null || true
 fi
-# Stamped by `task gui:build` (DEZHBAN_VERSION from `git describe`
-# or an explicit VERSION=vX.Y.Z). Only a strict X.Y.Z is stamped — CFBundle
-# version fields must be dotted numerics, so a `git describe` value like
-# 0.2.0-3-g<sha> or `dev` is left alone, keeping Info.plist's checked-in 0.1.0.
+# Stamped by `task gui:build` (DEZHBAN_VERSION from `git describe` or an explicit
+# VERSION=vX.Y.Z). CFBundle version fields must be dotted numerics, so only a
+# release version is stamped: X.Y.Z, or an rc reduced to its numeric core
+# (0.2.0-rc.1 -> 0.2.0). A `git describe` value like 0.2.0-3-g<sha> or `dev` is a
+# dev build and is left at Info.plist's checked-in 0.0.0, so it is visibly
+# unstamped rather than masquerading as a release.
 if [[ -n "${DEZHBAN_VERSION:-}" ]]; then
 	ver="${DEZHBAN_VERSION#v}"
+	ver="${ver%-rc.*}"
 	if [[ "$ver" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
 		/usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $ver" \
 			"$APP/Contents/Info.plist"
 		/usr/libexec/PlistBuddy -c "Set :CFBundleVersion $ver" \
 			"$APP/Contents/Info.plist"
 	else
-		echo "    note: DEZHBAN_VERSION='$DEZHBAN_VERSION' is not X.Y.Z; leaving Info.plist version unchanged" >&2
+		echo "    note: DEZHBAN_VERSION='$DEZHBAN_VERSION' is not a release version; leaving Info.plist at its dev default" >&2
 	fi
 fi
 

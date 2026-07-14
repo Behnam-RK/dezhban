@@ -12,10 +12,13 @@
 	<string>DezhbanMenu</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- Dev default, overwritten by build-app.sh for a release build. 0.0.0 (not a
+	     plausible-looking 0.1.0) so an unstamped build is visibly unstamped and
+	     never masquerades as a release. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.0.0</string>
 	<key>CFBundleVersion</key>
-	<string>1</string>
+	<string>0.0.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
 	<!-- Menubar agent: no Dock icon, no app switcher entry. -->

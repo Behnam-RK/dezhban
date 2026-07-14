@@ -38,8 +38,8 @@ import (
 	"github.com/behnam-rk/dezhban/internal/svc"
 )
 
-// version is overridden at build time via -ldflags "-X main.version=...".
-var version = "dev"
+// The build stamps (version/commit/date) and their ReadBuildInfo fallback live
+// in version.go; `buildStamp` is the resolved identity.
 
 // verbose is the global -v/--verbose flag, stripped from args before dispatch.
 // When set it overrides the configured log level to debug.
@@ -142,8 +142,7 @@ func run(args []string) int {
 	case "completion":
 		return cmdCompletion(rest)
 	case "version", "--version":
-		fmt.Println("dezhban", version)
-		return 0
+		return cmdVersion()
 	case "help", "--help", "-h":
 		fmt.Println(usage)
 		return 0
@@ -1418,7 +1417,7 @@ func cmdStatus(args []string) int {
 		blocked = []string{"(none)"}
 	}
 
-	fmt.Println("dezhban", version)
+	fmt.Println(buildStamp.line())
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
 	fmt.Println("service:         ", svc.Status())
 	fmt.Println("daemon control:  ", controlStatus(cfg))
@@ -1476,6 +1475,8 @@ func statusJSON(cfg *config.Config) int {
 	statePath := defaultStatePath()
 	out := struct {
 		Version          string          `json:"version"`
+		Commit           string          `json:"commit,omitempty"`    // build stamp; empty outside a git tree
+		BuildDate        string          `json:"buildDate,omitempty"` // RFC3339
 		Privileged       bool            `json:"privileged"`
 		Service          string          `json:"service"`
 		StatePath        string          `json:"statePath"`
@@ -1485,7 +1486,9 @@ func statusJSON(cfg *config.Config) int {
 		BlockedCountries []string        `json:"blockedCountries"`
 		VPNEnabled       bool            `json:"vpnEnabled"`
 	}{
-		Version:          version,
+		Version:          buildStamp.Version,
+		Commit:           buildStamp.short(),
+		BuildDate:        buildStamp.Date,
 		Privileged:       privilege.IsPrivileged(),
 		Service:          svc.Status(),
 		StatePath:        statePath,

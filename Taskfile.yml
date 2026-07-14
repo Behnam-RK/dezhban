@@ -22,6 +22,18 @@ vars:
   # Overridable per invocation: task build:all VERSION=v0.4.0
   VERSION:
     sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  # The v-prefix is normalised HERE, once, and nowhere else. VERSION may or may
+  # not carry a leading "v" (a tag does, a bare `git describe --always` SHA does
+  # not); artifact FILENAMES never do, because packaging/macos/build-pkg.sh writes
+  # dezhban-${VERSION#v}.pkg. Deriving the filename independently on each side is
+  # what used to break `task pkg:install` — it looked for dezhban-v0.1-17-g….pkg
+  # while build-pkg.sh had written dezhban-0.1-17-g….pkg.
+  VERSION_BARE: '{{trimPrefix "v" .VERSION}}'
+  COMMIT:
+    sh: git rev-parse HEAD 2>/dev/null || echo ""
+  DATE:
+    sh: date -u +%Y-%m-%dT%H:%M:%SZ
+  LDFLAGS: '-X main.version={{.VERSION}} -X main.commit={{.COMMIT}} -X main.date={{.DATE}}'
   # Dev-loop config knobs, e.g.:
   #   task rules MODE=fullblock CONFIG=configs/dezhban.vpn-guard.json
   CONFIG: configs/dezhban.local.json
@@ -43,7 +55,7 @@ tasks:
   build:
     desc: Build for the host platform into ./dezhban, version-stamped
     cmds:
-      - go build -ldflags "-X main.version={{.VERSION}}" -o {{.BINARY}} {{.PKG}}
+      - go build -ldflags "{{.LDFLAGS}}" -o {{.BINARY}} {{.PKG}}
 
   build:all:
     desc: Cross-compile all 5 release targets into ./dist, version-stamped
@@ -56,7 +68,7 @@ tasks:
           out={{.DIST}}/{{.BINARY}}-$os-$arch$ext
           echo "building $out ({{.VERSION}})"
           GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
-            go build -ldflags "-X main.version={{.VERSION}}" -o "$out" {{.PKG}} || exit 1
+            go build -ldflags "{{.LDFLAGS}}" -o "$out" {{.PKG}} || exit 1
         done
         echo "done -> {{.DIST}}/"
 
@@ -209,10 +221,12 @@ tasks:
     desc: Install ./dist/dezhban-<version>.pkg via the macOS Installer (sudo)
     platforms: [darwin]
     preconditions:
-      - sh: test -f {{.DIST}}/dezhban-{{.VERSION}}.pkg
-        msg: 'No {{.DIST}}/dezhban-{{.VERSION}}.pkg — run `task pkg:build` first (note: a dirty/changed tree changes the version suffix).'
+      # VERSION_BARE, not VERSION: build-pkg.sh strips the leading "v" from the
+      # filename, so this must too or it can never find what pkg:build produced.
+      - sh: test -f {{.DIST}}/dezhban-{{.VERSION_BARE}}.pkg
+        msg: 'No {{.DIST}}/dezhban-{{.VERSION_BARE}}.pkg — run `task pkg:build` first (note: a dirty/changed tree changes the version suffix).'
     cmds:
-      - sudo installer -pkg {{.DIST}}/dezhban-{{.VERSION}}.pkg -target /
+      - sudo installer -pkg {{.DIST}}/dezhban-{{.VERSION_BARE}}.pkg -target /
 
   pkg:uninstall:
     desc: Run the uninstaller (repo copy); keeps /etc/dezhban by default, KEEP_CONFIG=0 to purge (sudo)
@@ -234,3 +248,103 @@ tasks:
     cmds:
       - task: pkg:uninstall
       - task: pkg:cycle
+
+  # --- release ------------------------------------------------------------------
+  #
+  # All three delegate to scripts/release.sh, which is the SAME code the Release
+  # workflow runs — so a local preview cannot drift from what CI will do.
+  #
+  #   task release:check                  is it safe to release right now?
+  #   task release:preview VERSION=0.2.0  what exactly would a release do?
+  #   task release BUMP=minor             actually cut it
+  #
+  # Pass either VERSION=X.Y.Z[-rc.N] or BUMP=patch|minor|major|rc.
+
+  release:check:
+    desc: 'Preflight: on main? clean? synced? [Unreleased] filled? CI green?'
+    cmds:
+      - sh scripts/release.sh preflight
+
+  release:preview:
+    desc: 'Dry run: print the resolved version, the notes, and the CHANGELOG diff (VERSION=|BUMP=)'
+    silent: true
+    cmds:
+      - |
+        set -eu
+        # VERSION doubles as the build-stamp var (defaulting to `git describe`), so
+        # only a release-SHAPED value counts as an explicit request here.
+        if [ -n "{{.BUMP | default ""}}" ]; then
+          eval "$(sh scripts/release.sh resolve --bump '{{.BUMP}}')"
+        elif echo '{{.VERSION}}' | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+          eval "$(sh scripts/release.sh resolve --version '{{.VERSION}}')"
+        else
+          echo "pass VERSION=X.Y.Z[-rc.N] or BUMP=patch|minor|major|rc" >&2
+          echo "(VERSION is '{{.VERSION}}' — the git-describe default, not a release version)" >&2
+          exit 2
+        fi
+
+        echo "next tag    $TAG   ($KIND)"
+        echo "prev tag    ${PREV_TAG:-(none)}"
+        echo "numeric     $VERSION_NUM   (pkg receipt / CFBundleShortVersionString)"
+        echo "artifacts   dist/dezhban-$VERSION.pkg, 5 CLI binaries, app zip, SHA256SUMS"
+        echo
+        echo "--- release notes ------------------------------------------------------"
+        sh scripts/release.sh notes "$VERSION" "$KIND"
+        echo "--- end notes ----------------------------------------------------------"
+        echo
+
+        if [ "$KIND" = rc ]; then
+          echo "CHANGELOG: not rolled (rc is a tag-only snapshot; main is untouched)"
+          exit 0
+        fi
+        # Roll a scratch copy so the working tree is never touched by a preview.
+        tmp="$(mktemp -d)"
+        trap 'rm -rf "$tmp"' EXIT
+        cp CHANGELOG.md "$tmp/CHANGELOG.md.orig"
+        sh scripts/release.sh roll "$VERSION"
+        echo "--- CHANGELOG diff -----------------------------------------------------"
+        diff -u "$tmp/CHANGELOG.md.orig" CHANGELOG.md | sed '1,2d' || true
+        cp "$tmp/CHANGELOG.md.orig" CHANGELOG.md
+        echo "--- end diff (working tree restored) -----------------------------------"
+
+  release:
+    desc: 'Cut a release: preflight, confirm, dispatch the workflow, watch it (VERSION=|BUMP=)'
+    silent: true
+    cmds:
+      - |
+        set -eu
+        command -v gh >/dev/null 2>&1 || { echo "gh is required to dispatch a release" >&2; exit 1; }
+
+        if [ -n "{{.BUMP | default ""}}" ]; then
+          eval "$(sh scripts/release.sh resolve --bump '{{.BUMP}}')"
+          dispatch_args="-f bump={{.BUMP}}"
+        elif echo '{{.VERSION}}' | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
+          eval "$(sh scripts/release.sh resolve --version '{{.VERSION}}')"
+          dispatch_args="-f version={{.VERSION}}"
+        else
+          echo "pass VERSION=X.Y.Z[-rc.N] or BUMP=patch|minor|major|rc" >&2
+          echo "(VERSION is '{{.VERSION}}' — the git-describe default, not a release version)" >&2
+          exit 2
+        fi
+
+        sh scripts/release.sh preflight
+
+        echo
+        echo "  about to release   $TAG  ($KIND)"
+        echo "  from commit        $(git rev-parse --short HEAD)"
+        if [ "$KIND" = rc ]; then
+          echo "  effect             tag only — no commit to main, published --prerelease"
+        else
+          echo "  effect             rolls CHANGELOG, commits to main, tags, publishes as latest"
+        fi
+        echo
+        printf '  type the tag to confirm: '
+        read -r reply
+        [ "$reply" = "$TAG" ] || { echo "  mismatch — aborted."; exit 1; }
+
+        # shellcheck disable=SC2086
+        gh workflow run release.yml --ref main $dispatch_args
+        echo "  dispatched. waiting for the run to appear..."
+        sleep 5
+        run_id="$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+        gh run watch "$run_id" --exit-status

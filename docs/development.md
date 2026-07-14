@@ -32,11 +32,25 @@ GOOS=linux GOARCH=amd64 go build ./cmd/dezhban
 ```
 
 `task build:all` produces darwin arm64/amd64, linux amd64/arm64, and windows
-amd64, each with the version stamped via `-ldflags -X main.version` (from
+amd64, each stamped via `-ldflags` with the version, commit and build date (from
 `git describe`, overridable with `task build:all VERSION=vX.Y.Z`). macOS still
 requires the system `pfctl` at runtime (shelled, not linked). Cutting an actual
 release (tagging, publishing binaries) is a separate, automated flow — see
 [releasing.md](releasing.md).
+
+`dezhban version` prints the stamp; `dezhban -v version` prints commit, build
+date and Go version too. A binary built *without* the Taskfile (a plain
+`go build ./cmd/dezhban`) carries no ldflags, and falls back to the VCS data the
+Go toolchain embeds automatically — so it still reports the commit it came from
+and whether the tree was dirty, rather than an anonymous `dev`.
+
+### The `v` prefix
+
+`VERSION` may or may not carry a leading `v` — a tag does (`v0.2.0`), a bare
+`git describe --always` SHA does not. It is normalised in exactly **one** place,
+the `VERSION_BARE` var in `Taskfile.yml`, because artifact *filenames* never
+carry it (`packaging/macos/build-pkg.sh` writes `dezhban-${VERSION#v}.pkg`).
+Don't re-derive a filename from `VERSION` anywhere else.
 
 `task gui:build` is deliberately kept out of `build:all` — a separate
 Swift/AppKit target with no effect on the Go binary.
@@ -96,7 +110,10 @@ Gotchas:
 
 - The `.pkg` filename embeds `git describe --dirty`, so editing files between
   `pkg:build` and `pkg:install` changes the expected name — `pkg:install` has a
-  precondition that catches this and tells you to rebuild.
+  precondition that catches this and tells you to rebuild. (It used to misfire on
+  *every* invocation once a `v`-prefixed tag existed, because it looked for
+  `dezhban-v0.1-…​.pkg` while `build-pkg.sh` had written `dezhban-0.1-…​.pkg`. Both
+  sides now go through `VERSION_BARE`.)
 - After a **fresh** install there is no config yet: run `sudo dezhban setup`,
   then `sudo dezhban start` (or use the menubar app). See
   [usage.md](usage.md#install).

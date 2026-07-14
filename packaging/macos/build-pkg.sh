@@ -26,7 +26,14 @@ VERSION="${VERSION:-$(git -C "$REPO_ROOT" describe --tags --always --dirty 2>/de
 # "dev" is not. Fall back to 0.0.0 for the metadata while keeping the real version
 # in the filename, so a dev build is obviously a dev build and never masquerades as
 # a release in the receipt database.
+#
+# A release candidate is the one exception: 0.2.0-rc.1 is a real release, so it
+# gets its numeric core (0.2.0) in the receipt rather than being demoted to 0.0.0.
+# The filename keeps the full -rc.N, so the two rc's of a version are still
+# distinguishable as artifacts — they just share a receipt version, which is
+# correct: they are candidates for the same release.
 PKG_VERSION="${VERSION#v}"
+PKG_VERSION="${PKG_VERSION%-rc.*}"
 if ! [[ "$PKG_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]]; then
 	echo "    note: version '$VERSION' is not dotted-numeric; using 0.0.0 in pkg metadata" >&2
 	PKG_VERSION="0.0.0"

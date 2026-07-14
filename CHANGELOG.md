@@ -14,6 +14,26 @@ changes.
 
 ### Added
 
+- **A release is now one command.** `task release BUMP=minor` (or
+  `VERSION=0.2.0`) runs a preflight — on `main`, clean tree, synced with origin,
+  `[Unreleased]` non-empty, CI green — prints what it is about to do, asks you to
+  type the tag to confirm, then dispatches and streams the workflow.
+  `task release:preview` shows the resolved version, the rendered notes and the
+  CHANGELOG diff without touching anything, and the workflow's `dry_run` input
+  does the same at full fidelity on a real runner: it cross-compiles everything
+  and install/uninstall-tests the `.pkg`, then publishes nothing. All of it goes
+  through one `scripts/release.sh`, which is the same code the workflow runs, so a
+  local preview cannot drift from what CI does.
+- **Release candidates** (`X.Y.Z-rc.N`). An rc is a pure snapshot: it tags only —
+  no CHANGELOG roll, no commit to `main` — and publishes as a GitHub pre-release,
+  so it never becomes "latest" and an abandoned rc line costs nothing to walk away
+  from. `bump: patch|minor|major` always counts from the last *final* tag;
+  `bump: rc` advances an open rc line.
+- `dezhban -v version` now reports the commit, build date and Go version
+  alongside the version, and `status --json` gained `commit` and `buildDate`. A
+  binary built without the Taskfile (a plain `go build`) no longer reports itself
+  as an anonymous `dev`: it falls back to the VCS stamps the Go toolchain embeds,
+  so it still names the commit it came from and whether the tree was dirty.
 - **Standalone macOS installer** (`dezhban-<version>.pkg`, `task pkg:build`):
   installs the CLI, the menubar app, and the launchd service in one step with a
   single password prompt. It registers the service but deliberately does **not**
@@ -56,6 +76,29 @@ changes.
 
 ### Fixed
 
+- **A failed release used to strand a tag on `main`.** The release tagged and
+  pushed *before* it built anything, so a broken build or a failed installer
+  smoke-test left a pushed tag and a `chore(release)` commit with no release
+  behind them — and the workflow's own "tag already exists" guard then refused the
+  retry. The order is now resolve → build → smoke-test → *only then* tag and
+  publish, so a failed release leaves the repository untouched and re-dispatching
+  is free. `publish` additionally refuses to run if `main` moved after the commit
+  it built from, rather than tag a tree that was never tested.
+- **The release never checked whether the code it was shipping worked.** It ran no
+  tests and never looked at CI, so a red `main` released fine. It now requires
+  `ci.yml` to be green on the exact commit being released, waiting out an in-flight
+  run and aborting on a red or missing one. `force: true` overrides it for an
+  emergency, loudly.
+- **`task pkg:install` / `pkg:cycle` / `pkg:fresh` could never find the installer
+  they had just built.** The Taskfile looked for `dezhban-v0.1-…​.pkg` while
+  `build-pkg.sh` writes `dezhban-0.1-…​.pkg` — it strips the tag's leading `v` and
+  the Taskfile did not. Every invocation failed the precondition with a misleading
+  "run `task pkg:build` first". The `v` is now normalised in one place.
+- **Every dev build of the menubar app claimed to be version `0.1.0`**, the
+  hardcoded fallback in `Info.plist`, which only a tagged CI build ever overwrote.
+  An unstamped build is now a visible `0.0.0`. A release candidate stamps its
+  numeric core (`0.2.0-rc.1` → `0.2.0`) into the pkg receipt and bundle rather than
+  collapsing to `0.0.0`, since those fields must be dotted numerics.
 - **Endpoint auto-discovery reported unrelated hosts as VPN endpoints.** It accepted any
   socket bound to a physical interface IP with a public peer, on the premise that a
   full-tunnel VPN routes everything else through the tunnel. That premise is false: apps
