@@ -165,3 +165,49 @@ func captureStdout(t *testing.T, fn func()) string {
 	data, _ := io.ReadAll(r)
 	return string(data)
 }
+
+// parseSetPairs carries the whole legacy-vs-batch disambiguation, and the GUI depends
+// on its edges: it sends an empty value on every apply (`vpn.endpoints=` clears the
+// list), and a regression that routed `config set logLevel debug` into the pair parser
+// would break every script and doc example.
+func TestParseSetPairs(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []setPair
+	}{
+		{"legacy two positionals", []string{"logLevel", "debug"}, []setPair{{"logLevel", "debug"}}},
+		{"legacy value with an equals sign", []string{"providers", "https://x/?a=b"},
+			[]setPair{{"providers", "https://x/?a=b"}}},
+		{"single pair", []string{"vpn.enabled=true"}, []setPair{{"vpn.enabled", "true"}}},
+		{"several pairs", []string{"vpn.enabled=true", "logLevel=warn"},
+			[]setPair{{"vpn.enabled", "true"}, {"logLevel", "warn"}}},
+		{"empty value clears a list", []string{"vpn.endpoints="}, []setPair{{"vpn.endpoints", ""}}},
+		{"value keeps later equals signs", []string{"providers=https://x/?a=b"},
+			[]setPair{{"providers", "https://x/?a=b"}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, err := parseSetPairs(c.in)
+			if err != nil {
+				t.Fatalf("parseSetPairs(%v) errored: %v", c.in, err)
+			}
+			if !reflect.DeepEqual(got, c.want) {
+				t.Errorf("parseSetPairs(%v) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+
+	bad := [][]string{
+		{},                               // nothing to set
+		{"logLevel"},                     // a lone key is not a pair
+		{"logLevel", "debug", "extra"},   // 3 args must all be pairs
+		{"=debug"},                       // empty key
+		{"vpn.enabled=true", "logLevel"}, // one good pair, one bare word
+	}
+	for _, in := range bad {
+		if _, err := parseSetPairs(in); err == nil {
+			t.Errorf("parseSetPairs(%v) succeeded; want an error", in)
+		}
+	}
+}

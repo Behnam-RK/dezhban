@@ -251,6 +251,9 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
 
         applyButton.isEnabled = false
         statusLabel.stringValue = restart ? "Applying and restarting…" : "Applying…"
+        // Marked BEFORE the restart: only a snapshot published after this instant can
+        // have come from the new daemon. See awaitPosture.
+        let mark = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self = self else { return }
             let result = DezhbanCLI.runPrivileged(batch: commands)
@@ -270,7 +273,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
                 }
                 return
             }
-            self.awaitPosture(log: result.output)
+            self.awaitPosture(since: mark, log: result.output)
         }
     }
 
@@ -288,11 +291,18 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
-    /// Waits (bounded, off the main thread) for the restarted daemon to publish a
+    /// Waits (bounded, off the main thread) for the RESTARTED daemon to publish a
     /// posture, rather than assuming the restart worked: launchd can accept the load
     /// and the daemon still fail to come up. Called only after a successful batch, so
     /// the config is already written and validated.
-    private func awaitPosture(log: String) {
+    ///
+    /// `since` is what makes this a real check. The daemon writes a final
+    /// posture="stopped" snapshot on clean shutdown (runner.publishStopped), so the
+    /// state file is NOT empty between the stop and the start — reading whatever is
+    /// there would hand back the dead daemon's goodbye note and call the restart a
+    /// success, including when the new daemon never came up at all. Only a snapshot
+    /// stamped after the restart began can have come from the new process.
+    private func awaitPosture(since mark: Date, log: String) {
         // The daemon applies its startup ruleset and may take a geo reading before it
         // first publishes, so give it real time. This used to poll for 5s and report
         // a scary "restart incomplete" on a daemon that was merely still starting.
@@ -300,8 +310,8 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         var posture: String?
         while Date() < deadline {
             Thread.sleep(forTimeInterval: 0.5)
-            if let p = DezhbanCLI.reportedPosture() {
-                posture = p
+            if let s = StateReader.read(), s.time > mark, s.posture != "stopped" {
+                posture = s.posture
                 break
             }
         }

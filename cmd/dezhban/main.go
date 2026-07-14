@@ -837,6 +837,14 @@ func cmdPanic(args []string) int {
 // that judgement in the caller, where a failed stop aborted the start and left the
 // daemon down with a new config it never read.
 func cmdRestart(args []string) int {
+	// --config is accepted and ignored, exactly as start/stop do: the installed
+	// service unit already carries the config path it was registered with. Parsing it
+	// (rather than ignoring args wholesale) is what makes a typo'd flag an error
+	// instead of a silent no-op.
+	fs := flag.NewFlagSet("restart", flag.ExitOnError)
+	_ = fs.String("config", "", "ignored — the installed service uses the path it was registered with")
+	_ = fs.Parse(args)
+
 	if !requireRoot("restart") {
 		return 1
 	}
@@ -847,7 +855,30 @@ func cmdRestart(args []string) int {
 	if code := serviceAction("stop", ""); code != 0 {
 		return code
 	}
+	// Wait for the stop to actually settle before starting. `launchctl unload` can
+	// return before launchd has dropped the job, and serviceAction("start") skips the
+	// load when it still sees the service running — which would report a successful
+	// restart while leaving the daemon down with a config it never read.
+	if !waitUntilStopped(5 * time.Second) {
+		fmt.Fprintln(os.Stderr, "restart: the service did not stop within 5s; not starting it again")
+		return 1
+	}
 	return serviceAction("start", "")
+}
+
+// waitUntilStopped polls the service manager until the service is no longer running,
+// or the budget runs out. Reports whether it stopped.
+func waitUntilStopped(budget time.Duration) bool {
+	deadline := time.Now().Add(budget)
+	for {
+		if !svc.Running() {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // cmdService handles install/uninstall/start/stop against the OS service manager.
