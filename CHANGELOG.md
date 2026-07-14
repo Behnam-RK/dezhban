@@ -12,6 +12,8 @@ changes.
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-14
+
 ### Added
 
 - **A release is now one command.** `task release BUMP=minor` (or
@@ -170,4 +172,5 @@ changes.
 - Cross-platform release build matrix (`make build-all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
-[Unreleased]: https://github.com/Behnam-RK/dezhban/commits/main
+[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.1.0
