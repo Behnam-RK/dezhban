@@ -66,7 +66,15 @@ func controlStatus(cfg *config.Config) string {
 		return "disabled (control.enabled=false) — routine ops need sudo"
 	}
 	path := controlSocketPath(cfg)
-	if !control.Ping(path) {
+	// Do, not Ping: Ping collapses every failure into false, which would report the
+	// daemon as "not running" to the one user who most needs a real answer — a caller
+	// outside control.group, for whom the socket is right there and simply not
+	// openable. ErrForbidden is modeled precisely so this case can be named.
+	resp, err := control.Do(path, control.Request{Op: control.OpPing})
+	switch {
+	case errors.Is(err, control.ErrForbidden):
+		return fmt.Sprintf("forbidden (%s) — socket exists but you are not in the %q group; routine ops need sudo", path, cfg.Control.Group)
+	case err != nil || !resp.OK:
 		return fmt.Sprintf("unreachable (%s) — daemon not running; routine ops need sudo", path)
 	}
 	s := fmt.Sprintf("reachable (%s, group %q) — routine ops need no password", path, cfg.Control.Group)

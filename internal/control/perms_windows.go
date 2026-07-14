@@ -6,6 +6,11 @@ import (
 	"os"
 )
 
+// checkDirSecure is a no-op on Windows, for the same reason secureSocket is: there
+// is no unix mode/ownership model to judge the directory by, and the socket lives
+// under ProgramData whose ACL already restricts writers to administrators.
+func checkDirSecure(dir string) error { return nil }
+
 // listenSecure binds the socket directly: with no chown/mode boundary to establish
 // (see secureSocket), there is no permission window to close, so the unix side's
 // stage-then-rename dance would buy nothing — and renaming a bound AF_UNIX socket

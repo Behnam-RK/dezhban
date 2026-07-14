@@ -64,7 +64,7 @@ two you are in.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `control.enabled` | bool | `true` | Turn the socket off to require root for every operation. |
-| `control.socket` | string | `<state dir>/control.sock` | Socket path. Defaults to `/var/db/dezhban/control.sock` (unix). |
+| `control.socket` | string | `<state dir>/control.sock` | Socket path. Defaults to `/var/db/dezhban/control.sock` (unix). Its **parent directory is part of the trust boundary** — whoever may unlink the socket may bind their own in its place — so the daemon refuses to start the control feature if that directory is group/world-writable without the sticky bit, or is owned by neither root nor the daemon. Keep it in a root-owned directory. |
 | `control.group` | string | `"admin"` on macOS, `""` elsewhere | The unix group allowed to drive the daemon. The socket is root-owned, mode `0660`, group-owned by this group. `""` means root-only (`0600`) — the passwordless path is off. |
 | `control.allowSwitchOps` | bool | `true` | Whether opening/cancelling a **switch window** may go over the socket. This is the one op that *relaxes* the guard, so it has its own switch: set it `false` to force `switch` back to root-only (`sudo dezhban switch`). |
 

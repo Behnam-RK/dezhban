@@ -9,7 +9,54 @@ import (
 	"os/user"
 	"path/filepath"
 	"strconv"
+	"syscall"
 )
+
+// checkDirSecure refuses to publish the socket into a directory an unprivileged
+// local user could tamper with.
+//
+// The socket's own 0660 root:admin mode is only half the boundary. Permissions on
+// a unix socket gate who may CONNECT to it; permissions on its parent directory
+// gate who may UNLINK it — and a local user who can unlink our socket can bind
+// their own in its place and answer `block`/`unblock`/`open-switch` however they
+// like. Since filesystem permissions are the entire authorization model here, the
+// container's bits are part of that model, so an insecure directory fails the
+// control feature closed rather than publishing into it.
+//
+// Two ways a directory qualifies as insecure:
+//
+//   - group- or world-writable WITHOUT the sticky bit. Sticky is the exception on
+//     purpose: it is exactly the bit that makes /tmp-style 1777 dirs safe here, by
+//     restricting unlink to the file's owner (root, for us).
+//   - owned by neither root nor us. The owner can chmod it back open whenever they
+//     like, so its current mode proves nothing.
+func checkDirSecure(dir string) error {
+	fi, err := os.Stat(dir)
+	if err != nil {
+		return fmt.Errorf("control: stat socket dir %q: %w", dir, err)
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf("control: socket dir %q is not a directory", dir)
+	}
+	mode := fi.Mode()
+	if mode.Perm()&0o022 != 0 && mode&os.ModeSticky == 0 {
+		return fmt.Errorf("control: socket dir %q is group/world-writable (%#o) and not sticky: "+
+			"a local user could replace the control socket; tighten it to 0755 or set control.enabled=false",
+			dir, mode.Perm())
+	}
+	// Ownership is a *syscall.Stat_t detail; if some platform doesn't give us one,
+	// the mode check above still stands rather than failing the daemon outright.
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil
+	}
+	if uid := int(st.Uid); uid != 0 && uid != os.Getuid() {
+		return fmt.Errorf("control: socket dir %q is owned by uid %d (neither root nor us): "+
+			"its owner could replace the control socket; move control.socket into a root-owned directory",
+			dir, uid)
+	}
+	return nil
+}
 
 // listenSecure binds the control socket and publishes it at path only once it
 // already carries its intended ownership and mode.

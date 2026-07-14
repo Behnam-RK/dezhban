@@ -60,6 +60,16 @@ func New(path, group string, log *slog.Logger) (*Server, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("control: create dir %q: %w", dir, err)
 	}
+	// MkdirAll is a no-op on a directory that already exists, so the 0755 above says
+	// nothing about the mode of one we did not just create — and the socket's parent
+	// is part of the authorization boundary (whoever may unlink it may impersonate the
+	// daemon). Judge what is actually there, and fail the control feature closed if it
+	// is tamperable. Only the default path is guaranteed sound by construction
+	// (state.EnsureDir owns the state dir's mode); a configured control.socket can
+	// point anywhere.
+	if err := checkDirSecure(dir); err != nil {
+		return nil, err
+	}
 	// listenSecure publishes the socket at path only once it already carries its
 	// intended ownership and mode, so it is never briefly reachable under a
 	// umask-derived one. It also replaces a socket left behind by a crash.
