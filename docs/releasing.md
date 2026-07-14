@@ -19,18 +19,36 @@ prepare   resolve the version; require CI green on this exact commit
    |      -- writes nothing, anywhere --
 build     cross-compile all 5 CLI targets; build the macOS .pkg;
    |      install it on a runner and uninstall it again
-publish   roll the CHANGELOG, commit, tag, push, publish the release
+publish   tag the tested commit, publish the release,
+          open a PR with the rolled CHANGELOG
 ```
 
 Nothing touches the repository until every artifact has been built and the
 installer has been proven to install and uninstall cleanly. **A failed release
-leaves no tag and no commit behind** — just re-dispatch. (The old order tagged
-first, so a failed build stranded a tag that the workflow's own "tag already
-exists" guard then refused to retry.)
+leaves no tag behind** — just re-dispatch. (The old order tagged first, so a
+failed build stranded a tag that the workflow's own "tag already exists" guard
+then refused to retry.)
 
 `publish` also re-checks that `main` still points at the commit `prepare` pinned.
 If something merged mid-release, it stops rather than tag a tree that was never
 built.
+
+## The workflow never pushes to `main`
+
+The `main` ruleset requires a pull request, and `github-actions[bot]` **cannot**
+bypass it: GitHub only allows the Actions app as a ruleset bypass actor on
+**org-owned** repos, and this one is user-owned. (Note the legacy
+`/branches/main/protection` API reports 404 here — it does not know about
+rulesets. Check `gh api repos/OWNER/REPO/rulesets`.)
+
+Tags are not branch-ruled, so the **tag and the release go out directly**. What
+cannot go directly is the `chore(release)` CHANGELOG commit — so `publish` pushes
+it to a `release/vX.Y.Z` branch and opens a PR for you to merge. One click, after
+the release is already out.
+
+Consequence worth knowing: `## [Unreleased]` on `main` still holds the shipped
+entries until you merge that PR. Merge it promptly and the next release's notes
+stay correct.
 
 ## Before you release
 
@@ -148,9 +166,10 @@ add that to `macos-gui/build-app.sh` at the same time.)
 
 ## Requirements
 
-- `main` must accept a direct push from the default `GITHUB_TOKEN` (`publish`
-  pushes the changelog commit and the tag). If branch protection ever blocks that,
-  allow the Actions bot to bypass it or switch to a PAT.
+- The default `GITHUB_TOKEN` must be able to push **tags** and **branches other
+  than `main`**, and to open a PR (`contents: write` + `pull-requests: write`,
+  both set in the workflow). It does **not** need to push to `main`, and the
+  ruleset there is deliberately left intact.
 - `gh` locally, for `task release` and `task release:check`. `task release:preview`
   needs only git.
 

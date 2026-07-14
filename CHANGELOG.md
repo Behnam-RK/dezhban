@@ -25,10 +25,15 @@ changes.
   through one `scripts/release.sh`, which is the same code the workflow runs, so a
   local preview cannot drift from what CI does.
 - **Release candidates** (`X.Y.Z-rc.N`). An rc is a pure snapshot: it tags only —
-  no CHANGELOG roll, no commit to `main` — and publishes as a GitHub pre-release,
-  so it never becomes "latest" and an abandoned rc line costs nothing to walk away
-  from. `bump: patch|minor|major` always counts from the last *final* tag;
-  `bump: rc` advances an open rc line.
+  no CHANGELOG roll — and publishes as a GitHub pre-release, so it never becomes
+  "latest" and an abandoned rc line costs nothing to walk away from.
+  `bump: patch|minor|major` always counts from the last *final* tag; `bump: rc`
+  advances an open rc line.
+- The release **never pushes to `main`**. It tags the exact commit it built and
+  tested, publishes, and then opens a `chore(release)` PR carrying the rolled
+  CHANGELOG — because `main`'s ruleset requires a pull request and the Actions bot
+  cannot bypass it (GitHub only permits that on org-owned repos). The ruleset is
+  left intact, and no long-lived admin token goes anywhere near CI.
 - `dezhban -v version` now reports the commit, build date and Go version
   alongside the version, and `status --json` gained `commit` and `buildDate`. A
   binary built without the Taskfile (a plain `go build`) no longer reports itself
@@ -76,14 +81,14 @@ changes.
 
 ### Fixed
 
-- **A failed release used to strand a tag on `main`.** The release tagged and
-  pushed *before* it built anything, so a broken build or a failed installer
-  smoke-test left a pushed tag and a `chore(release)` commit with no release
-  behind them — and the workflow's own "tag already exists" guard then refused the
-  retry. The order is now resolve → build → smoke-test → *only then* tag and
-  publish, so a failed release leaves the repository untouched and re-dispatching
-  is free. `publish` additionally refuses to run if `main` moved after the commit
-  it built from, rather than tag a tree that was never tested.
+- **A failed release used to strand a tag.** The release tagged and pushed
+  *before* it built anything, so a broken build or a failed installer smoke-test
+  left a pushed tag and a `chore(release)` commit with no release behind them —
+  and the workflow's own "tag already exists" guard then refused the retry. The
+  order is now resolve → build → smoke-test → *only then* tag and publish, so a
+  failed release leaves the repository untouched and re-dispatching is free.
+  `publish` additionally refuses to run if `main` moved after the commit it built
+  from, rather than tag a tree that was never tested.
 - **The release never checked whether the code it was shipping worked.** It ran no
   tests and never looked at CI, so a red `main` released fine. It now requires
   `ci.yml` to be green on the exact commit being released, waiting out an in-flight

@@ -4,13 +4,19 @@ name: Release
 #
 #   prepare  resolve the version and gate on CI — WITHOUT writing anything
 #   build    cross-compile everything and smoke-test the installer
-#   publish  only now: roll the CHANGELOG, commit, tag, push, publish
+#   publish  only now: tag, publish, and open the CHANGELOG PR
 #
 # Nothing touches the repository until every artifact has been built and the
 # installer has been proven to install and uninstall cleanly. A failed build
-# therefore leaves NO tag and NO commit behind, and re-dispatching is free.
-# (The previous order tagged first, so a failed build stranded a tag that the
-# workflow's own "tag already exists" guard then refused to retry.)
+# therefore leaves NO tag behind, and re-dispatching is free. (The previous order
+# tagged first, so a failed build stranded a tag that the workflow's own "tag
+# already exists" guard then refused to retry.)
+#
+# The workflow NEVER pushes to main. The `main` ruleset requires a pull request,
+# and github-actions[bot] cannot bypass it — GitHub only allows the Actions app as
+# a ruleset bypass actor on ORG-owned repos, and this one is user-owned. Tags are
+# not branch-ruled, so the tag and the release go out directly; a final release's
+# CHANGELOG roll arrives as an auto-opened PR for you to merge.
 #
 # All version/CHANGELOG logic lives in scripts/release.sh — the same code
 # `task release:preview` runs locally, so a preview cannot drift from this.
@@ -51,7 +57,8 @@ on:
 
 permissions:
   contents: write
-  actions: read      # reading ci.yml's conclusion for the release gate
+  actions: read           # reading ci.yml's conclusion for the release gate
+  pull-requests: write    # the CHANGELOG roll lands as a PR (main requires one)
 
 concurrency:
   group: release
@@ -315,33 +322,22 @@ jobs:
       - name: Checksums
         run: cd dist && shasum -a 256 * > SHA256SUMS
 
-      # A final release rolls the CHANGELOG and commits it; the tag then lands on
-      # that commit. An rc is a pure snapshot: it tags prepare.sha directly and
-      # leaves main completely untouched, so an abandoned rc line costs nothing.
+      # The tag lands on prepare.sha — the exact tree that was built and tested —
+      # for BOTH kinds. The workflow never pushes to main: the `main` ruleset
+      # requires a pull request, and github-actions[bot] cannot bypass it (GitHub
+      # only allows the Actions app as a bypass actor on ORG-owned rulesets, and
+      # this repo is user-owned). Tags are not branch-ruled, so tagging is fine.
       #
-      # For a final, the binaries were built from the changelog commit's PARENT.
-      # The two trees differ only by CHANGELOG.md, which is not compiled in, so a
-      # rebuild from the tag is byte-identical.
-      - name: Roll CHANGELOG, commit and tag
+      # A final's CHANGELOG roll therefore arrives as a PR, opened below.
+      - name: Tag the release commit
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-          KIND: ${{ needs.prepare.outputs.kind }}
+          SHA: ${{ needs.prepare.outputs.sha }}
         run: |
           set -eu
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if [ "$KIND" = final ]; then
-            bash scripts/release.sh roll "$VERSION"
-            git add CHANGELOG.md
-            git commit -m "chore(release): $TAG [skip ci]"
-            git tag -a "$TAG" -m "$TAG"
-            git push origin HEAD:main
-          else
-            echo "rc: tagging ${{ needs.prepare.outputs.sha }} directly; main untouched"
-            git tag -a "$TAG" -m "$TAG"
-          fi
+          git tag -a "$TAG" -m "$TAG" "$SHA"
           git push origin "$TAG"
 
       - name: Publish release
@@ -370,6 +366,46 @@ jobs:
             dist/SHA256SUMS
 
           echo "### Published [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
+
+      # A final's CHANGELOG roll lands as a PR, because main requires one. Runs
+      # AFTER the release is out: the tag and the release are the release, and this
+      # is bookkeeping. If it fails, the release still shipped — you just have to
+      # open the PR by hand (`bash scripts/release.sh roll X.Y.Z`), which the error
+      # says. An rc rolls nothing, so it skips this entirely.
+      - name: Open the CHANGELOG PR
+        if: ${{ needs.prepare.outputs.kind == 'final' }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -eu
+          branch="release/$TAG"
+          bash scripts/release.sh roll "$VERSION"
+
+          git checkout -b "$branch"
+          git add CHANGELOG.md
+          git commit -m "chore(release): $TAG [skip ci]"
+          git push origin "$branch"
+
+          cat > pr-body.md <<-EOF
+		Rolls \`## [Unreleased]\` into \`## [$VERSION]\` for
+		[$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG), which is
+		**already published** — this PR is the bookkeeping.
+
+		Opened by the Release workflow. It does not push to \`main\` directly: the
+		branch ruleset requires a pull request, and \`github-actions[bot]\` cannot
+		bypass it.
+		EOF
+
+          url="$(gh pr create \
+            --base main \
+            --head "$branch" \
+            --title "chore(release): $TAG" \
+            --body-file pr-body.md)"
+
+          echo "### CHANGELOG PR: $url" >> "$GITHUB_STEP_SUMMARY"
+          echo "merge it to roll the changelog on main" >> "$GITHUB_STEP_SUMMARY"
 
   # Make a dry run say so loudly, rather than looking like a release that silently
   # did nothing.
