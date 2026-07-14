@@ -68,6 +68,7 @@ Commands:
   uninstall   Remove the OS service
   start       Start the installed service
   stop        Stop the installed service (removes firewall rules)
+  restart     Restart the installed service (apply a config change)
   detect-vpn  Print detected VPN tunnel interfaces to help fill the vpn config
   switch      Open a bounded window to connect a brand-new VPN (learns its server)
   vpn         Manage VPN profiles and learned endpoints (list/add/remove/import/…)
@@ -124,6 +125,8 @@ func run(args []string) int {
 		return cmdDoctor(rest)
 	case "panic":
 		return cmdPanic(rest)
+	case "restart":
+		return cmdRestart(rest)
 	case "install", "uninstall", "start", "stop":
 		return cmdService(cmd, rest)
 	case "detect-vpn":
@@ -826,6 +829,27 @@ func cmdPanic(args []string) int {
 	return 0
 }
 
+// cmdRestart applies a config change to the running daemon — there is no live
+// reload (kardianos has no SIGHUP-style reconfigure), so it is a stop followed by a
+// start. It exists as one command rather than two because the two halves have to
+// agree about the in-between state: `stop` on a service that is installed but not
+// running must be a no-op, not an error. Composing it from two shell invocations put
+// that judgement in the caller, where a failed stop aborted the start and left the
+// daemon down with a new config it never read.
+func cmdRestart(args []string) int {
+	if !requireRoot("restart") {
+		return 1
+	}
+	if !svc.Installed() {
+		fmt.Fprintln(os.Stderr, "restart: the service is not installed — run `dezhban install` first")
+		return 1
+	}
+	if code := serviceAction("stop", ""); code != 0 {
+		return code
+	}
+	return serviceAction("start", "")
+}
+
 // cmdService handles install/uninstall/start/stop against the OS service manager.
 // `install` embeds the config path into the boot invocation so the service loads
 // the same config on every restart; the path is made absolute because the
@@ -854,6 +878,25 @@ func cmdService(action string, args []string) int {
 		if _, err := os.Stat(path); err != nil {
 			fmt.Fprintf(os.Stderr, "warning: config %q not found — the service will start with defaults until you create it\n", path)
 		}
+	}
+
+	return serviceAction(action, path)
+}
+
+// serviceAction runs one service-manager action, having already established root.
+// start and stop are made IDEMPOTENT here: launchd's load/unload are edge triggers,
+// so unloading a job that was never loaded fails with a bare "Input/output error"
+// and loading one twice fails too. Being asked to reach a state you are already in
+// is not an error — reporting it as one is what broke `restart` (a failing stop
+// aborted the start) and made the GUI's config-apply leave the daemon down.
+func serviceAction(action, path string) int {
+	switch {
+	case action == "stop" && !svc.Running():
+		fmt.Println("dezhban service already stopped")
+		return 0
+	case action == "start" && svc.Running():
+		fmt.Println("dezhban service already running")
+		return 0
 	}
 
 	if err := svc.Control(action, path); err != nil {

@@ -34,8 +34,17 @@ changes.
   (`dezhban config set vpn.enabled=true vpn.tunnelInterfaces=utun4`). One prompt,
   one write, and no ordering constraints between interdependent keys.
 
+- `dezhban restart` — stop + start as one command, for applying a config change
+  (there is no live reload). `start` and `stop` are now idempotent.
+
 ### Fixed
 
+- **`stop` failed on a service that wasn't running**, because launchd's
+  `launchctl unload` is an edge trigger and errors with a bare "Input/output error"
+  when the job was never loaded. Being asked to reach a state you are already in is
+  not an error; `start`/`stop` now report it and exit 0. This is what made the GUI's
+  config-apply abort halfway — a failed `stop` (on an installed-but-stopped daemon)
+  took the following `start` down with it.
 - **The daemon's state directory (`/var/db/dezhban`) was created `0700`** by the
   macOS pf backend, which silently broke everything that reads out of it as the
   logged-in user: the menubar app could not read `state.json` (so it showed "Kill

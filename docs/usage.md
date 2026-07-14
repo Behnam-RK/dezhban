@@ -17,6 +17,7 @@ Commands:
   uninstall    Remove the OS service                              (root)
   start        Start the installed service                        (root)
   stop         Stop the installed service (removes firewall rules) (root)
+  restart      Restart the installed service — apply a config change (root)
   detect-vpn   Print detected VPN tunnel interfaces for config
   switch       Open a bounded window to connect a brand-new VPN    (root)
   vpn          Manage VPN profiles and learned endpoints (list/add/remove/import/promote/forget)
@@ -42,7 +43,7 @@ daemon** over its control socket and need no password at all:
 |---|---|
 | `block`, `unblock`, `switch` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back to acting on the firewall directly, which needs root. |
 | `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn` | **No** — read-only, no root, no firewall effects. |
-| `install`, `uninstall`, `start`, `stop` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
+| `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
 | `setup`, `config set`/`edit` | Yes, but only for the config write itself. |

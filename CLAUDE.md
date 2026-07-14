@@ -39,7 +39,7 @@ make gui-macos                            # macOS menubar app → dist/Dezhban.a
 ```
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
-`start`, `stop`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
+`start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
 `version`, plus a global `-v`/`--verbose`. `validate`, `print-rules`, `doctor`,
 and `monitor` are read-only (no root, no firewall effects); the rest of the
 privileged set requires root/admin. Full reference: [docs/usage.md](docs/usage.md).
@@ -88,7 +88,7 @@ The design depends on these invariants (rationale in
   Backend. No other goroutine applies rules.
 - **`panic` must never depend on the daemon.** It is the lockout escape hatch, so it
   is deliberately NOT a control-socket op — it removes rules directly, as root, with
-  no daemon running. Same for service lifecycle (`install`/`uninstall`/`start`/`stop`):
+  no daemon running. Same for service lifecycle (`install`/`uninstall`/`start`/`stop`/`restart`):
   a daemon cannot manage its own lifecycle, so those keep requiring root.
 - The tunnel-interface set is runtime-mutable (autodetect grows/prunes it), but
   **explicit `vpn.tunnelInterfaces` are pinned and never auto-pruned**, and the

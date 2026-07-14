@@ -240,13 +240,13 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         let setCmd: [String] = ["config", "set"] + pairs + ["--config", cfgPath]
         var commands: [[String]] = [setCmd]
         if restart {
-            // No --config on stop/start: they act on the already-installed service
-            // unit, whose config path was baked in at install time (cmdService only
-            // reads --config for `install`). `set -e` in the batch means these run
-            // only if the write above succeeded — a rejected config never restarts
-            // the daemon.
-            commands.append(["stop"])
-            commands.append(["start"])
+            // `restart`, not stop-then-start: the CLI owns the in-between state (a
+            // stop is a no-op on a service that isn't running, rather than an error
+            // that would abort the start and leave the daemon down). No --config —
+            // it acts on the already-installed service unit, whose config path was
+            // baked in at install time. `set -e` in the batch means it runs only if
+            // the write above succeeded, so a rejected config never restarts anything.
+            commands.append(["restart"])
         }
 
         applyButton.isEnabled = false
