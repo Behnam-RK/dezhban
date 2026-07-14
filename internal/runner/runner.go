@@ -355,6 +355,34 @@ func (o Options) runVPN(ctx context.Context) error {
 			"server can never let the tunnel reconnect")
 	}
 
+	// A tunnel is UP and we do not know its server. `relaxed` does NOT cover this.
+	//
+	// The relaxed allowance exists for the zero-tunnel case: no VPN connected, so the
+	// standing posture is a total cut, and that is both correct (nothing may leak) and
+	// recoverable (a switch window opens egress so a VPN can connect and be learned).
+	// With a tunnel already up it is neither. The guard's block-all covers the physical
+	// interface, which carries the tunnel's OWN encrypted transport — so arming it cuts
+	// every packet, including the VPN's handshake and keepalives. The tunnel dies, and
+	// because its socket dies with it, endpoint discovery can never learn the server
+	// either. That is not a kill switch; it is an unrecoverable blackout that we inflict
+	// on a working VPN.
+	//
+	// Refuse, and say exactly how to fix it. Discovery reads CONNECTED sockets from
+	// netstat, and WireGuard (like other NetworkExtension clients) sends from an
+	// unconnected UDP socket — it never appears as a connected flow, so autodiscovery
+	// cannot see it and never will. Naming the server is the fix.
+	if len(tunnels) > 0 && len(endpoints) == 0 {
+		return fmt.Errorf("refusing to start: the VPN tunnel (%s) is up but dezhban does not know its server "+
+			"address, and the guard blocks all egress on the physical link — including the tunnel's own encrypted "+
+			"transport. Arming it would cut ALL traffic, and the tunnel could never re-handshake. "+
+			"Auto-discovery reads connected sockets, and WireGuard/NetworkExtension clients use an unconnected UDP "+
+			"socket, so there is nothing for it to find. Name the server instead:\n"+
+			"    dezhban vpn import <wg0.conf|client.ovpn>   (reads the endpoint from your VPN's own config)\n"+
+			"    dezhban vpn add <name> --endpoint <host-or-ip>\n"+
+			"    dezhban config set vpn.endpoints=<server-ip>\n"+
+			"Then run `dezhban doctor` to confirm.", strings.Join(tunnels, ", "))
+	}
+
 	// A VPN endpoint must be reachable on the PHYSICAL interface. A tunnel-internal
 	// endpoint can't be, and blocking cuts the only path to it — a guaranteed
 	// lockout. Refuse to start rather than discover it at the next FULL BLOCK.

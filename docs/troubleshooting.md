@@ -94,6 +94,47 @@ not a route probe, and why `--discover` reads live sockets instead. The pf rule
 still matches the provider's physical-side socket, so a correct **public**
 endpoint works even though `route get` is misleading.
 
+## I started the kill switch with the VPN connected and lost ALL internet
+
+Even though your IP was in an allowed country. Symptom: `ping: cannot resolve
+google.com: Unknown host` — DNS and everything else, gone.
+
+Check what dezhban actually knows:
+
+```sh
+dezhban doctor --config /etc/dezhban/dezhban.json
+```
+
+If it says `endpoints … (none resolved)`, that is the whole story. The guard's
+standing rule is:
+
+```
+pass quick on lo0 all
+pass out quick on { utun4 } all      # tunnel traffic
+block drop out all                   # everything else — INCLUDING en0
+```
+
+That last line blocks the physical interface, and the physical interface is what
+carries your VPN's own encrypted transport. With no endpoint allowed through it, the
+guard cuts the tunnel's handshake and keepalives: the VPN dies, so nothing flows at
+all. It is not a leak-proof guard, it is a total blackout — and it can't recover,
+because the socket discovery would have learned the server from is now dead too.
+
+dezhban now **refuses to start** in this state and tells you so; `doctor` exits
+non-zero on it.
+
+**Why wasn't the server auto-discovered?** Endpoint discovery reads *connected*
+sockets out of `netstat`. WireGuard — and other NetworkExtension clients — send from
+an **unconnected** UDP socket, so they never appear as a connected flow and have no
+foreign address to read. No amount of retrying will find them. Name the server:
+
+```sh
+dezhban vpn import ~/wg0.conf                  # reads Endpoint= from the VPN's own config
+dezhban vpn add home --endpoint vpn.example.com
+sudo dezhban config set vpn.endpoints=203.0.113.7
+dezhban doctor                                  # confirm it resolves, then start
+```
+
 ## The menubar app says "stopped" — or routine ops started asking for a password again
 
 Both symptoms have one cause: the daemon's state directory `/var/db/dezhban` is not

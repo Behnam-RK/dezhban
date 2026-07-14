@@ -60,19 +60,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot = StateReader.read()
         }
         guard let button = statusItem.button else { return }
-        let (symbol, color, help) = iconFor(snapshot)
+        let (symbol, help) = iconFor(snapshot)
         let key = "\(symbol)|\(help)"
         guard key != lastIconKey else { return }
         lastIconKey = key
         let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "dezhban: \(help)")
         image?.isTemplate = true
         button.image = image
-        // nil tint = draw the template image in the menu bar's own foreground color,
-        // which follows the wallpaper/appearance (dark on a light bar, light on a dark
-        // one). The states that carry a warning keep an explicit color, but the
-        // resting states must NOT: a fixed gray shield is invisible on a dark menu bar,
-        // which is exactly where "stopped" most needs to be legible.
-        button.contentTintColor = color
+        // No tint at all. A template image drawn in the menu bar's own foreground color
+        // is the only thing guaranteed legible on both a light and a dark menu bar —
+        // any fixed color we pick is unreadable against one of them (gray vanished on
+        // dark, and so did green). State is carried by the SYMBOL, which is how menu bar
+        // icons are supposed to work; the dropdown spells the posture out in words.
+        button.contentTintColor = nil
         button.toolTip = "dezhban — \(help)"
     }
 
@@ -109,31 +109,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return s.age <= staleThreshold(s) && s.posture != "stopped"
     }
 
-    /// Maps a snapshot (or its absence/staleness) to an SF Symbol + tint + label.
-    /// A nil tint means "use the menu bar's own color", which is the only thing that
-    /// stays legible on both a light and a dark menu bar — see refresh().
-    private func iconFor(_ s: Snapshot?) -> (symbol: String, color: NSColor?, help: String) {
+    /// Maps a snapshot (or its absence/staleness) to an SF Symbol + label. Every state
+    /// is a distinct symbol and NO color: see refresh() for why nothing is tinted.
+    private func iconFor(_ s: Snapshot?) -> (symbol: String, help: String) {
         guard let s = s, isLive(s) else {
-            // Stopped is conveyed by the OUTLINE shield (vs. filled when enforcing),
-            // not by a color, so it needs no tint and stays visible on any menu bar.
-            return ("shield", nil, "stopped")
+            return ("shield", "stopped") // hollow shield: not enforcing
         }
         // A failed firewall action means the intended posture was NOT achieved (e.g. a
         // failed block leaves posture "allow" during a live leak). Surface it as a
-        // warning regardless of posture so a green shield never masks a failed enforce.
+        // warning regardless of posture so a "safe" shield never masks a failed enforce.
         if let e = s.enforcementErr, !e.isEmpty {
-            return ("exclamationmark.triangle.fill", .systemRed, "enforcement error")
+            return ("exclamationmark.triangle.fill", "enforcement error")
         }
         switch s.posture {
         case "block", "full-block":
-            return ("shield.slash.fill", .systemRed, humanPosture(s))
+            return ("shield.slash.fill", humanPosture(s))
         case "switch-window":
             // The switch window relaxes egress (all outbound, or a proto/port subset
-            // if restricted) — the real IP may be exposed. Never show a green "safe"
+            // if restricted) — the real IP may be exposed. Never show the plain "safe"
             // shield here; warn so the user notices it's open.
-            return ("exclamationmark.shield.fill", .systemYellow, humanPosture(s))
-        default: // allow, guard
-            return ("shield.fill", .systemGreen, humanPosture(s))
+            return ("exclamationmark.shield.fill", humanPosture(s))
+        default: // allow, guard — enforcing normally
+            return ("checkmark.shield.fill", humanPosture(s))
         }
     }
 

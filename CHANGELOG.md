@@ -39,6 +39,24 @@ changes.
 
 ### Fixed
 
+- **The guard could be armed in a state that cut the tunnel's own transport.** With a
+  VPN connected but no known server address, the guard's `block drop out all` covers
+  the physical interface — which is exactly what carries the VPN's encrypted transport
+  — so arming it killed the tunnel and every packet with it, unrecoverably (the socket
+  discovery would have learned the server from died too). `vpn.autodetect` was wrongly
+  excusing this; that allowance exists for the *zero-tunnel* case, where a total cut is
+  correct and a switch window recovers it. The daemon now refuses to start with a live
+  tunnel and no endpoint, and says how to fix it. `doctor` reports it as a LOCKOUT RISK
+  and exits non-zero (it also now exits non-zero on tunnel-internal endpoints, which it
+  previously reported and then exited 0 on).
+  Note: endpoint auto-discovery reads *connected* sockets, and WireGuard (like other
+  NetworkExtension clients) sends from an *unconnected* UDP socket — it cannot be
+  discovered, and must be named via `vpn import` / `vpn add` / `vpn.endpoints`.
+- **The menubar icon is no longer tinted at all.** Both the stopped (gray) and the
+  enforcing (green) shields were unreadable on a dark menu bar. It is now a plain
+  template image drawn in the menu bar's own color, with the posture carried by the
+  symbol — hollow shield (stopped), check shield (enforcing), slashed shield (blocked),
+  exclamation shield (switch window open).
 - **`stop` failed on a service that wasn't running**, because launchd's
   `launchctl unload` is an edge trigger and errors with a bare "Input/output error"
   when the job was never loaded. Being asked to reach a state you are already in is

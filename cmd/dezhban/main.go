@@ -1336,6 +1336,28 @@ func cmdDoctor(args []string) int {
 			fmt.Println("    your VPN server's PUBLIC IP from your VPN client config.")
 		}
 	}
+
+	// The guard blocks ALL egress on the physical link — which is what carries the
+	// tunnel's own encrypted transport. With a tunnel up and no known server address,
+	// arming it cuts every packet, kills the VPN, and leaves no socket for discovery to
+	// learn from: an unrecoverable blackout, not a kill switch. The daemon refuses to
+	// start in this state; doctor's whole job is to say so BEFORE you find out.
+	lockout := cfg.VPN.Enabled && len(tunnels) > 0 && len(endpoints) == 0
+	if lockout {
+		fmt.Println()
+		fmt.Println("LOCKOUT RISK — dezhban will refuse to start:")
+		fmt.Printf("  The VPN guard is on and %s is up, but no server address is known.\n", strings.Join(tunnels, ", "))
+		fmt.Println("  The guard would block the tunnel's own transport and cut ALL traffic.")
+		fmt.Println()
+		fmt.Println("  Auto-discovery reads CONNECTED sockets. WireGuard (and other")
+		fmt.Println("  NetworkExtension clients) send from an UNCONNECTED UDP socket, so they")
+		fmt.Println("  never appear as a connected flow — discovery cannot find them. Name the")
+		fmt.Println("  server explicitly:")
+		fmt.Println()
+		fmt.Println("    dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it")
+		fmt.Println("    dezhban vpn add <name> --endpoint <host-or-ip>")
+		fmt.Println("    sudo dezhban config set vpn.endpoints=<server-ip>")
+	}
 	fmt.Println()
 
 	if *discover {
@@ -1363,6 +1385,14 @@ func cmdDoctor(args []string) int {
 			}
 			fmt.Println("  add any missing server IP to vpn.endpoints and drop stale entries.")
 		}
+	}
+
+	// Exit non-zero when a real lockout risk was found. A diagnostic that reports a
+	// guaranteed blackout and still exits 0 is one `make doctor` in a script away from
+	// being ignored — and these are exactly the two conditions the daemon refuses to
+	// start on, so doctor must agree with it.
+	if lockout || len(bad) > 0 {
+		return 1
 	}
 	return 0
 }

@@ -50,6 +50,26 @@ daemon** over its control socket and need no password at all:
 
 `dezhban status` prints a `daemon control:` line saying which mode you're in.
 
+### Why doesn't the password prompt take Touch ID?
+
+The menubar app elevates through `do shell script … with administrator privileges`,
+whose SecurityAgent dialog is **password-only** — it has never supported biometrics.
+Touch ID there would require shipping a privileged helper (`SMAppService`) and going
+through Authorization Services, which is a lot of attack surface to save a few
+keystrokes on operations you should rarely perform. The prompts that remain are
+install-time and emergency ones; the *routine* ops need no authentication at all.
+
+For the CLI, Touch ID works with `sudo` once you enable it system-wide (macOS 14+):
+
+```sh
+sudo sh -c 'echo "auth       sufficient     pam_tid.so" > /etc/pam.d/sudo_local'
+```
+
+That's a change to your system's `sudo` configuration, not to dezhban — it applies
+to every `sudo` you run, and it survives OS updates (unlike editing `/etc/pam.d/sudo`
+directly). dezhban's auto-elevation goes through `sudo`, so `dezhban start` and
+friends pick it up automatically.
+
 When a command does need root and you're on an interactive terminal on unix,
 dezhban **auto-re-runs itself under `sudo`** — so you rarely type `sudo` yourself.
 Pass `--no-sudo` (or `DEZHBAN_NO_SUDO=1`) to opt out and get the plain "must run as
