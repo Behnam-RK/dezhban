@@ -333,18 +333,46 @@ tasks:
         echo "  about to release   $TAG  ($KIND)"
         echo "  from commit        $(git rev-parse --short HEAD)"
         if [ "$KIND" = rc ]; then
-          echo "  effect             tag only — no commit to main, published --prerelease"
+          echo "  effect             tags $TAG, publishes it as a --prerelease"
+          echo "                     main is untouched; no CHANGELOG roll"
         else
-          echo "  effect             rolls CHANGELOG, commits to main, tags, publishes as latest"
+          echo "  effect             tags $TAG, publishes it as the latest release,"
+          echo "                     opens a chore(release) PR with the rolled CHANGELOG"
+          echo "                     (main is never pushed to directly)"
         fi
         echo
-        printf '  type the tag to confirm: '
-        read -r reply
-        [ "$reply" = "$TAG" ] || { echo "  mismatch — aborted."; exit 1; }
+
+        # task does not give the command a TTY, so a bare `read` gets EOF and the
+        # confirmation would abort instantly. Read from /dev/tty. CONFIRM=<tag>
+        # skips the prompt for a non-interactive caller.
+        if [ -n "{{.CONFIRM | default ""}}" ]; then
+          reply='{{.CONFIRM}}'
+          echo "  confirmed via CONFIRM=$reply"
+        elif [ -r /dev/tty ]; then
+          printf '  type the tag to confirm: ' > /dev/tty
+          read -r reply < /dev/tty
+        else
+          echo "  no terminal to confirm on — re-run with CONFIRM=$TAG" >&2
+          exit 1
+        fi
+        [ "$reply" = "$TAG" ] || { echo "  got '$reply', expected '$TAG' — aborted."; exit 1; }
+
+        # Note which run is the newest BEFORE dispatching, so we watch the run we
+        # just created rather than a stale one (the dispatch is asynchronous, and
+        # the new run takes a few seconds to appear).
+        prev="$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId' 2>/dev/null || echo none)"
 
         # shellcheck disable=SC2086
         gh workflow run release.yml --ref main $dispatch_args
         echo "  dispatched. waiting for the run to appear..."
-        sleep 5
-        run_id="$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+
+        run_id="$prev"
+        for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+          sleep 5
+          run_id="$(gh run list --workflow=release.yml --limit 1 --json databaseId -q '.[0].databaseId')"
+          [ "$run_id" != "$prev" ] && break
+        done
+        [ "$run_id" != "$prev" ] || { echo "  the run never appeared; check the Actions tab" >&2; exit 1; }
+
+        echo "  https://github.com/Behnam-RK/dezhban/actions/runs/$run_id"
         gh run watch "$run_id" --exit-status
