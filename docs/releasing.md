@@ -46,6 +46,19 @@ cannot go directly is the `chore(release)` CHANGELOG commit — so `publish` pus
 it to a `release/vX.Y.Z` branch and opens a PR for you to merge. One click, after
 the release is already out.
 
+Opening that PR needs **Settings → Actions → General → "Allow GitHub Actions to
+create and approve pull requests"** (it is off by default; enabling it was a
+deliberate choice). Note this is a single toggle: it also lets workflows *approve*
+PRs, which can satisfy the ruleset's `required_approving_review_count`. If you
+ever want that strictness back, turn it off — the release still works, it just
+prints a one-click link instead of opening the PR itself.
+
+The PR step is **non-fatal on purpose**. By the time it runs, the tag is pushed
+and the release is published — that *is* the release. A failure there prints the
+compare link and leaves the release green, rather than painting a perfectly good
+release red and implying it should be re-run. (It must not be: the tag exists, so
+a re-run would be rejected.)
+
 Consequence worth knowing: `## [Unreleased]` on `main` still holds the shipped
 entries until you merge that PR. Merge it promptly and the next release's notes
 stay correct.

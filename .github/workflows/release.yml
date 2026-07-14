@@ -368,12 +368,17 @@ jobs:
           echo "### Published [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
 
       # A final's CHANGELOG roll lands as a PR, because main requires one. Runs
-      # AFTER the release is out: the tag and the release are the release, and this
-      # is bookkeeping. If it fails, the release still shipped — you just have to
-      # open the PR by hand (`bash scripts/release.sh roll X.Y.Z`), which the error
-      # says. An rc rolls nothing, so it skips this entirely.
+      # AFTER the release is out, and is deliberately NON-FATAL: by this point the
+      # tag is pushed and the release is published — that IS the release, and this
+      # is bookkeeping. Failing the job here would paint a perfectly good release
+      # red and imply it needs re-running, which it must not be. (v0.1.0 shipped
+      # exactly this way: the PR step failed, the release was fine.)
+      #
+      # On failure it prints the one-click compare link, so finishing by hand is
+      # trivial. An rc rolls nothing and skips this entirely.
       - name: Open the CHANGELOG PR
         if: ${{ needs.prepare.outputs.kind == 'final' }}
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -381,6 +386,11 @@ jobs:
         run: |
           set -eu
           branch="release/$TAG"
+          compare="https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
+
+          # Whatever else happens, leave the operator a working one-click path.
+          trap 'echo "### CHANGELOG PR not opened automatically — [open it here]($compare)" >> "$GITHUB_STEP_SUMMARY"' EXIT
+
           bash scripts/release.sh roll "$VERSION"
 
           git checkout -b "$branch"
@@ -409,6 +419,7 @@ jobs:
             --title "chore(release): $TAG" \
             --body-file pr-body.md)"
 
+          trap - EXIT   # opened it; don't print the manual fallback
           echo "### CHANGELOG PR: $url" >> "$GITHUB_STEP_SUMMARY"
           echo "merge it to roll the changelog on main" >> "$GITHUB_STEP_SUMMARY"
 
