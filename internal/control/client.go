@@ -33,7 +33,7 @@ func Do(path string, req Request) (Response, error) {
 		return Response{}, classifyDialErr(path, err)
 	}
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(replyTimeout + dialTimeout))
+	_ = conn.SetDeadline(time.Now().Add(clientDeadline))
 
 	if err := json.NewEncoder(conn).Encode(req); err != nil {
 		return Response{}, fmt.Errorf("control: send: %w", err)

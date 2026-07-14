@@ -27,9 +27,13 @@ type ConnRequest struct {
 // daemon's core invariant intact: the run-loop goroutine is the sole caller of
 // Backend.Apply. The accept goroutine only parses, gates, and hands off.
 type Server struct {
-	path     string
-	log      *slog.Logger
-	ln       net.Listener
+	path string
+	log  *slog.Logger
+	ln   net.Listener
+	// self identifies the socket inode we published at path, so Stop can tell our
+	// own socket from one a later daemon has since renamed over the top of it.
+	// nil means "identity unknown" — Stop then leaves the path alone.
+	self     os.FileInfo
 	requests chan ConnRequest
 
 	stopOnce sync.Once
@@ -63,10 +67,20 @@ func New(path, group string, log *slog.Logger) (*Server, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Remember which inode we published, for Stop's identity check. A failure here
+	// is not fatal: it only costs us the check (Stop will decline to unlink), which
+	// is the safe direction — a stale socket is recoverable, unlinking a live one
+	// silently strips a running daemon of its control channel.
+	self, err := os.Lstat(path)
+	if err != nil {
+		log.Debug("control: cannot stat published socket; Stop will not unlink", "err", err)
+		self = nil
+	}
 	return &Server{
 		path:     path,
 		log:      log,
 		ln:       ln,
+		self:     self,
 		requests: make(chan ConnRequest, requestBuffer),
 	}, nil
 }
@@ -88,6 +102,12 @@ func (s *Server) Start(ctx context.Context) {
 	s.wg.Add(1)
 	go func() {
 		defer s.wg.Done()
+		// Backoff for a failing Accept. Some errors are persistent rather than
+		// per-connection — fd exhaustion (EMFILE) is the realistic one — and retrying
+		// those with a bare `continue` spins this goroutine at 100% CPU inside a daemon
+		// whose entire job is to stay responsive enough to cut the network. Back off
+		// instead, and reset the moment a connection succeeds.
+		backoff := time.Duration(0)
 		for {
 			conn, err := s.ln.Accept()
 			if err != nil {
@@ -95,9 +115,20 @@ func (s *Server) Start(ctx context.Context) {
 				if errors.Is(err, net.ErrClosed) {
 					return
 				}
-				s.log.Debug("control: accept failed", "err", err)
+				if backoff == 0 {
+					backoff = acceptBackoffMin
+				} else if backoff < acceptBackoffMax {
+					backoff *= 2
+				}
+				s.log.Debug("control: accept failed", "err", err, "retry_in", backoff)
+				select {
+				case <-time.After(backoff):
+				case <-ctx.Done():
+					return
+				}
 				continue
 			}
+			backoff = 0
 			s.wg.Add(1)
 			go func() {
 				defer s.wg.Done()
@@ -108,9 +139,23 @@ func (s *Server) Start(ctx context.Context) {
 }
 
 // Stop closes the listener and unlinks the socket. Safe to call more than once.
+//
+// The unlink is identity-checked. listenSecure publishes by renaming OVER path, so
+// a daemon starting while this one is still shutting down leaves a different socket
+// at the same path — and a blind os.Remove here would delete the live daemon's
+// control channel, leaving it serving on an inode nobody can reach and silently
+// pushing every routine op back to a password prompt. Remove only what we published.
 func (s *Server) Stop() {
 	s.stopOnce.Do(func() {
 		_ = s.ln.Close()
+		if s.self == nil {
+			return
+		}
+		cur, err := os.Lstat(s.path)
+		if err != nil || !os.SameFile(s.self, cur) {
+			// Already gone, or superseded by another daemon's socket — not ours to remove.
+			return
+		}
 		_ = os.Remove(s.path)
 	})
 }
@@ -121,7 +166,13 @@ func (s *Server) Wait() { s.wg.Wait() }
 // serve handles one connection: one request in, one response out, then close.
 func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	defer func() { _ = conn.Close() }()
-	_ = conn.SetDeadline(time.Now().Add(connDeadline))
+	// Bound the READ only. A connection-wide deadline would also bound the wait for
+	// the run loop — and that wait is legitimately longer (handoffTimeout +
+	// replyTimeout) than connDeadline, so a slow Apply would trip it and drop the
+	// reply the caller is still blocked on. The write gets its own fresh deadline in
+	// reply(); this one exists solely so a peer that opens a connection and never
+	// sends cannot pin a goroutine.
+	_ = conn.SetReadDeadline(time.Now().Add(connDeadline))
 
 	var req Request
 	// Bound the read: an unbounded decode off a socket any admin can open is a
@@ -172,6 +223,11 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 }
 
 func (s *Server) reply(conn net.Conn, resp Response) {
+	// A fresh deadline, never the read's: reply may run up to
+	// handoffTimeout+replyTimeout after the read deadline was armed, and inheriting
+	// an already-expired deadline would fail every slow-path reply — precisely the
+	// ones ("daemon busy", "timed out waiting for daemon") the caller most needs.
+	_ = conn.SetWriteDeadline(time.Now().Add(writeDeadline))
 	if err := json.NewEncoder(conn).Encode(resp); err != nil {
 		s.log.Debug("control: reply failed", "err", err)
 	}

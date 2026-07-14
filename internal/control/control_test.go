@@ -252,3 +252,66 @@ func TestStopUnlinksSocket(t *testing.T) {
 		t.Fatalf("socket survived shutdown: %v", err)
 	}
 }
+
+// TestSlowRunLoopStillGetsItsReplyThrough guards the timeout budget. serve() used
+// to arm one connection-wide deadline (connDeadline, 5s), but its own worst case is
+// handoffTimeout+replyTimeout (12s) — so a run loop that took longer than 5s to
+// answer (a slow Backend.Apply under load) had its reply write fail on an expired
+// deadline, and the caller saw an EOF instead of the daemon's actual answer.
+func TestSlowRunLoopStillGetsItsReplyThrough(t *testing.T) {
+	srv, _ := newTestServer(t)
+
+	// Answer from the run loop only after the old connection-wide deadline would
+	// have fired. The reply must still arrive intact.
+	go func() {
+		select {
+		case cr := <-srv.Requests():
+			time.Sleep(connDeadline + time.Second)
+			cr.Reply <- Response{OK: true, Posture: "GUARD"}
+		case <-time.After(3 * time.Second):
+			t.Error("no request reached the run loop")
+		}
+	}()
+
+	resp, err := Do(srv.Path(), Request{Op: OpStatus})
+	if err != nil {
+		t.Fatalf("a reply issued after connDeadline must still reach the client: %v", err)
+	}
+	if !resp.OK || resp.Posture != "GUARD" {
+		t.Fatalf("got %+v, want the run loop's own response", resp)
+	}
+}
+
+// TestStopLeavesASupersededSocketAlone guards the shutdown unlink. Publishing
+// renames OVER the path, so a daemon that starts while an older one is still
+// shutting down owns the path — and the older one's Stop must not delete the live
+// socket out from under it, which would strand it on an unreachable inode.
+func TestStopLeavesASupersededSocketAlone(t *testing.T) {
+	path := tempSocket(t)
+
+	old, err := New(path, "", testLogger())
+	if err != nil {
+		t.Fatalf("New (old): %v", err)
+	}
+	// A second daemon publishes over the same path while the first is still alive.
+	fresh, err := New(path, "", testLogger())
+	if err != nil {
+		t.Fatalf("New (fresh): %v", err)
+	}
+	t.Cleanup(fresh.Stop)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	fresh.Start(ctx)
+
+	old.Stop() // must not unlink the path: what sits there now belongs to `fresh`
+
+	handle(t, fresh, Response{OK: true, Posture: "GUARD"})
+	resp, err := Do(path, Request{Op: OpStatus})
+	if err != nil {
+		t.Fatalf("the surviving daemon must still be reachable after the old one stopped: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("got %+v, want the surviving daemon's response", resp)
+	}
+}

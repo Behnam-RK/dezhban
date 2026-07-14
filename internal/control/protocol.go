@@ -69,14 +69,36 @@ type Response struct {
 // errResponse is the shorthand for a refusal.
 func errResponse(msg string) Response { return Response{OK: false, Error: msg} }
 
-// Timeouts. dialTimeout/replyTimeout bound the client; connDeadline bounds a
-// server-side connection so a stalled peer can't pin a goroutine; handoffTimeout
-// bounds how long a request waits for the (single) run-loop goroutine before we
-// tell the caller the daemon is busy rather than hanging.
+// Timeouts. These form a budget, and the ordering between them is load-bearing:
+// the server's worst case (handoffTimeout waiting for the run loop, then
+// replyTimeout waiting for it to finish) must fit inside what the client is
+// willing to wait, or the client would hang up exactly as the answer arrives.
+//
+//	server worst case: handoffTimeout + replyTimeout            (12s)
+//	client patience:   handoffTimeout + replyTimeout + writeDeadline + dialTimeout
+//
+// connDeadline bounds only the server-side READ, so a peer that connects and never
+// sends can't pin a goroutine; the reply carries its own writeDeadline because it
+// may be issued long after the read deadline was armed.
 const (
 	dialTimeout     = 2 * time.Second
 	replyTimeout    = 10 * time.Second
 	connDeadline    = 5 * time.Second
+	writeDeadline   = 5 * time.Second
 	handoffTimeout  = 2 * time.Second
 	maxRequestBytes = 4096
+)
+
+// clientDeadline is how long the client waits, end to end, once connected. It
+// deliberately exceeds the server's worst case so a slow-but-honest daemon gets to
+// deliver its answer — including a refusal — instead of the client timing out and
+// reporting an unreachable daemon, which the CLI would wrongly retry as root.
+const clientDeadline = handoffTimeout + replyTimeout + writeDeadline
+
+// Accept-failure backoff. Bounds the retry rate for a persistently failing
+// Accept (fd exhaustion, say) so it degrades into a slow poll instead of a
+// spin, while still recovering promptly once the condition clears.
+const (
+	acceptBackoffMin = 5 * time.Millisecond
+	acceptBackoffMax = time.Second
 )
