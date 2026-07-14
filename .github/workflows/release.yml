@@ -220,9 +220,14 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       # Builds the darwin CLI slices + the universal app, then the installer.
       - name: Build installer
-        run: make pkg-macos VERSION=${{ needs.prepare.outputs.tag }}
+        run: task pkg:build VERSION=${{ needs.prepare.outputs.tag }}
 
       # The .app zip stays a separate asset for anyone who only wants the menubar
       # app (e.g. Homebrew users who already have the CLI).
@@ -278,8 +283,13 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - uses: arduino/setup-task@v2
+        with:
+          version: 3.x
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Build all CLI platforms
-        run: make build-all VERSION=${{ needs.prepare.outputs.tag }}
+        run: task build:all VERSION=${{ needs.prepare.outputs.tag }}
 
       # Lands both the .app zip and the .pkg in dist/ BEFORE the checksums step, so
       # SHA256SUMS covers the installer too — it is the asset most people download,

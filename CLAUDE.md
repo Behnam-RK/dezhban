@@ -30,12 +30,14 @@ go test ./...                             # all tests
 go test ./internal/config -run TestLoad   # a single package / test
 
 # safe, root-free dev loop — none of these touch the firewall
-make validate CONFIG=configs/dezhban.dev.json    # parse + validate
-make rules MODE=guard CONFIG=...                  # print the ruleset, don't apply
-make doctor CONFIG=... [ARGS=--discover]          # diagnose VPN guard / lockout risks
+task validate CONFIG=configs/dezhban.dev.json    # parse + validate
+task rules MODE=guard CONFIG=...                 # print the ruleset, don't apply
+task doctor CONFIG=... -- --discover             # diagnose VPN guard / lockout risks
 
-make build-all                            # all 5 targets into dist/, version-stamped
-make gui-macos                            # macOS menubar app → dist/Dezhban.app (macOS only)
+task build:all                            # all 5 targets into dist/, version-stamped
+task gui:build                            # macOS menubar app → dist/Dezhban.app (macOS only)
+task dev:all                              # fast roll: rebuild + swap CLI and app (macOS, sudo)
+task pkg:cycle                            # full roll: build .pkg + install + launch (macOS, sudo)
 ```
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,

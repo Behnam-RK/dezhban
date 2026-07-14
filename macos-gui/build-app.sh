@@ -62,7 +62,7 @@ if [[ -f "$HERE/AppIcon.icns" ]]; then
 	/usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" \
 		"$APP/Contents/Info.plist" 2>/dev/null || true
 fi
-# Stamped by `make gui-macos` (DEZHBAN_VERSION=$(VERSION), from `git describe`
+# Stamped by `task gui:build` (DEZHBAN_VERSION from `git describe`
 # or an explicit VERSION=vX.Y.Z). Only a strict X.Y.Z is stamped — CFBundle
 # version fields must be dotted numerics, so a `git describe` value like
 # 0.2.0-3-g<sha> or `dev` is left alone, keeping Info.plist's checked-in 0.1.0.

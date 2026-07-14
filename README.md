@@ -68,7 +68,7 @@ See [docs/releasing.md](docs/releasing.md) for how releases are cut.
 Requires Go 1.26+.
 
 ```sh
-make build                        # host build → ./dezhban
+task build                        # host build → ./dezhban (go-task; or: go build ./cmd/dezhban)
 
 sudo dezhban setup                # interactive wizard — build the config, no JSON by hand
 dezhban validate                  # confirm it (--config is optional; see docs/config.md)

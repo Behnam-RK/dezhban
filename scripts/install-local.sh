@@ -14,7 +14,7 @@ SYS_CONFIG=/etc/dezhban/dezhban.json
 echo "validating $CONFIG ..."
 go run ./cmd/dezhban validate --config "$CONFIG"
 
-make build
+go build -ldflags "-X main.version=$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o dezhban ./cmd/dezhban
 
 echo "installing config -> $SYS_CONFIG"
 sudo mkdir -p /etc/dezhban

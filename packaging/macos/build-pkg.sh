@@ -43,9 +43,9 @@ CLI_X86="$OUT_DIR/dezhban-darwin-amd64"
 APP="$OUT_DIR/Dezhban.app"
 
 for f in "$CLI_ARM" "$CLI_X86"; do
-	[[ -f "$f" ]] || { echo "error: missing $f — run: make build-all VERSION=$VERSION" >&2; exit 1; }
+	[[ -f "$f" ]] || { echo "error: missing $f — run: task build:all VERSION=$VERSION" >&2; exit 1; }
 done
-[[ -d "$APP" ]] || { echo "error: missing $APP — run: make gui-macos VERSION=$VERSION" >&2; exit 1; }
+[[ -d "$APP" ]] || { echo "error: missing $APP — run: task gui:build UNIVERSAL=1 VERSION=$VERSION" >&2; exit 1; }
 
 echo "==> staging payload ($VERSION)"
 rm -rf "$BUILD"

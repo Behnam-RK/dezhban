@@ -19,6 +19,7 @@ state.json
 /configs/*.local.json
 
 # Tooling
+.task/
 .remember/
 .serena/
 .DS_Store

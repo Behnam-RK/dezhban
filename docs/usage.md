@@ -221,7 +221,7 @@ while blocked, the rules persist by design (a kill switch must not fail open); u
 On macOS an optional native **menubar app** (`Dezhban.app`) shows the daemon's
 live posture at a glance and offers click-to-control. It's a separate Swift/AppKit
 target, so the Go binary keeps its zero-dependency, `CGO_ENABLED=0` promise. Build
-it with `make gui-macos` (see [development.md](development.md)).
+it with `task gui:build` (see [development.md](development.md)).
 
 - **Status icon** — 🟢 allow/guard, 🔴 block/full-block, ⚪ stopped or stale;
   repainted about once a second.

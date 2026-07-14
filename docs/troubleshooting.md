@@ -7,7 +7,7 @@ endpoint leaves the block-all rule in place by design (the kill switch must not
 fail open). The escape hatch removes dezhban's rules with no daemon involved:
 
 ```sh
-sudo dezhban panic      # or: make panic
+sudo dezhban panic      # or: task panic (or: sh scripts/panic.sh)
 dezhban status
 ```
 
@@ -60,7 +60,7 @@ client's config, or from `dezhban doctor --discover`. Then:
 
 ```sh
 dezhban validate --config <your-config>   # confirm it parses
-sudo make reinstall                       # tear down + reinstall the service
+task reinstall                            # tear down + reinstall the service (sudo prompted inside)
 ```
 
 ### Reconnect livelock during tunnel warmup (fixed)
@@ -166,7 +166,7 @@ Never find out what a block does by getting locked out. Render the exact ruleset
 first, no root, no side effects:
 
 ```sh
-dezhban print-rules --mode guard --config <config>     # or: make rules MODE=guard
+dezhban print-rules --mode guard --config <config>     # or: task rules MODE=guard
 dezhban print-rules --mode fullblock --config <config>
 dezhban print-rules --mode legacy --config <config>
 ```

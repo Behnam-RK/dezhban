@@ -27,9 +27,9 @@ land changes — it's what becomes the release notes. The workflow **fails** if
      the file,
    - commits that as `chore(release): vX.Y.Z [skip ci]` to `main` and pushes the
      annotated tag,
-   - cross-compiles the 5 CLI targets (`make build-all`) and the macOS GUI
-     (`make gui-macos`), both version-stamped from the new tag,
-   - builds the macOS installer (`make pkg-macos`) and **smoke-tests it on the
+   - cross-compiles the 5 CLI targets (`task build:all`) and the macOS GUI,
+     both version-stamped from the new tag,
+   - builds the macOS installer (`task pkg:build`) and **smoke-tests it on the
      runner**: installs it, asserts the payload landed and the service was
      registered but *not started*, then runs the shipped uninstaller and asserts it
      left nothing behind. A broken installer fails the release instead of shipping,
@@ -73,7 +73,7 @@ two-environment-variable change, not a rewrite:
 ```sh
 INSTALLER_SIGN_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
 NOTARIZE_PROFILE="my-notary-profile" \
-make pkg-macos VERSION=vX.Y.Z
+task pkg:build VERSION=vX.Y.Z
 ```
 
 `INSTALLER_SIGN_IDENTITY` alone signs the package; setting `NOTARIZE_PROFILE` as

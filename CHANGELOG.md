@@ -14,7 +14,7 @@ changes.
 
 ### Added
 
-- **Standalone macOS installer** (`dezhban-<version>.pkg`, `make pkg-macos`):
+- **Standalone macOS installer** (`dezhban-<version>.pkg`, `task pkg:build`):
   installs the CLI, the menubar app, and the launchd service in one step with a
   single password prompt. It registers the service but deliberately does **not**
   start enforcement — configure with `sudo dezhban setup`, then `sudo dezhban start`.
@@ -43,6 +43,16 @@ changes.
   action a moment later is usually silent. The old `osascript` dialog was password-only
   and always had been; it remains as a fallback. For the CLI, enable Touch ID for
   `sudo` (`pam_tid`) — see [docs/usage.md](docs/usage.md#touch-id).
+
+### Changed
+
+- **Makefile replaced by a [Taskfile](https://taskfile.dev)** (`task` lists everything).
+  All targets carried over 1:1, plus two new update-roll loops for testing:
+  `task dev:all` (fast: rebuild + swap CLI and app in place, restart daemon, relaunch)
+  and `task pkg:cycle` (full: cross-compile, build the `.pkg`, install it, open the
+  app), with `pkg:fresh`/`pkg:install`/`pkg:uninstall` piecewise variants. The
+  `scripts/*.sh` escape hatches still run standalone without `task`. See
+  [docs/development.md](docs/development.md).
 
 ### Fixed
 
