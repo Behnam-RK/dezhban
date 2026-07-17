@@ -14,4 +14,5 @@ Detailed docs live here:
 | [development.md](development.md) | Build, cross-compile, the safe dev loop, CI, and the pre-commit hook. |
 | [releasing.md](releasing.md) | Cutting a release: the dispatch workflow, CHANGELOG discipline, unsigned macOS GUI. |
 | [state.md](state.md) | The `state.json` posture file: location, shape, and staleness contract. |
-| [plans/readme.md](plans/readme.md) | Phase-by-phase implementation plans and locked design decisions. |
+| [acceptance.md](acceptance.md) | The standing on-host verification checklist — the privileged checks CI cannot run. |
+| [testing-macos-block.md](testing-macos-block.md) | Step-by-step live block and VPN-guard walkthrough on macOS, with expected output. |

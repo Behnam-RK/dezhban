@@ -110,9 +110,15 @@ These invariants are load-bearing — the whole design depends on them:
 - `Cleanup()` must always be safe to call and is wired to run on shutdown
   (`defer` + `signal.NotifyContext`). A stale block-all rule can lock the user out
   of their own network — `panic` removes rules even with no daemon running.
-- Default to **fail-closed**: when the country can't be determined, block. But the
-  allowlist (loopback + DNS + geo-API egress) must stay open so recovery detection
-  still works, or the machine can lock itself out.
+- Default to **fail-closed** — but the meaning is scoped per mode, and conflating
+  the two will livelock the daemon:
+  - *Country-blocklist fallback:* when the country can't be determined, **block**.
+    The allowlist (loopback + DNS + geo-API egress) must stay open so recovery
+    detection still works, or the machine can lock itself out.
+  - *VPN guard:* the standing guard rule **is** the fail-closed block for physical
+    leaks, so an undeterminable country **holds** the current posture. Only a
+    *successful* blocked-country reading escalates to FULL BLOCK. Escalating on an
+    unknown would cut the tunnel's own egress and livelock the reconnect.
 - **One goroutine applies rules.** Every `Backend.Apply` call comes from the single
   run-loop goroutine in `internal/runner`. The window timer, command poll, tunnel
   watcher, geo ticks, and control-socket requests are all *select cases* in that one
@@ -138,5 +144,31 @@ Config is JSON with string durations; the on-disk shape is the `fileConfig` DTO 
 `internal/config`, converted to a validated `Config`. Module path
 `github.com/behnam-rk/dezhban`.
 
-See [plans/readme.md](plans/readme.md) for the phase-by-phase build history and the
-locked design decisions behind these choices.
+## Design decisions
+
+The choices below were locked early and the codebase still rests on them. They are
+recorded here because the rationale, not the choice, is the part that is expensive
+to reconstruct.
+
+| Decision | Choice | Rationale |
+|---|---|---|
+| Language | **Go** | One static binary per OS, `go build` cross-compiles, no runtime to install |
+| Platform order | **macOS first**, then Linux, then Windows | Prove one backend end-to-end, then port behind the `FirewallBackend` interface |
+| Detection | **API-based**, offline IP-range hybrid deferred | Simple to start; robustness can be added once the loop is proven |
+| Fail mode | **Fail-closed** | Block when the country is undeterminable — the safe default for a security tool (but see the mode-scoping above) |
+| Enforcement primitive | **Interface-aware** — pass on tunnel + endpoint handshake, block physical | A destination-IP allowlist is meaningless under a full tunnel: pf/nft see only the outer packets to the VPN endpoint |
+| Guard model | **Always-on interface guard** | A VPN drop is cut instantly, with a zero leak window. A reactive poller leaks for one poll interval |
+| Recovery | **Wait for the VPN to return to an allowed country** | While full-blocked, observe the exit through a time-windowed probe and restore the guard once the exit is allowed again |
+
+Two of these were revisited during the build and are worth naming as *deviations*,
+since the reasoning is not obvious from the code:
+
+- **The Linux and Windows backends shell out** to `nft` and `netsh`/PowerShell
+  instead of linking [`google/nftables`](https://github.com/google/nftables) and
+  [`tailscale/wf`](https://github.com/tailscale/wf), as originally planned. Shelling
+  out mirrors the macOS `pfctl` backend, giving one consistent model across all three
+  OSes and zero added dependencies. Those libraries remain the documented alternative
+  if pure-Go enforcement is ever needed.
+- **The control socket relaxes "root-triggered"** for routine ops. The full cost of
+  that trade is spelled out under [Control channels](#control-channels) — it is a
+  deliberate concession to usability, not an oversight.

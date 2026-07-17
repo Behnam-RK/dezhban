@@ -12,6 +12,26 @@ changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS: start/stop/restart from the menubar app failed with "Expecting a
+  LaunchAgents path … Load failed: 5".** The app's admin prompt runs commands as
+  root but *inside the GUI login session*, and the legacy `launchctl load`/
+  `unload`/`list` used by the service library infer the launchd domain from the
+  session, not the uid — so loading the LaunchDaemons plist was rejected, and
+  the service was misreported as stopped while running. Service start/stop and
+  the root status query on macOS now use the domain-explicit subcommands
+  (`launchctl bootstrap system …` / `bootout system/…` / `print system/…`),
+  which behave identically under a terminal `sudo` and the app's elevation.
+  (`uninstall` also boots the job out first, so it can no longer remove the
+  plist while leaving the daemon resident.)
+- **A startup refusal is now visible, not just logged.** When the run loop
+  refuses to arm (e.g. the VPN guard's "refusing to start: the tunnel is up but
+  no server address is known") or fails, the reason is published into the final
+  `posture: "stopped"` snapshot as `enforcementErr` — so `status --json` and the
+  menubar app can say *why* the daemon is down instead of showing a bare
+  "stopped" indistinguishable from a deliberate shutdown.
+
 ## [0.1.0] - 2026-07-14
 
 ### Added
@@ -163,13 +183,14 @@ changes.
 - Cross-platform `FirewallBackend` seam with build-tagged backends: `pfctl`
   (macOS), `nftables` (Linux), WFP/`netsh` (Windows).
 - CLI subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`,
-  `uninstall`, `start`, `stop`, `detect-vpn`, `validate`, `print-rules`, `doctor`,
-  `monitor`, `setup`, `version`, plus a global `-v`/`--verbose`.
+  `uninstall`, `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`,
+  `doctor`, `monitor`, `switch`, `vpn`, `setup`, `config`, `completion`, `version`,
+  plus a global `-v`/`--verbose`.
 - Read-only diagnostics that need no root: `validate`, `print-rules`, `doctor`,
   `monitor`.
-- macOS **menubar GUI** (`Dezhban.app`, `make gui-macos`): a standalone Swift
+- macOS **menubar GUI** (`Dezhban.app`, `task gui:build`): a standalone Swift
   client that reads the daemon state file and drives the CLI.
-- Cross-platform release build matrix (`make build-all`) producing five binaries:
+- Cross-platform release build matrix (`task build:all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
 [Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.1.0...HEAD
