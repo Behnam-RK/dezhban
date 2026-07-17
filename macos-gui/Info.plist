@@ -21,9 +21,11 @@
 	<string>0.0.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>13.0</string>
-	<!-- Menubar agent: no Dock icon, no app switcher entry. -->
+	<!-- Regular app, not a menubar agent: the Dock tile doubles as a state
+	     display (AppDelegate swaps the Dock icon to match the enforcement
+	     posture), so the app must be visible in the Dock. -->
 	<key>LSUIElement</key>
-	<true/>
+	<false/>
 	<key>NSHumanReadableCopyright</key>
 	<string>dezhban network kill switch</string>
 </dict>

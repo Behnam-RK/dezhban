@@ -1,3 +1,5 @@
+![dezhban — system-wide network kill switch](assets/png/banner-1280x640.png)
+
 # dezhban
 
 > Persian *dežbān* (دژبان) — "gatekeeper / garrison guard."

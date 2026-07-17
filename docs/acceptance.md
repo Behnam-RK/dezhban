@@ -149,8 +149,9 @@ task gui:build && open dist/Dezhban.app
 ```
 
 - [ ] **Posture tracking.** Drive the daemon with `--simulate-country IR` / `US`
-      and confirm the icon flips 🔴/🟢 and the menu detail updates within ~1 s.
-- [ ] **Staleness.** Kill the daemon → the icon goes ⚪ after the 90 s staleness
+      and confirm the menu bar icon *and* the Dock tile flip red/teal and the
+      menu detail updates within ~1 s.
+- [ ] **Staleness.** Kill the daemon → the icon goes gray after the 90 s staleness
       window.
 - [ ] **Privileged actions.** Start/Stop and Block/Unblock each raise a native
       admin prompt (Touch ID or password), run, and the state reflects the result.

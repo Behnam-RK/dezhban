@@ -223,8 +223,11 @@ live posture at a glance and offers click-to-control. It's a separate Swift/AppK
 target, so the Go binary keeps its zero-dependency, `CGO_ENABLED=0` promise. Build
 it with `task gui:build` (see [development.md](development.md)).
 
-- **Status icon** — 🟢 allow/guard, 🔴 block/full-block, ⚪ stopped or stale;
-  repainted about once a second.
+- **Status icon** — full-color brand state icons (from `assets/`), shown in both
+  the menu bar and the Dock tile: teal allow/guard, red block/full-block, amber
+  warning (switch window open or enforcement error), gray stopped or stale;
+  repainted about once a second. Outside the assembled `.app` bundle (e.g. a bare
+  `swift run`) the menu bar falls back to monochrome SF Symbol shields.
 - **Menu** — Start/Stop kill switch, Block now/Unblock, the VPN switch window
   (Switching VPN… / Cancel) when in VPN mode, **Run diagnostics…**, **Panic —
   force unblock…**, **Install/Uninstall service**, **VPN guard mode** (opens the

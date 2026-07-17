@@ -60,20 +60,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             snapshot = StateReader.read()
         }
         guard let button = statusItem.button else { return }
-        let (symbol, help) = iconFor(snapshot)
-        let key = "\(symbol)|\(help)"
+        let (state, symbol, help) = iconFor(snapshot)
+        let key = "\(state)|\(help)"
         guard key != lastIconKey else { return }
         lastIconKey = key
-        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "dezhban: \(help)")
-        image?.isTemplate = true
-        button.image = image
-        // No tint at all. A template image drawn in the menu bar's own foreground color
-        // is the only thing guaranteed legible on both a light and a dark menu bar —
-        // any fixed color we pick is unreadable against one of them (gray vanished on
-        // dark, and so did green). State is carried by the SYMBOL, which is how menu bar
-        // icons are supposed to work; the dropdown spells the posture out in words.
+        if let brand = Self.menubarIcon(state) {
+            // Full-color brand state icon (bundled by build-app.sh from assets/png).
+            // Color IS the state — teal on, gray off, red blocked, amber warning —
+            // drawn as-is (not templated, not tinted), so it reads identically on
+            // light and dark menu bars.
+            brand.accessibilityDescription = "dezhban: \(help)"
+            button.image = brand
+        } else {
+            // Fallback for a bare `swift run` binary with no bundle resources: a
+            // template SF Symbol in the menu bar's own foreground color, state
+            // carried by the symbol's shape.
+            let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "dezhban: \(help)")
+            image?.isTemplate = true
+            button.image = image
+        }
         button.contentTintColor = nil
         button.toolTip = "dezhban — \(help)"
+        // The Dock tile mirrors the same state; nil falls back to the bundle's
+        // static AppIcon (e.g. outside the assembled .app bundle).
+        NSApp.applicationIconImage = Self.dockIcon(state)
+    }
+
+    /// Brand state images, loaded once from the app bundle's Resources (put there
+    /// by build-app.sh from assets/png) and cached per state. Both stay empty when
+    /// running outside the bundle, which triggers the SF Symbol / default-icon
+    /// fallbacks in refresh().
+    private static var menubarIcons: [String: NSImage] = [:]
+    private static var dockIcons: [String: NSImage] = [:]
+
+    private static func menubarIcon(_ state: String) -> NSImage? {
+        if let img = menubarIcons[state] { return img }
+        guard let url = Bundle.main.url(forResource: "menubar-state-\(state)", withExtension: "png"),
+              let img = NSImage(contentsOf: url) else { return nil }
+        // The bundled bitmap is the designer's menubar master (88px tall = 22pt
+        // @4x, not square). Scale to the 22pt menu bar item height, preserving
+        // the glyph's aspect ratio.
+        let height: CGFloat = 22
+        img.size = NSSize(width: img.size.width * height / img.size.height, height: height)
+        img.isTemplate = false
+        menubarIcons[state] = img
+        return img
+    }
+
+    private static func dockIcon(_ state: String) -> NSImage? {
+        if let img = dockIcons[state] { return img }
+        guard let url = Bundle.main.url(forResource: "dock-state-\(state)", withExtension: "png"),
+              let img = NSImage(contentsOf: url) else { return nil }
+        dockIcons[state] = img
+        return img
     }
 
     /// Recomputes `serviceIsInstalled` off the main thread. Skips the subprocess
@@ -109,28 +148,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return s.age <= staleThreshold(s) && s.posture != "stopped"
     }
 
-    /// Maps a snapshot (or its absence/staleness) to an SF Symbol + label. Every state
-    /// is a distinct symbol and NO color: see refresh() for why nothing is tinted.
-    private func iconFor(_ s: Snapshot?) -> (symbol: String, help: String) {
+    /// Maps a snapshot (or its absence/staleness) to one of the four brand states
+    /// (on / off / blocked / warning — the full-color icons from assets/), plus an
+    /// SF Symbol fallback for running outside the assembled bundle, plus a label.
+    private func iconFor(_ s: Snapshot?) -> (state: String, symbol: String, help: String) {
         guard let s = s, isLive(s) else {
-            return ("shield", "stopped") // hollow shield: not enforcing
+            return ("off", "shield", "stopped") // gray / hollow shield: not enforcing
         }
         // A failed firewall action means the intended posture was NOT achieved (e.g. a
         // failed block leaves posture "allow" during a live leak). Surface it as a
-        // warning regardless of posture so a "safe" shield never masks a failed enforce.
+        // warning regardless of posture so a "safe" icon never masks a failed enforce.
         if let e = s.enforcementErr, !e.isEmpty {
-            return ("exclamationmark.triangle.fill", "enforcement error")
+            return ("warning", "exclamationmark.triangle.fill", "enforcement error")
         }
         switch s.posture {
         case "block", "full-block":
-            return ("shield.slash.fill", humanPosture(s))
+            return ("blocked", "shield.slash.fill", humanPosture(s))
         case "switch-window":
             // The switch window relaxes egress (all outbound, or a proto/port subset
             // if restricted) — the real IP may be exposed. Never show the plain "safe"
-            // shield here; warn so the user notices it's open.
-            return ("exclamationmark.shield.fill", humanPosture(s))
+            // icon here; warn so the user notices it's open.
+            return ("warning", "exclamationmark.shield.fill", humanPosture(s))
         default: // allow, guard — enforcing normally
-            return ("checkmark.shield.fill", humanPosture(s))
+            return ("on", "checkmark.shield.fill", humanPosture(s))
         }
     }
 
