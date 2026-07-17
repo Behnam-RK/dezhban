@@ -116,7 +116,7 @@ Gotchas:
   sides now go through `VERSION_BARE`.)
 - After a **fresh** install there is no config yet: run `sudo dezhban setup`,
   then `sudo dezhban start` (or use the menubar app). See
-  [usage.md](usage.md#install).
+  [usage.md](usage.md#create--manage-the-config).
 
 ## Safe dev loop (no root, no firewall effects)
 

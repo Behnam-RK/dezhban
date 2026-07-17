@@ -163,13 +163,14 @@ changes.
 - Cross-platform `FirewallBackend` seam with build-tagged backends: `pfctl`
   (macOS), `nftables` (Linux), WFP/`netsh` (Windows).
 - CLI subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`,
-  `uninstall`, `start`, `stop`, `detect-vpn`, `validate`, `print-rules`, `doctor`,
-  `monitor`, `setup`, `version`, plus a global `-v`/`--verbose`.
+  `uninstall`, `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`,
+  `doctor`, `monitor`, `switch`, `vpn`, `setup`, `config`, `completion`, `version`,
+  plus a global `-v`/`--verbose`.
 - Read-only diagnostics that need no root: `validate`, `print-rules`, `doctor`,
   `monitor`.
-- macOS **menubar GUI** (`Dezhban.app`, `make gui-macos`): a standalone Swift
+- macOS **menubar GUI** (`Dezhban.app`, `task gui:build`): a standalone Swift
   client that reads the daemon state file and drives the CLI.
-- Cross-platform release build matrix (`make build-all`) producing five binaries:
+- Cross-platform release build matrix (`task build:all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
 [Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.1.0...HEAD
