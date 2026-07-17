@@ -12,6 +12,20 @@ changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **macOS: start/stop/restart from the menubar app failed with "Expecting a
+  LaunchAgents path … Load failed: 5".** The app's admin prompt runs commands as
+  root but *inside the GUI login session*, and the legacy `launchctl load`/
+  `unload`/`list` used by the service library infer the launchd domain from the
+  session, not the uid — so loading the LaunchDaemons plist was rejected, and
+  the service was misreported as stopped while running. Service start/stop and
+  the root status query on macOS now use the domain-explicit subcommands
+  (`launchctl bootstrap system …` / `bootout system/…` / `print system/…`),
+  which behave identically under a terminal `sudo` and the app's elevation.
+  (`uninstall` also boots the job out first, so it can no longer remove the
+  plist while leaving the daemon resident.)
+
 ## [0.1.0] - 2026-07-14
 
 ### Added

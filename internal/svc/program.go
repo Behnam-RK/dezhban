@@ -159,7 +159,13 @@ func Running() bool {
 	return err == nil && st == service.StatusRunning
 }
 
+// status defers to the platform override (darwin queries launchd's system
+// domain explicitly; see launchd_darwin.go) with kardianos as the base case.
 func status() (service.Status, error) {
+	return platformStatus()
+}
+
+func kardianosStatus() (service.Status, error) {
 	s, err := service.New(&program{}, serviceConfig(""))
 	if err != nil {
 		return service.StatusUnknown, err
@@ -169,8 +175,12 @@ func status() (service.Status, error) {
 
 // Control performs an install/uninstall/start/stop (and other kardianos control
 // actions) against the registered service. configPath is embedded so a freshly
-// installed service knows which config to load on boot.
+// installed service knows which config to load on boot. Actions the platform
+// override claims (darwin start/stop) never reach kardianos.
 func Control(action, configPath string) error {
+	if handled, err := platformControl(action); handled {
+		return err
+	}
 	s, err := service.New(&program{}, serviceConfig(configPath))
 	if err != nil {
 		return err
