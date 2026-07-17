@@ -151,6 +151,14 @@ task gui:build && open dist/Dezhban.app
 - [ ] **Posture tracking.** Drive the daemon with `--simulate-country IR` / `US`
       and confirm the menu bar icon *and* the Dock tile flip red/teal and the
       menu detail updates within ~1 s.
+- [ ] **Auto-arm (`vpn.autoArm: true`).** Start the daemon with the VPN off →
+      posture `standby`, egress open, gray icon. Connect the VPN → `guard`
+      within a few seconds ("AUTO-ARMED" in the log) and a "Guard armed"
+      notification. Disconnect → guard HOLDS (red blocked icon, egress cut).
+      Menu **Unblock** → back to `standby`, egress open. Reconnect → arms again.
+- [ ] **Essential notifications.** With notifications on (Settings), the
+      armed/blocked/warning/standby/stopped transitions each notify once; no
+      notification at app launch or on routine country/endpoint updates.
 - [ ] **Staleness.** Kill the daemon → the icon goes gray after the 90 s staleness
       window.
 - [ ] **Privileged actions.** Start/Stop and Block/Unblock each raise a native
