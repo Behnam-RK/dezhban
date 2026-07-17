@@ -1,11 +1,11 @@
-![dezhban — system-wide network kill switch](assets/png/banner-1280x640.png)
-
-# dezhban
+# Dezhban
 
 > Persian *dežbān* (دژبان) — "gatekeeper / garrison guard."
 
-A standalone, cross-platform **network kill switch** written in Go, built for
-running behind a full-tunnel VPN. Its primary mode is an **always-on interface
+![dezhban — system-wide network kill switch](assets/png/banner-1280x640.png)
+
+A standalone, system-wide and cross-platform **network kill switch** written in Go, built for
+running behind full-tunnel VPNs. Its primary mode is an **always-on interface
 guard**: it lets traffic out only through the VPN tunnel, so the instant the
 tunnel drops it cuts egress with a **zero leak window**, and it full-blocks when
 the VPN exit switches to a forbidden country.
