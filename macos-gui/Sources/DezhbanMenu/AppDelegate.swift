@@ -289,22 +289,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         menu.addItem(.separator())
 
-        // VPN mode: show current mode with a checkmark; opens the validated
-        // in-app config panel (Phase 11) rather than a blind file edit.
-        let vpnItem = addAction("VPN guard mode", #selector(openVPNConfigPanel))
-        vpnItem.state = (s?.mode == "vpn") ? .on : .off
-        vpnItem.toolTip = "Configure vpn.enabled + tunnels/endpoints, then apply (restarts dezhban)."
-
-        addAction("Open config file…", #selector(openConfig))
+        // Settings hub: startup (boot service / login item), protection fields,
+        // and the VPN guard panel + config file, all in one window. Replaces the
+        // old scattered "VPN guard mode" / "Open config file…" / "Launch at
+        // login" menu items.
+        let settings = addAction("Settings…", #selector(openSettings))
+        settings.toolTip = "Startup, blocked countries, switch window, VPN guard configuration."
         addLogsMenu()
 
         menu.addItem(.separator())
         addAction("About Dezhban…", #selector(showAbout))
-
-        menu.addItem(.separator())
-
-        let login = addAction("Launch at login", #selector(toggleLogin))
-        login.state = LoginItem.isEnabled ? .on : .off
 
         menu.addItem(.separator())
         addAction("Quit", #selector(quit))
@@ -505,6 +499,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // is installed (the cached `status --json` service field).
                 let posture = self.isRunning ? self.humanPosture(self.snapshot!) : "stopped"
                 let service = self.serviceIsInstalled ? "installed" : "not installed"
+                // Which elevation path privileged actions will take — the Touch
+                // ID-capable Authorization Services route, or the password-only
+                // AppleScript fallback. Surfaced here so "why did I get a
+                // password dialog?" is diagnosable from the app itself.
+                let elevation = Elevation.isAvailable
+                    ? "Authorization Services (Touch ID capable)"
+                    : "AppleScript fallback (password only)"
                 let text = """
                 \(version.isEmpty ? "dezhban (version unknown)" : version)
 
@@ -512,18 +513,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 Binary path:     \(binPath)
                 Posture:         \(posture)
                 Service:         \(service)
+                Elevation:       \(elevation)
                 """
                 OutputPanel.shared.show(title: "About Dezhban", text: text)
             }
         }
     }
 
-    @objc private func openConfig() {
-        NSWorkspace.shared.open(URL(fileURLWithPath: DezhbanCLI.resolvedConfigPath()))
-    }
-
-    @objc private func openVPNConfigPanel() {
-        VPNConfigPanel.shared.open()
+    @objc private func openSettings() {
+        SettingsPanel.shared.open()
     }
 
     @objc private func showRecentLogs() {
@@ -556,8 +554,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func openConsole() {
         NSWorkspace.shared.open(URL(fileURLWithPath: "/System/Applications/Utilities/Console.app"))
     }
-
-    @objc private func toggleLogin() { LoginItem.toggle() }
 
     @objc private func quit() { NSApp.terminate(nil) }
 

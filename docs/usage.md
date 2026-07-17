@@ -230,10 +230,14 @@ it with `task gui:build` (see [development.md](development.md)).
   `swift run`) the menu bar falls back to monochrome SF Symbol shields.
 - **Menu** — Start/Stop kill switch, Block now/Unblock, the VPN switch window
   (Switching VPN… / Cancel) when in VPN mode, **Run diagnostics…**, **Panic —
-  force unblock…**, **Install/Uninstall service**, **VPN guard mode** (opens the
-  validated in-app config panel), Open config file…, View logs, **About
-  Dezhban…**, Launch at login (`SMAppService`), Quit. Items enable/disable from
-  the current state.
+  force unblock…**, **Install/Uninstall service**, **Settings…**, View logs,
+  **About Dezhban…**, Quit. Items enable/disable from the current state.
+- **Settings…** — one window for the tweaks: startup ("Start protection at
+  boot" installs the launchd system service so enforcement survives reboots;
+  "Open this menubar app at login" via `SMAppService`), protection (blocked
+  countries, switch-window duration, endpoint grace) applied through one
+  validated `config set` batch, plus the **VPN guard configuration** panel and
+  the raw config file.
 - **Passwords** — Block, Unblock and the switch window go to the running daemon
   over its control socket and raise **no prompt at all**. Only the service lifecycle
   (Install/Uninstall/Start/Stop) and Panic raise the native admin prompt, because

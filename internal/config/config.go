@@ -54,6 +54,11 @@ type VPN struct {
 	// EndpointRefresh is how often hostnames are re-resolved and live discovery
 	// re-run. Defaults to 5m.
 	EndpointRefresh time.Duration
+	// EndpointGrace is how long an autodiscovered endpoint stays in the allowed
+	// set after a refresh stops reporting it — the window in which a dropped VPN
+	// can redial the same server (its socket, the only thing discovery can see,
+	// died with the tunnel). Defaults to 15m.
+	EndpointGrace time.Duration
 	// TunnelWatch is how often the tunnel interface(s) are sampled for up/down so
 	// a drop cuts the network at once instead of waiting for the next geo poll.
 	// Defaults to 1s.
@@ -215,6 +220,7 @@ type fileVPN struct {
 	AutoDiscoverEndpoints bool          `json:"autoDiscoverEndpoints"`
 	AllowPhysicalDNS      bool          `json:"allowPhysicalDNS"`
 	EndpointRefresh       string        `json:"endpointRefresh"`
+	EndpointGrace         string        `json:"endpointGrace,omitempty"`
 	TunnelWatch           string        `json:"tunnelWatch"`
 	Profiles              []fileProfile `json:"profiles,omitempty"`
 	SwitchWindow          string        `json:"switchWindow,omitempty"`
@@ -339,6 +345,16 @@ func apply(cfg *Config, fc fileConfig) error {
 				return fmt.Errorf("vpn.endpointRefresh: %w", err)
 			}
 			v.EndpointRefresh = d
+		}
+		if fc.VPN.EndpointGrace != "" {
+			d, err := time.ParseDuration(fc.VPN.EndpointGrace)
+			if err != nil {
+				return fmt.Errorf("vpn.endpointGrace: %w", err)
+			}
+			if d < 0 {
+				return fmt.Errorf("vpn.endpointGrace: must not be negative (got %s)", d)
+			}
+			v.EndpointGrace = d
 		}
 		if fc.VPN.TunnelWatch != "" {
 			d, err := time.ParseDuration(fc.VPN.TunnelWatch)

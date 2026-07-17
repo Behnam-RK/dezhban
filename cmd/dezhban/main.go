@@ -439,6 +439,7 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 			return epSrc.ResolveWith(ctx, tuns)
 		},
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
+		EndpointGrace:           cfg.VPN.EndpointGrace,
 		Watcher:                 watcher,
 		WindowProtos:            adv.WindowProtocols,
 		WindowPorts:             adv.WindowPorts,

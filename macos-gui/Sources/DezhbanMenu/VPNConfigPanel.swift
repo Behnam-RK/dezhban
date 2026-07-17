@@ -352,7 +352,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
     /// (via `config set`) remains the authority, so this errs permissive (it
     /// accepts everything ParseDuration does) and only exists to catch obviously
     /// wrong input before spending a privileged round trip.
-    private static func looksLikeGoDuration(_ s: String) -> Bool {
+    static func looksLikeGoDuration(_ s: String) -> Bool {
         guard !s.isEmpty else { return false }
         // Mirror ParseDuration: optional [-+], the special bare "0", or repeated
         // chunks of (number + unit). Each number needs at least one digit (before

@@ -128,6 +128,10 @@ type Options struct {
 	ResolveEndpoints func(ctx context.Context) netdetect.EndpointSet
 	// EndpointRefresh is how often ResolveEndpoints is re-run (VPN mode). <=0 → 5m.
 	EndpointRefresh time.Duration
+	// EndpointGrace is how long an endpoint stays in the allowed set after its
+	// last sighting once a refresh no longer reports it (VPN mode) — the window
+	// in which a dropped VPN can redial the same server. <=0 → 15m.
+	EndpointGrace time.Duration
 	// Watcher, when non-nil, emits tunnel up/down edges. In VPN mode it drives
 	// observability logging only (the standing guard rule already cuts a drop with
 	// no leak). In legacy mode a down edge triggers an immediate block — a kill
@@ -358,6 +362,18 @@ func (o Options) runVPN(ctx context.Context) error {
 	set := o.resolveEndpointsWith(ctx, tunnels)
 	endpoints := set.Addrs
 	lastSet := set
+	// Sighting times for endpoint retention (see reconcileWithGrace): a VPN
+	// client reconnecting after a drop dials a server whose live socket vanished
+	// with the tunnel, so endpoints must outlive their sockets for a bounded
+	// grace or the guard walls off the very reconnect it is holding the line for.
+	epGrace := o.EndpointGrace
+	if epGrace <= 0 {
+		epGrace = 15 * time.Minute
+	}
+	epLastSeen := make(map[netip.Addr]time.Time, len(endpoints))
+	for _, a := range endpoints {
+		epLastSeen[a] = time.Now()
+	}
 	if len(endpoints) == 0 && !relaxed {
 		return errors.New("refusing to start: no usable vpn endpoints — set vpn.endpoints (IP or hostname), " +
 			"vpn.profiles, or enable vpn.autoDiscoverEndpoints/vpn.autodetect; a guard with no way to reach the " +
@@ -910,7 +926,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			// socket appears, then try to close.
 			fresh := o.resolveEndpointsWith(ctx, tunnels)
 			lastSet = fresh
-			if next, changed := reconcileEndpoints(endpoints, fresh, true); changed {
+			if next, changed := reconcileWithGrace(endpoints, fresh, true, epLastSeen, time.Now(), epGrace); changed {
 				endpoints = next
 				reapplyWindow("in-window endpoint discovery")
 			}
@@ -922,7 +938,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			// replace (and thus drop) the session/in-window endpoints the window is
 			// keeping open until it closes or reverts.
 			growOnly := blocked || windowActive
-			if next, changed := reconcileEndpoints(endpoints, fresh, growOnly); changed {
+			if next, changed := reconcileWithGrace(endpoints, fresh, growOnly, epLastSeen, time.Now(), epGrace); changed {
 				endpoints = next
 				reapplyStanding("endpoint refresh")
 				reapplyWindow("endpoint refresh")
@@ -1391,6 +1407,44 @@ func firstOr(s []string) string {
 // (a removed endpoint might be the one needed to recover); and while guarding
 // never let a loss-only refresh drop an endpoint the tunnel still needs. Returns
 // the set and whether it changed.
+// reconcileWithGrace wraps reconcileEndpoints with bounded retention: every
+// fresh address is stamped as seen now, and current addresses MISSING from
+// fresh ride along as if still fresh while they are within grace of their last
+// sighting. Rationale: autodiscovered endpoints are only observable while their
+// socket lives, and the socket dies with the tunnel — pruning them at the next
+// refresh would wall off exactly the reconnect the guard keeps endpoints open
+// for. A genuinely rotated-away server ages out once unseen past the grace.
+// Entries neither current nor fresh are dropped from lastSeen so it can't grow
+// without bound. growOnly (an active block or switch window) is unchanged —
+// retention there is unconditional, as before.
+func reconcileWithGrace(current []netip.Addr, fresh netdetect.EndpointSet, growOnly bool,
+	lastSeen map[netip.Addr]time.Time, now time.Time, grace time.Duration) ([]netip.Addr, bool) {
+	for _, a := range fresh.Addrs {
+		lastSeen[a] = now
+	}
+	keep := make(map[netip.Addr]bool, len(current)+len(fresh.Addrs))
+	for _, a := range current {
+		keep[a] = true
+	}
+	augmented := fresh
+	if !growOnly {
+		for _, a := range current {
+			if t, ok := lastSeen[a]; ok && now.Sub(t) <= grace {
+				augmented.Addrs = unionAddrs(augmented.Addrs, []netip.Addr{a})
+			}
+		}
+	}
+	for _, a := range augmented.Addrs {
+		keep[a] = true
+	}
+	for a := range lastSeen {
+		if !keep[a] {
+			delete(lastSeen, a)
+		}
+	}
+	return reconcileEndpoints(current, augmented, growOnly)
+}
+
 func reconcileEndpoints(current []netip.Addr, fresh netdetect.EndpointSet, blocked bool) ([]netip.Addr, bool) {
 	if len(fresh.Addrs) == 0 {
 		return current, false // never narrow to empty

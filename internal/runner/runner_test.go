@@ -786,6 +786,52 @@ func TestReconcileEndpoints(t *testing.T) {
 	}
 }
 
+func TestReconcileWithGrace(t *testing.T) {
+	set := func(ss ...string) netdetect.EndpointSet { return netdetect.EndpointSet{Addrs: addrsOf(ss...)} }
+	now := time.Now()
+	const grace = 15 * time.Minute
+	a1 := netip.MustParseAddr("1.1.1.1")
+	a3 := netip.MustParseAddr("3.3.3.3")
+
+	// Rotation with the old endpoint still within grace: the new address enters
+	// AND the recently-seen one rides along — a dropped VPN redialing its old
+	// server must not find it walled off.
+	seen := map[netip.Addr]time.Time{a1: now.Add(-5 * time.Minute)}
+	if got, ch := reconcileWithGrace(addrsOf("1.1.1.1"), set("3.3.3.3"), false, seen, now, grace); !ch ||
+		!sameAddrs(got, addrsOf("3.3.3.3", "1.1.1.1")) {
+		t.Errorf("rotation in grace: got %v changed=%v, want [3.3.3.3 1.1.1.1] changed", got, ch)
+	}
+
+	// Same rotation past the grace: the stale endpoint ages out.
+	seen = map[netip.Addr]time.Time{a1: now.Add(-20 * time.Minute)}
+	if got, ch := reconcileWithGrace(addrsOf("1.1.1.1"), set("3.3.3.3"), false, seen, now, grace); !ch ||
+		!sameAddrs(got, addrsOf("3.3.3.3")) {
+		t.Errorf("rotation past grace: got %v changed=%v, want [3.3.3.3] changed", got, ch)
+	}
+
+	// Fresh sightings are stamped, so a just-seen endpoint's clock restarts.
+	seen = map[netip.Addr]time.Time{}
+	_, _ = reconcileWithGrace(addrsOf(), set("3.3.3.3"), false, seen, now, grace)
+	if got, ok := seen[a3]; !ok || !got.Equal(now) {
+		t.Errorf("stamp: lastSeen[3.3.3.3] = %v ok=%v, want stamped now", got, ok)
+	}
+
+	// growOnly (block / switch window) retains unconditionally — even past grace.
+	seen = map[netip.Addr]time.Time{a1: now.Add(-20 * time.Minute)}
+	if got, ch := reconcileWithGrace(addrsOf("1.1.1.1"), set("3.3.3.3"), true, seen, now, grace); !ch ||
+		!sameAddrs(got, addrsOf("1.1.1.1", "3.3.3.3")) {
+		t.Errorf("growOnly: got %v changed=%v, want union", got, ch)
+	}
+
+	// lastSeen is pruned of addresses that are neither current nor fresh.
+	gone := netip.MustParseAddr("9.9.9.9")
+	seen = map[netip.Addr]time.Time{gone: now.Add(-time.Hour)}
+	_, _ = reconcileWithGrace(addrsOf("1.1.1.1"), set("1.1.1.1"), false, seen, now, grace)
+	if _, ok := seen[gone]; ok {
+		t.Error("prune: lastSeen kept an address that is neither current nor fresh")
+	}
+}
+
 func TestReconcileTunnels(t *testing.T) {
 	pinned := map[string]bool{"utun4": true}
 	// Growth: a new observed tunnel is added.

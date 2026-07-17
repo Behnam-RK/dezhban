@@ -102,6 +102,7 @@ is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you ou
 | `vpn.autoDiscoverEndpoints` | bool | `false` | Continuously learn the live VPN server IP from the active socket (**macOS only**; ignored elsewhere, where hostnames/IPs are used). Lets a rotating-pool VPN (NordVPN/ProtonVPN/…) run with no hand-typed endpoint. |
 | `vpn.allowPhysicalDNS` | bool | `false` | Open plain DNS (port 53) egress on the **physical** link in GUARD and VPN FULL BLOCK, so a VPN client can re-resolve its server hostname and reconnect while the tunnel is down. Off by default — the residual leak is DNS-query metadata (which resolver you query, and that you're reconnecting) on the physical path; your actual traffic stays blocked. Recommended when any endpoint is a hostname. |
 | `vpn.endpointRefresh` | duration | `5m` | How often hostnames are re-resolved and live discovery re-run. |
+| `vpn.endpointGrace` | duration | `15m` | How long an autodiscovered endpoint stays in the allowed set after a refresh stops reporting it. Discovery can only see an endpoint while its socket lives, and the socket dies with the tunnel — the grace is the window in which a dropped VPN can redial the *same* server without a switch window. A genuinely rotated-away server ages out once unseen past the grace. |
 | `vpn.tunnelWatch` | duration | `1s` | How often the tunnel interface(s) are sampled for up/down. In guard mode this powers logging/`monitor`; in legacy (direct) mode a drop blocks immediately (kill switch). |
 
 ### Validation rules (enforced by `validate` and at load)

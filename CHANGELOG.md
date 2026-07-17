@@ -12,7 +12,48 @@ changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Brand assets wired in end-to-end** (`assets/`): full-color menubar and Dock
+  state icons (teal on / gray off / red blocked / amber warning), a generated
+  `AppIcon.icns`, and the README banner. The Dock tile mirrors the enforcement
+  posture (the app is no longer an `LSUIElement` agent).
+- **`vpn.endpointGrace`** (default `15m`): an autodiscovered endpoint now stays
+  in the allowed set for a grace period after a refresh stops reporting it, so
+  a dropped VPN can redial the same server without needing a switch window.
+  Discovery could only see an endpoint while its socket lived — and the socket
+  dies with the tunnel, which walled off exactly the reconnect the guard keeps
+  endpoints open for.
+- **macOS: Settings hub in the menubar app** ("Settings…"): startup controls
+  (install/uninstall the boot service, open the app at login), blocked
+  countries, switch-window duration, endpoint grace, and entry points to the
+  VPN guard panel and the config file. Replaces the scattered "VPN guard
+  mode" / "Open config file…" / "Launch at login" menu items. The About panel
+  now also reports which elevation path privileged actions take
+  (Authorization Services with Touch ID vs. the password-only fallback).
+
 ### Fixed
+
+- **A daemon whose run loop ended on its own (startup refusal, run failure)
+  lingered as a zombie**: the service manager still counted the process as
+  running, so `start` was a silent no-op and only a kill recovered. The
+  process now exits when the loop ends by itself, and `stop`'s teardown wait
+  is bounded (30s, with a loud log pointing at `dezhban panic`).
+- **`switch --cancel` could die with "daemon busy" while a window was open
+  with a VPN mid-connect.** The early-close verification probe ran inline on
+  the run loop (8s budget vs. the control socket's 2s hand-off), and the CLI
+  treated the busy reply as a daemon refusal — which callers rightly never
+  escalate. The probe now runs off-loop (verdict and every firewall Apply
+  still on the loop), and transient server errors fall back to the durable
+  root command-file path.
+- **`stop` on a crash-looping (loaded-but-not-running) service reported
+  "already stopped" without unloading it**, so KeepAlive kept respawning the
+  daemon. The idempotence guard now consults the loaded state, not just
+  running. (Post-merge review finding on #21.)
+- **macOS: a guard posture with every tunnel down now shows the BLOCKED state
+  icon** (menu bar + Dock) instead of the calm "on" — the guard cutting
+  physical egress is a blocked state visually, even though the posture string
+  legitimately stays `guard`.
 
 - **macOS: start/stop/restart from the menubar app failed with "Expecting a
   LaunchAgents path … Load failed: 5".** The app's admin prompt runs commands as
