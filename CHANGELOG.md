@@ -14,6 +14,20 @@ changes.
 
 ### Added
 
+- **`vpn.autoArm`** (default off): the daemon starts PASSIVE (new posture
+  `standby`, nothing enforced) when no tunnel interface is present, and arms
+  the guard automatically the moment a VPN connects — no more choosing between
+  "always blocked without a VPN" and "kill switch off". Arming is one-way on
+  tunnel loss (a drop is exactly the leak the kill switch exists for); an
+  explicit `unblock` with the tunnel down releases back to standby. Arm-time
+  endpoint checks preserve the no-endpoint blackout refusal, and switch
+  windows are refused in standby (egress is already open). Toggle in the
+  menubar app's VPN guard panel.
+- **macOS: notifications for essential events** — guard armed / auto-armed,
+  egress blocked, warnings (enforcement error, switch window open), standby,
+  stopped. Posted by the menubar app on posture transitions only (never at
+  launch, never for routine updates); toggle in Settings.
+
 - **Brand assets wired in end-to-end** (`assets/`): full-color menubar and Dock
   state icons (teal on / gray off / red blocked / amber warning), a generated
   `AppIcon.icns`, and the README banner. The Dock tile mirrors the enforcement

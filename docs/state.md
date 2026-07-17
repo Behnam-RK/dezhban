@@ -31,7 +31,7 @@ Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
 {
   "time": "2026-07-01T12:00:00Z",
   "mode": "legacy",                     // "vpn" | "legacy"
-  "posture": "allow",                   // allow | block | guard | full-block | switch-window | stopped
+  "posture": "allow",                   // allow | block | guard | full-block | switch-window | standby | stopped
   "blocked": false,                     // egress currently cut
   "ip": "203.0.113.45",
   "countryCode": "US",

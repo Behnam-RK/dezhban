@@ -29,7 +29,7 @@ Keys (dotted; list values are comma-separated):
   pollInterval blockedCountries failClosed hysteresis providers
   allowlist.dns allowlist.hosts providerQuorum logLevel
   vpn.enabled vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
-  vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.switchWindow
+  vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.autoArm vpn.switchWindow
   vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
@@ -122,6 +122,10 @@ var configFields = map[string]configField{
 	"vpn.endpointGrace": {
 		get: func(c *config.Config) string { return c.VPN.EndpointGrace.String() },
 		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.EndpointGrace, v) },
+	},
+	"vpn.autoArm": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AutoArm) },
+		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AutoArm, v) },
 	},
 	"vpn.tunnelWatch": {
 		get: func(c *config.Config) string { return c.VPN.TunnelWatch.String() },

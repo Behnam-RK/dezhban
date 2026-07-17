@@ -23,6 +23,7 @@ final class SettingsPanel: NSObject, NSWindowDelegate {
     private var window: NSWindow!
     private var bootCheckbox: NSButton!
     private var loginCheckbox: NSButton!
+    private var notifyCheckbox: NSButton!
     private var blockedCountriesField: NSTextField!
     private var switchWindowField: NSTextField!
     private var endpointGraceField: NSTextField!
@@ -64,6 +65,10 @@ final class SettingsPanel: NSObject, NSWindowDelegate {
                                  target: self, action: #selector(loginToggled))
         loginCheckbox.toolTip = "Registers the app as a login item (System Settings → General → Login Items). "
             + "This is only the status display — protection itself is the system service above."
+        notifyCheckbox = NSButton(checkboxWithTitle: "Notify on essential events",
+                                  target: self, action: #selector(notifyToggled))
+        notifyCheckbox.toolTip = "macOS notifications for the transitions that matter: guard armed, egress "
+            + "blocked, warnings (enforcement error / switch window open), standby, stopped. Nothing else."
 
         // Protection — staged fields, written by Apply.
         blockedCountriesField = NSTextField()
@@ -101,6 +106,7 @@ final class SettingsPanel: NSObject, NSWindowDelegate {
             sectionLabel("Startup"),
             bootCheckbox,
             loginCheckbox,
+            notifyCheckbox,
             spacer(),
             sectionLabel("Protection"),
             labeledRow("Blocked countries (comma-sep):", blockedCountriesField),
@@ -176,6 +182,7 @@ final class SettingsPanel: NSObject, NSWindowDelegate {
         applyButton.isEnabled = false
         bootCheckbox.isEnabled = false
         loginCheckbox.state = LoginItem.isEnabled ? .on : .off
+        notifyCheckbox.state = NotificationManager.isEnabled ? .on : .off
         blockedCountriesField.stringValue = ""
         switchWindowField.stringValue = ""
         endpointGraceField.stringValue = ""
@@ -251,6 +258,13 @@ final class SettingsPanel: NSObject, NSWindowDelegate {
         statusLabel.stringValue = enabled
             ? "Menubar app will open at login."
             : "Menubar app will not open at login."
+    }
+
+    @objc private func notifyToggled() {
+        NotificationManager.isEnabled = notifyCheckbox.state == .on
+        statusLabel.stringValue = NotificationManager.isEnabled
+            ? "Notifications on for essential events."
+            : "Notifications off."
     }
 
     // MARK: - apply (staged protection fields)

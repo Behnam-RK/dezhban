@@ -17,6 +17,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
     private static let keyEndpoints = "vpn.endpoints"
     private static let keyAutodetect = "vpn.autodetect"
     private static let keyAutoDiscoverEndpoints = "vpn.autoDiscoverEndpoints"
+    private static let keyAutoArm = "vpn.autoArm"
     private static let keyEndpointRefresh = "vpn.endpointRefresh"
     private static let keyTunnelWatch = "vpn.tunnelWatch"
 
@@ -26,6 +27,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
     private var endpointsField: NSTextField!
     private var autodetectCheckbox: NSButton!
     private var autoDiscoverCheckbox: NSButton!
+    private var autoArmCheckbox: NSButton!
     private var endpointRefreshField: NSTextField!
     private var tunnelWatchField: NSTextField!
     private var applyButton: NSButton!
@@ -60,6 +62,10 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         enabledCheckbox = NSButton(checkboxWithTitle: "Enable VPN guard (vpn.enabled)", target: nil, action: nil)
         autodetectCheckbox = NSButton(checkboxWithTitle: "Autodetect tunnel interface (vpn.autodetect)", target: nil, action: nil)
         autoDiscoverCheckbox = NSButton(checkboxWithTitle: "Auto-discover endpoints (vpn.autoDiscoverEndpoints)", target: nil, action: nil)
+        autoArmCheckbox = NSButton(checkboxWithTitle: "Auto-arm when a VPN connects (vpn.autoArm)", target: nil, action: nil)
+        autoArmCheckbox.toolTip = "With no VPN connected the daemon idles in standby (nothing blocked) and arms "
+            + "the guard the moment a tunnel appears. It never disarms on a drop — that's the kill switch — "
+            + "only an explicit Unblock with the VPN off returns to standby."
 
         tunnelInterfacesField = NSTextField()
         endpointsField = NSTextField()
@@ -86,6 +92,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             labeledRow("Endpoints (comma-sep):", endpointsField),
             autodetectCheckbox,
             autoDiscoverCheckbox,
+            autoArmCheckbox,
             labeledRow("Endpoint refresh (e.g. 30s):", endpointRefreshField),
             labeledRow("Tunnel watch (e.g. 5s):", tunnelWatchField),
         ])
@@ -141,6 +148,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         enabledCheckbox.state = .off
         autodetectCheckbox.state = .off
         autoDiscoverCheckbox.state = .off
+        autoArmCheckbox.state = .off
         tunnelInterfacesField.stringValue = ""
         endpointsField.stringValue = ""
         endpointRefreshField.stringValue = ""
@@ -148,7 +156,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         DispatchQueue.global(qos: .userInitiated).async {
             let keys = [
                 Self.keyEnabled, Self.keyTunnelInterfaces, Self.keyEndpoints,
-                Self.keyAutodetect, Self.keyAutoDiscoverEndpoints,
+                Self.keyAutodetect, Self.keyAutoDiscoverEndpoints, Self.keyAutoArm,
                 Self.keyEndpointRefresh, Self.keyTunnelWatch,
             ]
             // Capture each read's success. If any `config get` fails, the raw
@@ -178,8 +186,9 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
                 self.endpointsField.stringValue = values[2]
                 self.autodetectCheckbox.state = (values[3] == "true") ? .on : .off
                 self.autoDiscoverCheckbox.state = (values[4] == "true") ? .on : .off
-                self.endpointRefreshField.stringValue = values[5]
-                self.tunnelWatchField.stringValue = values[6]
+                self.autoArmCheckbox.state = (values[5] == "true") ? .on : .off
+                self.endpointRefreshField.stringValue = values[6]
+                self.tunnelWatchField.stringValue = values[7]
                 self.statusLabel.stringValue = "Seeded from \(cfgPath)"
                 self.applyButton.isEnabled = true
             }
@@ -198,6 +207,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
         let endpoints = endpointsField.stringValue
         let autodetect = autodetectCheckbox.state == .on
         let autoDiscover = autoDiscoverCheckbox.state == .on
+        let autoArm = autoArmCheckbox.state == .on
         let endpointRefresh = endpointRefreshField.stringValue.trimmingCharacters(in: .whitespaces)
         let tunnelWatch = tunnelWatchField.stringValue.trimmingCharacters(in: .whitespaces)
 
@@ -225,6 +235,7 @@ final class VPNConfigPanel: NSObject, NSWindowDelegate {
             "\(Self.keyEndpoints)=\(endpoints)",
             "\(Self.keyAutodetect)=\(autodetect)",
             "\(Self.keyAutoDiscoverEndpoints)=\(autoDiscover)",
+            "\(Self.keyAutoArm)=\(autoArm)",
             "\(Self.keyEndpointRefresh)=\(endpointRefresh)",
             "\(Self.keyTunnelWatch)=\(tunnelWatch)",
         ]

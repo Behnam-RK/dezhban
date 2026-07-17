@@ -51,6 +51,13 @@ type VPN struct {
 	// server hostname and reconnect while the tunnel is down. Off by default:
 	// the residual leak is DNS-query metadata on the physical path.
 	AllowPhysicalDNS bool
+	// AutoArm starts the daemon PASSIVE (posture "standby", no enforcement)
+	// when no tunnel interface is present, arming the guard automatically the
+	// moment a VPN connects. Never disarms on tunnel loss — a drop is exactly
+	// the leak the kill switch exists for; only an explicit unblock with the
+	// tunnel down returns to standby. Off by default: without it the guard is
+	// armed from startup, which is the stricter posture.
+	AutoArm bool
 	// EndpointRefresh is how often hostnames are re-resolved and live discovery
 	// re-run. Defaults to 5m.
 	EndpointRefresh time.Duration
@@ -219,6 +226,7 @@ type fileVPN struct {
 	Autodetect            bool          `json:"autodetect"`
 	AutoDiscoverEndpoints bool          `json:"autoDiscoverEndpoints"`
 	AllowPhysicalDNS      bool          `json:"allowPhysicalDNS"`
+	AutoArm               bool          `json:"autoArm,omitempty"`
 	EndpointRefresh       string        `json:"endpointRefresh"`
 	EndpointGrace         string        `json:"endpointGrace,omitempty"`
 	TunnelWatch           string        `json:"tunnelWatch"`
@@ -338,6 +346,7 @@ func apply(cfg *Config, fc fileConfig) error {
 			Autodetect:            fc.VPN.Autodetect,
 			AutoDiscoverEndpoints: fc.VPN.AutoDiscoverEndpoints,
 			AllowPhysicalDNS:      fc.VPN.AllowPhysicalDNS,
+			AutoArm:               fc.VPN.AutoArm,
 		}
 		if fc.VPN.EndpointRefresh != "" {
 			d, err := time.ParseDuration(fc.VPN.EndpointRefresh)

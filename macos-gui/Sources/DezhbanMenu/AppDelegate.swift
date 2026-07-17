@@ -32,6 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let staleFloor: TimeInterval = 90
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationManager.requestAuthorizationIfNeeded()
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         menu.delegate = self
         // We compute item enablement ourselves (see addAction); without this, AppKit's
@@ -84,7 +85,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // The Dock tile mirrors the same state; nil falls back to the bundle's
         // static AppIcon (e.g. outside the assembled .app bundle).
         NSApp.applicationIconImage = Self.dockIcon(state)
+
+        // Essential-transition notifications. The FIRST classification after
+        // launch is recorded silently — notifying the user about the state the
+        // world was already in when the app opened is noise, not news.
+        let essential = essentialClass(state, help)
+        if let prev = lastEssential, prev != essential {
+            NotificationManager.post(title: Self.essentialTitles[essential] ?? "Dezhban", body: "dezhban — \(help)")
+        }
+        lastEssential = essential
     }
+
+    // MARK: - essential-event notifications
+
+    private var lastEssential: String?
+
+    /// Collapses (icon state, help) into the coarse classes worth interrupting a
+    /// person for. Standby and stopped both draw the gray icon but mean very
+    /// different things, so they class by the help text, not the icon.
+    private func essentialClass(_ state: String, _ help: String) -> String {
+        if help == "stopped" { return "stopped" }
+        if help.hasPrefix("standby") { return "standby" }
+        return state // on / off / blocked / warning
+    }
+
+    private static let essentialTitles: [String: String] = [
+        "on": "Guard armed",
+        "blocked": "Egress blocked",
+        "warning": "Warning",
+        "standby": "Standby — not enforcing",
+        "stopped": "Protection stopped",
+        "off": "Not enforcing",
+    ]
 
     /// Brand state images, loaded once from the app bundle's Resources (put there
     /// by build-app.sh from assets/png) and cached per state. Both stay empty when
@@ -162,6 +194,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return ("warning", "exclamationmark.triangle.fill", "enforcement error")
         }
         switch s.posture {
+        case "standby":
+            // vpn.autoArm parked: daemon alive, nothing enforced, arms on VPN
+            // connect. Gray like "off" — the truthful "not enforcing" look.
+            return ("off", "shield", humanPosture(s))
         case "block", "full-block":
             return ("blocked", "shield.slash.fill", humanPosture(s))
         case "switch-window":
@@ -187,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         switch s.posture {
         case "allow": return "allowing"
         case "block": return "blocking"
+        case "standby": return "standby — waiting for VPN (not enforcing)"
         case "guard": return "guarding (VPN)"
         case "full-block": return "full block (VPN)"
         case "switch-window": return "switch window — egress relaxed (real IP may be exposed)"
@@ -255,9 +292,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // daemon over its control socket, so they normally need no password — say so,
         // and say the opposite when they'd have to fall back to a direct root action.
         let blocked = s?.blocked ?? false
+        // With the guard holding a downed tunnel, Unblock doubles as the
+        // "my VPN is off on purpose — release the line" action: a vpn.autoArm
+        // daemon returns to standby; without autoArm it's a harmless no-op the
+        // daemon acknowledges.
+        let guardHoldsDownedTunnel = isRunning && s?.mode == "vpn" && s?.posture == "guard"
+            && (s?.tunnels.map { !$0.isEmpty && !$0.contains(where: { $0.up }) } ?? false)
         addAction("Block now", #selector(blockNow), enabled: isRunning && !blocked)
             .toolTip = routineHint("Cuts all egress and holds it until you unblock.")
-        addAction("Unblock", #selector(unblockNow), enabled: isRunning && blocked)
+        addAction("Unblock", #selector(unblockNow), enabled: isRunning && (blocked || guardHoldsDownedTunnel))
             .toolTip = routineHint("Releases a manual block and resumes monitoring.")
 
         // Switch window: connect a brand-new VPN whose server isn't known yet.

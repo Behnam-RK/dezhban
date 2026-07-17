@@ -127,19 +127,23 @@ func equal(a, b []string) bool {
 
 func TestPostureName(t *testing.T) {
 	cases := []struct {
-		vpn, blocked, window bool
-		want                 string
+		vpn, blocked, window, standby bool
+		want                          string
 	}{
-		{false, false, false, "allow"},
-		{false, true, false, "block"},
-		{true, false, false, "guard"},
-		{true, true, false, "full-block"},
-		{true, false, true, "switch-window"},
-		{true, true, true, "switch-window"}, // window overrides
+		{false, false, false, false, "allow"},
+		{false, true, false, false, "block"},
+		{true, false, false, false, "guard"},
+		{true, true, false, false, "full-block"},
+		{true, false, true, false, "switch-window"},
+		{true, true, true, false, "switch-window"}, // window overrides
+		{true, false, false, true, "standby"},      // vpn.autoArm, no tunnel yet
+		{true, true, false, true, "full-block"},    // a block outranks standby
+		{true, false, true, true, "switch-window"}, // so does a window
 	}
 	for _, c := range cases {
-		if got := postureName(c.vpn, c.blocked, c.window); got != c.want {
-			t.Errorf("postureName(vpn=%v, blocked=%v, window=%v) = %q, want %q", c.vpn, c.blocked, c.window, got, c.want)
+		if got := postureName(c.vpn, c.blocked, c.window, c.standby); got != c.want {
+			t.Errorf("postureName(vpn=%v, blocked=%v, window=%v, standby=%v) = %q, want %q",
+				c.vpn, c.blocked, c.window, c.standby, got, c.want)
 		}
 	}
 }

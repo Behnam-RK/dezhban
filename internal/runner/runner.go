@@ -132,6 +132,12 @@ type Options struct {
 	// last sighting once a refresh no longer reports it (VPN mode) — the window
 	// in which a dropped VPN can redial the same server. <=0 → 15m.
 	EndpointGrace time.Duration
+	// AutoArm (vpn.autoArm): start PASSIVE (standby, no enforcement) when no
+	// tunnel interface is present, and arm the guard automatically the moment
+	// one appears. Arming is one-way on tunnel loss — a drop is
+	// indistinguishable from the leak the kill switch exists for — so only an
+	// explicit unblock with the tunnel down returns to standby.
+	AutoArm bool
 	// Watcher, when non-nil, emits tunnel up/down edges. In VPN mode it drives
 	// observability logging only (the standing guard rule already cuts a drop with
 	// no leak). In legacy mode a down edge triggers an immediate block — a kill
@@ -174,13 +180,17 @@ func modeName(vpn bool) string {
 	return "legacy"
 }
 
-// postureName maps (mode, blocked, window) to the snapshot's posture string.
-func postureName(vpn, blocked, window bool) string {
+// postureName maps (mode, blocked, window, standby) to the snapshot's posture
+// string. "standby" (vpn.autoArm, no tunnel yet) outranks only the plain guard:
+// a manual block or an open window always names itself.
+func postureName(vpn, blocked, window, standby bool) string {
 	switch {
 	case vpn && window:
 		return "switch-window"
 	case vpn && blocked:
 		return "full-block"
+	case vpn && standby:
+		return "standby"
 	case vpn:
 		return "guard"
 	case blocked:
@@ -195,7 +205,7 @@ func postureName(vpn, blocked, window bool) string {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-func (o Options) publish(blocked bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string) {
+func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string) {
 	if o.Publish == nil {
 		return
 	}
@@ -203,7 +213,7 @@ func (o Options) publish(blocked bool, r monitor.Reading, lookupErr error, enfEr
 	snap := state.Snapshot{
 		Time:                time.Now(),
 		Mode:                modeName(o.VPN),
-		Posture:             postureName(o.VPN, blocked, windowOpen),
+		Posture:             postureName(o.VPN, blocked, windowOpen, standby),
 		Blocked:             blocked,
 		CountryCode:         r.CountryCode,
 		Provider:            r.Provider,
@@ -374,7 +384,22 @@ func (o Options) runVPN(ctx context.Context) error {
 	for _, a := range endpoints {
 		epLastSeen[a] = time.Now()
 	}
-	if len(endpoints) == 0 && !relaxed {
+	// vpn.autoArm: when no tunnel interface is actually present at startup, run
+	// PASSIVE (standby: no rules, no enforcement) and arm the guard the moment
+	// one appears — instead of arming the zero-tunnel standing posture, a total
+	// cut that makes "VPN off on purpose" mean "no network at all". Presence is
+	// probed directly (netdetect), not inferred from the configured tunnel set:
+	// explicit vpn.tunnelInterfaces names are pinned whether or not the
+	// interface exists. A failed probe arms immediately — fail-closed.
+	standby := false
+	if o.AutoArm {
+		if present, derr := netdetect.TunnelInterfaces(); derr != nil {
+			o.Log.Warn("auto-arm: tunnel detection failed — arming immediately (fail-closed)", "err", derr)
+		} else {
+			standby = len(present) == 0
+		}
+	}
+	if len(endpoints) == 0 && !relaxed && !standby {
 		return errors.New("refusing to start: no usable vpn endpoints — set vpn.endpoints (IP or hostname), " +
 			"vpn.profiles, or enable vpn.autoDiscoverEndpoints/vpn.autodetect; a guard with no way to reach the " +
 			"server can never let the tunnel reconnect")
@@ -396,7 +421,10 @@ func (o Options) runVPN(ctx context.Context) error {
 	// netstat, and WireGuard (like other NetworkExtension clients) sends from an
 	// unconnected UDP socket — it never appears as a connected flow, so autodiscovery
 	// cannot see it and never will. Naming the server is the fix.
-	if len(tunnels) > 0 && len(endpoints) == 0 {
+	// In standby no tunnel is actually present (probed above) — the configured
+	// names are just pinned — so this up-tunnel hazard cannot apply; arming out
+	// of standby re-checks endpoints at arm time (tryAutoArm).
+	if !standby && len(tunnels) > 0 && len(endpoints) == 0 {
 		return fmt.Errorf("refusing to start: the VPN tunnel (%s) is up but dezhban does not know its server "+
 			"address, and the guard blocks all egress on the physical link — including the tunnel's own encrypted "+
 			"transport. Arming it would cut ALL traffic, and the tunnel could never re-handshake. "+
@@ -425,13 +453,24 @@ func (o Options) runVPN(ctx context.Context) error {
 	}
 
 	guard, fullBlock := o.vpnPolicies(tunnels, endpoints)
-	if err := o.Backend.Apply(guard); err != nil {
-		return fmt.Errorf("install startup guard: %w", err)
+	if standby {
+		// Passive start: no rules. Clear any stale dezhban rules from a prior
+		// run so "standby" is what it claims — best-effort, since there may be
+		// nothing to remove.
+		if err := o.Backend.Unblock(); err != nil {
+			o.Log.Warn("standby: clearing prior rules failed", "err", err)
+		}
+		o.Log.Info("vpn standby (vpn.autoArm) — not enforcing; the guard arms when a VPN connects",
+			"tunnels", tunnels, "switch", switchEnabled)
+	} else {
+		if err := o.Backend.Apply(guard); err != nil {
+			return fmt.Errorf("install startup guard: %w", err)
+		}
+		// guard is the standing posture: usually ModeGuard, but the zero-tunnel
+		// standing posture is a ModeFullBlock shape — log the actual applied mode
+		// rather than claiming "guard" unconditionally.
+		o.Log.Info("vpn posture active (startup)", "mode", guard.Mode, "tunnels", tunnels, "endpoints", len(endpoints), "switch", switchEnabled)
 	}
-	// guard is the standing posture: usually ModeGuard, but the zero-tunnel
-	// standing posture is a ModeFullBlock shape — log the actual applied mode
-	// rather than claiming "guard" unconditionally.
-	o.Log.Info("vpn posture active (startup)", "mode", guard.Mode, "tunnels", tunnels, "endpoints", len(endpoints), "switch", switchEnabled)
 
 	blocked := false // applied posture: false = GUARD, true = FULL BLOCK
 
@@ -456,7 +495,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		winDiscC          <-chan time.Time
 	)
 
-	tunnelUp := true
+	tunnelUp := !standby // armed start presumes up until the watcher says otherwise
 	var lastRes monitor.Result
 	var lastTun []state.Tunnel
 	var enfErr error
@@ -473,16 +512,16 @@ func (o Options) runVPN(ctx context.Context) error {
 		return &state.SwitchState{Open: true, Until: windowDeadline, Profile: windowProfile}
 	}
 	snapshot := func() {
-		o.publish(blocked, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile)
+		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile)
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints) }
 
 	// reapplyStanding re-applies the guard after a tunnel/endpoint change, unless a
-	// window owns the rules or we are in FULL BLOCK (which renders no tunnel pass —
-	// the new set lands on the next guard restore).
+	// window owns the rules, we are in FULL BLOCK (which renders no tunnel pass —
+	// the new set lands on the next guard restore), or standby (nothing applied).
 	reapplyStanding := func(reason string) {
 		rebuild()
-		if windowActive || blocked {
+		if windowActive || blocked || standby {
 			return
 		}
 		// The standing posture is usually ModeGuard but is ModeFullBlock in the
@@ -624,7 +663,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		windowActive = false
 		blocked = windowPrevBlocked
 		enfErr = nil
-		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(true, blocked, false))
+		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(true, blocked, false, standby))
 		snapshot()
 	}
 
@@ -727,6 +766,40 @@ func (o Options) runVPN(ctx context.Context) error {
 		snapshot()
 	}
 
+	// tryAutoArm arms the guard out of standby once a tunnel is up (vpn.autoArm).
+	// Endpoints are refreshed first, and arming is refused while none are known:
+	// with the tunnel up, the guard's block-all covers the tunnel's own encrypted
+	// transport, so arming endpoint-less would black out the working VPN — the
+	// same hazard the startup refusal explains. Discoverable VPNs surface their
+	// socket right after connect, so the refresh normally resolves this on the
+	// very tunnel-up event that triggered arming; retried on endpoint refreshes.
+	tryAutoArm := func(detail string) {
+		if !standby {
+			return
+		}
+		fresh := o.resolveEndpointsWith(ctx, tunnels)
+		lastSet = fresh
+		if next, changed := reconcileWithGrace(endpoints, fresh, false, epLastSeen, time.Now(), epGrace); changed {
+			endpoints = next
+		}
+		if len(endpoints) == 0 {
+			o.Log.Warn("auto-arm: tunnel is up but no VPN server endpoint is known — staying in standby. "+
+				"Name the server (dezhban vpn import/add, or config set vpn.endpoints=...) so the guard can arm.",
+				"detail", detail)
+			return
+		}
+		rebuild()
+		if err := o.Backend.Apply(guard); err != nil {
+			enfErr = err
+			o.Log.Error("auto-arm: applying the guard failed — staying in standby", "err", err)
+			return
+		}
+		standby = false
+		enfErr = nil
+		o.Log.Info("AUTO-ARMED — vpn connected, guard active",
+			"mode", guard.Mode, "tunnels", tunnels, "endpoints", len(endpoints), "detail", detail)
+	}
+
 	// handleControl services one control-socket request. It runs INLINE on the run
 	// loop (as a select case), which is what lets it call Backend.Apply at all —
 	// the accept goroutine never does. Every path returns a Response; the server is
@@ -737,7 +810,7 @@ func (o Options) runVPN(ctx context.Context) error {
 				OK:      ok,
 				Error:   msg,
 				Mode:    modeName(true),
-				Posture: postureName(true, blocked, windowActive),
+				Posture: postureName(true, blocked, windowActive, standby),
 				Blocked: blocked,
 			}
 		}
@@ -764,6 +837,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			}
 			blocked = true
 			manualBlock = true
+			standby = false // a manual block arms enforcement out of standby
 			enfErr = nil
 			o.Log.Warn("FULL BLOCK (manual, via control socket) — held until unblock")
 			snapshot()
@@ -774,6 +848,25 @@ func (o Options) runVPN(ctx context.Context) error {
 				return reply(false, "switch window is open — cancel it first")
 			}
 			manualBlock = false
+			// vpn.autoArm: with the tunnel DOWN, an explicit unblock is the
+			// operator saying "the VPN is off on purpose — release the line".
+			// Return to standby (no enforcement) instead of restoring a guard
+			// that, with no tunnel, is a total cut. With the tunnel up the
+			// normal guard restore below is what they want.
+			if o.AutoArm && !tunnelUp && !standby {
+				if err := o.Backend.Unblock(); err != nil {
+					enfErr = err
+					o.Log.Error("control: standby release failed", "err", err)
+					snapshot()
+					return reply(false, "standby release failed: "+err.Error())
+				}
+				standby = true
+				blocked = false
+				enfErr = nil
+				o.Log.Info("STANDBY (manual unblock, vpn.autoArm) — guard released; re-arms when a VPN connects")
+				snapshot()
+				return reply(true, "")
+			}
 			if !blocked {
 				return reply(true, "")
 			}
@@ -791,6 +884,11 @@ func (o Options) runVPN(ctx context.Context) error {
 			return reply(true, "")
 
 		case control.OpOpenSwitch:
+			if standby {
+				// Nothing to relax: standby enforces nothing, so the VPN can
+				// already connect freely — and the guard arms itself when it does.
+				return reply(false, "standby — egress is already open; connect your VPN and the guard arms itself")
+			}
 			if !o.AllowSwitchOps {
 				return reply(false, "switch ops over the control socket are disabled (control.allowSwitchOps)")
 			}
@@ -880,9 +978,12 @@ func (o Options) runVPN(ctx context.Context) error {
 				continue
 			}
 			tunnelUp = st.Up
-			if st.Up {
+			switch {
+			case st.Up:
 				o.Log.Info("vpn tunnel up", "detail", st.Detail)
-			} else {
+			case standby:
+				o.Log.Debug("tunnel down (standby — not enforcing)", "detail", st.Detail)
+			default:
 				o.Log.Warn("vpn tunnel down — guard holds the line (physical egress stays blocked, "+
 					"endpoints open for reconnect)", "detail", st.Detail)
 			}
@@ -892,6 +993,9 @@ func (o Options) runVPN(ctx context.Context) error {
 				reapplyWindow("tunnel set changed")
 			}
 			lastTun = tunnelSnapshot(st, tunnels)
+			if standby && st.Up {
+				tryAutoArm(st.Detail)
+			}
 			if windowActive {
 				maybeStartCloseProbe()
 			}
@@ -904,6 +1008,11 @@ func (o Options) runVPN(ctx context.Context) error {
 			now := time.Now()
 			switch cmd.Op {
 			case command.OpOpenSwitchWindow:
+				if standby {
+					o.Log.Info("ignoring switch-window command in standby — egress is already open; " +
+						"connect your VPN and the guard arms itself")
+					continue
+				}
 				dur := o.clampWindow(cmd.Duration)
 				openWindow(now, dur, cmd.Profile)
 			case command.OpCancelSwitchWindow:
@@ -944,7 +1053,16 @@ func (o Options) runVPN(ctx context.Context) error {
 				reapplyWindow("endpoint refresh")
 				snapshot()
 			}
+			// A standby daemon whose earlier arm attempt found no endpoint
+			// retries here — the refresh may have surfaced one.
+			if standby && tunnelUp {
+				tryAutoArm("endpoint refresh")
+				snapshot()
+			}
 		case <-geoTick.C:
+			if standby {
+				continue // not enforcing — nothing to decide, nothing to protect a probe with
+			}
 			if windowActive {
 				continue // window suppresses the geo state machine
 			}
@@ -1207,7 +1325,7 @@ func (o Options) runLegacy(ctx context.Context) error {
 	// full snapshot without blanking the IP/country from the most recent poll.
 	var last monitor.Result
 	var lastTun []state.Tunnel
-	snapshot := func() { o.publish(blocked, last.Reading, last.Err, enfErr, lastTun, nil, nil, "") }
+	snapshot := func() { o.publish(blocked, false, last.Reading, last.Err, enfErr, lastTun, nil, nil, "") }
 
 	// manualBlock holds an operator-requested block across allowed verdicts, so the
 	// geo poll cannot unblock what an operator explicitly blocked. Cleared only by
@@ -1223,7 +1341,7 @@ func (o Options) runLegacy(ctx context.Context) error {
 				OK:      ok,
 				Error:   msg,
 				Mode:    modeName(false),
-				Posture: postureName(false, blocked, false),
+				Posture: postureName(false, blocked, false, false),
 				Blocked: blocked,
 			}
 		}

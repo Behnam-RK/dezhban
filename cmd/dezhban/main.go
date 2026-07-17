@@ -440,6 +440,7 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		},
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
 		EndpointGrace:           cfg.VPN.EndpointGrace,
+		AutoArm:                 cfg.VPN.AutoArm,
 		Watcher:                 watcher,
 		WindowProtos:            adv.WindowProtocols,
 		WindowPorts:             adv.WindowPorts,
