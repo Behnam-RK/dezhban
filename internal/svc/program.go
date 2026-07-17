@@ -159,6 +159,16 @@ func Running() bool {
 	return err == nil && st == service.StatusRunning
 }
 
+// Loaded reports whether the service manager still holds the job at all,
+// running or not. It exists for stop's idempotence guard: on launchd a
+// KeepAlive job can be bootstrapped but parked ("spawn scheduled") between
+// respawns of a crash-looping daemon — Running() is false, yet the job still
+// needs its bootout or it will come back. On other platforms this is
+// equivalent to Running().
+func Loaded() bool {
+	return platformLoaded()
+}
+
 // status defers to the platform override (darwin queries launchd's system
 // domain explicitly; see launchd_darwin.go) with kardianos as the base case.
 func status() (service.Status, error) {

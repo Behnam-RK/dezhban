@@ -42,6 +42,11 @@ type Snapshot struct {
 	// the backend rejected it, so posture/blocked describe the data plane truthfully but
 	// the intended posture was not achieved (e.g. a failed block leaves posture "allow"
 	// during an active leak). Observers should surface it prominently regardless of posture.
+	// On a terminal posture:"stopped" snapshot it additionally carries WHY the daemon
+	// went down when the exit was not a clean shutdown — a startup refusal or a run-loop
+	// failure (see runner.publishStopped and docs/state.md); a clean, operator-requested
+	// stop leaves it empty. Either way the contract holds: the intended posture (enforcing)
+	// was not achieved.
 	EnforcementErr string   `json:"enforcementErr,omitempty"`
 	Tunnels        []Tunnel `json:"tunnels,omitempty"`   // VPN mode
 	Endpoints      []string `json:"endpoints,omitempty"` // resolved VPN endpoints (VPN mode)

@@ -921,7 +921,11 @@ func cmdService(action string, args []string) int {
 // aborted the start) and made the GUI's config-apply leave the daemon down.
 func serviceAction(action, path string) int {
 	switch {
-	case action == "stop" && !svc.Running():
+	// Stop consults Loaded(), not just Running(): a KeepAlive job whose daemon
+	// is crash-looping sits "loaded but not running" (launchd's spawn-scheduled
+	// throttle) — Running() is false, yet without the bootout it respawns. Only
+	// a job the manager doesn't hold at all is truly "already stopped".
+	case action == "stop" && !svc.Running() && !svc.Loaded():
 		fmt.Println("dezhban service already stopped")
 		return 0
 	case action == "start" && svc.Running():

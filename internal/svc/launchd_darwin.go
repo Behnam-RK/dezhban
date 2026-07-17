@@ -46,6 +46,12 @@ func bootstrapped() bool {
 	return exec.Command("launchctl", "print", "system/"+Name).Run() == nil
 }
 
+// platformLoaded: a launchd job can be bootstrapped but not running — KeepAlive
+// parks a crash-looping daemon in "spawn scheduled" while it throttles the
+// respawn. Such a job still needs a bootout to actually go away, so "loaded"
+// (not "running") is what stop's idempotence guard must consult here.
+func platformLoaded() bool { return bootstrapped() }
+
 func launchctl(args ...string) error {
 	out, err := exec.Command("launchctl", args...).CombinedOutput()
 	if err != nil {
