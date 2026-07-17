@@ -64,10 +64,21 @@ type Response struct {
 	Mode    string `json:"mode,omitempty"`
 	Posture string `json:"posture,omitempty"`
 	Blocked bool   `json:"blocked"`
+	// Transient marks a not-OK reply that is NOT the daemon's decision: the
+	// server couldn't get the request to the run loop in time ("daemon busy",
+	// a reply timeout, shutdown mid-request). Callers must treat it like an
+	// unreachable daemon — retry or fall back to the root command-file path —
+	// never like a refusal, which is deliberate and must not be routed around.
+	// Optional on the wire (omitempty), so older peers interop unchanged.
+	Transient bool `json:"transient,omitempty"`
 }
 
 // errResponse is the shorthand for a refusal.
 func errResponse(msg string) Response { return Response{OK: false, Error: msg} }
+
+// busyResponse is the shorthand for a transient server-side failure — the run
+// loop never saw (or never answered) the request. See Response.Transient.
+func busyResponse(msg string) Response { return Response{OK: false, Error: msg, Transient: true} }
 
 // Timeouts. These form a budget, and the ordering between them is load-bearing:
 // the server's worst case (handoffTimeout waiting for the run loop, then

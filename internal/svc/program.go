@@ -4,15 +4,19 @@
 //
 // The service wraps the Phase 3 run loop (internal/runner). Start launches the
 // loop in a goroutine and returns promptly (service managers require it); Stop
-// cancels the loop's context and waits for runner.Run's deferred Cleanup to
-// remove every firewall rule — stopping the service must never leave a block-all
-// rule behind that locks the operator out of their own network.
+// cancels the loop's context and waits (bounded) for runner.Run's deferred
+// Cleanup to remove every firewall rule — stopping the service must never leave
+// a block-all rule behind that locks the operator out of their own network. If
+// the loop ever ends on its own (startup refusal, run failure), the process
+// exits rather than lingering as a zombie the manager still counts as running.
 package svc
 
 import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"time"
 
 	"github.com/kardianos/service"
 
@@ -40,6 +44,15 @@ type program struct {
 	done   chan struct{}
 }
 
+// stopTimeout bounds Stop's wait for the run loop's teardown. Unbounded, a
+// teardown wedged on a firewall call leaves a zombie: the run loop is gone but
+// the process never exits, the service manager still counts it as running, so
+// `start` no-ops and only a kill recovers (observed live — a daemon that
+// published its final "stopped" snapshot and then lingered for hours). If this
+// fires, dezhban rules may still be present; `dezhban panic` is the documented
+// recovery for that, whereas a zombie has none.
+const stopTimeout = 30 * time.Second
+
 // Start builds the run loop and launches it in a goroutine, returning at once.
 func (p *program) Start(service.Service) error {
 	opts, err := p.build(p.log)
@@ -51,22 +64,43 @@ func (p *program) Start(service.Service) error {
 	p.done = make(chan struct{})
 	go func() {
 		defer close(p.done)
-		if err := runner.Run(ctx, opts); err != nil {
+		err := runner.Run(ctx, opts)
+		if err != nil {
 			p.log.Error("run loop failed", "err", err)
 		}
+		if ctx.Err() != nil {
+			return // Stop requested this exit; the manager finishes the shutdown
+		}
+		// The loop ended on its OWN — a startup refusal or a run failure (every
+		// clean exit rides the context). service.Run has no path from here to a
+		// process exit, so without this the process lingers as a zombie (see
+		// stopTimeout). Exit instead: runner.Run's defers (Cleanup, the final
+		// stopped snapshot) have already run, and a dead process is something
+		// KeepAlive or a later `start` can actually respawn.
+		if err != nil {
+			os.Exit(1)
+		}
+		os.Exit(0)
 	}()
 	return nil
 }
 
-// Stop cancels the run loop and blocks until it has finished — runner.Run's
-// deferred Cleanup removes all firewall rules before this returns, so the
-// service manager never sees the process exit with a block-all rule still live.
+// Stop cancels the run loop and waits (bounded by stopTimeout) for runner.Run's
+// deferred Cleanup to remove all firewall rules, so a normal stop never lets the
+// process exit with a block-all rule still live. On timeout it stops waiting and
+// lets the exit proceed — see stopTimeout for why a zombie is the worse outcome.
 func (p *program) Stop(service.Service) error {
 	if p.cancel != nil {
 		p.cancel()
 	}
 	if p.done != nil {
-		<-p.done
+		select {
+		case <-p.done:
+		case <-time.After(stopTimeout):
+			p.log.Error("run loop teardown timed out — exiting without it; "+
+				"dezhban firewall rules may still be present (recover with `dezhban panic`)",
+				"timeout", stopTimeout)
+		}
 	}
 	return nil
 }

@@ -120,6 +120,17 @@ func tryControl(cfgPath string, req control.Request) (code int, handled bool) {
 		return 0, false
 	}
 	if !resp.OK {
+		if resp.Transient {
+			// Not a decision — the server couldn't get the request to the run
+			// loop (busy with an inline probe, shutting down). Fall back to the
+			// root command-file path like an unreachable daemon: that file is
+			// durable, so the loop honors it on its next poll no matter how
+			// busy it is now. Reporting a refusal here would be wrong twice:
+			// it's not one, and callers (the menubar app) rightly never
+			// escalate refusals — the request would just die.
+			verbosef("control socket: %s — falling back to direct/root path", resp.Error)
+			return 0, false
+		}
 		fmt.Fprintln(os.Stderr, "daemon refused:", resp.Error)
 		return ExitDaemonRefused, true
 	}

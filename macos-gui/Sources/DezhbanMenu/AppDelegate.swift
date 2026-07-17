@@ -170,6 +170,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // icon here; warn so the user notices it's open.
             return ("warning", "exclamationmark.shield.fill", humanPosture(s))
         default: // allow, guard — enforcing normally
+            // Guard with the tunnel DOWN is the guard actively doing its job:
+            // physical egress is cut until the VPN comes back. The posture string
+            // stays "guard" (the standing rule didn't change), but visually this
+            // is a blocked state, not a calm "on" — show it as blocked so a
+            // dropped VPN is impossible to miss in the menu bar and the Dock.
+            if s.mode == "vpn", s.posture == "guard",
+               let tuns = s.tunnels, !tuns.isEmpty, !tuns.contains(where: { $0.up }) {
+                return ("blocked", "shield.slash.fill", "VPN down — egress blocked (guard)")
+            }
             return ("on", "checkmark.shield.fill", humanPosture(s))
         }
     }

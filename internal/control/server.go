@@ -215,10 +215,10 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	select {
 	case s.requests <- cr:
 	case <-time.After(handoffTimeout):
-		s.reply(conn, errResponse("daemon busy"))
+		s.reply(conn, busyResponse("daemon busy"))
 		return
 	case <-ctx.Done():
-		s.reply(conn, errResponse("daemon shutting down"))
+		s.reply(conn, busyResponse("daemon shutting down"))
 		return
 	}
 
@@ -226,9 +226,9 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	case resp := <-cr.Reply:
 		s.reply(conn, resp)
 	case <-time.After(replyTimeout):
-		s.reply(conn, errResponse("timed out waiting for daemon"))
+		s.reply(conn, busyResponse("timed out waiting for daemon"))
 	case <-ctx.Done():
-		s.reply(conn, errResponse("daemon shutting down"))
+		s.reply(conn, busyResponse("daemon shutting down"))
 	}
 }
 

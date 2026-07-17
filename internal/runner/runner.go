@@ -612,13 +612,23 @@ func (o Options) runVPN(ctx context.Context) error {
 		snapshot()
 	}
 
-	// tryCloseWindowVerified attempts an early success close: a tunnel is up, a
-	// VPN server socket has actually been DISCOVERED this window, AND a bounded geo
-	// lookup reads a NON-blocked exit. Only then do we close toward GUARD and learn
-	// the discovered endpoint. A blocked or failed reading keeps the window open
+	// Early success close of a switch window: a tunnel is up, a VPN server socket
+	// has actually been DISCOVERED this window, AND a bounded geo lookup reads a
+	// NON-blocked exit. Only then do we close toward GUARD and learn the
+	// discovered endpoint. A blocked or failed reading keeps the window open
 	// (it may be a physical-path leak reading, or the exit really is forbidden —
 	// either way, not safe to trust yet). We never feed this reading into the
 	// Decider's hysteresis streak (path-ambiguous).
+	//
+	// The check is split in two so the geo lookup — the only slow part — never
+	// runs on the run loop. Inline it blocked every select case for up to
+	// probeEgressBudget at the 2s discovery cadence, so control-socket requests
+	// (notably `switch --cancel`, the one op an operator needs mid-window) hit
+	// "daemon busy" precisely while a window was open with a VPN mid-connect.
+	// maybeStartCloseProbe only OBSERVES (Monitor.Once off-loop, single-flight);
+	// finishCloseProbe runs back on the loop with the outcome, re-validates the
+	// preconditions (the world may have changed during the probe), and alone
+	// touches the Backend — the single-goroutine Apply invariant holds.
 	//
 	// CAVEAT: o.Monitor.Once uses the OS default route (no interface binding), and
 	// while the window is open ALL egress is allowed — so a non-blocked reading is
@@ -631,17 +641,42 @@ func (o Options) runVPN(ctx context.Context) error {
 	// open so the handshake still completes, and the next GUARD-posture geo tick
 	// re-checks the exit through the Decider. The learned endpoints come from the
 	// socket table, not the geo reading, so attribution stays correct regardless.
-	tryCloseWindowVerified := func() {
+	type probeOutcome struct {
+		r   monitor.Reading
+		err error
+	}
+	probeResC := make(chan probeOutcome, 1)
+	probeInFlight := false
+
+	maybeStartCloseProbe := func() {
+		if probeInFlight || !windowActive || len(tunnels) == 0 {
+			return
+		}
+		if len(discoveredAddrs(lastSet)) == 0 {
+			return // no live VPN socket yet — a static endpoint alone can't confirm a connect
+		}
+		probeInFlight = true
+		go func() {
+			pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
+			r, err := o.Monitor.Once(pctx)
+			cancel()
+			select {
+			case probeResC <- probeOutcome{r: r, err: err}:
+			case <-ctx.Done(): // loop is gone; don't leak this goroutine on the send
+			}
+		}()
+	}
+
+	finishCloseProbe := func(p probeOutcome) {
+		probeInFlight = false
 		if !windowActive || len(tunnels) == 0 {
 			return
 		}
 		disc := discoveredAddrs(lastSet)
 		if len(disc) == 0 {
-			return // no live VPN socket yet — a static endpoint alone can't confirm a connect
+			return // the socket vanished mid-probe — evidence gone, hold the window
 		}
-		pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
-		r, err := o.Monitor.Once(pctx)
-		cancel()
+		r, err := p.r, p.err
 		if err != nil || r.CountryCode == "" || blockedContains(o.BlockedCountries, r.CountryCode) {
 			o.Log.Debug("switch window: exit not yet confirmed allowed, holding window open",
 				"country", r.CountryCode, "err", err)
@@ -842,7 +877,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			}
 			lastTun = tunnelSnapshot(st, tunnels)
 			if windowActive {
-				tryCloseWindowVerified()
+				maybeStartCloseProbe()
 			}
 			snapshot()
 		case <-cmdC:
@@ -868,6 +903,8 @@ func (o Options) runVPN(ctx context.Context) error {
 			if windowActive {
 				closeWindowRevert("expired")
 			}
+		case p := <-probeResC:
+			finishCloseProbe(p)
 		case <-winDiscC:
 			// Fast in-window discovery: grow the endpoint set as the new server's
 			// socket appears, then try to close.
@@ -877,7 +914,7 @@ func (o Options) runVPN(ctx context.Context) error {
 				endpoints = next
 				reapplyWindow("in-window endpoint discovery")
 			}
-			tryCloseWindowVerified()
+			maybeStartCloseProbe()
 		case <-epTick.C:
 			fresh := o.resolveEndpointsWith(ctx, tunnels)
 			lastSet = fresh
