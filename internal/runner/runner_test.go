@@ -1126,6 +1126,8 @@ func TestVPNRefusesToArmGuardThatWouldCutTheTunnelsOwnTransport(t *testing.T) {
 		// socket never shows up as a connected flow).
 		Autodetect: true, // "relaxed" — must not rescue this
 	}
+	var snaps []state.Snapshot
+	o.Publish = func(s state.Snapshot) { snaps = append(snaps, s) }
 	err := Run(context.Background(), o)
 	if err == nil {
 		t.Fatal("daemon armed a guard with a live tunnel and no known endpoint; that cuts the tunnel's own transport and blacks the host out")
@@ -1140,6 +1142,20 @@ func TestVPNRefusesToArmGuardThatWouldCutTheTunnelsOwnTransport(t *testing.T) {
 		if strings.HasPrefix(c, "apply") {
 			t.Fatalf("a ruleset was applied despite the refusal: %v", be.calls)
 		}
+	}
+	// The refusal must be OBSERVABLE, not just returned: under a service manager
+	// the returned error dies in a log nobody reads, and the state file is the one
+	// surface `status --json` and the menubar app see. A bare "stopped" would be
+	// indistinguishable from a deliberate shutdown.
+	if len(snaps) == 0 {
+		t.Fatal("no snapshot published on refusal")
+	}
+	last := snaps[len(snaps)-1]
+	if last.Posture != "stopped" {
+		t.Fatalf("final posture = %q, want \"stopped\"", last.Posture)
+	}
+	if !strings.Contains(last.EnforcementErr, "refusing to start") {
+		t.Fatalf("final snapshot enforcementErr = %q, want the refusal reason", last.EnforcementErr)
 	}
 }
 

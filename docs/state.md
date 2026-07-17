@@ -62,6 +62,13 @@ a failed block leaves `posture: "allow"` during a live leak, and a failed VPN pr
 re-cut can leave egress open). Observers should surface it prominently regardless of
 posture — the menubar app shows a red warning icon whenever it is set.
 
+On a terminal `posture: "stopped"` snapshot, `enforcementErr` carries **why the
+daemon went down** when the exit was not a clean shutdown: a startup refusal (e.g.
+the VPN guard's "refusing to start: the tunnel is up but no server address is
+known") or a run-loop failure. A clean, operator-requested stop leaves it empty —
+so `stopped` + `enforcementErr` reads as "the daemon would not run", not "you
+stopped it".
+
 ## The rest of the state directory
 
 `state.json` is one of four things the daemon keeps in `/var/db/dezhban`. They are

@@ -25,6 +25,12 @@ changes.
   which behave identically under a terminal `sudo` and the app's elevation.
   (`uninstall` also boots the job out first, so it can no longer remove the
   plist while leaving the daemon resident.)
+- **A startup refusal is now visible, not just logged.** When the run loop
+  refuses to arm (e.g. the VPN guard's "refusing to start: the tunnel is up but
+  no server address is known") or fails, the reason is published into the final
+  `posture: "stopped"` snapshot as `enforcementErr` — so `status --json` and the
+  menubar app can say *why* the daemon is down instead of showing a bare
+  "stopped" indistinguishable from a deliberate shutdown.
 
 ## [0.1.0] - 2026-07-14
 

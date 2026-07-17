@@ -304,24 +304,33 @@ func Run(ctx context.Context, o Options) error {
 	// menubar app, `status --json`) flip to stopped at once on a clean shutdown
 	// instead of waiting out the staleness window. It's queued on the same channel
 	// and flushed by the defer above; a hard crash still relies on staleness.
-	o.publishStopped()
+	o.publishStopped(runErr)
 	return runErr
 }
 
 // publishStopped emits a terminal snapshot marking the daemon as no longer
-// enforcing. Cleanup (deferred) removes the rules right after.
-func (o Options) publishStopped() {
+// enforcing. Cleanup (deferred) removes the rules right after. A non-nil
+// runErr — a startup refusal or a loop failure — rides along as
+// enforcementErr: without it the only trace of WHY the daemon went down is a
+// log line under a service manager, and the state file (the one surface the
+// menubar app and `status --json` actually read) would show a bare "stopped"
+// indistinguishable from a deliberate one.
+func (o Options) publishStopped(runErr error) {
 	if o.Publish == nil {
 		return
 	}
-	o.Publish(state.Snapshot{
+	snap := state.Snapshot{
 		Time:                time.Now(),
 		Mode:                modeName(o.VPN),
 		Posture:             "stopped",
 		Blocked:             false,
 		PollIntervalSeconds: int(o.Interval.Seconds()),
 		PID:                 os.Getpid(),
-	})
+	}
+	if runErr != nil {
+		snap.EnforcementErr = runErr.Error()
+	}
+	o.Publish(snap)
 }
 
 // runVPN installs the always-on guard immediately at startup (so a tunnel drop
