@@ -17,9 +17,11 @@ VPN. See [docs/modes.md](docs/modes.md).
 misconfigured, so it is a deliberate safety opt-in — not a statement that the
 fallback is the normal mode.
 
-Built phase-by-phase; see [docs/plans/readme.md](docs/plans/readme.md) (index) —
-each `phase-N-*.md` is an independently buildable unit with its own acceptance
-checks. Implement and verify one phase before the next.
+The feature set is complete and the phase plans it was built from are retired (they
+live in git history). What survives them is the verification they specified:
+[docs/acceptance.md](docs/acceptance.md) is the standing checklist of privileged,
+on-host checks that CI cannot run, and the design rationale is recorded under
+"Design decisions" in [docs/architecture.md](docs/architecture.md).
 
 ## Commands
 
@@ -42,7 +44,7 @@ task pkg:cycle                            # full roll: build .pkg + install + la
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
-`version`, plus a global `-v`/`--verbose`. `validate`, `print-rules`, `doctor`,
+`switch`, `vpn`, `setup`, `config`, `completion`, `version`, plus a global `-v`/`--verbose`. `validate`, `print-rules`, `doctor`,
 and `monitor` are read-only (no root, no firewall effects); the rest of the
 privileged set requires root/admin. Full reference: [docs/usage.md](docs/usage.md).
 

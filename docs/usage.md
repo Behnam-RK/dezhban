@@ -243,7 +243,5 @@ The app runs no IP/country poller of its own — it reads the daemon's state fil
 (see [state.md](state.md)), the single source of truth for what the daemon decided.
 It is unsigned for local use (right-click → Open past Gatekeeper). The in-app
 **VPN guard mode** panel edits `vpn.enabled` + tunnels/endpoints through the same
-validation as `config set`, then restarts the daemon to apply. Design notes:
-[plans/phase-8-macos-gui.md](plans/phase-8-macos-gui.md),
-[plans/phase-10-gui-diagnostics.md](plans/phase-10-gui-diagnostics.md),
-[plans/phase-11-gui-vpn-config.md](plans/phase-11-gui-vpn-config.md).
+validation as `config set`, then restarts the daemon to apply. The app's own
+verification checklist lives in [acceptance.md](acceptance.md#macos-menubar-app).

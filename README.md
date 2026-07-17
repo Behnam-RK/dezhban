@@ -113,7 +113,7 @@ Full field reference, the `vpn` block, and validation rules:
 | [docs/development.md](docs/development.md) | Build, cross-compile, dev loop, CI, hooks. |
 | [docs/releasing.md](docs/releasing.md) | Cutting a release, CHANGELOG discipline, unsigned macOS GUI. |
 | [docs/state.md](docs/state.md) | The `state.json` posture file. |
-| [docs/plans/readme.md](docs/plans/readme.md) | Phase-by-phase plans and locked decisions. |
+| [docs/acceptance.md](docs/acceptance.md) | The on-host verification checklist CI can't run. |
 
 ## License
 
