@@ -168,7 +168,7 @@ two-environment-variable change, not a rewrite:
 ```sh
 INSTALLER_SIGN_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
 NOTARIZE_PROFILE="my-notary-profile" \
-task pkg:build VERSION=vX.Y.Z
+task pkg VERSION=vX.Y.Z
 ```
 
 `INSTALLER_SIGN_IDENTITY` alone signs the package; adding `NOTARIZE_PROFILE` also

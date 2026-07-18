@@ -36,11 +36,15 @@ task validate CONFIG=configs/dezhban.dev.json    # parse + validate
 task rules MODE=guard CONFIG=...                 # print the ruleset, don't apply
 task doctor CONFIG=... -- --discover             # diagnose VPN guard / lockout risks
 
-task build:all                            # all 5 targets into dist/, version-stamped
-task gui:build                            # macOS menubar app → dist/Dezhban.app (macOS only)
-task dev:all                              # fast roll: rebuild + swap CLI and app (macOS, sudo)
-task pkg:cycle                            # full roll: build .pkg + install + launch (macOS, sudo)
+task build:all                            # all 5 targets into dist/, version-stamped (hidden task)
+task gui:build                            # macOS menubar app → dist/Dezhban.app (macOS only, hidden task)
+task dev                                  # fast roll: rebuild + swap CLI and app (macOS, sudo)
+task install                              # full roll: build .pkg + install + launch (macOS, sudo)
 ```
+
+Bare `task` on a TTY opens an interactive picker (`tools/taskmenu`, huh-based —
+dev tooling only, never the daemon path); non-TTY prints the grouped menu
+(`task help`). `task --list-all` shows hidden plumbing.
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,

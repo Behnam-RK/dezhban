@@ -49,6 +49,23 @@ changes.
 
 ### Changed
 
+- **Dev-task vocabulary overhauled** (developer-facing only; no runtime change).
+  The Taskfile shrinks to ~15 intent-named commands in four groups — everyday
+  (`build`, `check`, `dev`, `clean`), safe loop (`monitor`, `validate`, `rules`,
+  `doctor`, `status`), real install (`pkg`, `install`, `uninstall`, `panic`),
+  and the unchanged release trio. Renames: `dev:all`→`dev`, `pkg:build`→`pkg`,
+  `pkg:cycle`→`install` (`pkg:fresh` is now `install FRESH=1`),
+  `pkg:uninstall`→`uninstall`, `run-dry`→`monitor`. The source-install wrappers
+  (`install-local`, `reinstall`, `uninstall-local`) are gone — the scripts
+  remain standalone (`sh scripts/install-local.sh`). Bare `task` on a TTY now
+  opens an interactive picker (`tools/taskmenu`, built on the huh dependency
+  the setup wizard already uses); non-TTY prints a grouped menu. Privileged
+  flows ask for sudo up front, destructive ones confirm first, and behavior
+  vars are asked on-demand: unset on a TTY, `install` asks "wipe first?" and
+  `uninstall` asks "keep config?", and the release tasks ask for the
+  bump/version spec — passing `FRESH=`, `KEEP_CONFIG=`, `VERSION=`/`BUMP=`
+  explicitly (or having no TTY) skips the question. Plumbing is hidden behind
+  `task --list-all`.
 - **macOS app overhauled: one main window, minimal menubar.** A SwiftUI main
   window (sidebar: Overview / VPN Guard / Settings / Logs & Diagnostics /
   About) is now the primary surface — opened via "Open Dezhban…" (⌘O) or the

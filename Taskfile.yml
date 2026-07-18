@@ -1,18 +1,26 @@
-# dezhban task runner — https://taskfile.dev (`brew install go-task`).
-# `task` with no arguments lists everything; that list is the entry point.
+# dezhban task runner — https://taskfile.dev (`brew install go-task`, v3.30+ for `prompt:`).
 #
-# Two update-roll loops (macOS):
-#   fast : task dev:all    — rebuild CLI+GUI, swap them in place, restart/relaunch
-#   full : task pkg:cycle  — cross-compile, universal app, .pkg, installer, open app
+# `task` with no arguments is the entry point: an interactive picker on a TTY,
+# the static grouped menu otherwise (`task help` prints it directly). The visible
+# vocabulary is ~15 intent-named commands in four groups (everyday / safe loop /
+# real install / release); plumbing is hidden but callable (`task --list-all`).
+#
+# Two roll loops (macOS):
+#   fast : task dev      — rebuild CLI+GUI, swap them in place, restart/relaunch
+#   full : task install  — cross-compile, universal app, .pkg, installer, open app
 #
 # Each OS firewall backend is isolated behind build tags (pf/darwin,
 # nftables/linux, wf/windows), so every target compiles only its own backend.
 # The version is stamped via -ldflags; nothing else is linked in.
 #
 # scripts/*.sh stay runnable without task (escape hatches must not depend on
-# dev tooling): `sh scripts/panic.sh` always works.
+# dev tooling): `sh scripts/panic.sh` always works. The source-install scripts
+# (install-local.sh / reinstall.sh / uninstall-local.sh) have no task wrappers —
+# they are the standalone / non-macOS path, run them directly.
 
 version: '3'
+
+silent: true
 
 vars:
   BINARY: dezhban
@@ -26,7 +34,7 @@ vars:
   # not carry a leading "v" (a tag does, a bare `git describe --always` SHA does
   # not); artifact FILENAMES never do, because packaging/macos/build-pkg.sh writes
   # dezhban-${VERSION#v}.pkg. Deriving the filename independently on each side is
-  # what used to break `task pkg:install` — it looked for dezhban-v0.1-17-g….pkg
+  # what used to break the install step — it looked for dezhban-v0.1-17-g….pkg
   # while build-pkg.sh had written dezhban-0.1-17-g….pkg.
   VERSION_BARE: '{{trimPrefix "v" .VERSION}}'
   COMMIT:
@@ -45,65 +53,72 @@ vars:
 
 tasks:
   default:
-    desc: List all tasks
-    silent: true
     cmds:
-      - task --list
+      - |
+        if [ -t 0 ] && [ -t 1 ]; then
+          go run ./tools/taskmenu
+        else
+          task help
+        fi
 
-  # --- build & verify ---------------------------------------------------------
+  help:
+    cmds:
+      - |
+        cat <<'EOF'
+        dezhban — dev tasks   (interactive picker: run `task` on a TTY)
+
+          everyday
+            build      compile for this host into ./dezhban
+            check      vet + test + lint (golangci-lint if installed)
+            dev        fast roll: rebuild CLI+GUI, swap, restart (sudo)
+            clean      remove build artifacts
+
+          safe loop (no root, no firewall effects)
+            monitor    build + run the monitor in dry-run, Ctrl-C to stop (CONFIG=…)
+            validate   parse + validate CONFIG
+            rules      print the ruleset for MODE (guard|fullblock|legacy), don't apply
+            doctor     diagnose VPN-guard config (flags after --: task doctor -- --discover)
+            status     current posture
+
+          real install (macOS installer)
+            pkg        build dist/dezhban-<version>.pkg (universal CLI + app)
+            install    pkg + macOS Installer + open app — asks to wipe first (FRESH=1/0 skips; sudo)
+            uninstall  run the uninstaller — asks whether to keep config (KEEP_CONFIG=1/0 skips; sudo)
+            panic      force-remove dezhban's firewall rules — the lockout escape hatch
+
+          release
+            release:check    preflight: on main? clean? synced? CI green?
+            release:preview  dry run: version, notes, CHANGELOG diff (VERSION=|BUMP=, or asked)
+            release          cut it: confirm, dispatch the workflow, watch it (VERSION=|BUMP=, or asked)
+
+          plumbing (hidden; see `task --list-all`): build:all gui:build dev:cli dev:gui vet test lint
+          escape hatches (never need task): sh scripts/panic.sh, sh scripts/install-local.sh, …
+        EOF
+
+  # --- everyday ---------------------------------------------------------------
 
   build:
-    desc: Build for the host platform into ./dezhban, version-stamped
+    desc: Compile for this host into ./dezhban, version-stamped
     cmds:
       - go build -ldflags "{{.LDFLAGS}}" -o {{.BINARY}} {{.PKG}}
+      - echo "built ./{{.BINARY}} ({{.VERSION}})"
 
-  build:all:
-    desc: Cross-compile all 5 release targets into ./dist, version-stamped
+  check:
+    desc: vet + test + lint (golangci-lint if installed, else gofmt + go vet)
     cmds:
-      - |
-        mkdir -p {{.DIST}}
-        for p in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
-          os=${p%/*}; arch=${p#*/}; ext=""
-          [ "$os" = windows ] && ext=.exe
-          out={{.DIST}}/{{.BINARY}}-$os-$arch$ext
-          echo "building $out ({{.VERSION}})"
-          GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
-            go build -ldflags "{{.LDFLAGS}}" -o "$out" {{.PKG}} || exit 1
-        done
-        echo "done -> {{.DIST}}/"
-
-  vet:
-    desc: Static checks
-    cmds:
-      - go vet ./...
-
-  test:
-    desc: Run all tests
-    cmds:
-      - go test ./...
-
-  lint:
-    desc: golangci-lint if installed, else gofmt + go vet
-    cmds:
-      - |
-        if command -v golangci-lint >/dev/null 2>&1; then
-          golangci-lint run
-        else
-          echo "golangci-lint not found; running gofmt + go vet"
-          unformatted="$(gofmt -l .)"
-          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
-          go vet ./...
-        fi
+      - task: lint
+      - task: test
+      - echo "check passed"
 
   clean:
     desc: Remove build artifacts (dist/, ./dezhban, ./dezhban.exe, Swift .build)
     cmds:
       - rm -rf {{.DIST}} {{.BINARY}} {{.BINARY}}.exe gui/macos/.build
 
-  # --- safe dev loop (no root, no firewall effects) ---------------------------
+  # --- safe loop (no root, no firewall effects) -------------------------------
 
-  run-dry:
-    desc: Build + run the monitor in dry-run — no firewall touch (CONFIG=...)
+  monitor:
+    desc: Build + run the monitor in dry-run — no firewall touch, Ctrl-C to stop (CONFIG=…)
     cmds:
       - CONFIG={{.CONFIG}} sh scripts/dev.sh
 
@@ -124,49 +139,25 @@ tasks:
 
   status:
     desc: Show current posture (installed CLI if present, else go run)
-    silent: true
     cmds:
       - |
         if [ -x {{.INSTALL_BIN}} ]; then {{.INSTALL_BIN}} status; else go run {{.PKG}} status; fi
 
-  # --- service lifecycle from source (scripts prompt for sudo themselves) -----
-
-  install-local:
-    desc: Validate, build, install config + service, start it (sudo inside)
-    cmds:
-      - CONFIG={{.CONFIG}} sh scripts/install-local.sh
-
-  reinstall:
-    desc: Tear down, then install fresh from source (sudo inside)
-    cmds:
-      - CONFIG={{.CONFIG}} sh scripts/reinstall.sh
-
-  uninstall-local:
-    desc: Panic-teardown, unregister service, remove config (KEEP_CONFIG=1 to keep; sudo inside)
-    cmds:
-      - sh scripts/uninstall-local.sh
-
-  panic:
-    desc: Force-remove dezhban's firewall rules — the lockout escape hatch (sudo inside)
-    cmds:
-      - sh scripts/panic.sh
-
-  # --- macOS menubar GUI -------------------------------------------------------
-
-  gui:build:
-    desc: Build the menubar app into ./dist/Dezhban.app (UNIVERSAL=1 for arm64+x86_64)
-    platforms: [darwin]
-    cmds:
-      # build-app.sh checks DEZHBAN_APP_UNIVERSAL for non-emptiness, so it must
-      # stay UNSET (not "0") for a single-arch build.
-      - |
-        if [ "{{.UNIVERSAL}}" = "1" ]; then export DEZHBAN_APP_UNIVERSAL=1; fi
-        DEZHBAN_VERSION={{.VERSION}} bash gui/macos/build-app.sh {{.ABS_DIST}}
-
   # --- fast dev loop (everyday roll; seconds, not minutes) --------------------
 
+  dev:
+    desc: 'Fast roll: rebuild CLI+GUI, swap in place, restart daemon + relaunch app (sudo)'
+    platforms: [darwin]
+    preconditions:
+      - sh: test -f {{.DAEMON_PLIST}} || test -d {{.APP_DIR}}
+        msg: 'Nothing installed yet — run `task install` first (or sh scripts/install-local.sh).'
+    cmds:
+      # Ask for sudo up front so the prompt fires now, not after the build.
+      - sudo -v
+      - task: dev:cli
+      - task: dev:gui
+
   dev:cli:
-    desc: Rebuild CLI, swap /usr/local/bin/dezhban, restart daemon if registered (sudo)
     platforms: [darwin]
     deps: [build]
     cmds:
@@ -174,21 +165,22 @@ tasks:
       # running (ad-hoc signed) binary in place — the kernel kills such a
       # process on Apple Silicon. The running daemon keeps its old image
       # until the restart below.
+      - echo "→ swapping {{.INSTALL_BIN}}"
       - sudo install -m 0755 ./{{.BINARY}} {{.INSTALL_BIN}}
       - |
         if [ -f {{.DAEMON_PLIST}} ]; then
-          echo "restarting daemon..."
+          echo "→ restarting daemon"
           sudo {{.INSTALL_BIN}} restart
         else
-          echo "no LaunchDaemon registered; skipping restart (task install-local, or install the .pkg)"
+          echo "no LaunchDaemon registered; skipping restart (task install)"
         fi
       - '{{.INSTALL_BIN}} version'
 
   dev:gui:
-    desc: Rebuild menubar app (host arch), swap /Applications/Dezhban.app, relaunch (sudo)
     platforms: [darwin]
     cmds:
       - task: gui:build
+      - echo "→ relaunching Dezhban.app"
       - osascript -e 'quit app "Dezhban"' 2>/dev/null || true
       - pkill -x DezhbanMenu 2>/dev/null || true
       - sleep 1
@@ -198,18 +190,14 @@ tasks:
       - sudo ditto {{.DIST}}/Dezhban.app {{.APP_DIR}}
       - open {{.APP_DIR}}
 
-  dev:all:
-    desc: 'Fast roll of both: dev:cli then dev:gui (sudo)'
-    platforms: [darwin]
-    cmds:
-      - task: dev:cli
-      - task: dev:gui
+  # --- real install (macOS installer) -----------------------------------------
 
-  # --- full installer loop -----------------------------------------------------
-
-  pkg:build:
+  pkg:
     desc: Build the macOS installer into ./dist/dezhban-<version>.pkg (universal CLI + app)
     platforms: [darwin]
+    preconditions:
+      - sh: xcode-select -p >/dev/null 2>&1
+        msg: 'Xcode Command Line Tools required — run `xcode-select --install`.'
     deps: # independent — run in parallel
       - build:all
       - task: gui:build
@@ -217,37 +205,104 @@ tasks:
     cmds:
       - VERSION={{.VERSION}} bash packaging/macos/build-pkg.sh {{.ABS_DIST}}
 
-  pkg:install:
-    desc: Install ./dist/dezhban-<version>.pkg via the macOS Installer (sudo)
-    platforms: [darwin]
-    preconditions:
-      # VERSION_BARE, not VERSION: build-pkg.sh strips the leading "v" from the
-      # filename, so this must too or it can never find what pkg:build produced.
-      - sh: test -f {{.DIST}}/dezhban-{{.VERSION_BARE}}.pkg
-        msg: 'No {{.DIST}}/dezhban-{{.VERSION_BARE}}.pkg — run `task pkg:build` first (note: a dirty/changed tree changes the version suffix).'
-    cmds:
-      - sudo installer -pkg {{.DIST}}/dezhban-{{.VERSION_BARE}}.pkg -target /
-
-  pkg:uninstall:
-    desc: Run the uninstaller (repo copy); keeps /etc/dezhban by default, KEEP_CONFIG=0 to purge (sudo)
+  install:
+    desc: 'Real install: build the .pkg, run the macOS Installer, open the app (asks to wipe first; FRESH=1/0 skips the question; sudo)'
     platforms: [darwin]
     cmds:
-      - sudo env KEEP_CONFIG={{.KEEP_CONFIG | default "1"}} sh packaging/macos/uninstall.sh
-
-  pkg:cycle:
-    desc: 'Full loop: build:all + universal app + .pkg + install (upgrade-in-place) + open app (sudo)'
-    platforms: [darwin]
-    cmds:
-      - task: pkg:build
-      - task: pkg:install
+      # Ask for sudo up front so the prompt fires now, not after the build.
+      - sudo -v
+      # On-demand var: FRESH unset on a TTY → ask; FRESH=1/0 explicit (or no
+      # TTY) → no question. task gives commands no TTY, hence /dev/tty — the
+      # same pattern as `release`.
+      - |
+        fresh='{{.FRESH | default ""}}'
+        if [ -z "$fresh" ] && (exec </dev/tty) 2>/dev/null; then
+          printf 'Wipe first? Runs the uninstaller before installing (config kept). [y/N] ' > /dev/tty
+          read -r reply < /dev/tty
+          case "$reply" in y|Y) fresh=1 ;; esac
+        fi
+        if [ "$fresh" = "1" ]; then
+          echo "→ uninstalling first"
+          sudo env KEEP_CONFIG=1 sh packaging/macos/uninstall.sh
+        fi
+      - task: pkg
+      - |
+        set -eu
+        pkg={{.DIST}}/dezhban-{{.VERSION_BARE}}.pkg
+        [ -f "$pkg" ] || { echo "missing $pkg — did the pkg build fail?" >&2; exit 1; }
+        echo "→ installing $pkg"
+        sudo installer -pkg "$pkg" -target /
       - open {{.APP_DIR}}
+      - echo "installed $({{.INSTALL_BIN}} version 2>/dev/null || echo '(version unavailable)')"
 
-  pkg:fresh:
-    desc: 'pkg:cycle from a clean slate: uninstall first (config kept), then full loop (sudo)'
+  uninstall:
+    desc: Tear down the installed dezhban — asks whether to keep the config (KEEP_CONFIG=1/0 skips the question; sudo)
+    platforms: [darwin]
+    prompt: This removes the dezhban daemon, app, CLI, and firewall rules. Continue?
+    cmds:
+      - sudo -v
+      # On-demand var: KEEP_CONFIG unset on a TTY → ask (default keep);
+      # explicit 1/0 or no TTY → keep without asking.
+      - |
+        keep='{{.KEEP_CONFIG | default ""}}'
+        if [ -z "$keep" ] && (exec </dev/tty) 2>/dev/null; then
+          printf 'Keep the /etc/dezhban config? [Y/n] ' > /dev/tty
+          read -r reply < /dev/tty
+          case "$reply" in n|N) keep=0 ;; *) keep=1 ;; esac
+        fi
+        sudo env KEEP_CONFIG="${keep:-1}" sh packaging/macos/uninstall.sh
+
+  panic:
+    desc: Force-remove dezhban's firewall rules — the lockout escape hatch (sudo inside)
+    cmds:
+      - sh scripts/panic.sh
+
+  # --- hidden plumbing (callable, not listed) ---------------------------------
+
+  build:all:
+    # CI (ci.yml, release.yml) calls this by name — keep it callable.
+    cmds:
+      - |
+        mkdir -p {{.DIST}}
+        for p in darwin/arm64 darwin/amd64 linux/amd64 linux/arm64 windows/amd64; do
+          os=${p%/*}; arch=${p#*/}; ext=""
+          [ "$os" = windows ] && ext=.exe
+          out={{.DIST}}/{{.BINARY}}-$os-$arch$ext
+          echo "building $out ({{.VERSION}})"
+          GOOS=$os GOARCH=$arch CGO_ENABLED=0 \
+            go build -ldflags "{{.LDFLAGS}}" -o "$out" {{.PKG}} || exit 1
+        done
+        echo "done -> {{.DIST}}/"
+
+  gui:build:
+    # Build the menubar app into ./dist/Dezhban.app (UNIVERSAL=1 for arm64+x86_64).
     platforms: [darwin]
     cmds:
-      - task: pkg:uninstall
-      - task: pkg:cycle
+      # build-app.sh checks DEZHBAN_APP_UNIVERSAL for non-emptiness, so it must
+      # stay UNSET (not "0") for a single-arch build.
+      - |
+        if [ "{{.UNIVERSAL}}" = "1" ]; then export DEZHBAN_APP_UNIVERSAL=1; fi
+        DEZHBAN_VERSION={{.VERSION}} bash gui/macos/build-app.sh {{.ABS_DIST}}
+
+  vet:
+    cmds:
+      - go vet ./...
+
+  test:
+    cmds:
+      - go test ./...
+
+  lint:
+    cmds:
+      - |
+        if command -v golangci-lint >/dev/null 2>&1; then
+          golangci-lint run
+        else
+          echo "golangci-lint not found; running gofmt + go vet"
+          unformatted="$(gofmt -l .)"
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+          go vet ./...
+        fi
 
   # --- release ------------------------------------------------------------------
   #
@@ -266,17 +321,27 @@ tasks:
       - bash scripts/release.sh preflight
 
   release:preview:
-    desc: 'Dry run: print the resolved version, the notes, and the CHANGELOG diff (VERSION=|BUMP=)'
-    silent: true
+    desc: 'Dry run: print the resolved version, the notes, and the CHANGELOG diff (VERSION=|BUMP=, or asked)'
     cmds:
       - |
         set -eu
         # VERSION doubles as the build-stamp var (defaulting to `git describe`), so
-        # only a release-SHAPED value counts as an explicit request here.
+        # only a release-SHAPED value counts as an explicit request here. With
+        # neither given, ask on-demand on a TTY.
         if [ -n "{{.BUMP | default ""}}" ]; then
           eval "$(bash scripts/release.sh resolve --bump '{{.BUMP}}')"
         elif echo '{{.VERSION}}' | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
           eval "$(bash scripts/release.sh resolve --version '{{.VERSION}}')"
+        elif (exec </dev/tty) 2>/dev/null; then
+          printf 'release spec — patch|minor|major|rc, or a version X.Y.Z[-rc.N]: ' > /dev/tty
+          read -r spec < /dev/tty
+          case "$spec" in
+            patch|minor|major|rc) eval "$(bash scripts/release.sh resolve --bump "$spec")" ;;
+            *)
+              echo "$spec" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' \
+                || { echo "unrecognised: '$spec' — expected patch|minor|major|rc or X.Y.Z[-rc.N]" >&2; exit 2; }
+              eval "$(bash scripts/release.sh resolve --version "$spec")" ;;
+          esac
         else
           echo "pass VERSION=X.Y.Z[-rc.N] or BUMP=patch|minor|major|rc" >&2
           echo "(VERSION is '{{.VERSION}}' — the git-describe default, not a release version)" >&2
@@ -308,8 +373,7 @@ tasks:
         echo "--- end diff (working tree restored) -----------------------------------"
 
   release:
-    desc: 'Cut a release: preflight, confirm, dispatch the workflow, watch it (VERSION=|BUMP=)'
-    silent: true
+    desc: 'Cut a release: preflight, confirm, dispatch the workflow, watch it (VERSION=|BUMP=, or asked)'
     cmds:
       - |
         set -eu
@@ -321,6 +385,19 @@ tasks:
         elif echo '{{.VERSION}}' | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$'; then
           eval "$(bash scripts/release.sh resolve --version '{{.VERSION}}')"
           dispatch_args="-f version={{.VERSION}}"
+        elif (exec </dev/tty) 2>/dev/null; then
+          printf 'release spec — patch|minor|major|rc, or a version X.Y.Z[-rc.N]: ' > /dev/tty
+          read -r spec < /dev/tty
+          case "$spec" in
+            patch|minor|major|rc)
+              eval "$(bash scripts/release.sh resolve --bump "$spec")"
+              dispatch_args="-f bump=$spec" ;;
+            *)
+              echo "$spec" | grep -Eq '^v?[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' \
+                || { echo "unrecognised: '$spec' — expected patch|minor|major|rc or X.Y.Z[-rc.N]" >&2; exit 2; }
+              eval "$(bash scripts/release.sh resolve --version "$spec")"
+              dispatch_args="-f version=$spec" ;;
+          esac
         else
           echo "pass VERSION=X.Y.Z[-rc.N] or BUMP=patch|minor|major|rc" >&2
           echo "(VERSION is '{{.VERSION}}' — the git-describe default, not a release version)" >&2
@@ -348,7 +425,7 @@ tasks:
         if [ -n "{{.CONFIRM | default ""}}" ]; then
           reply='{{.CONFIRM}}'
           echo "  confirmed via CONFIRM=$reply"
-        elif [ -r /dev/tty ]; then
+        elif (exec </dev/tty) 2>/dev/null; then
           printf '  type the tag to confirm: ' > /dev/tty
           read -r reply < /dev/tty
         else

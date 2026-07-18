@@ -60,7 +60,7 @@ client's config, or from `dezhban doctor --discover`. Then:
 
 ```sh
 dezhban validate --config <your-config>   # confirm it parses
-task reinstall                            # tear down + reinstall the service (sudo prompted inside)
+task install FRESH=1                      # tear down + reinstall (or: sh scripts/reinstall.sh)
 ```
 
 ### Reconnect livelock during tunnel warmup (fixed)

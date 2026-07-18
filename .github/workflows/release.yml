@@ -207,7 +207,7 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build installer
-        run: task pkg:build VERSION=${{ needs.prepare.outputs.tag }}
+        run: task pkg VERSION=${{ needs.prepare.outputs.tag }}
 
       - name: Zip app bundle
         run: ditto -c -k --keepParent dist/Dezhban.app dist/Dezhban-macos.app.zip

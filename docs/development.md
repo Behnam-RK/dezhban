@@ -4,9 +4,12 @@ Requires Go 1.26+ and [Task](https://taskfile.dev) as the task runner
 (`brew install go-task`, or `go install github.com/go-task/task/v3/cmd/task@latest`).
 The GUI additionally needs a Swift toolchain (Command Line Tools, macOS 13+).
 
-`task` with no arguments lists every task with a one-line description — that
-list is the reference; this page explains the loops. Tasks marked `(sudo)`
-prompt for your password (or Touch ID) at the privileged step.
+`task` with no arguments is the entry point: on a TTY it opens an interactive
+picker (choose a flow, answer its prompts, it runs the task); piped or in CI it
+prints the static grouped menu (`task help` prints it directly, `task --list`
+is the flat reference, `task --list-all` includes hidden plumbing). This page
+explains the loops. Tasks marked `(sudo)` ask for your password up front, then
+run the privileged steps on the cached credential.
 
 Everything also works without Task — the plain Go commands:
 
@@ -57,13 +60,13 @@ Swift/AppKit target with no effect on the Go binary.
 
 ## The fast dev loop (macOS) — everyday testing
 
-Once dezhban is installed (via the `.pkg` or `task install-local`), rolling a
-new build onto the machine is one command:
+Once dezhban is installed (via `task install` or `sh scripts/install-local.sh`),
+rolling a new build onto the machine is one command:
 
 ```sh
-task dev:all     # rebuild CLI + GUI, swap both in place, restart daemon, relaunch app
-task dev:cli     # just the CLI: rebuild, swap /usr/local/bin/dezhban, restart daemon
-task dev:gui     # just the app: rebuild, swap /Applications/Dezhban.app, relaunch
+task dev         # rebuild CLI + GUI, swap both in place, restart daemon, relaunch app
+task dev:cli     # (hidden) just the CLI: rebuild, swap /usr/local/bin/dezhban, restart daemon
+task dev:gui     # (hidden) just the app: rebuild, swap /Applications/Dezhban.app, relaunch
 ```
 
 Seconds, not minutes: host-arch builds only, no installer. What `dev:cli` does
@@ -89,31 +92,31 @@ experience, use the full loop below.
 ## The full installer loop (macOS) — test what ships
 
 ```sh
-task pkg:cycle       # build everything + .pkg, install it, open the app
-task pkg:fresh       # same, but uninstall first (config kept) — a clean slate
+task install     # build everything + .pkg, install it, open the app; asks "wipe first?"
+task pkg         # just build ./dist/dezhban-<version>.pkg, don't install
+task uninstall   # run the uninstaller; asks whether to keep /etc/dezhban
 ```
 
-Or piecewise:
+Behavior knobs are asked **on-demand**: leave them unset on a TTY and the flow
+asks (wipe first? default no; keep config? default keep). Pass them explicitly —
+`FRESH=1`/`FRESH=0`, `KEEP_CONFIG=1`/`KEEP_CONFIG=0` — and the question is
+skipped, which is also what happens with no TTY (safe defaults: no wipe, keep
+config).
 
-```sh
-task pkg:build       # cross-compile + universal app + ./dist/dezhban-<version>.pkg
-task pkg:install     # sudo installer -pkg ... -target /
-task pkg:uninstall   # run the uninstaller; keeps /etc/dezhban (KEEP_CONFIG=0 to purge)
-```
-
-`pkg:cycle` installs over the existing installation (the installer overwrites
+`task install` installs over the existing installation (the installer overwrites
 the payload and the `postinstall`'s service registration is idempotent) — the
-same upgrade path a real user takes. Reach for `pkg:fresh` when you suspect
-leftover-file bugs that an upgrade would mask.
+same upgrade path a real user takes. Answer yes to "wipe first?" (or pass
+`FRESH=1`) when you suspect leftover-file bugs that an upgrade would mask.
 
 Gotchas:
 
-- The `.pkg` filename embeds `git describe --dirty`, so editing files between
-  `pkg:build` and `pkg:install` changes the expected name — `pkg:install` has a
-  precondition that catches this and tells you to rebuild. (It used to misfire on
-  *every* invocation once a `v`-prefixed tag existed, because it looked for
-  `dezhban-v0.1-…​.pkg` while `build-pkg.sh` had written `dezhban-0.1-…​.pkg`. Both
-  sides now go through `VERSION_BARE`.)
+- The `.pkg` filename embeds `git describe --dirty`. `task install` builds and
+  installs in one invocation so the name can't drift, but if you build with
+  `task pkg` and install by hand, editing files in between changes the expected
+  filename. (This used to misfire on *every* invocation once a `v`-prefixed tag
+  existed, because the installer looked for `dezhban-v0.1-…​.pkg` while
+  `build-pkg.sh` had written `dezhban-0.1-…​.pkg`. Both sides now go through
+  `VERSION_BARE`.)
 - After a **fresh** install there is no config yet: run `sudo dezhban setup`,
   then `sudo dezhban start` (or use the menubar app). See
   [usage.md](usage.md#create--manage-the-config).
@@ -126,7 +129,7 @@ Iterate on rules and config without root and without risking a lockout:
 task validate CONFIG=configs/dezhban.dev.json    # parse + validate a config
 task rules MODE=guard CONFIG=...                 # print the ruleset, don't apply it
 task doctor CONFIG=... -- --discover             # diagnose tunnels / lockout risks
-task run-dry                                     # build + run the monitor, no firewall touch
+task monitor                                     # build + run the monitor in dry-run, no firewall touch
 task status                                      # current posture (installed CLI or go run)
 ```
 
@@ -135,23 +138,23 @@ is for).
 
 ## Service lifecycle from source
 
-Wrappers for running the *source tree* as the installed service, without
-building a `.pkg`:
+Scripts for running the *source tree* as the installed service, without
+building a `.pkg`. They have no task wrappers — the macOS installer loop above
+is the blessed install path — but they remain the standalone / non-macOS path:
 
 ```sh
-task install-local        # validate, build, install config + service, start it
-task reinstall            # tear down, then install fresh
-task uninstall-local      # panic-teardown, unregister, remove config (KEEP_CONFIG=1 keeps it)
-task panic                # force-remove dezhban's firewall rules — the lockout escape hatch
+sh scripts/install-local.sh     # validate, build, install config + service, start it
+sh scripts/reinstall.sh         # tear down, then install fresh
+sh scripts/uninstall-local.sh   # panic-teardown, unregister, remove config (KEEP_CONFIG=1 keeps it)
+sh scripts/panic.sh             # force-remove dezhban's firewall rules (also: task panic)
 ```
 
-These wrap `scripts/*.sh`, which prompt for sudo themselves — run `task`
-unprivileged, never `sudo task`. The scripts stay standalone on purpose:
+The scripts prompt for sudo themselves and stay standalone on purpose:
 recovery must not depend on dev tooling, so `sh scripts/panic.sh` always works
 even with Task missing or the Taskfile broken (as does the `dezhban panic`
 subcommand itself).
 
-`task uninstall-local` panic-flushes the firewall rules first (so a wedged
+`uninstall-local.sh` panic-flushes the firewall rules first (so a wedged
 service can't leave you blocked), unregisters the service, then deletes the
 installed `/etc/dezhban` config; pass `KEEP_CONFIG=1` to keep the config. It also
 flags a `go install` copy of `dezhban` left on your `$PATH`, which would otherwise
