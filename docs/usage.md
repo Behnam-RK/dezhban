@@ -149,8 +149,8 @@ pairs. The multi-pair form applies them all to one in-memory config, validates
 **once**, and writes **once** — so there is no ordering to get right (a key that is
 only legal alongside another, like `vpn.enabled`, can come first) and no
 half-applied config if one value is rejected. It is also one privileged write, i.e.
-one password prompt instead of one per key; the menubar app's VPN panel uses it for
-exactly that reason.
+one password prompt instead of one per key; the macOS app's VPN Guard pane uses it
+for exactly that reason.
 
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
@@ -216,39 +216,57 @@ stopping the service never leaves a block-all rule behind. If the service crashe
 while blocked, the rules persist by design (a kill switch must not fail open); use
 `sudo dezhban panic` to flush them even with no daemon running.
 
-## macOS menubar app
+## macOS app
 
-On macOS an optional native **menubar app** (`Dezhban.app`) shows the daemon's
-live posture at a glance and offers click-to-control. It's a separate Swift/AppKit
-target, so the Go binary keeps its zero-dependency, `CGO_ENABLED=0` promise. Build
-it with `task gui:build` (see [development.md](development.md)).
+On macOS an optional native app (`Dezhban.app`) shows the daemon's live posture
+and offers click-to-control. It's a separate Swift target (AppKit shell, SwiftUI
+main window), so the Go binary keeps its zero-dependency, `CGO_ENABLED=0`
+promise. Build it with `task gui:build` (see [development.md](development.md)).
 
-- **Status icon** — full-color brand state icons (from `assets/`), shown in both
-  the menu bar and the Dock tile: teal allow/guard, red block/full-block, amber
-  warning (switch window open or enforcement error), gray stopped or stale;
-  repainted about once a second. Outside the assembled `.app` bundle (e.g. a bare
-  `swift run`) the menu bar falls back to monochrome SF Symbol shields.
-- **Menu** — Start/Stop kill switch, Block now/Unblock, the VPN switch window
-  (Switching VPN… / Cancel) when in VPN mode, **Run diagnostics…**, **Panic —
-  force unblock…**, **Install/Uninstall service**, **Settings…**, View logs,
-  **About Dezhban…**, Quit. Items enable/disable from the current state.
-- **Settings…** — one window for the tweaks: startup ("Start protection at
-  boot" installs the launchd system service so enforcement survives reboots;
-  "Open this menubar app at login" via `SMAppService`), protection (blocked
-  countries, switch-window duration, endpoint grace) applied through one
-  validated `config set` batch, plus the **VPN guard configuration** panel and
-  the raw config file.
-- **Passwords** — Block, Unblock and the switch window go to the running daemon
-  over its control socket and raise **no prompt at all**. Only the service lifecycle
-  (Install/Uninstall/Start/Stop) and Panic raise the native admin prompt, because
-  neither can be daemon-mediated. Each menu item's tooltip says which it will be.
-- **Output & diagnostics** — Run diagnostics, panic, and install/uninstall
-  capture their command output in a scrollable panel; View logs streams a scoped
-  `log show`/`log stream` (or opens Console.app).
+Two surfaces, split by urgency:
+
+- **Menubar dropdown — the safety/glance core.** One status line (posture, exit
+  country/provider), **Open Dezhban…**, **Block now/Unblock**, the VPN switch
+  window (Switching VPN… / Cancel with a live countdown) when in VPN mode,
+  **Panic — force unblock…**, Quit. These are the time-critical and
+  lockout-recovery actions; they never depend on the main window opening. Items
+  enable/disable from the current state.
+- **Main window — everything else**, opened from the dropdown or by clicking the
+  Dock icon (never automatically at launch). Sidebar sections:
+  - **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
+    profile, switch-window countdown, enforcement-error banner) plus the daily
+    controls and a visually-separated Panic. Degraded states are guided: CLI
+    missing, service not installed, and daemon stopped each render an
+    explanation with the one relevant action inline (Install service… / Start
+    kill switch).
+  - **VPN Guard** — edits `vpn.enabled` + tunnels/endpoints/autodetection through
+    the same validation as `config set`, then (after an explicit restart-warning
+    choice) restarts the daemon to apply and verifies the new posture.
+  - **Settings** — startup ("Start protection at boot" installs the launchd
+    system service so enforcement survives reboots; "Open this app at login" via
+    `SMAppService`; essential-event notifications), protection (blocked
+    countries, switch-window duration, endpoint grace) applied through one
+    validated `config set` batch, and the raw config file escape hatch (some
+    advanced options are JSON-only).
+  - **Logs & Diagnostics** — read-only `doctor`, a scoped `log show --last 1h`,
+    a live `log stream` with Stop (also opens Console.app), and the transcripts
+    of window-triggered panic/install/uninstall/apply runs.
+  - **About** — version, config/binary paths, posture, service state, and which
+    elevation path (Touch ID-capable Authorization Services vs password-only
+    fallback) privileged actions will take.
+
+**Status icon** — full-color brand state icons (from `gui/assets/`), shown in both
+the menu bar and the Dock tile: teal allow/guard, red block/full-block, amber
+warning (switch window open or enforcement error), gray stopped or stale;
+repainted about once a second. Outside the assembled `.app` bundle (e.g. a bare
+`swift run`) the menu bar falls back to monochrome SF Symbol shields.
+
+**Passwords** — Block, Unblock and the switch window go to the running daemon
+over its control socket and raise **no prompt at all**. Only the service lifecycle
+(Install/Uninstall/Start/Stop) and Panic raise the native admin prompt, because
+neither can be daemon-mediated. Tooltips say which it will be before you click.
 
 The app runs no IP/country poller of its own — it reads the daemon's state file
 (see [state.md](state.md)), the single source of truth for what the daemon decided.
-It is unsigned for local use (right-click → Open past Gatekeeper). The in-app
-**VPN guard mode** panel edits `vpn.enabled` + tunnels/endpoints through the same
-validation as `config set`, then restarts the daemon to apply. The app's own
-verification checklist lives in [acceptance.md](acceptance.md#macos-menubar-app).
+It is unsigned for local use (right-click → Open past Gatekeeper). The app's own
+verification checklist lives in [acceptance.md](acceptance.md#macos-app).

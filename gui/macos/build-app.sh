@@ -4,8 +4,8 @@
 # toolchain (Command Line Tools are enough — no full Xcode required).
 set -euo pipefail
 
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO_ROOT="$(cd "$HERE/.." && pwd)"
+HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"   # gui/macos
+REPO_ROOT="$(cd "$HERE/../.." && pwd)"
 OUT_DIR="${1:-$REPO_ROOT/dist}"
 APP="$OUT_DIR/Dezhban.app"
 CONFIG="${CONFIG:-release}"
@@ -58,10 +58,10 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/DezhbanMenu"
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
-# Brand assets (assets/png at the repo root): full-color menubar + Dock state
-# icons. Optional — a checkout without assets/ still builds, and AppDelegate
+# Brand assets (gui/assets/png): full-color menubar + Dock state
+# icons. Optional — a checkout without gui/assets/ still builds, and AppDelegate
 # falls back to SF Symbols / the static app icon when the PNGs are absent.
-ASSETS="$REPO_ROOT/assets/png"
+ASSETS="$REPO_ROOT/gui/assets/png"
 if [[ -d "$ASSETS" ]]; then
 	for state in on off blocked warning; do
 		# Menubar: the asset pack ships dedicated colored menubar glyphs
@@ -82,7 +82,7 @@ if [[ -d "$ASSETS" ]]; then
 	done
 fi
 
-# App icon: a hand-dropped macos-gui/AppIcon.icns wins; otherwise one is
+# App icon: a hand-dropped gui/macos/AppIcon.icns wins; otherwise one is
 # generated from the 1024px brand master so Finder / the installer / the Dock's
 # default tile all show the brand icon.
 if [[ -f "$HERE/AppIcon.icns" ]]; then

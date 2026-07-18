@@ -140,7 +140,7 @@ Per OS, privileged:
       config with **zero** concrete interface names, and offers to install and
       start the service.
 
-## macOS menubar app
+## macOS app
 
 Build and launch:
 
@@ -148,39 +148,68 @@ Build and launch:
 task gui:build && open dist/Dezhban.app
 ```
 
+### Surfaces & window lifecycle
+
+- [ ] **Menubar is the safety core only.** The dropdown shows exactly: one status
+      line, Open Dezhban… (⌘O), Block now, Unblock, the switch item (VPN mode),
+      Panic — force unblock…, Quit. Nothing else.
+- [ ] **Window opening.** "Open Dezhban…" and a Dock-icon click both open/focus
+      the main window; a fresh app launch opens **no** window (menubar + Dock
+      only); closing the window (⌘W) leaves the app and icon running.
 - [ ] **Posture tracking.** Drive the daemon with `--simulate-country IR` / `US`
       and confirm the menu bar icon *and* the Dock tile flip red/teal and the
-      menu detail updates within ~1 s.
+      window's Overview updates within ~1 s.
 - [ ] **Auto-arm (`vpn.autoArm: true`).** Start the daemon with the VPN off →
       posture `standby`, egress open, gray icon. Connect the VPN → `guard`
       within a few seconds ("AUTO-ARMED" in the log) and a "Guard armed"
       notification. Disconnect → guard HOLDS (red blocked icon, egress cut).
-      Menu **Unblock** → back to `standby`, egress open. Reconnect → arms again.
-- [ ] **Essential notifications.** With notifications on (Settings), the
+      **Unblock** (menubar or Overview) → back to `standby`, egress open.
+      Reconnect → arms again.
+- [ ] **Essential notifications.** With notifications on (Settings pane), the
       armed/blocked/warning/standby/stopped transitions each notify once; no
       notification at app launch or on routine country/endpoint updates.
 - [ ] **Staleness.** Kill the daemon → the icon goes gray after the 90 s staleness
-      window.
-- [ ] **Privileged actions.** Start/Stop and Block/Unblock each raise a native
-      admin prompt (Touch ID or password), run, and the state reflects the result.
-- [ ] **Launch at login** toggles `SMAppService.mainApp.status` to `.enabled`, and
-      the app relaunches after a logout/login cycle.
+      window, and Overview switches to the guided "Protection stopped" state.
+
+### Actions
+
+- [ ] **Routine ops are passwordless with a live daemon.** Block/Unblock and the
+      switch window complete over the control socket with **no** prompt, from both
+      the menubar and Overview; the switch countdown ticks in both surfaces and
+      matches.
+- [ ] **Privileged actions.** Start/Stop raise a native admin prompt (Touch ID or
+      password), run, and the state reflects the result.
+- [ ] **Menubar panic works without the window.** From a fresh launch (main window
+      never opened): Panic shows a confirmation, confirming removes the rules and
+      the transcript appears in an alert; cancelling does nothing.
+- [ ] **Window panic** routes its transcript to the Logs & Diagnostics pane and
+      navigates there.
 - [ ] **Failures are visible, not silent.** Move the CLI binary aside (or invalidate
       the config), then trigger Start/Stop → the alert shows real stderr.
-- [ ] **Diagnostics** match a hand-run `dezhban doctor --config …`.
-- [ ] **Panic** shows a confirmation dialog; confirming removes the rules, and
-      cancelling does nothing.
-- [ ] **Install/uninstall menu items** reflect whether a service is registered, and
-      flip after the action.
-- [ ] **About** shows a version matching `dezhban version` and paths matching
-      `dezhban config path`.
-- [ ] **Logs.** "Show last hour" matches a hand-run `log show --last 1h --predicate
-      'process == "dezhban"'`. "Stream live…" updates live, and its Stop button ends
-      the child process — confirm no orphaned `log stream` in `ps` afterwards.
 
-### VPN config panel
+### Overview degraded states
 
-- [ ] Opening the panel with the service stopped seeds values matching
+- [ ] CLI binary moved aside → Overview explains "dezhban CLI not found" (and the
+      menubar status line agrees); restore it → recovers on next refresh.
+- [ ] Service uninstalled → "Not protecting" with an inline **Install service…**
+      that installs + starts under one prompt and shows its transcript in Logs.
+- [ ] Service installed but stopped → "Protection stopped" with an inline
+      **Start kill switch**.
+
+### Settings pane
+
+- [ ] **Start at boot** reflects whether the service is registered, flips after
+      install/uninstall (one prompt each, uninstall confirms first), and the
+      uninstall tears rules down before unload.
+- [ ] **Launch at login** toggles `SMAppService.mainApp.status` to `.enabled`, and
+      the app relaunches after a logout/login cycle.
+- [ ] Protection fields seed from `dezhban config show` values; Apply raises the
+      restart-warning choice; "Save only" writes without restarting.
+- [ ] **Open Config File…** opens the resolved config path.
+
+### VPN Guard pane
+
+- [ ] Opening the pane with the service stopped seeds values matching
       `dezhban config show`.
 - [ ] Applying a valid change raises the restart-warning modal, then: the `config
       set` calls land, the icon goes ⚪ across the stop/start gap, and it resolves
@@ -188,8 +217,17 @@ task gui:build && open dist/Dezhban.app
 - [ ] **A change that fails cross-field validation is refused *before* any
       restart** — e.g. `vpn.enabled=true` with empty `endpoints`. No stop/start may
       happen on a config that would fail to start.
-- [ ] Killing the daemon mid-restart makes the panel report failure, not success.
+- [ ] Killing the daemon mid-restart makes the pane report failure, not success.
 - [ ] One prompt per apply — not one per field.
+
+### Logs & Diagnostics pane
+
+- [ ] **Diagnostics** match a hand-run `dezhban doctor --config …`.
+- [ ] "Show last hour" matches a hand-run `log show --last 1h --predicate
+      'process == "dezhban"'`. "Stream live" updates live; Stop — or closing the
+      window mid-stream — ends the child process (no orphaned `log stream` in `ps`).
+- [ ] **About** shows a version matching `dezhban version` and paths matching
+      `dezhban config path`.
 
 ## Known gaps
 

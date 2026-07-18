@@ -9,7 +9,7 @@
 vendor/
 
 # Swift (macOS menubar GUI)
-macos-gui/.build/
+gui/macos/.build/
 
 # Runtime state
 /var/run/dezhban/

@@ -98,7 +98,7 @@ tasks:
   clean:
     desc: Remove build artifacts (dist/, ./dezhban, ./dezhban.exe, Swift .build)
     cmds:
-      - rm -rf {{.DIST}} {{.BINARY}} {{.BINARY}}.exe macos-gui/.build
+      - rm -rf {{.DIST}} {{.BINARY}} {{.BINARY}}.exe gui/macos/.build
 
   # --- safe dev loop (no root, no firewall effects) ---------------------------
 
@@ -161,7 +161,7 @@ tasks:
       # stay UNSET (not "0") for a single-arch build.
       - |
         if [ "{{.UNIVERSAL}}" = "1" ]; then export DEZHBAN_APP_UNIVERSAL=1; fi
-        DEZHBAN_VERSION={{.VERSION}} bash macos-gui/build-app.sh {{.ABS_DIST}}
+        DEZHBAN_VERSION={{.VERSION}} bash gui/macos/build-app.sh {{.ABS_DIST}}
 
   # --- fast dev loop (everyday roll; seconds, not minutes) --------------------
 

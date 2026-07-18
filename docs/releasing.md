@@ -175,7 +175,7 @@ task pkg:build VERSION=vX.Y.Z
 submits it with `notarytool` and staples the ticket. Both come from an Apple
 Developer account; wire them into the `build-macos` job as repository secrets when
 one exists. (The app bundle inside would need `codesign` + hardened runtime too —
-add that to `macos-gui/build-app.sh` at the same time.)
+add that to `gui/macos/build-app.sh` at the same time.)
 
 ## Requirements
 

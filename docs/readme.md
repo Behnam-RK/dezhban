@@ -7,7 +7,7 @@ Detailed docs live here:
 |---|---|
 | [modes.md](modes.md) | The two enforcement modes — **VPN guard (primary)** vs country-blocklist (fallback): how each works, the rulesets, and which one you want. |
 | [config.md](config.md) | Full JSON config field reference, the `vpn` block, validation rules, and sample configs. |
-| [usage.md](usage.md) | Every CLI command and flag, safe read-only inspection, running as a service, and the macOS menubar app. |
+| [usage.md](usage.md) | Every CLI command and flag, safe read-only inspection, running as a service, and the macOS app. |
 | [architecture.md](architecture.md) | The three-layer design, the `FirewallBackend` seam, the non-negotiable invariants, and the dependency strategy. |
 | [safety.md](safety.md) | Kill-switch safety principles and firewall teardown mechanics. |
 | [troubleshooting.md](troubleshooting.md) | Lockout recovery and VPN-guard failure runbook. |

@@ -2,7 +2,7 @@
 
 > Persian *dežbān* (دژبان) — "gatekeeper / garrison guard."
 
-![dezhban — system-wide network kill switch](assets/png/banner-1280x640.png)
+![dezhban — system-wide network kill switch](gui/assets/png/banner-1280x640.png)
 
 A standalone, system-wide and cross-platform **network kill switch** written in Go, built for
 running behind full-tunnel VPNs. Its primary mode is an **always-on interface
@@ -83,7 +83,7 @@ sudo dezhban panic                # always-available teardown, no daemon needed
 `--config` is optional — dezhban resolves it from `$DEZHBAN_CONFIG` or the system
 path (`dezhban config path`). Tab-completion: `source <(dezhban completion zsh)`.
 The binary can also install itself as a boot-persistent service and ships an
-optional macOS menubar app. Full command reference: [docs/usage.md](docs/usage.md).
+optional macOS app (menubar + main window). Full command reference: [docs/usage.md](docs/usage.md).
 
 ## Modes at a glance
 
@@ -108,7 +108,7 @@ Full field reference, the `vpn` block, and validation rules:
 |---|---|
 | [docs/modes.md](docs/modes.md) | The two enforcement modes and which one you want. |
 | [docs/config.md](docs/config.md) | Config field reference and sample configs. |
-| [docs/usage.md](docs/usage.md) | CLI commands, flags, service install, menubar app. |
+| [docs/usage.md](docs/usage.md) | CLI commands, flags, service install, the macOS app. |
 | [docs/architecture.md](docs/architecture.md) | Three-layer design and the invariants it rests on. |
 | [docs/safety.md](docs/safety.md) | Kill-switch safety principles and teardown mechanics. |
 | [docs/troubleshooting.md](docs/troubleshooting.md) | Lockout recovery and VPN-guard failure runbook. |

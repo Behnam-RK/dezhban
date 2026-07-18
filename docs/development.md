@@ -23,7 +23,7 @@ go run ./cmd/dezhban status             # run a subcommand without installing
 ```sh
 task build                   # host build, version-stamped, into ./dezhban
 task build:all               # cross-compile all 5 targets into ./dist/
-task gui:build               # macOS menubar app -> ./dist/Dezhban.app
+task gui:build               # macOS app -> ./dist/Dezhban.app
 task gui:build UNIVERSAL=1   # same, as an arm64+x86_64 universal bundle
 task clean                   # remove dist/, ./dezhban, Swift .build
 
