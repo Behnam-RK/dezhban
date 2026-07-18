@@ -22,13 +22,13 @@ changes.
   explicit `unblock` with the tunnel down releases back to standby. Arm-time
   endpoint checks preserve the no-endpoint blackout refusal, and switch
   windows are refused in standby (egress is already open). Toggle in the
-  menubar app's VPN guard panel.
+  macOS app's VPN Guard pane.
 - **macOS: notifications for essential events** — guard armed / auto-armed,
   egress blocked, warnings (enforcement error, switch window open), standby,
   stopped. Posted by the menubar app on posture transitions only (never at
   launch, never for routine updates); toggle in Settings.
 
-- **Brand assets wired in end-to-end** (`assets/`): full-color menubar and Dock
+- **Brand assets wired in end-to-end** (`gui/assets/`): full-color menubar and Dock
   state icons (teal on / gray off / red blocked / amber warning), a generated
   `AppIcon.icns`, and the README banner. The Dock tile mirrors the enforcement
   posture (the app is no longer an `LSUIElement` agent).
@@ -38,13 +38,25 @@ changes.
   Discovery could only see an endpoint while its socket lived — and the socket
   dies with the tunnel, which walled off exactly the reconnect the guard keeps
   endpoints open for.
-- **macOS: Settings hub in the menubar app** ("Settings…"): startup controls
-  (install/uninstall the boot service, open the app at login), blocked
-  countries, switch-window duration, endpoint grace, and entry points to the
-  VPN guard panel and the config file. Replaces the scattered "VPN guard
-  mode" / "Open config file…" / "Launch at login" menu items. The About panel
-  now also reports which elevation path privileged actions take
+- **macOS: Settings hub in the app**: startup controls (install/uninstall the
+  boot service, open the app at login), blocked countries, switch-window
+  duration, endpoint grace, and the config-file escape hatch. Replaces the
+  scattered "VPN guard mode" / "Open config file…" / "Launch at login" menu
+  items. About now also reports which elevation path privileged actions take
   (Authorization Services with Touch ID vs. the password-only fallback).
+
+### Changed
+
+- **macOS app overhauled: one main window, minimal menubar.** A SwiftUI main
+  window (sidebar: Overview / VPN Guard / Settings / Logs & Diagnostics /
+  About) is now the primary surface — opened via "Open Dezhban…" (⌘O) or the
+  Dock icon, never at launch; closing it keeps the app running. The menubar
+  dropdown shrinks to the safety core: status line, Block/Unblock, the switch
+  window, Panic, Quit. Panic from the menubar still shows its transcript in a
+  plain alert, so the escape hatch never depends on the window opening. The
+  three separate panel windows (Settings, VPN guard, output) are gone; long
+  command output lands in the Logs & Diagnostics pane. Repo layout moved with
+  it: `macos-gui/` → `gui/macos/`, `assets/` → `gui/assets/`.
 
 ### Fixed
 
