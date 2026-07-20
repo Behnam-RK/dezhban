@@ -1206,54 +1206,42 @@ func cmdMonitor(args []string) int {
 	}
 }
 
-// policyForMode builds the firewall Policy the named mode would apply, mirroring
-// the run loop's guard/full-block construction (runner.runVPN). It is the single
-// source print-rules renders from. NOTE: keep in sync with runner.runVPN; a
-// future refactor should extract a shared constructor in the firewall package.
+// policyForMode builds the firewall Policy the named mode would apply. It is the
+// single source print-rules renders from, and it builds postures through
+// firewall.PolicyInput — the same constructor the run loop uses — so the preview
+// cannot drift from what the daemon would actually install.
 func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
 	tunnels := resolveTunnels(cfg, log)
 	// The physical dst-IP allowlist belongs only to the legacy (non-VPN) model.
-	// The runner's VPN guard/full-block (runner.vpnPolicies) never sets it — a VPN
-	// posture opens endpoints, not a physical allowlist. Populate it only for
-	// non-VPN configs; otherwise a VPN config with no static tunnels/endpoints
-	// (autoDiscover-only) would fail isVPNPolicy and render phantom physical egress.
+	// A VPN posture opens endpoints, not a physical allowlist, so the run loop
+	// leaves it empty. Populate it only for non-VPN configs; otherwise a VPN config
+	// with no static tunnels/endpoints (autoDiscover-only) would fail isVPNPolicy
+	// and render phantom physical egress.
 	vpnAllowlist := firewall.Allowlist{}
 	if !cfg.VPN.Enabled {
 		vpnAllowlist = buildAllowlist(cfg, log)
 	}
+	// Built lazily because it resolves endpoints, which does DNS. The `legacy`
+	// posture has no endpoints and never renders them, so resolving there would be
+	// pointless network work that also logs resolution failures for addresses the
+	// ruleset does not contain.
+	vpnInput := func() firewall.PolicyInput {
+		return firewall.PolicyInput{
+			Tunnels:          tunnels,
+			Endpoints:        resolveEndpointsOnce(cfg, log, tunnels),
+			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
+			WindowProtos:     cfg.VPN.Advanced.WindowProtocols,
+			WindowPorts:      cfg.VPN.Advanced.WindowPorts,
+			Allowlist:        vpnAllowlist,
+		}
+	}
 	switch mode {
 	case "guard":
-		// Mirror the runner's zero-tunnel standing posture (runner.vpnPolicies):
-		// applying ModeGuard with no tunnel interfaces is rejected at the backend
-		// seam as a total-lockout guard, so the daemon falls back to the
-		// endpoints-open FULL BLOCK shape. print-rules must render the same thing.
-		guardMode := firewall.ModeGuard
-		if len(tunnels) == 0 {
-			guardMode = firewall.ModeFullBlock
-		}
-		return firewall.Policy{
-			Mode:             guardMode,
-			Allowlist:        vpnAllowlist,
-			TunnelIfaces:     tunnels,
-			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
-			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
-		}, nil
+		return vpnInput().Guard(), nil
 	case "fullblock":
-		return firewall.Policy{
-			Mode:             firewall.ModeFullBlock,
-			Allowlist:        vpnAllowlist,
-			TunnelIfaces:     tunnels,
-			VPNEndpoints:     resolveEndpointsOnce(cfg, log, tunnels),
-			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
-		}, nil
+		return vpnInput().FullBlock(), nil
 	case "switch":
-		return firewall.Policy{
-			Mode:         firewall.ModeSwitchWindow,
-			TunnelIfaces: tunnels,
-			VPNEndpoints: resolveEndpointsOnce(cfg, log, tunnels),
-			WindowProtos: cfg.VPN.Advanced.WindowProtocols,
-			WindowPorts:  cfg.VPN.Advanced.WindowPorts,
-		}, nil
+		return vpnInput().SwitchWindow(), nil
 	case "legacy":
 		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.
 		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: buildAllowlist(cfg, log)}, nil

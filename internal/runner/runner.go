@@ -1180,16 +1180,26 @@ func (o Options) runVPN(ctx context.Context) error {
 // guard. FULL BLOCK cuts the tunnel too — the dst-IP allowlist is meaningless on
 // encrypted outer packets, so it is omitted.
 func (o Options) vpnPolicies(tunnels []string, endpoints []netip.Addr) (guard, fullBlock firewall.Policy) {
-	fullBlock = firewall.Policy{Mode: firewall.ModeFullBlock, TunnelIfaces: tunnels, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
-	if len(tunnels) == 0 && len(o.TunnelGroups) == 0 {
-		// Zero-tunnel standing posture: reuse the FULL BLOCK shape (endpoints open,
-		// everything else cut). Applying ModeGuard with no ifaces would be rejected
-		// at the backend seam (a total-lockout guard).
-		guard = fullBlock
-		return guard, fullBlock
+	in := o.policyInput(tunnels, endpoints)
+	return in.Guard(), in.FullBlock()
+}
+
+// policyInput gathers the posture-shaping options into the firewall package's
+// shared constructor input, so the run loop and print-rules build postures from
+// one definition (firewall.PolicyInput).
+//
+// Allowlist is deliberately left zero: a VPN posture opens endpoints, not a
+// physical dst-IP allowlist, which is meaningless against encrypted outer
+// packets. The runner's separate Allowlist hook feeds the legacy Block path only.
+func (o Options) policyInput(tunnels []string, endpoints []netip.Addr) firewall.PolicyInput {
+	return firewall.PolicyInput{
+		Tunnels:          tunnels,
+		TunnelGroups:     o.TunnelGroups,
+		Endpoints:        endpoints,
+		AllowPhysicalDNS: o.AllowPhysicalDNS,
+		WindowProtos:     o.WindowProtos,
+		WindowPorts:      o.WindowPorts,
 	}
-	guard = firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: tunnels, TunnelGroups: o.TunnelGroups, VPNEndpoints: endpoints, AllowPhysicalDNS: o.AllowPhysicalDNS}
-	return guard, fullBlock
 }
 
 // windowRestricted reports whether the switch window filters egress by
@@ -1203,14 +1213,7 @@ func (o Options) windowRestricted() bool {
 // windowPolicy builds the switch-window policy from the current tunnel/endpoint
 // sets plus any configured restriction knobs.
 func (o Options) windowPolicy(tunnels []string, endpoints []netip.Addr) firewall.Policy {
-	return firewall.Policy{
-		Mode:         firewall.ModeSwitchWindow,
-		TunnelIfaces: tunnels,
-		TunnelGroups: o.TunnelGroups,
-		VPNEndpoints: endpoints,
-		WindowProtos: o.WindowProtos,
-		WindowPorts:  o.WindowPorts,
-	}
+	return o.policyInput(tunnels, endpoints).SwitchWindow()
 }
 
 // reconcileTunnels merges the observed tunnel set into the current one: every
