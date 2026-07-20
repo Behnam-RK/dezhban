@@ -15,6 +15,6 @@ Tagline: SYSTEM-WIDE NETWORK KILL SWITCH. Corner stars are cut-out holes.
 - Persian دژبان: Rakkas / Noto Naskh Arabic (Google Fonts)
 
 ## Files
-- svg/ — resolution-independent masters (mark, guardian, state icons, menubar sets; `-template` = black+alpha for macOS, `-color` = full color, `-mono` uses currentColor)
+- svg/ — resolution-independent masters (mark, mark-mono, guardian, app-icon, state icons, menubar sets; `-template` = black+alpha for macOS, `-color` = full color, `-mono` uses currentColor)
 - png/ — app icon (1024), transparent logo (1024), state icons (512), menubar PNGs (44/88px, template + color), banner 1280×640
 - Menubar ON = standalone Firouzeh guardian (no gate); other menubar states use the simplified gate (no star holes)
