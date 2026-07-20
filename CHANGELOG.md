@@ -69,6 +69,19 @@ changes.
 
 ### Fixed
 
+- **The recovery probe no longer lifts the guard — a recurring leak is gone.**
+  While in FULL BLOCK, observing the exit country meant applying the **GUARD**
+  ruleset (full tunnel egress) for up to 8 seconds on *every* probe tick, just to
+  make one HTTP request, for as long as a forbidden exit persisted. FULL BLOCK
+  now carries a standing pass scoped to the tunnel interface **and** the geo
+  providers' addresses, so the lookup completes with no rule change and no leak.
+  The double scoping is load-bearing: with the tunnel down the lookup fails and
+  the posture holds — correct, since there is no exit to measure — whereas a pass
+  on the *physical* link would succeed and report the ISP's country, silently
+  defeating the check. Provider IPs refresh on the endpoint cadence, since
+  CDN-fronted providers rotate. If none resolve, recovery falls back to the old
+  lift-and-probe rather than losing the ability to recover at all.
+  See [ADR-0006](docs/adr/0006-geo-providers-tunnel-scoped.md).
 - **Failed exit-country lookups are now classified instead of all being reported
   as errors.** Three causes collapsed into one alarming message, and the most
   common was not a fault at all: during a switch or reconnect window the tunnel

@@ -125,6 +125,15 @@ type Options struct {
 	// tunnel set for the tunnel-internal drop filter. nil → ResolveEndpoints /
 	// static fallback (the tunnel set is then ignored).
 	ResolveEndpointsWith func(ctx context.Context, tunnels []string) netdetect.EndpointSet
+	// ResolveProviders recomputes the geo-API provider IPs, passed tunnel-scoped
+	// in FULL BLOCK so the exit-country lookup needs no guard lift. Called on the
+	// same cadence as endpoints, because CDN-fronted providers rotate addresses.
+	//
+	// nil (or an empty result) falls back to the old lift-and-probe recovery.
+	// That fallback is deliberate: losing the ability to observe the exit at all
+	// would mean a FULL BLOCK that can never lift, which is worse than a bounded
+	// leak.
+	ResolveProviders func(ctx context.Context) []netip.Addr
 	// ResolveEndpoints recomputes the VPN endpoint set (literals + resolved
 	// hostnames + live discovery). Called once at startup and on each
 	// EndpointRefresh tick. nil → fall back to the static Endpoints above.
@@ -474,7 +483,21 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 	}
 
-	guard, fullBlock := o.vpnPolicies(tunnels, endpoints)
+	// Geo-provider IPs, passed tunnel-scoped in FULL BLOCK so the exit-country
+	// lookup can traverse the tunnel without lifting the guard. Resolved here at
+	// startup and refreshed on the endpoint cadence, because CDN-fronted
+	// providers rotate addresses. An empty set is not fatal: the recovery probe
+	// falls back to the old lift-and-probe, which leaks briefly but still
+	// recovers — strictly better than a FULL BLOCK that can never lift.
+	var providers []netip.Addr
+	if o.ResolveProviders != nil {
+		providers = o.ResolveProviders(ctx)
+		if len(providers) == 0 {
+			o.Log.Warn("no geo-provider IPs resolved — recovery will briefly lift the guard to observe the exit")
+		}
+	}
+
+	guard, fullBlock := o.vpnPolicies(tunnels, endpoints, providers)
 	if standby {
 		// Passive start: no rules. Clear any stale dezhban rules from a prior
 		// run so "standby" is what it claims — best-effort, since there may be
@@ -549,7 +572,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	snapshot := func() {
 		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile)
 	}
-	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints) }
+	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
 
 	// reapplyStanding re-applies the guard after a tunnel/endpoint change, unless a
 	// window owns the rules, we are in FULL BLOCK (which renders no tunnel pass —
@@ -1137,6 +1160,25 @@ func (o Options) runGuard(ctx context.Context) error {
 			}
 			maybeStartCloseProbe()
 		case <-epTick.C:
+			// Refresh the provider IPs on the same cadence. CDN-fronted providers
+			// rotate addresses, and a stale set means the tunnel-scoped pass no
+			// longer covers where the lookup actually connects — which would send
+			// recovery back to lift-and-probe without anyone noticing.
+			if o.ResolveProviders != nil {
+				if fresh := o.ResolveProviders(ctx); len(fresh) > 0 && !sameAddrs(fresh, providers) {
+					providers = fresh
+					reapplyStanding("provider refresh")
+					if blocked {
+						// FULL BLOCK is the posture that carries these rules, and
+						// reapplyStanding deliberately skips it. Re-apply directly so a
+						// rotated provider IP becomes reachable without waiting for the
+						// exit to change.
+						if err := o.Backend.Apply(fullBlock); err != nil {
+							o.Log.Error("provider refresh: re-applying full block failed", "err", err)
+						}
+					}
+				}
+			}
 			fresh := o.resolveEndpointsWith(ctx, tunnels)
 			lastSet = fresh
 			// An open window is grow-only like a block: a plain refresh must not
@@ -1195,8 +1237,8 @@ func (o Options) runGuard(ctx context.Context) error {
 // before any VPN is connected without the backend rejecting an empty-iface
 // guard. FULL BLOCK cuts the tunnel too — the dst-IP allowlist is meaningless on
 // encrypted outer packets, so it is omitted.
-func (o Options) vpnPolicies(tunnels []string, endpoints []netip.Addr) (guard, fullBlock firewall.Policy) {
-	in := o.policyInput(tunnels, endpoints)
+func (o Options) vpnPolicies(tunnels []string, endpoints, providers []netip.Addr) (guard, fullBlock firewall.Policy) {
+	in := o.policyInput(tunnels, endpoints, providers)
 	return in.Guard(), in.FullBlock()
 }
 
@@ -1207,7 +1249,7 @@ func (o Options) vpnPolicies(tunnels []string, endpoints []netip.Addr) (guard, f
 // Allowlist is deliberately left zero: a VPN posture opens endpoints, not a
 // physical dst-IP allowlist, which is meaningless against encrypted outer
 // packets. The runner's separate Allowlist hook feeds the legacy Block path only.
-func (o Options) policyInput(tunnels []string, endpoints []netip.Addr) firewall.PolicyInput {
+func (o Options) policyInput(tunnels []string, endpoints, providers []netip.Addr) firewall.PolicyInput {
 	return firewall.PolicyInput{
 		Tunnels:           tunnels,
 		TunnelGroups:      o.TunnelGroups,
@@ -1216,6 +1258,7 @@ func (o Options) policyInput(tunnels []string, endpoints []netip.Addr) firewall.
 		AllowLocalNetwork: o.AllowLocalNetwork,
 		WindowProtos:      o.WindowProtos,
 		WindowPorts:       o.WindowPorts,
+		ProviderAddrs:     providers,
 	}
 }
 
@@ -1230,7 +1273,7 @@ func (o Options) windowRestricted() bool {
 // windowPolicy builds the switch-window policy from the current tunnel/endpoint
 // sets plus any configured restriction knobs.
 func (o Options) windowPolicy(tunnels []string, endpoints []netip.Addr) firewall.Policy {
-	return o.policyInput(tunnels, endpoints).SwitchWindow()
+	return o.policyInput(tunnels, endpoints, nil).SwitchWindow()
 }
 
 // reconcileTunnels merges the observed tunnel set into the current one: every
@@ -1346,11 +1389,15 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 	return res, enfErr
 }
 
-// probe is the VPN recovery probe: briefly lift the guard so a single geo lookup
-// can traverse the tunnel, then re-cut to FULL BLOCK immediately. The egress
-// window is one bounded lookup (probeEgressBudget) — the accepted recovery
-// semantics. A failed re-cut leaves egress open; it is logged at error and the
-// next tick re-applies the block.
+// probe is the VPN recovery probe: observe the exit country while in FULL BLOCK,
+// so a tunnel that returns to an allowed country can lift the block.
+//
+// Two paths. When the FULL BLOCK ruleset carries tunnel-scoped provider passes
+// (the normal case) the lookup just runs — no rule change, no leak. Only when
+// those are unavailable does it fall back to the historical behaviour below:
+// briefly lift the guard, observe, and re-cut immediately, with the egress
+// window bounded by probeEgressBudget. A failed re-cut leaves egress open; it is
+// logged at error and the next tick re-applies the block.
 // Both GUARD and FULL BLOCK keep the endpoint passes open, so the encrypted
 // tunnel transport survives the re-cut — the probe toggles only the tunnel's
 // user-egress, never tearing down a tunnel that has reconnected. That is what
@@ -1361,6 +1408,26 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 // failed guard LIFT is not — the guard still holds, egress stays cut — so that path
 // returns a nil enforcement error and reports the miss as a lookup failure instead.
 func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) (monitor.Result, error) {
+	// Fast path: FULL BLOCK already passes the geo providers through the tunnel,
+	// so the lookup needs no guard lift at all. This is the whole point of the
+	// tunnel-scoped provider rule — the old path opened FULL tunnel egress for up
+	// to probeEgressBudget on EVERY probe tick just to make one HTTP request, a
+	// recurring leak measured in seconds per tick for the entire time a forbidden
+	// exit persisted.
+	//
+	// The measurement stays honest because the pass is scoped to the tunnel: with
+	// the tunnel down the lookup simply fails and the posture holds, exactly as it
+	// should. A physical-link pass would instead succeed and report the ISP's
+	// country, silently defeating the check (docs/adr/0006).
+	if len(fullBlock.ProviderAddrs) > 0 {
+		pctx, cancel := context.WithTimeout(ctx, probeEgressBudget)
+		r, err := o.Monitor.Once(pctx)
+		cancel()
+		return monitor.Result{Reading: r, Err: err}, nil
+	}
+	// Fallback: no provider IPs resolved (resolution failed, or the backend could
+	// not express the rule). Lift briefly, observe, re-cut — a bounded leak, but
+	// far better than a FULL BLOCK that can never observe its way out.
 	if err := o.Backend.Apply(guard); err != nil {
 		// Could not open the tunnel to look — report as a lookup failure so the
 		// Decider treats the country as undeterminable (fail-closed keeps blocking).

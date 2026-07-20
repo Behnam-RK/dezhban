@@ -276,3 +276,57 @@ func TestRenderLocalNetwork(t *testing.T) {
 		t.Errorf("allowLocalNetwork=false must emit no LAN pass:\n%s", off)
 	}
 }
+
+// The provider pass must be scoped to BOTH the tunnel interface AND the provider
+// destinations. Either half alone breaks it, in opposite directions:
+//
+//   - destination only (a pass on the PHYSICAL link) lets the lookup succeed with
+//     the tunnel down and report the ISP's country — a normal, allowed one — so
+//     FULL BLOCK would never fire and a switch window would close early on a
+//     bogus "good exit". That is the unsafe variant ADR-0006 exists to prevent.
+//   - interface only is just ModeGuard: all tunnel egress, i.e. no block at all.
+func TestRenderTunnelScopedProviders(t *testing.T) {
+	rs := renderRuleset(Policy{
+		Mode:          ModeFullBlock,
+		TunnelIfaces:  []string{"utun4"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	var found bool
+	for _, line := range strings.Split(rs, "\n") {
+		if !strings.Contains(line, "104.16.1.1") {
+			continue
+		}
+		found = true
+		if !strings.Contains(line, "on { utun4 }") {
+			t.Errorf("provider pass is not tunnel-scoped — it would measure the ISP's country with the tunnel down:\n%s", line)
+		}
+	}
+	if !found {
+		t.Errorf("FULL BLOCK with providers must pass them through the tunnel:\n%s", rs)
+	}
+	assertDefaultDenyLast(t, rs)
+
+	// No tunnel to scope to → emit nothing rather than an unscoped pass. The
+	// daemon falls back to lift-and-probe; a physical-link pass would be worse
+	// than the leak it replaces.
+	noTun := renderRuleset(Policy{
+		Mode:          ModeFullBlock,
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	if strings.Contains(noTun, "104.16.1.1") {
+		t.Errorf("with no tunnel the provider pass must be omitted, not emitted unscoped:\n%s", noTun)
+	}
+
+	// GUARD already passes all tunnel egress; no provider rule needed.
+	g := renderRuleset(Policy{
+		Mode:          ModeGuard,
+		TunnelIfaces:  []string{"utun4"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	if strings.Contains(g, "104.16.1.1") {
+		t.Errorf("GUARD should not emit a provider pass — it already passes all tunnel egress:\n%s", g)
+	}
+}

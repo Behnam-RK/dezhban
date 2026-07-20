@@ -111,6 +111,31 @@ Only a live host can prove these — CI cannot reach a printer.
       with real packets, not by reading rules — rule inspection would have called
       the mapped-address bug "handled".
 
+## Recovery probe (the geo-provider pass)
+
+- [ ] **No guard lift during recovery.** Force FULL BLOCK (block the exit's
+      country), then watch the logs across several probe ticks: no
+      `apply-guard` / lift-and-re-cut cycle should appear, and
+      `pfctl -a dezhban -sr` must stay on the FULL BLOCK ruleset throughout.
+      A lift every tick is the ~8s recurring leak this replaced.
+- [ ] **The pass is tunnel-scoped.** The provider rule must read
+      `pass out quick on { utunN } to { … }` — interface **and** destination.
+      A destination-only rule is the unsafe variant: it would let the lookup
+      succeed with the tunnel down and report your ISP's country.
+- [ ] **The measurement stays honest.** Drop the tunnel while in FULL BLOCK and
+      confirm the lookup **fails** rather than silently reporting the ISP's
+      country. This check must never be "fixed" to pass by allowing the
+      providers on the physical link — that is precisely the bug ADR-0006
+      exists to prevent, and it would close switch windows early on a bogus
+      "good exit".
+- [ ] **Rotation is handled.** Leave the daemon in FULL BLOCK longer than
+      `vpn.endpointRefresh` and confirm recovery still works after the
+      providers' CDN addresses rotate.
+- [ ] **The fallback survives.** Point `providers` at an unresolvable host so no
+      IP resolves → the daemon logs that recovery will briefly lift the guard,
+      and recovery still works via lift-and-probe. A FULL BLOCK that can never
+      observe its way out would be worse than the leak.
+
 ## Country check (exit country, not physical location)
 
 - [ ] **Blocklist trips.** Add the VPN exit's country to `blockedCountries` →

@@ -464,6 +464,12 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
 		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
 		ResolveEndpoints:  func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
+		// Geo-provider IPs for the tunnel-scoped FULL BLOCK pass. Reuses the same
+		// resolver `block --force` uses; the runner calls it at startup and on
+		// each endpoint-refresh tick, since CDN-fronted providers rotate.
+		ResolveProviders: func(context.Context) []netip.Addr {
+			return buildProviderAllowlist(cfg, log).Hosts
+		},
 		ResolveEndpointsWith: func(ctx context.Context, tuns []string) netdetect.EndpointSet {
 			return epSrc.ResolveWith(ctx, tuns)
 		},

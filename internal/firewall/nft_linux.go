@@ -173,6 +173,7 @@ func renderNftRuleset(p Policy) string {
 			// the server and the tunnel can reconnect. A cut endpoint would livelock
 			// recovery (the VPN could never re-establish to be re-evaluated).
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
+			emitTunnelProviders(rule, p)
 			emitAllowPhysicalDNS(rule, p)
 			emitLocalNetwork(rule, p)
 		} else {
@@ -209,6 +210,36 @@ func emitAllowPhysicalDNS(rule func(string), p Policy) {
 	}
 	rule("udp dport 53 accept")
 	rule("tcp dport 53 accept")
+}
+
+// emitTunnelProviders renders the tunnel-scoped geo-provider passes used in FULL
+// BLOCK, so the exit-country lookup traverses the tunnel while all other user
+// traffic stays cut. No-op without both a tunnel and a resolved provider IP —
+// the daemon then falls back to lift-and-probe rather than losing recovery.
+func emitTunnelProviders(rule func(string), p Policy) {
+	if len(p.ProviderAddrs) == 0 {
+		return
+	}
+	var oif string
+	switch {
+	case len(p.TunnelIfaces) > 0:
+		oif = "oifname " + nftIfaceSet(p.TunnelIfaces)
+	case len(p.TunnelGroups) > 0:
+		oif = fmt.Sprintf("oifname %q", p.TunnelGroups[0]+"*")
+	default:
+		return
+	}
+	v4, v6 := splitAddrFamilies(p.ProviderAddrs)
+	if len(v4) > 0 {
+		rule(fmt.Sprintf("%s ip daddr %s accept", oif, nftAddrSet(v4)))
+	}
+	if len(v6) > 0 {
+		rule(fmt.Sprintf("%s ip6 daddr %s accept", oif, nftAddrSet(v6)))
+	}
+	// DNS through the tunnel so the provider hostname can be re-resolved —
+	// CDN-fronted providers rotate addresses, and allowPhysicalDNS may be off.
+	rule(oif + " udp dport 53 accept")
+	rule(oif + " tcp dport 53 accept")
 }
 
 // emitLocalNetwork renders the destination-scoped LAN passes

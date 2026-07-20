@@ -1,7 +1,7 @@
 # ADR-0006: Geo-provider passes are tunnel-scoped, never physical
 
 **Date**: 2026-07-20
-**Status**: accepted, implementation pending
+**Status**: accepted, implemented
 **Deciders**: Behnam RK
 
 > **Read this before changing anything about the geo lookup.** It records why the

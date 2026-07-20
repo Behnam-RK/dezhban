@@ -61,10 +61,22 @@ user traffic can reach a forbidden exit, but **keep the endpoint handshake open*
 so the encrypted transport survives and the tunnel can reconnect — a cut endpoint
 would livelock the reconnect. It is GUARD minus the tunnel-egress pass.
 
-Recovery uses a time-windowed probe: each tick the guard is briefly lifted for
-one geo lookup through the tunnel, then re-cut. The tunnel transport is never
-torn down across the re-cut, so a genuinely-down tunnel can come back and a later
-probe observe an allowed exit.
+Recovery observes the exit through a **tunnel-scoped geo-provider pass**: FULL
+BLOCK keeps a rule matching the tunnel interface *and* the provider addresses, so
+the exit-country lookup completes while every other byte stays cut. No rules
+change to make a reading, so there is no leak.
+
+The double scoping is the point. With the tunnel down the lookup simply fails and
+the posture holds — correct, because there is no VPN exit to measure. A pass on
+the *physical* link would instead succeed and report your ISP's country (a normal,
+allowed one), so FULL BLOCK would never fire. See
+[ADR-0006](adr/0006-geo-providers-tunnel-scoped.md).
+
+If no provider address can be resolved, recovery falls back to briefly lifting the
+guard for one bounded lookup and re-cutting — a small leak, but far better than a
+block that can never observe its way out. The tunnel transport survives either
+path, so a genuinely-down tunnel can come back and a later probe see an allowed
+exit.
 
 ```
 # GUARD  — pass quick on lo0 all no state

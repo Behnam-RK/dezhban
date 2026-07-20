@@ -1,7 +1,7 @@
 # ADR-0004: The switch window must be fully disableable
 
 **Date**: 2026-07-20
-**Status**: accepted, implementation pending
+**Status**: accepted, implemented
 **Deciders**: Behnam RK
 
 ## Context

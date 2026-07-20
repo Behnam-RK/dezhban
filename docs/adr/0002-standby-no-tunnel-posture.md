@@ -1,7 +1,7 @@
 # ADR-0002: Standby is the resting posture when no tunnel exists
 
 **Date**: 2026-07-20
-**Status**: accepted, implementation pending
+**Status**: accepted, implemented
 **Deciders**: Behnam RK
 
 ## Context

@@ -198,3 +198,37 @@ func TestAllowLocalNetworkReachesEveryPosture(t *testing.T) {
 		}
 	}
 }
+
+// The provider pass belongs to FULL BLOCK only. ModeGuard already passes all
+// tunnel egress, so emitting it there would be redundant noise; the switch
+// window passes everything anyway.
+func TestProviderAddrsOnlyOnFullBlock(t *testing.T) {
+	in := PolicyInput{
+		Tunnels:       []string{"utun4"},
+		Endpoints:     []netip.Addr{mustCanonAddr(t, "203.0.113.9")},
+		ProviderAddrs: []netip.Addr{mustCanonAddr(t, "104.16.1.1")},
+	}
+	if got := in.FullBlock().ProviderAddrs; len(got) != 1 {
+		t.Errorf("FullBlock dropped the provider addresses: %v", got)
+	}
+	if got := in.Guard().ProviderAddrs; len(got) != 0 {
+		t.Errorf("Guard carries provider addresses (%v) — redundant, it already passes all tunnel egress", got)
+	}
+	if got := in.SwitchWindow().ProviderAddrs; len(got) != 0 {
+		t.Errorf("SwitchWindow carries provider addresses (%v) — it passes everything already", got)
+	}
+}
+
+// Provider addresses go through the same canonicalisation as everything else: a
+// mapped address here would render as an inet6 rule that never matches, silently
+// sending recovery back to lift-and-probe.
+func TestProviderAddrsAreCanonicalised(t *testing.T) {
+	in := PolicyInput{
+		Tunnels:       []string{"utun4"},
+		ProviderAddrs: []netip.Addr{mustCanonAddr(t, "::ffff:104.16.1.1"), {}},
+	}
+	got := in.FullBlock().ProviderAddrs
+	if len(got) != 1 || !got[0].Is4() || got[0].String() != "104.16.1.1" {
+		t.Errorf("ProviderAddrs = %v, want [104.16.1.1] canonical with the invalid entry dropped", got)
+	}
+}

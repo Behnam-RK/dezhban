@@ -89,6 +89,19 @@ type Policy struct {
 	// never interface-scoped: it cannot become an internet path, because packets
 	// to public addresses remain blocked whatever the next hop is.
 	AllowLocalNetwork bool
+	// ProviderAddrs are the resolved geo-API provider IPs, passed in FULL BLOCK
+	// scoped to BOTH the tunnel interface AND these destinations, so the
+	// exit-country lookup can traverse the tunnel while every other byte stays
+	// cut. Only meaningful in ModeFullBlock — ModeGuard already passes all tunnel
+	// egress, so the rule would be redundant there.
+	//
+	// The double scoping is the entire point and must never be relaxed to one
+	// half. Destination-only (a pass on the PHYSICAL link) would let the lookup
+	// succeed with the tunnel down and report the ISP's country — a normal,
+	// allowed one — so FULL BLOCK would never fire and a window would close early
+	// on a bogus "good exit". Interface-only would just be ModeGuard. See
+	// docs/adr/0006.
+	ProviderAddrs []netip.Addr
 	// TunnelGroups are tunnel-interface *class* names (e.g. "utun") rendered as a
 	// pf interface group / nft wildcard ("utun*") so every current and future
 	// interface of that class is passed in ModeGuard without a rule reload when a

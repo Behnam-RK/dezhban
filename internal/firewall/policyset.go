@@ -35,6 +35,9 @@ type PolicyInput struct {
 	AllowPhysicalDNS bool
 	// AllowLocalNetwork keeps LAN destinations reachable while the guard is armed.
 	AllowLocalNetwork bool
+	// ProviderAddrs are the resolved geo-API provider IPs, passed tunnel-scoped
+	// in FULL BLOCK so the exit-country lookup needs no guard lift.
+	ProviderAddrs []netip.Addr
 	// WindowProtos / WindowPorts optionally restrict the switch window instead of
 	// passing all outbound.
 	WindowProtos []string
@@ -102,6 +105,9 @@ func (in PolicyInput) FullBlock() Policy {
 		VPNEndpoints:      canonAddrs(in.Endpoints),
 		AllowPhysicalDNS:  in.AllowPhysicalDNS,
 		AllowLocalNetwork: in.AllowLocalNetwork,
+		// Only FULL BLOCK carries these: ModeGuard already passes all tunnel
+		// egress, so a tunnel-scoped provider rule there would be redundant.
+		ProviderAddrs: canonAddrs(in.ProviderAddrs),
 	}
 }
 

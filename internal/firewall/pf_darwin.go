@@ -269,6 +269,10 @@ func renderRuleset(p Policy) string {
 			if len(p.VPNEndpoints) > 0 {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 			}
+			// Tunnel-scoped geo-provider pass: lets the exit-country lookup run
+			// through the tunnel WITHOUT lifting the guard, which is what the
+			// recovery probe used to do for ~8s on every tick.
+			b.WriteString(tunnelProviderRules(p))
 			if p.AllowPhysicalDNS {
 				b.WriteString(allowPhysicalDNSRule)
 			}
@@ -325,6 +329,27 @@ const allowPhysicalDNSRule = "pass out quick proto { udp tcp } to any port 53 no
 // pf infers each address's family from the address itself, so v4 and v6 prefixes
 // can share one list — verified with `pfctl -nvf`, a mixed list expands to one
 // inet rule and one inet6 rule.
+// tunnelProviderRules renders the tunnel-scoped geo-provider passes used in FULL
+// BLOCK, so the exit-country lookup can traverse the tunnel while all other user
+// traffic stays cut. Empty when there is no tunnel or no resolved provider IP —
+// with either missing the rule cannot be built, and the daemon falls back to the
+// old lift-and-probe rather than losing the ability to recover.
+//
+// Two rules, both scoped to the tunnel interface:
+//   - to the provider IPs, so the lookup itself completes;
+//   - DNS, so the provider hostname can be re-resolved. Without this the lookup
+//     dies at resolution whenever allowPhysicalDNS is off, and CDN-fronted
+//     providers rotate addresses often enough that a stale IP set is normal.
+func tunnelProviderRules(p Policy) string {
+	ifaces := append(append([]string{}, p.TunnelIfaces...), p.TunnelGroups...)
+	if len(ifaces) == 0 || len(p.ProviderAddrs) == 0 {
+		return ""
+	}
+	set := strings.Join(ifaces, " ")
+	return fmt.Sprintf("pass out quick on { %s } to { %s } no state\n", set, joinAddrs(p.ProviderAddrs)) +
+		fmt.Sprintf("pass out quick on { %s } proto { udp tcp } to any port 53 no state\n", set)
+}
+
 func localNetworkRule() string {
 	return fmt.Sprintf("pass out quick to { %s } no state\n", strings.Join(LocalNetworkPrefixes, " "))
 }

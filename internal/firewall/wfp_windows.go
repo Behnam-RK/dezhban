@@ -222,6 +222,7 @@ func renderBlockScript(p Policy) string {
 			if ep := psAddrList(p.VPNEndpoints); ep != "" {
 				rule("endpoint", "-RemoteAddress "+ep)
 			}
+			emitTunnelProviderRules(rule, p)
 			emitAllowPhysicalDNSRules(rule, p)
 			emitLocalNetworkRules(rule, p)
 		} else {
@@ -256,6 +257,21 @@ func emitWindowPortRules(rule func(name, args string), p Policy) {
 				fmt.Sprintf("-Protocol %s -RemotePort %d", up, port))
 		}
 	}
+}
+
+// emitTunnelProviderRules renders the tunnel-scoped geo-provider pass used in
+// FULL BLOCK. WFP matches interface by exact alias only, so tunnel GROUPS cannot
+// be expressed here — with only a group configured this emits nothing and the
+// daemon falls back to lift-and-probe.
+func emitTunnelProviderRules(rule func(name, args string), p Policy) {
+	if len(p.ProviderAddrs) == 0 || len(p.TunnelIfaces) == 0 {
+		return
+	}
+	iface := "-InterfaceAlias " + psStringList(p.TunnelIfaces)
+	rule("providers-via-tunnel", iface+" -RemoteAddress "+psAddrList(p.ProviderAddrs))
+	// DNS through the tunnel so the provider hostname can be re-resolved.
+	rule("providers-dns-udp-tunnel", iface+" -Protocol UDP -RemotePort 53")
+	rule("providers-dns-tcp-tunnel", iface+" -Protocol TCP -RemotePort 53")
 }
 
 // emitLocalNetworkRules renders the destination-scoped LAN pass

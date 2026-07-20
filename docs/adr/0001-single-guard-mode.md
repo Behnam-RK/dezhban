@@ -1,7 +1,7 @@
 # ADR-0001: Collapse the two enforcement modes into one guard-only product
 
 **Date**: 2026-07-20
-**Status**: accepted, implementation pending
+**Status**: accepted, implemented
 **Deciders**: Behnam RK
 
 ## Context

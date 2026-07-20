@@ -1196,3 +1196,48 @@ func TestSuccessfulLookupSetsNoErrorFields(t *testing.T) {
 		t.Errorf("a successful lookup set LookupErr=%q ExitUnknown=%q, want both empty", got.LookupErr, got.ExitUnknown)
 	}
 }
+
+// With tunnel-scoped provider passes in the FULL BLOCK ruleset, the recovery
+// probe must NOT lift the guard.
+//
+// The old path applied ModeGuard — full tunnel egress — for up to
+// probeEgressBudget on EVERY probe tick, just to make one HTTP request, and kept
+// doing it for as long as a forbidden exit persisted. That is a recurring leak
+// measured in seconds per tick, and it is what the tunnel-scoped pass removes.
+func TestProbeSkipsGuardLiftWhenProvidersArePassed(t *testing.T) {
+	be := &fakeBackend{}
+	o := Options{Backend: be, Log: discardLog(), Monitor: &fakeMonitor{results: []monitor.Result{reading("IR")}}}
+
+	fullBlock := firewall.Policy{
+		Mode:          firewall.ModeFullBlock,
+		TunnelIfaces:  []string{"utun4"},
+		ProviderAddrs: []netip.Addr{netip.MustParseAddr("104.16.1.1")},
+	}
+	guard := firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: []string{"utun4"}}
+
+	if _, err := o.probe(context.Background(), guard, fullBlock); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(be.calls) != 0 {
+		t.Errorf("probe touched the firewall (%v) — with providers passed it must observe without lifting", be.calls)
+	}
+}
+
+// Without provider passes the fallback must still work: lift, observe, re-cut.
+// Losing that would leave a FULL BLOCK unable to observe its way out — a block
+// that can never lift is worse than a bounded leak.
+func TestProbeFallsBackToLiftWhenNoProviders(t *testing.T) {
+	be := &fakeBackend{}
+	o := Options{Backend: be, Log: discardLog(), Monitor: &fakeMonitor{results: []monitor.Result{reading("IR")}}}
+
+	fullBlock := firewall.Policy{Mode: firewall.ModeFullBlock, TunnelIfaces: []string{"utun4"}}
+	guard := firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: []string{"utun4"}}
+
+	if _, err := o.probe(context.Background(), guard, fullBlock); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	want := []string{"apply-guard", "apply-fullblock"}
+	if strings.Join(be.calls, ",") != strings.Join(want, ",") {
+		t.Errorf("fallback probe calls = %v, want %v (lift then re-cut)", be.calls, want)
+	}
+}
