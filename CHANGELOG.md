@@ -81,7 +81,27 @@ changes.
   defeating the check. Provider IPs refresh on the endpoint cadence, since
   CDN-fronted providers rotate. If none resolve, recovery falls back to the old
   lift-and-probe rather than losing the ability to recover at all.
+  The provider rule deliberately carries **no DNS pass**: a tunnel-scoped but
+  destination-unscoped `port 53` rule would send *every application's* DNS
+  through the tunnel to the forbidden exit's resolver for as long as FULL BLOCK
+  lasted, handing the exit whose country we are refusing a running log of every
+  hostname the host looks up. The set is refreshed while the guard is healthy,
+  and a mid-block rotation falls back to lift-and-probe, which heals it.
   See [ADR-0006](docs/adr/0006-geo-providers-tunnel-scoped.md).
+- **The local-network pass no longer includes globally-routable multicast.**
+  `224.0.0.0/4` and `ff00::/8` were shorthand for "multicast", but they contain
+  scopes designed to cross the internet (`232/8` SSM, `233/8` GLOP, `ff0e::/16`
+  global) — which a pass justified by "this traffic never leaves the building"
+  must not contain. Narrowed to the local and administratively-scoped ranges
+  that discovery actually uses: `224.0.0.0/24`, `239.0.0.0/8`, `ff02::/16`,
+  `ff05::/16`. mDNS, Bonjour, SSDP, AirPlay and Chromecast are unaffected.
+- Invalid addresses dropped at the policy seam are now logged. Dropping is
+  correct — one `invalid IP` entry would make pf reject the whole ruleset — but
+  a silent drop of a VPN endpoint presents as a tunnel that will not handshake,
+  with nothing connecting the two.
+- FULL BLOCK now carries tunnel **groups** as well as concrete interfaces, so a
+  host that names only an interface class (`utun`) gets a scoped provider pass
+  instead of silently degrading to lift-and-probe.
 - **Failed exit-country lookups are now classified instead of all being reported
   as errors.** Three causes collapsed into one alarming message, and the most
   common was not a fault at all: during a switch or reconnect window the tunnel

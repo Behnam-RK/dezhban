@@ -216,30 +216,40 @@ func emitAllowPhysicalDNS(rule func(string), p Policy) {
 // BLOCK, so the exit-country lookup traverses the tunnel while all other user
 // traffic stays cut. No-op without both a tunnel and a resolved provider IP —
 // the daemon then falls back to lift-and-probe rather than losing recovery.
+//
+// Deliberately NO accompanying DNS pass; see tunnelProviderRules in pf_darwin.go
+// for why an unscoped `dport 53` here would leak every hostname this host
+// resolves to the very exit FULL BLOCK is refusing.
 func emitTunnelProviders(rule func(string), p Policy) {
 	if len(p.ProviderAddrs) == 0 {
 		return
 	}
-	var oif string
-	switch {
-	case len(p.TunnelIfaces) > 0:
-		oif = "oifname " + nftIfaceSet(p.TunnelIfaces)
-	case len(p.TunnelGroups) > 0:
-		oif = fmt.Sprintf("oifname %q", p.TunnelGroups[0]+"*")
-	default:
+	// Every tunnel matcher gets the pass, not just the first: a host may have both
+	// concrete interfaces and a class wildcard, and taking only one would leave
+	// the lookup unable to reach a tunnel the guard itself passes.
+	//
+	// Groups are emitted as separate rules rather than folded into the set with
+	// the concrete names, matching the ModeGuard path above: nft does not accept
+	// wildcard interface names inside a set literal.
+	var oifs []string
+	if len(p.TunnelIfaces) > 0 {
+		oifs = append(oifs, "oifname "+nftIfaceSet(p.TunnelIfaces))
+	}
+	for _, g := range p.TunnelGroups {
+		oifs = append(oifs, fmt.Sprintf("oifname %q", g+"*"))
+	}
+	if len(oifs) == 0 {
 		return
 	}
 	v4, v6 := splitAddrFamilies(p.ProviderAddrs)
-	if len(v4) > 0 {
-		rule(fmt.Sprintf("%s ip daddr %s accept", oif, nftAddrSet(v4)))
+	for _, oif := range oifs {
+		if len(v4) > 0 {
+			rule(fmt.Sprintf("%s ip daddr %s accept", oif, nftAddrSet(v4)))
+		}
+		if len(v6) > 0 {
+			rule(fmt.Sprintf("%s ip6 daddr %s accept", oif, nftAddrSet(v6)))
+		}
 	}
-	if len(v6) > 0 {
-		rule(fmt.Sprintf("%s ip6 daddr %s accept", oif, nftAddrSet(v6)))
-	}
-	// DNS through the tunnel so the provider hostname can be re-resolved —
-	// CDN-fronted providers rotate addresses, and allowPhysicalDNS may be off.
-	rule(oif + " udp dport 53 accept")
-	rule(oif + " tcp dport 53 accept")
 }
 
 // emitLocalNetwork renders the destination-scoped LAN passes

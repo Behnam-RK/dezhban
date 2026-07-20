@@ -221,3 +221,38 @@ func TestRenderBlockScriptLocalNetwork(t *testing.T) {
 		t.Errorf("allowLocalNetwork=false must emit no LAN allow:\n%s", off)
 	}
 }
+
+// The provider pass must be tunnel-scoped and must not drag a blanket DNS rule
+// along with it. See tunnelProviderRules in pf_darwin.go for why an unscoped
+// port-53 rule would leak every hostname this host resolves to the very exit
+// FULL BLOCK is refusing.
+func TestRenderBlockScriptTunnelScopedProviders(t *testing.T) {
+	script := renderBlockScript(Policy{
+		Mode:          ModeFullBlock,
+		TunnelIfaces:  []string{"utun4"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	for _, line := range strings.Split(script, "\n") {
+		if strings.Contains(line, "104.16.1.1") && !strings.Contains(line, "-InterfaceAlias") {
+			t.Errorf("provider pass is not tunnel-scoped — it would measure the ISP's country with the tunnel down:\n%s", line)
+		}
+		// Narrowly the TUNNEL-scoped form: allowPhysicalDNS legitimately renders a
+		// `-RemotePort 53` rule with no interface scope on the physical link.
+		if strings.Contains(line, "-RemotePort 53") && strings.Contains(line, "-InterfaceAlias") {
+			t.Errorf("FULL BLOCK emits a tunnel-scoped DNS pass — every lookup would leak to the forbidden exit:\n%s", line)
+		}
+	}
+
+	// WFP matches interfaces by exact alias only, so a group alone cannot be
+	// scoped: emit nothing and let the daemon fall back to lift-and-probe.
+	grp := renderBlockScript(Policy{
+		Mode:          ModeFullBlock,
+		TunnelGroups:  []string{"utun"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	if strings.Contains(grp, "104.16.1.1") {
+		t.Errorf("a tunnel group cannot be expressed in WFP — the provider pass must be omitted, not emitted unscoped:\n%s", grp)
+	}
+}

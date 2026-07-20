@@ -1249,7 +1249,23 @@ func (o Options) vpnPolicies(tunnels []string, endpoints, providers []netip.Addr
 // Allowlist is deliberately left zero: a VPN posture opens endpoints, not a
 // physical dst-IP allowlist, which is meaningless against encrypted outer
 // packets. The runner's separate Allowlist hook feeds the legacy Block path only.
+//
+// Invalid addresses are dropped by the constructor (they would otherwise render
+// as "invalid IP" and make pf reject the whole ruleset). That drop is silent by
+// design at the seam, so report it here, where a logger exists: a dropped
+// endpoint means a tunnel that cannot handshake, and the operator should not
+// have to infer that from a VPN that merely fails to connect.
 func (o Options) policyInput(tunnels []string, endpoints, providers []netip.Addr) firewall.PolicyInput {
+	if o.Log != nil {
+		if n := firewall.CountInvalid(endpoints); n > 0 {
+			o.Log.Warn("dropping invalid vpn endpoint address(es) from the ruleset — the tunnel may be unable to handshake",
+				"dropped", n, "endpoints", len(endpoints))
+		}
+		if n := firewall.CountInvalid(providers); n > 0 {
+			o.Log.Warn("dropping invalid geo-provider address(es) from the ruleset — recovery may fall back to lift-and-probe",
+				"dropped", n, "providers", len(providers))
+		}
+	}
 	return firewall.PolicyInput{
 		Tunnels:           tunnels,
 		TunnelGroups:      o.TunnelGroups,

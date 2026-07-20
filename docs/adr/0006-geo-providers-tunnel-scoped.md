@@ -90,9 +90,26 @@ Separately, classify lookup failures instead of surfacing them all identically.
 
 ### Negative
 
-- Provider addresses are CDN-rotated, so they need resolve-and-refresh plus tunnel-scoped
-  DNS to re-resolve them. The retired legacy allowlist already had this machinery —
-  salvage it rather than rewriting.
+- Provider addresses are CDN-rotated, so they need resolve-and-refresh. They are refreshed
+  on the endpoint cadence.
+- **No DNS pass accompanies the provider rule.** The first implementation added
+  `on <tunnel> proto { udp tcp } to any port 53` so provider hostnames could be re-resolved
+  during FULL BLOCK. That rule is scoped to the tunnel but *not* to a destination, so it
+  passed **every application's** DNS through the tunnel to the forbidden exit's resolver,
+  continuously, for as long as FULL BLOCK lasted — handing the exit whose country we are
+  refusing a running log of every hostname the host looks up. That is the exposure this
+  posture exists to prevent, and vastly broader than the daemon's own need.
+
+  Dropping it is safe: the provider set is refreshed while the guard is HEALTHY, where
+  tunnel DNS is already unrestricted, so FULL BLOCK begins with a fresh set. If the
+  providers rotate mid-block the lookup fails, **the posture holds** (an undeterminable
+  country never escalates), and recovery falls back to lift-and-probe — which lifts the
+  guard, letting the next refresh succeed and the scoped rule heal itself. A bounded,
+  self-clearing leak beats a continuous metadata one.
+
+  Scoping the pass to the system resolvers instead was considered and rejected for now:
+  it needs per-OS resolver discovery (`scutil` on macOS, `resolv.conf` on Linux) that does
+  not exist in the tree, and the fallback above already covers the stale case.
 - A new matched posture must be implemented across pf, nft, and WFP.
 
 ### Risks

@@ -26,7 +26,13 @@ destination-scoped passes to GUARD, FULL BLOCK, and the switch window alike:
 ```
 IPv4    10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 169.254.0.0/16
 IPv6    fc00::/7 (ULA), fe80::/10 (link-local)
-mcast   224.0.0.0/4, ff00::/8      — mDNS/Bonjour needs 224.0.0.251 / ff02::fb
+mcast   224.0.0.0/24, 239.0.0.0/8  — mDNS 224.0.0.251, SSDP 239.255.255.250
+        ff02::/16, ff05::/16       — mDNS ff02::fb; link- and site-local scope
+
+        NOT 224/4 or ff00::/8: multicast has globally-routable scopes
+        (232/8 SSM, 233/8 GLOP, ff0e::/16 global) that are designed to
+        cross the internet. A pass justified by "this traffic never
+        leaves the building" must exclude them.
 ```
 
 Implemented once in the shared policy constructor, so all three backends and

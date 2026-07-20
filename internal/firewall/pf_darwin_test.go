@@ -252,7 +252,7 @@ func TestRenderLocalNetwork(t *testing.T) {
 			VPNEndpoints:      []netip.Addr{mustAddr(t, "203.0.113.5")},
 			AllowLocalNetwork: true,
 		})
-		for _, w := range []string{"10.0.0.0/8", "192.168.0.0/16", "fc00::/7", "224.0.0.0/4"} {
+		for _, w := range []string{"10.0.0.0/8", "192.168.0.0/16", "fc00::/7", "224.0.0.0/24", "239.0.0.0/8"} {
 			if !strings.Contains(rs, w) {
 				t.Errorf("mode %s with allowLocalNetwork must pass %s:\n%s", mode, w, rs)
 			}
@@ -307,6 +307,21 @@ func TestRenderTunnelScopedProviders(t *testing.T) {
 	}
 	assertDefaultDenyLast(t, rs)
 
+	// The provider pass must NOT drag a blanket DNS rule along with it. An
+	// earlier draft emitted `on <tunnel> proto { udp tcp } to any port 53` so
+	// provider hostnames could be re-resolved; `to any` is destination-unscoped,
+	// so it passed every application's DNS through the tunnel to the forbidden
+	// exit's resolver — handing the exit we are refusing a continuous log of
+	// every hostname this host looks up, for as long as FULL BLOCK lasted.
+	// Matched narrowly on the TUNNEL-scoped form: `allowPhysicalDNS` legitimately
+	// renders `to any port 53` on the physical link, and this assertion must not
+	// blame that rule for a leak it is not responsible for.
+	for _, line := range strings.Split(rs, "\n") {
+		if strings.Contains(line, "port 53") && strings.Contains(line, "on {") {
+			t.Errorf("FULL BLOCK emits a tunnel-scoped DNS pass — every lookup would leak to the forbidden exit:\n%s", line)
+		}
+	}
+
 	// No tunnel to scope to → emit nothing rather than an unscoped pass. The
 	// daemon falls back to lift-and-probe; a physical-link pass would be worse
 	// than the leak it replaces.
@@ -317,6 +332,18 @@ func TestRenderTunnelScopedProviders(t *testing.T) {
 	})
 	if strings.Contains(noTun, "104.16.1.1") {
 		t.Errorf("with no tunnel the provider pass must be omitted, not emitted unscoped:\n%s", noTun)
+	}
+
+	// A group-only host must still get a scoped provider pass rather than
+	// silently degrading to lift-and-probe.
+	grp := renderRuleset(Policy{
+		Mode:          ModeFullBlock,
+		TunnelGroups:  []string{"utun"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	if !strings.Contains(grp, "on { utun }") || !strings.Contains(grp, "104.16.1.1") {
+		t.Errorf("group-only FULL BLOCK must scope the provider pass to the group:\n%s", grp)
 	}
 
 	// GUARD already passes all tunnel egress; no provider rule needed.

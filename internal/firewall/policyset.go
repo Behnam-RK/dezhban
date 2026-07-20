@@ -90,6 +90,24 @@ func canonAllowlist(a Allowlist) Allowlist {
 	return Allowlist{DNS: canonAddrs(a.DNS), Hosts: canonAddrs(a.Hosts)}
 }
 
+// CountInvalid reports how many of addrs canonAddrs would silently drop.
+//
+// Dropping is the right behaviour at the seam — the zero netip.Addr stringifies
+// to "invalid IP", a ruleset pf genuinely rejects, so rendering one bad entry
+// would fail to install ANY rules — but a silent drop is a bad failure mode of
+// its own: if the dropped address is a VPN endpoint, the symptom is a tunnel
+// that will not handshake, with nothing in the log connecting the two. Callers
+// that hold a logger use this to say so.
+func CountInvalid(addrs []netip.Addr) int {
+	n := 0
+	for _, a := range addrs {
+		if !a.IsValid() {
+			n++
+		}
+	}
+	return n
+}
+
 // FullBlock is the cut posture: no tunnel-interface pass, so no user traffic can
 // reach a forbidden exit — but the endpoint pass stays open so the encrypted
 // handshake still reaches the server and the tunnel can reconnect. Cutting the
@@ -99,9 +117,16 @@ func canonAllowlist(a Allowlist) Allowlist {
 // which is why the run loop never sets it here.
 func (in PolicyInput) FullBlock() Policy {
 	return Policy{
-		Mode:              ModeFullBlock,
-		Allowlist:         canonAllowlist(in.Allowlist),
-		TunnelIfaces:      in.Tunnels,
+		Mode:         ModeFullBlock,
+		Allowlist:    canonAllowlist(in.Allowlist),
+		TunnelIfaces: in.Tunnels,
+		// Carried even though FULL BLOCK installs no tunnel pass: the geo-provider
+		// rule below is scoped to the tunnel, and a config that names only a
+		// tunnel GROUP (e.g. "utun") has no concrete iface to scope to. Dropping
+		// the groups here made the backends' group-scoping branches unreachable,
+		// silently degrading such a host to lift-and-probe — the leak this posture
+		// exists to remove.
+		TunnelGroups:      in.TunnelGroups,
 		VPNEndpoints:      canonAddrs(in.Endpoints),
 		AllowPhysicalDNS:  in.AllowPhysicalDNS,
 		AllowLocalNetwork: in.AllowLocalNetwork,
@@ -170,14 +195,34 @@ func (in PolicyInput) SwitchWindow() Policy {
 // What is here and why:
 //
 //   - RFC1918 (10/8, 172.16/12, 192.168/16) — ordinary private LANs.
+//
 //   - 100.64/10 (RFC6598, CGNAT) — the range Tailscale and many ISP routers use.
+//
 //   - 169.254/16 + fe80::/10 — link-local, incl. self-assigned addressing.
+//
 //   - fc00::/7 — IPv6 unique-local, the ULA equivalent of RFC1918.
-//   - 224/4 + ff00::/8 — multicast, which is what actually makes discovery work:
-//     mDNS/Bonjour (224.0.0.251, ff02::fb) and SSDP (239.255.255.250) are how a
-//     Mac finds printers, AirPlay targets and Chromecasts. Opening unicast
-//     private ranges alone would leave devices "visible but undiscoverable",
-//     which reads as broken.
+//
+//   - Multicast, which is what actually makes discovery work: mDNS/Bonjour
+//     (224.0.0.251, ff02::fb) and SSDP (239.255.255.250) are how a Mac finds
+//     printers, AirPlay targets and Chromecasts. Opening unicast private ranges
+//     alone would leave devices "visible but undiscoverable", which reads as
+//     broken.
+//
+//     Only the LOCALLY-SCOPED multicast ranges are here, not all of 224/4 and
+//     ff00::/8. Multicast has globally-routable scopes — 232/8 (SSM), 233/8
+//     (GLOP) and ff0e::/16 (global) are designed to cross the internet — and a
+//     range that can leave the building has no place in a pass justified by
+//     "this traffic never leaves the building". So:
+//
+//   - 224.0.0.0/24 — local network control block, incl. mDNS 224.0.0.251.
+//
+//   - 239.0.0.0/8  — administratively scoped (RFC2365), incl. SSDP
+//     239.255.255.250.
+//
+//   - ff02::/16    — IPv6 link-local scope, incl. mDNS ff02::fb and SSDP
+//     ff02::c.
+//
+//   - ff05::/16    — IPv6 site-local scope, incl. SSDP ff05::c.
 //
 // NOT here: 127/8 and ::1 (loopback is passed unconditionally by every posture,
 // independent of this setting) and 0.0.0.0/8, which is a source-only range.
@@ -187,10 +232,12 @@ var LocalNetworkPrefixes = []string{
 	"192.168.0.0/16",
 	"100.64.0.0/10",
 	"169.254.0.0/16",
-	"224.0.0.0/4",
+	"224.0.0.0/24",
+	"239.0.0.0/8",
 	"fc00::/7",
 	"fe80::/10",
-	"ff00::/8",
+	"ff02::/16",
+	"ff05::/16",
 }
 
 // LocalNetworkPrefixesFor returns the local-network prefixes of one address

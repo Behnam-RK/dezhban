@@ -152,7 +152,8 @@ enforcing posture:
 | `100.64/10` | CGNAT (RFC6598) — Tailscale, many ISP routers |
 | `169.254/16`, `fe80::/10` | link-local, incl. self-assigned addressing |
 | `fc00::/7` | IPv6 unique-local — the ULA equivalent of RFC1918 |
-| `224/4`, `ff00::/8` | multicast — mDNS/Bonjour and SSDP |
+| `224.0.0.0/24`, `239/8` | v4 multicast — mDNS/Bonjour and SSDP (local + admin scope only) |
+| `ff02::/16`, `ff05::/16` | v6 multicast — link-local and site-local scope only |
 
 Multicast is what actually makes discovery work: `224.0.0.251` / `ff02::fb`
 (mDNS) and `239.255.255.250` (SSDP) are how a Mac finds printers and AirPlay

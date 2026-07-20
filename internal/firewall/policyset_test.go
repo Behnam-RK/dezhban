@@ -118,6 +118,14 @@ func TestLocalNetworkPrefixesAreAllPrivate(t *testing.T) {
 		mustCanonAddr(t, "1.1.1.1"),
 		mustCanonAddr(t, "203.0.113.9"),
 		mustCanonAddr(t, "2001:4860:4860::8888"),
+		// Multicast has globally-routable scopes, and a unicast-only sample would
+		// never catch them: 224/4 and ff00::/8 are NOT safe shorthands for "local".
+		// These are designed to cross the internet, so a pass justified by "this
+		// traffic never leaves the building" must exclude them.
+		mustCanonAddr(t, "232.1.2.3"),  // source-specific multicast (RFC4607)
+		mustCanonAddr(t, "233.1.2.3"),  // GLOP, globally assigned (RFC3180)
+		mustCanonAddr(t, "ff0e::1234"), // IPv6 global scope
+		mustCanonAddr(t, "ff0e::c"),    // SSDP at global scope
 	}
 	for _, raw := range LocalNetworkPrefixes {
 		pfx, err := netip.ParsePrefix(raw)
@@ -196,6 +204,46 @@ func TestAllowLocalNetworkReachesEveryPosture(t *testing.T) {
 		if !pol.AllowLocalNetwork {
 			t.Errorf("%s posture dropped AllowLocalNetwork", name)
 		}
+	}
+}
+
+// FULL BLOCK must carry the tunnel GROUPS, not just the concrete interfaces.
+// It installs no tunnel pass, so the groups look unused here — but the
+// geo-provider rule is scoped to the tunnel, and a host that names only a class
+// ("utun") has nothing else to scope to. Dropping them made the backends'
+// group-scoping branches unreachable and silently degraded such a host to
+// lift-and-probe: the leak this posture exists to remove.
+func TestFullBlockCarriesTunnelGroups(t *testing.T) {
+	in := PolicyInput{
+		TunnelGroups:  []string{"utun"},
+		Endpoints:     []netip.Addr{mustCanonAddr(t, "203.0.113.9")},
+		ProviderAddrs: []netip.Addr{mustCanonAddr(t, "104.16.1.1")},
+	}
+	fb := in.FullBlock()
+	if len(fb.TunnelGroups) != 1 || fb.TunnelGroups[0] != "utun" {
+		t.Errorf("FULL BLOCK dropped TunnelGroups: %v — the provider pass would have nothing to scope to", fb.TunnelGroups)
+	}
+	// A group-only guard degrades to the FullBlock shape; it must keep them too.
+	if g := in.Guard(); len(g.TunnelGroups) != 1 {
+		t.Errorf("group-only Guard dropped TunnelGroups: %v", g.TunnelGroups)
+	}
+}
+
+// CountInvalid must agree with what the constructor actually drops, since it is
+// the only signal an operator gets that an endpoint vanished from the ruleset.
+func TestCountInvalidMatchesDroppedAddrs(t *testing.T) {
+	addrs := []netip.Addr{
+		mustCanonAddr(t, "203.0.113.9"),
+		{}, // zero value: renders as "invalid IP", which pf rejects wholesale
+		mustCanonAddr(t, "198.51.100.4"),
+		{},
+	}
+	if n := CountInvalid(addrs); n != 2 {
+		t.Errorf("CountInvalid = %d, want 2", n)
+	}
+	kept := PolicyInput{Tunnels: []string{"utun4"}, Endpoints: addrs}.Guard().VPNEndpoints
+	if len(kept) != len(addrs)-CountInvalid(addrs) {
+		t.Errorf("kept %d endpoints, but CountInvalid implies %d", len(kept), len(addrs)-CountInvalid(addrs))
 	}
 }
 

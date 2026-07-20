@@ -335,19 +335,29 @@ const allowPhysicalDNSRule = "pass out quick proto { udp tcp } to any port 53 no
 // with either missing the rule cannot be built, and the daemon falls back to the
 // old lift-and-probe rather than losing the ability to recover.
 //
-// Two rules, both scoped to the tunnel interface:
-//   - to the provider IPs, so the lookup itself completes;
-//   - DNS, so the provider hostname can be re-resolved. Without this the lookup
-//     dies at resolution whenever allowPhysicalDNS is off, and CDN-fronted
-//     providers rotate addresses often enough that a stale IP set is normal.
+// ONE rule, scoped to both the tunnel interface and the provider addresses.
+//
+// Deliberately NO accompanying DNS pass. An earlier draft added
+// `on <tunnel> proto { udp tcp } to any port 53` so provider hostnames could be
+// re-resolved — but `to any` is destination-unscoped, so it passed EVERY
+// application's DNS through the tunnel to the forbidden exit's resolver, for as
+// long as FULL BLOCK lasted. That hands the exit whose country we are refusing a
+// continuous log of every hostname this host looks up: precisely the exposure
+// FULL BLOCK exists to prevent, and far broader than the daemon's own need.
+//
+// Losing it is safe because the provider set is refreshed on the endpoint
+// cadence while the guard is HEALTHY, where tunnel DNS is already unrestricted,
+// so FULL BLOCK begins with a fresh set. If the providers do rotate mid-block
+// the lookup fails, the posture holds, and recovery falls back to lift-and-probe
+// — which lifts the guard, letting the next refresh succeed and the scoped rule
+// heal itself. A bounded, self-clearing leak beats a continuous metadata one.
 func tunnelProviderRules(p Policy) string {
 	ifaces := append(append([]string{}, p.TunnelIfaces...), p.TunnelGroups...)
 	if len(ifaces) == 0 || len(p.ProviderAddrs) == 0 {
 		return ""
 	}
-	set := strings.Join(ifaces, " ")
-	return fmt.Sprintf("pass out quick on { %s } to { %s } no state\n", set, joinAddrs(p.ProviderAddrs)) +
-		fmt.Sprintf("pass out quick on { %s } proto { udp tcp } to any port 53 no state\n", set)
+	return fmt.Sprintf("pass out quick on { %s } to { %s } no state\n",
+		strings.Join(ifaces, " "), joinAddrs(p.ProviderAddrs))
 }
 
 func localNetworkRule() string {
