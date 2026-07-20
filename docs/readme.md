@@ -10,6 +10,8 @@ Detailed docs live here:
 | [config.md](config.md) | Full JSON config field reference, the `vpn` block, validation rules, and sample configs. |
 | [usage.md](usage.md) | Every CLI command and flag, safe read-only inspection, running as a service, and the macOS app. |
 | [architecture.md](architecture.md) | The three-layer design, the `FirewallBackend` seam, the non-negotiable invariants, and the dependency strategy. |
+| [adr/](adr/README.md) | Architecture decision records — the *why* behind the choices, the alternatives examined, and the specific reason each was rejected. Read before reversing anything they describe. |
+| [glossary.md](glossary.md) | One term per concept, and the words we deliberately don't use. The authority for user-facing copy in the GUI, CLI, and docs. |
 | [safety.md](safety.md) | Kill-switch safety principles and firewall teardown mechanics. |
 | [troubleshooting.md](troubleshooting.md) | Lockout recovery and VPN-guard failure runbook. |
 | [development.md](development.md) | Build, cross-compile, the safe dev loop, CI, and the pre-commit hook. |
