@@ -99,7 +99,11 @@ enum PostureUI {
         case "standby": return "standby — waiting for VPN (not enforcing)"
         case "guard": return "guarding (VPN)"
         case "full-block": return "full block (VPN)"
-        case "switch-window": return "switch window — egress relaxed (real IP may be exposed)"
+        case "switch-window":
+            if s.switch?.isAutoReconnect == true {
+                return "VPN dropped — reconnect window open (redial now; real IP may be exposed)"
+            }
+            return "switch window — egress relaxed (real IP may be exposed)"
         case "stopped": return "stopped"
         default: return s.posture
         }
@@ -108,9 +112,12 @@ enum PostureUI {
     /// Guard mode holding a downed tunnel: Unblock doubles as the "my VPN is off
     /// on purpose — release the line" action (a vpn.autoArm daemon returns to
     /// standby; without autoArm it's a harmless no-op the daemon acknowledges).
+    /// An EMPTY tunnel list counts as down: the zero-tunnel standing posture is a
+    /// total egress cut (ModeFullBlock shape under the "guard" posture string),
+    /// and the icon must never show a calm green shield while the network is cut.
     static func guardHoldsDownedTunnel(_ s: Snapshot?) -> Bool {
-        guard let s = s, s.mode == "vpn", s.posture == "guard",
-              let tuns = s.tunnels, !tuns.isEmpty else { return false }
+        guard let s = s, s.mode == "vpn", s.posture == "guard" else { return false }
+        guard let tuns = s.tunnels, !tuns.isEmpty else { return true }
         return !tuns.contains(where: { $0.up })
     }
 

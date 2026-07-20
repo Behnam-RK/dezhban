@@ -52,9 +52,13 @@ is [testing-macos-block.md](testing-macos-block.md).
 
 ## Who can relax the guard
 
-The **switch window** is the only sanctioned relaxation of the guard. It is bounded
-(default 2m, capped 5m), never automatic, and auto-reverts to the prior fail-closed
-posture on cancel or expiry.
+The bounded **switch window** is the only sanctioned relaxation of the guard, and it
+has exactly two sanctioned triggers: an explicit operator command (default 15s), and
+the [automatic reconnect window](modes.md#automatic-reconnect-window)
+(`vpn.reconnectWindow`, default 30s) that opens on a tunnel drop from healthy GUARD
+so the VPN can redial — set it to `"0"` to make the window operator-only again.
+Either way it is capped (5m) and auto-reverts to the prior fail-closed posture on
+cancel or expiry.
 
 By default it can be opened by any member of the `control.group` (macOS: `admin`)
 over the control socket — **without a password**. That is a deliberate trade for

@@ -1231,3 +1231,185 @@ func TestVPNArmsStandingPostureWithNoTunnelAndNoEndpoint(t *testing.T) {
 		t.Fatal("no standing posture was applied")
 	}
 }
+
+// --- automatic reconnect window ---
+
+// edgeWatcher scripts a tunnel that is up for the first upSamples samples and
+// permanently down afterwards: one clean up→down edge. Sample runs on the
+// watcher's single goroutine, so the plain counter is race-free.
+func edgeWatcher(upSamples int) *netdetect.Watcher {
+	n := 0
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			n++
+			if n <= upSamples {
+				return netdetect.TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+			}
+			return netdetect.TunnelState{}
+		},
+	}
+}
+
+// steadyFailMonitor always fails the lookup, so no exit is ever confirmed.
+type steadyFailMonitor struct{}
+
+func (steadyFailMonitor) Poll(ctx context.Context) <-chan monitor.Result {
+	ch := make(chan monitor.Result)
+	go func() { <-ctx.Done(); close(ch) }()
+	return ch
+}
+func (steadyFailMonitor) Once(context.Context) (monitor.Reading, error) {
+	return monitor.Reading{}, errors.New("lookup failed")
+}
+
+// A tunnel drop from healthy GUARD must open the automatic reconnect window
+// (ModeSwitchWindow), and its expiry must revert to GUARD — fail closed, no
+// second window without a new up edge.
+func TestVPNAutoReconnectWindowOpensAndExpires(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:         steadyMonitor{cc: "US"},
+		Decider:         decision.New([]string{"IR"}, true, 1),
+		Backend:         be,
+		Log:             discardLog(),
+		Interval:        time.Millisecond,
+		VPN:             true,
+		Tunnels:         []string{"utun4"},
+		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:         edgeWatcher(5),
+		ReconnectWindow: 50 * time.Millisecond,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	switches, guards := 0, 0
+	for _, c := range be.calls {
+		switch c {
+		case "apply-switch":
+			switches++
+		case "apply-guard":
+			guards++
+		}
+	}
+	if switches != 1 {
+		t.Fatalf("apply-switch count = %d, want exactly 1 (open once on the drop, never reopen while still down); calls = %v", switches, be.calls)
+	}
+	if guards < 2 {
+		t.Fatalf("apply-guard count = %d, want >=2 (startup + fail-closed revert on expiry); calls = %v", guards, be.calls)
+	}
+	// The revert must come AFTER the window (fail closed on expiry).
+	last := be.calls[len(be.calls)-2] // final call is cleanup
+	if last != "apply-guard" {
+		t.Fatalf("posture after expiry = %q, want apply-guard; calls = %v", last, be.calls)
+	}
+}
+
+// A tunnel that was never OBSERVED up (armed start presumes up, but no watcher
+// up sample and no confirmed exit) must not open an auto window on its first
+// down sample — there is nothing to "reconnect".
+func TestVPNAutoWindowRequiresObservedUp(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:         steadyFailMonitor{},
+		Decider:         decision.New([]string{"IR"}, true, 1),
+		Backend:         be,
+		Log:             discardLog(),
+		Interval:        time.Millisecond,
+		VPN:             true,
+		Tunnels:         []string{"utun4"},
+		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:         downWatcher(),
+		ReconnectWindow: 50 * time.Millisecond,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			t.Fatalf("auto window opened for a tunnel never observed up; calls = %v", be.calls)
+		}
+	}
+}
+
+// flapWatcher scripts a flap: down at start (so no window opens on the initial
+// presumed-up→down sample), then briefly up, then down for good. The final drop
+// follows an OBSERVED up-streak of only a few milliseconds — exactly what the
+// flap guard must suppress.
+func flapWatcher() *netdetect.Watcher {
+	n := 0
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			n++
+			if n > 5 && n <= 8 {
+				return netdetect.TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+			}
+			return netdetect.TunnelState{}
+		},
+	}
+}
+
+// The anti-flap gate: a drop after an observed up-streak shorter than
+// ReconnectMinUptime, with no confirmed exit, must NOT get an auto window.
+// (The first drop after an armed start is different: uptime before the daemon
+// started is unknowable, so it gets the benefit of the doubt — see
+// TestVPNAutoReconnectWindowOpensAndExpires.)
+func TestVPNAutoWindowFlapGuard(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, true, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		VPN:                true,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            flapWatcher(),
+		ReconnectWindow:    50 * time.Millisecond,
+		ReconnectMinUptime: 10 * time.Second,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			t.Fatalf("flap guard failed: window opened after a ~3ms observed uptime with no confirmed exit; calls = %v", be.calls)
+		}
+	}
+}
+
+// A drop while in FULL BLOCK (forbidden exit) must never auto-open a window:
+// relaxing from a known-bad state needs an explicit operator command.
+func TestVPNAutoWindowNotFromFullBlock(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:         steadyMonitor{cc: "IR"}, // forbidden exit → FULL BLOCK at startup
+		Decider:         decision.New([]string{"IR"}, true, 1),
+		Backend:         be,
+		Log:             discardLog(),
+		Interval:        time.Millisecond,
+		VPN:             true,
+		Tunnels:         []string{"utun4"},
+		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:         edgeWatcher(5),
+		ReconnectWindow: 50 * time.Millisecond,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			t.Fatalf("auto window opened from FULL BLOCK; calls = %v", be.calls)
+		}
+	}
+}

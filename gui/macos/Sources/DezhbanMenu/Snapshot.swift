@@ -12,6 +12,11 @@ struct SwitchState: Codable {
     let open: Bool
     let until: Date
     let profile: String?
+    /// "manual" (operator command) or "auto" (automatic reconnect window opened
+    /// by a tunnel drop). Absent from older daemons — treat nil as "manual".
+    let trigger: String?
+
+    var isAutoReconnect: Bool { trigger == "auto" }
 }
 
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.

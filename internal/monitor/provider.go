@@ -134,13 +134,92 @@ func parseIfconfig(b []byte) (netip.Addr, string, error) {
 	return ip, v.CountryISO, nil
 }
 
+// parseIPCountry handles the minimal {ip, country} shape shared by
+// api.country.is and geojs.io, where country is already ISO alpha-2.
+func parseIPCountry(b []byte) (netip.Addr, string, error) {
+	var v struct {
+		IP      string `json:"ip"`
+		Country string `json:"country"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return netip.Addr{}, "", err
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(v.IP))
+	if err != nil {
+		return netip.Addr{}, "", fmt.Errorf("parse ip: %w", err)
+	}
+	return ip, v.Country, nil
+}
+
+func parseIPWhois(b []byte) (netip.Addr, string, error) {
+	var v struct {
+		IP          string `json:"ip"`
+		CountryCode string `json:"country_code"`
+		Success     *bool  `json:"success"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return netip.Addr{}, "", err
+	}
+	// ipwho.is reports failures (including rate limiting) as success:false with
+	// HTTP 200 — require an explicit true so those fail closed.
+	if v.Success == nil || !*v.Success {
+		return netip.Addr{}, "", fmt.Errorf("provider reported failure")
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(v.IP))
+	if err != nil {
+		return netip.Addr{}, "", fmt.Errorf("parse ip: %w", err)
+	}
+	return ip, v.CountryCode, nil
+}
+
+func parseFreeIPAPI(b []byte) (netip.Addr, string, error) {
+	var v struct {
+		IPAddress   string `json:"ipAddress"`
+		CountryCode string `json:"countryCode"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return netip.Addr{}, "", err
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(v.IPAddress))
+	if err != nil {
+		return netip.Addr{}, "", fmt.Errorf("parse ip: %w", err)
+	}
+	return ip, v.CountryCode, nil
+}
+
+func parseIPAPICo(b []byte) (netip.Addr, string, error) {
+	var v struct {
+		IP          string `json:"ip"`
+		CountryCode string `json:"country_code"`
+		Error       bool   `json:"error"`
+		Reason      string `json:"reason"`
+	}
+	if err := json.Unmarshal(b, &v); err != nil {
+		return netip.Addr{}, "", err
+	}
+	// ipapi.co reports quota exhaustion as {"error":true,"reason":"RateLimited"}.
+	if v.Error {
+		return netip.Addr{}, "", fmt.Errorf("provider error: %s", v.Reason)
+	}
+	ip, err := netip.ParseAddr(strings.TrimSpace(v.IP))
+	if err != nil {
+		return netip.Addr{}, "", fmt.Errorf("parse ip: %w", err)
+	}
+	return ip, v.CountryCode, nil
+}
+
 // knownProviders maps a configured URL to its parser. New endpoints are added
 // here; URLs not present are skipped with a warning (see ProvidersFromURLs).
 func knownProviders() map[string]parseFunc {
 	return map[string]parseFunc{
-		"https://ipinfo.io/json":   parseIPInfo,
-		"http://ip-api.com/json":   parseIPAPI,
-		"https://ifconfig.co/json": parseIfconfig,
+		"https://ipinfo.io/json":                  parseIPInfo,
+		"http://ip-api.com/json":                  parseIPAPI,
+		"https://ifconfig.co/json":                parseIfconfig,
+		"https://get.geojs.io/v1/ip/country.json": parseIPCountry,
+		"https://api.country.is/":                 parseIPCountry,
+		"https://ipwho.is/":                       parseIPWhois,
+		"https://freeipapi.com/api/json":          parseFreeIPAPI,
+		"https://ipapi.co/json/":                  parseIPAPICo,
 	}
 }
 

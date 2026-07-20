@@ -49,7 +49,8 @@ Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
   "switch": {                            // (vpn) present only while a switch window is open
     "open": true,
     "until": "2026-07-01T12:02:00Z",
-    "profile": "newvpn"
+    "profile": "newvpn",
+    "trigger": "manual"                  // "manual" (operator command) | "auto" (reconnect window on a tunnel drop); absent from older daemons — treat as "manual"
   }
 }
 ```
@@ -78,6 +79,7 @@ easy to confuse, and only one of them is a *capability*:
 |---|---|---|
 | `state.json` | `0644` | This file — a **report**. Read-only observability; never affects enforcement. |
 | `learned.json` | `0644` | VPN endpoints learned during a switch window. Daemon-owned — **never** written back into your config. |
+| `logs/dezhban.log` | `0644` | Persistent daemon log, captured on every run (interactive or service) in addition to stderr / the platform logger. Size-rotated: 5 MiB × 3 files (`.1`, `.2` archives), oldest dropped. |
 | `command.json` | `0600` root | A **capability**: the root-only command channel (switch open/cancel, forget-learned). Consumed once, and the daemon re-verifies its owner and mode on every read. |
 | `control.sock` | `0660` root:group | The control socket — passwordless `block`/`unblock`/`switch` for the `control.group`. |
 

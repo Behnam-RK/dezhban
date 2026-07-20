@@ -138,10 +138,22 @@ type Options struct {
 	// indistinguishable from the leak the kill switch exists for — so only an
 	// explicit unblock with the tunnel down returns to standby.
 	AutoArm bool
-	// Watcher, when non-nil, emits tunnel up/down edges. In VPN mode it drives
-	// observability logging only (the standing guard rule already cuts a drop with
-	// no leak). In legacy mode a down edge triggers an immediate block — a kill
-	// switch needing only a tunnel name, no endpoints.
+	// ReconnectWindow (vpn.reconnectWindow): when >0, a tunnel-down edge from a
+	// healthy GUARD posture (not standby, not FULL BLOCK, no window already
+	// open) automatically opens a switch-window relaxation of this duration so
+	// the VPN client can redial any server — including one never seen before.
+	// The window closes early on a confirmed good exit (learning the new
+	// endpoint) and reverts fail-closed on expiry. <=0 → no automatic window.
+	ReconnectWindow time.Duration
+	// ReconnectMinUptime is the anti-flap gate: the auto-window opens only if
+	// the tunnel had been up at least this long, or a non-blocked exit was
+	// confirmed during that uptime. <=0 → gate off.
+	ReconnectMinUptime time.Duration
+	// Watcher, when non-nil, emits tunnel up/down edges. In VPN mode a down edge
+	// can open the automatic reconnect window (see ReconnectWindow); the standing
+	// guard rule already cuts the drop itself with no leak. In legacy mode a down
+	// edge triggers an immediate block — a kill switch needing only a tunnel
+	// name, no endpoints.
 	Watcher *netdetect.Watcher
 	// Allowlist (re)builds the legacy dst-IP allowlist. It is called before every
 	// Block — including each tick while blocked — so rotated provider IPs stay
@@ -488,6 +500,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		windowDeadline    time.Time
 		windowPrevBlocked bool
 		windowProfile     string
+		windowTrigger     string // state.TriggerManual or state.TriggerAuto
 		activeProfile     string // last profile a switch window verified onto; sticky
 		windowTimer       *time.Timer
 		windowTimerC      <-chan time.Time
@@ -500,6 +513,18 @@ func (o Options) runVPN(ctx context.Context) error {
 	var lastTun []state.Tunnel
 	var enfErr error
 
+	// Automatic reconnect-window tracking. sawTunnelUp distinguishes an OBSERVED
+	// healthy tunnel (watcher up sample, or a confirmed exit reading) from the
+	// armed start's presumption of up — an auto-window must never open for a
+	// tunnel that was never actually there. tunnelUpSince/goodExitThisUp feed the
+	// anti-flap gate; a zero tunnelUpSince with sawTunnelUp set means "up since
+	// before we started watching", which counts as long uptime.
+	var (
+		sawTunnelUp    bool
+		tunnelUpSince  time.Time
+		goodExitThisUp bool
+	)
+
 	winInterval := o.WindowDiscoveryInterval
 	if winInterval <= 0 {
 		winInterval = 2 * time.Second
@@ -509,7 +534,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		if !windowActive {
 			return nil
 		}
-		return &state.SwitchState{Open: true, Until: windowDeadline, Profile: windowProfile}
+		return &state.SwitchState{Open: true, Until: windowDeadline, Profile: windowProfile, Trigger: windowTrigger}
 	}
 	snapshot := func() {
 		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile)
@@ -577,8 +602,14 @@ func (o Options) runVPN(ctx context.Context) error {
 		windowMax = 5 * time.Minute
 	}
 
-	openWindow := func(now time.Time, dur time.Duration, profile string) {
+	openWindow := func(now time.Time, dur time.Duration, profile, trigger string) {
 		if windowActive {
+			// A manual command takes over an auto window's attribution (the
+			// operator is now driving); an auto trigger never fires while a window
+			// is open, so the reverse cannot happen.
+			if trigger == state.TriggerManual {
+				windowTrigger = trigger
+			}
 			// Extend the deadline, but never past windowStart+windowMax — the hard
 			// cap on exposure holds across repeated opens.
 			hardCap := windowStart.Add(windowMax)
@@ -618,6 +649,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		windowActive = true
 		windowStart = now
 		windowProfile = profile
+		windowTrigger = trigger
 		windowDeadline = now.Add(dur)
 		windowTimer = time.NewTimer(dur)
 		windowTimerC = windowTimer.C
@@ -628,9 +660,34 @@ func (o Options) runVPN(ctx context.Context) error {
 		if o.windowRestricted() {
 			relaxation = "egress relaxed to configured protocols/ports"
 		}
-		o.Log.Warn("SWITCH WINDOW OPEN — "+relaxation+"; connect your VPN now (real IP may be exposed until it closes)",
-			"until", windowDeadline, "profile", profile)
+		if trigger == state.TriggerAuto {
+			o.Log.Warn("RECONNECT WINDOW OPEN — "+relaxation+"; tunnel dropped, redial any VPN now (real IP may be exposed until it closes)",
+				"until", windowDeadline)
+		} else {
+			o.Log.Warn("SWITCH WINDOW OPEN — "+relaxation+"; connect your VPN now (real IP may be exposed until it closes)",
+				"until", windowDeadline, "profile", profile)
+		}
 		snapshot()
+	}
+
+	// maybeAutoWindow opens the automatic reconnect window on a tunnel up→down
+	// edge. Only from a healthy standing GUARD: never in standby (egress already
+	// open), never from FULL BLOCK (the last known exit was forbidden — relaxing
+	// from a known-bad state needs an explicit operator command), never while a
+	// window is already open, and never for a tunnel that was only ever presumed
+	// up. The anti-flap gate keeps a flapping VPN from chaining windows.
+	maybeAutoWindow := func(now time.Time, detail string) {
+		if o.ReconnectWindow <= 0 || windowActive || standby || blocked || !sawTunnelUp {
+			return
+		}
+		if minUp := o.ReconnectMinUptime; minUp > 0 && !goodExitThisUp &&
+			!tunnelUpSince.IsZero() && now.Sub(tunnelUpSince) < minUp {
+			o.Log.Warn("vpn tunnel down — reconnect window suppressed (flap guard: tunnel up "+
+				now.Sub(tunnelUpSince).Round(time.Second).String()+" with no confirmed exit); guard holds",
+				"minUptime", minUp, "detail", detail)
+			return
+		}
+		openWindow(now, o.ReconnectWindow, "", state.TriggerAuto)
 	}
 
 	// closeWindowRevert reverts to the prior posture (expiry / cancel). Session-
@@ -895,7 +952,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			if !switchEnabled {
 				return reply(false, "switch window unavailable (vpn.switchWindow not configured)")
 			}
-			openWindow(time.Now(), o.clampWindow(req.Duration), req.Profile)
+			openWindow(time.Now(), o.clampWindow(req.Duration), req.Profile, state.TriggerManual)
 			if !windowActive {
 				return reply(false, "open switch window failed")
 			}
@@ -933,7 +990,7 @@ func (o Options) runVPN(ctx context.Context) error {
 
 	epInterval := o.EndpointRefresh
 	if epInterval <= 0 {
-		epInterval = 5 * time.Minute
+		epInterval = time.Minute
 	}
 	epTick := time.NewTicker(epInterval)
 	defer epTick.Stop()
@@ -957,6 +1014,18 @@ func (o Options) runVPN(ctx context.Context) error {
 	// With zero tunnels (standing posture) a lookup egresses nowhere useful.
 	if len(tunnels) > 0 && len(endpoints) > 0 {
 		lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+		if lastRes.Err == nil && !blocked {
+			// A confirmed allowed exit proves the tunnel is carrying traffic.
+			goodExitThisUp = true
+			// But with a watcher, up/down is the watcher's to report: this
+			// startup reading only presumes up, and had the tunnel actually been
+			// down it could have egressed the allowlisted physical path. Let the
+			// watcher's own up sample set sawTunnelUp, so an auto reconnect window
+			// never opens for a tunnel it never observed up.
+			if o.Watcher == nil {
+				sawTunnelUp = true
+			}
+		}
 	}
 	snapshot()
 
@@ -977,7 +1046,15 @@ func (o Options) runVPN(ctx context.Context) error {
 				o.Log.Debug("ignoring tunnel sample with unknown state", "detail", st.Detail)
 				continue
 			}
+			wasUp := tunnelUp
 			tunnelUp = st.Up
+			if st.Up {
+				sawTunnelUp = true
+				if !wasUp {
+					tunnelUpSince = time.Now()
+					goodExitThisUp = false
+				}
+			}
 			switch {
 			case st.Up:
 				o.Log.Info("vpn tunnel up", "detail", st.Detail)
@@ -995,6 +1072,9 @@ func (o Options) runVPN(ctx context.Context) error {
 			lastTun = tunnelSnapshot(st, tunnels)
 			if standby && st.Up {
 				tryAutoArm(st.Detail)
+			}
+			if wasUp && !st.Up {
+				maybeAutoWindow(time.Now(), st.Detail)
 			}
 			if windowActive {
 				maybeStartCloseProbe()
@@ -1014,7 +1094,7 @@ func (o Options) runVPN(ctx context.Context) error {
 					continue
 				}
 				dur := o.clampWindow(cmd.Duration)
-				openWindow(now, dur, cmd.Profile)
+				openWindow(now, dur, cmd.Profile, state.TriggerManual)
 			case command.OpCancelSwitchWindow:
 				if windowActive {
 					closeWindowRevert("cancelled")
@@ -1081,6 +1161,9 @@ func (o Options) runVPN(ctx context.Context) error {
 				continue
 			}
 			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+			if lastRes.Err == nil && !blocked {
+				goodExitThisUp, sawTunnelUp = true, true // confirmed exit through the tunnel
+			}
 			snapshot()
 		}
 	}

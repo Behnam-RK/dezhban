@@ -23,6 +23,10 @@ Subcommands:
   get <key>         Print one config value
   set <key> <val>   Set a value, validate, and save
   set k=v [k=v ...] Set several values in one validated, atomic write
+  reset <key> [...] Reset key(s) to the shipped default, validate, and save
+  reset --all       Reset every tunable to defaults, preserving identity data
+                    (blockedCountries, allowlist, vpn.enabled/interfaces/
+                    endpoints/profiles). Delete the config file for a true wipe.
   edit              Open the config in $EDITOR (created from defaults if missing)
 
 Keys (dotted; list values are comma-separated):
@@ -30,7 +34,7 @@ Keys (dotted; list values are comma-separated):
   allowlist.dns allowlist.hosts providerQuorum logLevel
   vpn.enabled vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
   vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.autoArm vpn.switchWindow
-  vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
+  vpn.reconnectWindow vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
 
@@ -115,6 +119,23 @@ var configFields = map[string]configField{
 		get: func(c *config.Config) string { return c.VPN.SwitchWindow.String() },
 		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.SwitchWindow, v) },
 	},
+	"vpn.reconnectWindow": {
+		get: func(c *config.Config) string {
+			if c.VPN.ReconnectWindow < 0 {
+				return "0s" // explicitly disabled
+			}
+			return c.VPN.ReconnectWindow.String()
+		},
+		set: func(c *config.Config, v string) error {
+			if err := setDuration(&c.VPN.ReconnectWindow, v); err != nil {
+				return err
+			}
+			if c.VPN.ReconnectWindow == 0 {
+				c.VPN.ReconnectWindow = config.Disabled // "0" means off, not "reset to default"
+			}
+			return nil
+		},
+	},
 	"vpn.endpointRefresh": {
 		get: func(c *config.Config) string { return c.VPN.EndpointRefresh.String() },
 		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.EndpointRefresh, v) },
@@ -168,6 +189,8 @@ func cmdConfig(args []string) int {
 		return configGet(cfgPath, rest)
 	case "set":
 		return configSet(cfgPath, rest)
+	case "reset":
+		return configReset(cfgPath, rest)
 	case "edit":
 		return configEdit(cfgPath)
 	case "-h", "--help", "help":
@@ -299,6 +322,68 @@ func configSet(flagVal string, args []string) int {
 	}
 	for _, p := range pairs {
 		fmt.Printf("set %s = %s  (%s)\n", p.key, configFields[p.key].get(cfg), path)
+	}
+	return 0
+}
+
+// configReset restores config keys to their shipped defaults — the CLI twin of
+// the GUI's per-field ↺. `--all` resets every tunable but preserves identity
+// data (what the user protects and how to reach their VPNs); resetting those to
+// empty would not be "defaults", it would be data loss.
+func configReset(flagVal string, args []string) int {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: dezhban config reset <key> [key ...] | --all")
+		return 2
+	}
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+	def := config.Default()
+	config.Normalize(&def)
+
+	var keys []string
+	if len(args) == 1 && args[0] == "--all" {
+		preserved := struct {
+			blocked   []string
+			allowlist config.Allowlist
+			enabled   bool
+			tunnels   []string
+			endpoints []string
+			profiles  []config.Profile
+		}{cfg.BlockedCountries, cfg.Allowlist, cfg.VPN.Enabled, cfg.VPN.TunnelInterfaces, cfg.VPN.Endpoints, cfg.VPN.Profiles}
+		*cfg = def
+		cfg.BlockedCountries = preserved.blocked
+		cfg.Allowlist = preserved.allowlist
+		cfg.VPN.Enabled = preserved.enabled
+		cfg.VPN.TunnelInterfaces = preserved.tunnels
+		cfg.VPN.Endpoints = preserved.endpoints
+		cfg.VPN.Profiles = preserved.profiles
+		fmt.Println("reset all tunables to defaults (preserved: blockedCountries, allowlist, vpn.enabled/tunnelInterfaces/endpoints/profiles)")
+	} else {
+		keys = args
+		for _, k := range keys {
+			field, ok := configFields[k]
+			if !ok {
+				fmt.Fprintf(os.Stderr, "unknown key %q\nvalid keys: %s\n", k, knownKeys())
+				return 2
+			}
+			// The shipped default, rendered through the same accessor pair the
+			// GUI and `set` use, so every key resets the way it is edited.
+			if err := field.set(cfg, field.get(&def)); err != nil {
+				fmt.Fprintf(os.Stderr, "reset %s: %v\n", k, err)
+				return 1
+			}
+		}
+	}
+
+	path := writeTargetPath(flagVal)
+	if err := writeConfig(path, cfg); err != nil {
+		return saveError(path, err)
+	}
+	for _, k := range keys {
+		fmt.Printf("reset %s = %s  (%s)\n", k, configFields[k].get(cfg), path)
 	}
 	return 0
 }

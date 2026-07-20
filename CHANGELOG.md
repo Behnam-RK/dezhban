@@ -12,6 +12,79 @@ changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Upgrade note — posture defaults change for existing configs.** The defaults
+  review below makes `vpn.autoArm` and `vpn.allowPhysicalDNS` default **on**. A
+  config that never set `vpn.autoArm` (the previous default was off, and it was
+  omitted when false) will **arm on VPN connect / park in standby instead of
+  arming from boot** under this release — a real posture change, not a no-op.
+  Every tunnel drop now also opens a **30s reconnect window** by default (real IP
+  may be exposed while the client redials) unless you set `vpn.reconnectWindow:
+  "0"`. To keep the pre-upgrade strict posture, set `vpn.autoArm: false`,
+  `vpn.allowPhysicalDNS: false`, and `vpn.reconnectWindow: "0"`. (An explicit
+  `allowPhysicalDNS: false` already on disk is preserved; only omitted keys pick
+  up the new default.)
+- **Defaults review (2026-07-19)** — the shipped defaults now favor the
+  smooth-operation posture; every previous value remains one config line away:
+  `vpn.autoArm` **on** (standby until a VPN connects — no more mystery blackout
+  when starting without a VPN), `vpn.allowPhysicalDNS` **on** (hostname redials
+  work while the tunnel is down; explicit `false` still closes the DNS-metadata
+  leak), `pollInterval` **15s** + `hysteresis` **2** (~30s worst-case
+  forbidden-exit confirmation), `vpn.switchWindow` **15s** (windows close early
+  on success; `--for` extends a one-off), `vpn.endpointRefresh` **1m**.
+  `autoArm`/`allowPhysicalDNS` became pointer fields on disk so an explicit
+  `false` survives normalization.
+- **Five new geo-IP providers** (geojs.io, country.is, ipwho.is,
+  freeipapi.com, ipapi.co) join the existing three, and the default provider
+  list is now ordered by rate-limit headroom — the first reachable provider
+  absorbs nearly all poll traffic, so unmetered endpoints go first and
+  quota-limited ones (ipinfo, ipapi.co) become deep fallbacks. Provider-side
+  failure shapes (ipwho.is `success:false`, ipapi.co `error:true`) fail closed.
+
+### Added
+
+- **Automatic reconnect window** (`vpn.reconnectWindow`, default `30s`, on by
+  default; `"0"` disables): a tunnel drop from healthy GUARD now opens the
+  bounded switch-window relaxation automatically, so a VPN client can redial
+  *any* server — including a never-seen one (rotating-pool / 443-fronted
+  anti-censorship VPNs) — or a different VPN app entirely, with zero operator
+  interaction. Closes early and learns the new endpoint on a confirmed good
+  exit; fail-closes and stays closed on expiry. Guarded by an anti-flap gate
+  (`vpn.advanced.reconnectMinUptime`, default `15s`) and never opens from
+  standby, FULL BLOCK, or for a tunnel never observed up. The manual
+  `dezhban switch` window remains as the fallback for edge cases.
+  `status --json` labels an open window's origin via the additive
+  `switch.trigger` field (`"manual"`/`"auto"`); the menubar app shows a
+  distinct "VPN dropped — reconnect window open" banner and notification.
+
+- **`dezhban config reset <key> [key ...]` / `config reset --all`** — restore
+  shipped defaults from the CLI. `--all` resets every tunable while preserving
+  identity data (blockedCountries, allowlist, vpn.enabled / tunnelInterfaces /
+  endpoints / profiles); deleting the config file remains the true wipe.
+- **Persistent log capture, always on**: every daemon run — interactive or
+  under the service manager — now also appends to
+  `<state dir>/logs/dezhban.log` (0644, size-rotated at 5 MiB with two
+  archives), so history survives shell exits and is readable without root;
+  stderr and the platform logger keep working exactly as before.
+- **Touch ID for the menubar app's privileged prompts**: elevation now prefers
+  `sudo` + `pam_tid` (the system Touch ID HUD) when Touch ID for sudo is
+  configured, falling back to Authorization Services and then the legacy
+  osascript dialog — in practice the `system.privilege.admin` SecurityAgent
+  prompt never offers biometrics, so the sudo path is the one that actually
+  delivers them. `dezhban doctor` now surfaces the one-line
+  `/etc/pam.d/sudo_local` opt-in when it is missing.
+
+### Fixed
+
+- Saving a config (`config set`, the setup wizard, GUI settings) silently
+  dropped `vpn.endpointGrace` and `vpn.autoArm` — both now round-trip, and an
+  absent `endpointGrace` normalizes to its effective `15m` default so
+  observers see the real value instead of `0`.
+- The menubar/Dock icon now shows the blocked (red) state in the zero-tunnel
+  standing posture — VPN guard armed with no tunnel present is a total egress
+  cut and no longer renders the calm green shield.
+
 ## [0.2.0] - 2026-07-18
 
 ### Added

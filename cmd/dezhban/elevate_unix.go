@@ -61,3 +61,21 @@ func elevatedWrite(path string, data []byte) error {
 func shQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
+
+// sudoTouchIDConfigured reports whether Touch ID for sudo is opted in
+// (pam_tid in /etc/pam.d/sudo_local — the Apple-documented mechanism, which
+// survives OS updates unlike editing /etc/pam.d/sudo). Used by doctor to
+// surface the opt-in, and mirrored by the menubar app's elevation path.
+func sudoTouchIDConfigured() bool {
+	data, err := os.ReadFile("/etc/pam.d/sudo_local")
+	if err != nil {
+		return false
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		l := strings.TrimSpace(line)
+		if !strings.HasPrefix(l, "#") && strings.Contains(l, "pam_tid") {
+			return true
+		}
+	}
+	return false
+}
