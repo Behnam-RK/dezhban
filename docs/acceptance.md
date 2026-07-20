@@ -51,27 +51,50 @@ Per-OS rule inspection:
 | Linux | `sudo nft list ruleset` — only the `dezhban` table should appear |
 | Windows | WFP filter dump — rules under the `dezhban` group/sublayer |
 
-## Country-blocklist fallback (`vpn.enabled: false`)
+## Standby and the single-mode merge
 
-- [ ] **Blocklist trips.** Set `blockedCountries` to your *own* current country →
-      `sudo dezhban run` → within N ticks egress is cut and the log shows
-      `BLOCKING (country=XX)`.
-- [ ] **Recovery.** Remove your country from the list and restart → `ALLOWING`,
-      connectivity returns.
+- [ ] **Fresh install, no VPN configured** → posture `standby`, **no rules
+      installed** (the inspect command above shows nothing for the `dezhban`
+      table/anchor), network fully open, menubar icon grey, Overview says it is
+      not protecting.
+- [ ] **Arming.** Configure a tunnel and connect the VPN → the guard arms, icon
+      goes green, and the GUARD ruleset appears.
+- [ ] **A pre-merge config still works.** Load a config carrying `vpn.enabled`,
+      `failClosed` and `allowlist` → it loads without error, `dezhban validate`
+      names all three as retired with a reason, and the installed ruleset is
+      **identical** to the same config with those keys deleted.
+- [ ] **Retired keys are not written back.** `sudo dezhban config set logLevel debug`
+      on that config → the saved file no longer contains `failClosed` or
+      `allowlist`, and a re-load reports nothing retired.
+- [ ] **`--mode legacy` errors by name** rather than rendering a posture that no
+      longer exists: `dezhban print-rules --mode legacy` exits non-zero and points
+      at ADR-0001.
+
+## Country check (exit country, not physical location)
+
+- [ ] **Blocklist trips.** Add the VPN exit's country to `blockedCountries` →
+      within `hysteresis` ticks the posture escalates to `full-block`.
+- [ ] **Recovery.** Remove it → the guard is restored.
 - [ ] **Clean shutdown.** `Ctrl-C` while blocked → `Cleanup()` runs, connectivity
       is restored, exit 0.
-- [ ] **Fail-closed on lookup failure.** Blackhole every provider host (e.g. via
-      `/etc/hosts`) while running → within N error-ticks the firewall blocks, but
-      loopback, DNS, and the provider allowlist stay open so recovery can fire.
-      Restore `/etc/hosts` → it recovers.
+- [ ] **An unknown country HOLDS — it must not escalate.** Blackhole every
+      provider host (e.g. via `/etc/hosts`) while running in GUARD → the posture
+      **stays** `guard` however many error-ticks pass, and the log says the exit
+      country is unknown. It must never reach `full-block` on errors alone:
+      that would cut the tunnel's own egress and livelock the reconnect.
+- [ ] **An unknown country does not lift a block either.** Repeat while in
+      `full-block` → it stays blocked.
+- [ ] **An error mid-streak does not cancel a pending flip.** With `hysteresis: 3`,
+      feed blocked/blocked/error/blocked → the block still commits on the fourth
+      reading.
 - [ ] **No flapping.** An alternating country sequence must NOT toggle the
       firewall until `hysteresis` consecutive readings agree.
 - [ ] **Quorum.** With three providers and one disagreeing, the majority wins and
       a warning is logged.
 
-## VPN interface guard (`vpn.enabled: true`)
+## VPN interface guard
 
-The guard is the dangerous mode — a misconfiguration locks the host out. Run
+The guard is where a misconfiguration locks the host out. Run
 `dezhban doctor --discover` first; it is designed to catch exactly that.
 
 - [ ] **Guard is up, tunnel traffic flows.** With the VPN connected and the guard
@@ -127,6 +150,22 @@ The guard is the dangerous mode — a misconfiguration locks the host out. Run
       confirming an allowed exit (or a manual `switch`).
 - [ ] **Strict opt-out.** With `vpn.reconnectWindow: "0"`, a drop opens nothing
       and behavior matches the pre-0.3 zero-relaxation guard.
+
+### The two windows disable independently
+
+Run all four permutations; each setting must disable **only** its own trigger.
+
+- [ ] `switchWindow: "0"`, `reconnectWindow` default → `dezhban switch` refuses
+      with a message naming `vpn.switchWindow`, but a tunnel drop **still** opens
+      the automatic reconnect window.
+- [ ] `switchWindow` default, `reconnectWindow: "0"` → a drop opens nothing, but
+      `dezhban switch` **still** works.
+- [ ] **Both `"0"` — the strict zero-leak posture.** A drop is cut instantly with
+      no window at all, and `dezhban switch` refuses. Nothing can relax the guard.
+- [ ] **`"0"` survives a round trip.** With `switchWindow: "0"` set, run
+      `dezhban config set logLevel debug` and re-load → it is still disabled, not
+      silently coerced back to the 15s default. (This was a real bug: the setting
+      was accepted and discarded.)
 
 **Full live macOS pass:** `setup` → connect VPN A (guarded) → disconnect →
 `dezhban switch` → connect self-hosted VPN B → the window learns the endpoint and
@@ -231,7 +270,7 @@ task gui:build && open dist/Dezhban.app
       set` calls land, the icon goes ⚪ across the stop/start gap, and it resolves
       to 🟢/🔴 for the new mode.
 - [ ] **A change that fails cross-field validation is refused *before* any
-      restart** — e.g. `vpn.enabled=true` with empty `endpoints`. No stop/start may
+      restart** — e.g. a profile with no valid endpoint. No stop/start may
       happen on a config that would fail to start.
 - [ ] Killing the daemon mid-restart makes the pane report failure, not success.
 - [ ] One prompt per apply — not one per field.

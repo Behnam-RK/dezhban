@@ -51,9 +51,11 @@ type Monitor interface {
 
 // Backend is the subset of firewall.FirewallBackend the runner drives.
 // *firewall backends satisfy it directly.
+// Every posture the guard installs is expressed as a Policy through Apply. The
+// dst-IP Block verb belonged to the retired country-blocklist model and is gone
+// from this seam; `dezhban block --force` still calls it on the concrete backend.
 type Backend interface {
 	Apply(p firewall.Policy) error
-	Block(a firewall.Allowlist) error
 	Unblock() error
 	Cleanup() error
 }
@@ -67,10 +69,7 @@ type Options struct {
 	Log      *slog.Logger
 	Interval time.Duration // poll period; drives the VPN ticker
 
-	// VPN selects the interface-guard state machine (GUARD ↔ FULL BLOCK) instead
-	// of the legacy dst-IP Block/Unblock model.
-	VPN bool
-	// Tunnels and Endpoints describe the VPN guard (VPN mode only). Endpoints is
+	// Tunnels and Endpoints describe the VPN guard. Endpoints is
 	// the static fallback used only when ResolveEndpoints is nil (tests / legacy
 	// callers); normal runs supply ResolveEndpoints.
 	Tunnels   []string
@@ -155,11 +154,6 @@ type Options struct {
 	// edge triggers an immediate block — a kill switch needing only a tunnel
 	// name, no endpoints.
 	Watcher *netdetect.Watcher
-	// Allowlist (re)builds the legacy dst-IP allowlist. It is called before every
-	// Block — including each tick while blocked — so rotated provider IPs stay
-	// reachable for recovery detection. Legacy mode only.
-	Allowlist func() firewall.Allowlist
-
 	// Publish, when non-nil, receives a fresh snapshot of the daemon's posture
 	// after each poll, verdict transition, tunnel edge, and endpoint refresh. It
 	// is best-effort observability (the menubar app / `status --json` read it) and
@@ -184,31 +178,19 @@ func tunnelSnapshot(st netdetect.TunnelState, tunnels []string) []state.Tunnel {
 	return []state.Tunnel{{Name: name, Up: st.Up, Detail: st.Detail}}
 }
 
-// modeName is the snapshot's mode string.
-func modeName(vpn bool) string {
-	if vpn {
-		return "vpn"
-	}
-	return "legacy"
-}
-
-// postureName maps (mode, blocked, window, standby) to the snapshot's posture
-// string. "standby" (vpn.autoArm, no tunnel yet) outranks only the plain guard:
-// a manual block or an open window always names itself.
-func postureName(vpn, blocked, window, standby bool) string {
+// postureName maps (blocked, window, standby) to the snapshot's posture string.
+// "standby" (no tunnel observed yet) outranks only the plain guard: a full block
+// or an open window always names itself.
+func postureName(blocked, window, standby bool) string {
 	switch {
-	case vpn && window:
+	case window:
 		return "switch-window"
-	case vpn && blocked:
-		return "full-block"
-	case vpn && standby:
-		return "standby"
-	case vpn:
-		return "guard"
 	case blocked:
-		return "block"
+		return "full-block"
+	case standby:
+		return "standby"
 	default:
-		return "allow"
+		return "guard"
 	}
 }
 
@@ -224,8 +206,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 	windowOpen := win != nil && win.Open
 	snap := state.Snapshot{
 		Time:                time.Now(),
-		Mode:                modeName(o.VPN),
-		Posture:             postureName(o.VPN, blocked, windowOpen, standby),
+		Posture:             postureName(blocked, windowOpen, standby),
 		Blocked:             blocked,
 		CountryCode:         r.CountryCode,
 		Provider:            r.Provider,
@@ -320,12 +301,7 @@ func Run(ctx context.Context, o Options) error {
 		defer o.Control.Stop()
 	}
 
-	var runErr error
-	if o.VPN {
-		runErr = o.runVPN(ctx)
-	} else {
-		runErr = o.runLegacy(ctx)
-	}
+	runErr := o.runGuard(ctx)
 	// Publish one final "stopped" snapshot before teardown so observers (the
 	// menubar app, `status --json`) flip to stopped at once on a clean shutdown
 	// instead of waiting out the staleness window. It's queued on the same channel
@@ -347,7 +323,6 @@ func (o Options) publishStopped(runErr error) {
 	}
 	snap := state.Snapshot{
 		Time:                time.Now(),
-		Mode:                modeName(o.VPN),
 		Posture:             "stopped",
 		Blocked:             false,
 		PollIntervalSeconds: int(o.Interval.Seconds()),
@@ -359,14 +334,14 @@ func (o Options) publishStopped(runErr error) {
 	o.Publish(snap)
 }
 
-// runVPN installs the always-on guard immediately at startup (so a tunnel drop
+// runGuard installs the always-on guard immediately at startup (so a tunnel drop
 // is cut even before the first poll), then toggles GUARD ↔ FULL BLOCK on each
 // verdict. While in FULL BLOCK the tunnel is cut and the exit country cannot be
 // observed, so recovery uses a time-windowed probe (see probe): each tick the
 // guard is briefly lifted for a single lookup, then re-cut. Probe readings feed
 // the same hysteresis streak in the Decider, so one allowed reading does not
 // lift the block — it takes `Hysteresis` consecutive allowed probes.
-func (o Options) runVPN(ctx context.Context) error {
+func (o Options) runGuard(ctx context.Context) error {
 	switchEnabled := o.SwitchWindow > 0 && o.PollCommand != nil
 	// relaxed startup gates: with runtime autodetect or an available switch
 	// window, an empty tunnel/endpoint set is legal — the standing posture is a
@@ -720,7 +695,7 @@ func (o Options) runVPN(ctx context.Context) error {
 		windowActive = false
 		blocked = windowPrevBlocked
 		enfErr = nil
-		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(true, blocked, false, standby))
+		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(blocked, false, standby))
 		snapshot()
 	}
 
@@ -866,8 +841,7 @@ func (o Options) runVPN(ctx context.Context) error {
 			return control.Response{
 				OK:      ok,
 				Error:   msg,
-				Mode:    modeName(true),
-				Posture: postureName(true, blocked, windowActive, standby),
+				Posture: postureName(blocked, windowActive, standby),
 				Blocked: blocked,
 			}
 		}
@@ -1094,6 +1068,13 @@ func (o Options) runVPN(ctx context.Context) error {
 					continue
 				}
 				dur := o.clampWindow(cmd.Duration)
+				if dur <= 0 {
+					// Unreachable while the command poll only ticks when
+					// switchEnabled, but never open a window the operator
+					// disabled — this is the guard's only relaxation.
+					o.Log.Warn("ignoring switch-window command — manual switch windows are disabled (vpn.switchWindow: \"0\")")
+					continue
+				}
 				openWindow(now, dur, cmd.Profile, state.TriggerManual)
 			case command.OpCancelSwitchWindow:
 				if windowActive {
@@ -1357,177 +1338,6 @@ func (o Options) probe(ctx context.Context, guard, fullBlock firewall.Policy) (m
 	return monitor.Result{Reading: r, Err: err}, enfErr
 }
 
-// runLegacy is the direct-connection model: dst-IP allowlist Block on entering a
-// blocked country, Unblock on leaving. The allowlist is re-resolved on every
-// Block — including each tick while still blocked — so a provider that rotates
-// its CDN IP mid-block stays reachable for recovery detection. Block is
-// idempotent, so re-applying the refreshed allowlist never stacks rules.
-func (o Options) runLegacy(ctx context.Context) error {
-	blocked := false
-	// enfErr is the last firewall-action failure, published so observers don't read a
-	// failed block as a healthy "allow". Sticky: set on a Block/Unblock error, cleared
-	// on the next success, and carried through non-enforcing (tunnel/geo) snapshots.
-	var enfErr error
-
-	// block applies (or refreshes) the dst-IP allowlist block. The allowlist is
-	// re-resolved on every call so a provider that rotates its CDN IP mid-block
-	// stays reachable. A mid-block refresh that resolves no provider IPs (transient
-	// DNS failure) must NOT narrow an existing block — that would strand the monitor
-	// with no geo-API egress and make the block permanent; keep the rules in force
-	// and retry next tick. On first entry we still block even with an empty list
-	// (buildAllowlist warns separately).
-	block := func(reason, cc string) {
-		al := o.Allowlist()
-		if blocked && len(al.Hosts) == 0 {
-			// Deliberate safety no-op (keep the existing block), not a failure — leave
-			// enfErr untouched.
-			o.Log.Warn("allowlist refresh resolved no provider IPs; keeping existing block", "reason", reason, "country", cc)
-			return
-		}
-		if err := o.Backend.Block(al); err != nil {
-			o.Log.Error("block failed", "err", err, "reason", reason, "country", cc)
-			enfErr = err
-			return
-		}
-		enfErr = nil
-		if !blocked {
-			o.Log.Info("BLOCKING", "reason", reason, "country", cc, "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
-			blocked = true
-		} else {
-			o.Log.Debug("allowlist refreshed under block", "hosts_allowed", len(al.Hosts))
-		}
-	}
-
-	// Tunnel watcher: a drop cuts the network at once (kill switch) instead of
-	// leaking until the next geo poll detects the reverted country. A tunnel coming
-	// back up does NOT auto-unblock — recovery stays governed by the geo verdict's
-	// hysteresis, so a flapping tunnel can't strobe the network open.
-	var tunCh <-chan netdetect.TunnelState
-	if o.Watcher != nil {
-		tunCh = o.Watcher.Watch(ctx)
-	}
-
-	// Last-known reading and tunnel state, retained so a tunnel edge publishes a
-	// full snapshot without blanking the IP/country from the most recent poll.
-	var last monitor.Result
-	var lastTun []state.Tunnel
-	snapshot := func() { o.publish(blocked, false, last.Reading, last.Err, enfErr, lastTun, nil, nil, "") }
-
-	// manualBlock holds an operator-requested block across allowed verdicts, so the
-	// geo poll cannot unblock what an operator explicitly blocked. Cleared only by
-	// an explicit unblock.
-	manualBlock := false
-
-	// handleControl services a control-socket request inline on this loop — the
-	// same reason as in runVPN: the run-loop goroutine is the only one allowed to
-	// drive the Backend. Switch ops are VPN-mode only and are refused here.
-	handleControl := func(req control.Request) control.Response {
-		reply := func(ok bool, msg string) control.Response {
-			return control.Response{
-				OK:      ok,
-				Error:   msg,
-				Mode:    modeName(false),
-				Posture: postureName(false, blocked, false, false),
-				Blocked: blocked,
-			}
-		}
-		switch req.Op {
-		case control.OpStatus:
-			return reply(true, "")
-		case control.OpBlock:
-			if blocked {
-				manualBlock = true
-				return reply(true, "")
-			}
-			block("manual (control socket)", last.Reading.CountryCode)
-			if !blocked {
-				return reply(false, "block failed")
-			}
-			manualBlock = true
-			return reply(true, "")
-		case control.OpUnblock:
-			manualBlock = false
-			if !blocked {
-				return reply(true, "")
-			}
-			if err := o.Backend.Unblock(); err != nil {
-				enfErr = err
-				o.Log.Error("control: unblock failed", "err", err)
-				snapshot()
-				return reply(false, "unblock failed: "+err.Error())
-			}
-			blocked = false
-			enfErr = nil
-			o.Log.Info("ALLOWING (manual unblock, via control socket)")
-			snapshot()
-			return reply(true, "")
-		case control.OpOpenSwitch, control.OpCancelSwitch:
-			return reply(false, "switch windows are a vpn-mode feature (vpn.enabled is false)")
-		}
-		return reply(false, fmt.Sprintf("unsupported op %q", req.Op))
-	}
-
-	var ctlC <-chan control.ConnRequest
-	if o.Control != nil {
-		ctlC = o.Control.Requests()
-	}
-
-	results := o.Monitor.Poll(ctx)
-	for {
-		select {
-		case <-ctx.Done():
-			return nil
-		case cr := <-ctlC:
-			cr.Reply <- handleControl(cr.Req)
-		case st, ok := <-tunCh:
-			if !ok {
-				tunCh = nil
-				continue
-			}
-			if st.Up {
-				o.Log.Info("vpn tunnel up", "detail", st.Detail)
-			} else {
-				o.Log.Warn("vpn tunnel down — blocking immediately (kill switch)", "detail", st.Detail)
-				block("tunnel-down", "")
-			}
-			lastTun = tunnelSnapshot(st, o.Tunnels)
-			snapshot()
-		case res, ok := <-results:
-			if !ok {
-				return nil
-			}
-			if res.Err != nil {
-				o.Log.Warn("country lookup failed", "err", res.Err)
-			}
-			last = res
-			cc := res.Reading.CountryCode
-			switch o.Decider.Evaluate(res) {
-			case decision.Block:
-				block("country", cc)
-			case decision.Allow:
-				// Only act when currently blocked; an allowed reading while already
-				// allowing is a no-op. An unblock error leaves blocked=true so the
-				// next allowed reading retries — same posture as before publishing.
-				if blocked && manualBlock {
-					// The operator asked for this block; an allowed country does not
-					// override them. `dezhban unblock` is the only way out.
-					o.Log.Debug("manual block held — not unblocking on allowed verdict", "country", cc)
-				} else if blocked {
-					if err := o.Backend.Unblock(); err != nil {
-						o.Log.Error("unblock failed", "err", err, "country", cc)
-						enfErr = err
-					} else {
-						enfErr = nil
-						o.Log.Info("ALLOWING", "country", cc)
-						blocked = false
-					}
-				}
-			}
-			snapshot()
-		}
-	}
-}
-
 // resolveEndpoints returns the current endpoint set, using ResolveEndpoints when
 // supplied or falling back to the static Endpoints (tests / legacy callers).
 func (o Options) resolveEndpoints(ctx context.Context) netdetect.EndpointSet {
@@ -1556,6 +1366,14 @@ func (o Options) resolveEndpointsWith(ctx context.Context, tunnels []string) net
 // [minSwitchWindow, SwitchWindowMax]. An empty/invalid request falls back to the
 // configured default SwitchWindow.
 func (o Options) clampWindow(req string) time.Duration {
+	// Refuse outright when manual switch windows are disabled. Both triggers
+	// (socket op, command file) are already gated on switchEnabled, so this is
+	// unreachable today — but the clamp below raises anything under 10s UP to
+	// 10s, so a future caller that skipped the gate would turn "disabled" into
+	// a real 10-second relaxation of the guard. Fail closed instead.
+	if o.SwitchWindow <= 0 {
+		return 0
+	}
 	dur := o.SwitchWindow
 	if req != "" {
 		if d, err := time.ParseDuration(req); err == nil && d > 0 {

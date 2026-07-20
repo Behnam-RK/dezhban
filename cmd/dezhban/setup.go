@@ -59,9 +59,8 @@ func cmdSetup(args []string) int {
 	pollInterval := cfg.PollInterval.String()
 	hysteresis := strconv.Itoa(cfg.Hysteresis)
 	logLevel := cfg.LogLevel
-	failClosed := cfg.FailClosed
 	quorum := cfg.ProviderQuorum
-	vpnEnabled := cfg.VPN.Enabled
+	configureVPN := true
 
 	blockedSet := map[string]bool{}
 	for _, c := range cfg.BlockedCountries {
@@ -94,14 +93,11 @@ func cmdSetup(args []string) int {
 			Value(&otherCountries),
 		huh.NewSelect[string]().Title("Log level").
 			Options(huh.NewOptions("debug", "info", "warn", "error")...).Value(&logLevel),
-		huh.NewConfirm().Title("Fail closed?").
-			Description("Block when the country can't be determined — applies in fallback (non-VPN) mode. In VPN guard mode the standing guard is itself the fail-closed block.").
-			Value(&failClosed),
 		huh.NewConfirm().Title("Require provider quorum?").Description("Only act when a majority of providers agree.").
 			Value(&quorum),
-		huh.NewConfirm().Title("Behind a full-tunnel VPN?").
-			Description("Enables the always-on interface guard (the primary, zero-leak mode).").
-			Value(&vpnEnabled),
+		huh.NewConfirm().Title("Configure your VPN now?").
+			Description("dezhban only enforces once it knows your VPN's tunnel and server. Say no and it starts in standby — fully open, not protecting — until you run 'dezhban setup' again or edit the config.").
+			Value(&configureVPN),
 	))
 	if err := runForm(basics); err != nil {
 		return formExit(err)
@@ -123,7 +119,7 @@ func cmdSetup(args []string) int {
 	}
 	allowPhysicalDNS := cfg.VPN.AllowPhysicalDNS
 	var profiles []config.Profile
-	if vpnEnabled {
+	if configureVPN {
 		// Recommended path: automatic detection (no pinned interface names that go
 		// stale across reconnects). The old pin-specific-interfaces flow survives
 		// behind an advanced opt-out.
@@ -188,9 +184,9 @@ func cmdSetup(args []string) int {
 	// --- assemble into the config ---
 	applyWizard(cfg, wizardInput{
 		pollInterval: pollInterval, hysteresis: hysteresis, logLevel: logLevel,
-		failClosed: failClosed, quorum: quorum,
-		countries:  append(checkedCountries, splitList(otherCountries)...),
-		vpnEnabled: vpnEnabled, autoMode: autoMode, tunnels: tunnels,
+		quorum:       quorum,
+		countries:    append(checkedCountries, splitList(otherCountries)...),
+		configureVPN: configureVPN, autoMode: autoMode, tunnels: tunnels,
 		endpoints: splitList(endpoints), profiles: profiles,
 		autoDiscover: autoDiscover && macOS, allowPhysicalDNS: allowPhysicalDNS,
 	})
@@ -203,7 +199,7 @@ func cmdSetup(args []string) int {
 	}
 
 	// --- lockout guard: warn if an endpoint sits inside a tunnel subnet ---
-	if vpnEnabled {
+	if configureVPN {
 		if warn := endpointLockoutWarning(cfg); warn != "" {
 			var proceed bool
 			fmt.Fprintln(os.Stderr, warn)
@@ -221,13 +217,14 @@ func cmdSetup(args []string) int {
 	}
 
 	// --- preview the exact ruleset, then confirm ---
-	mode := "legacy"
-	if vpnEnabled {
-		mode = "guard"
-	}
-	if pol, err := policyForMode(cfg, newLogger(cfg), mode); err == nil {
+	// There is one mode now (docs/adr/0001): guard, which degrades to the
+	// FullBlock shape when there is no tunnel to pass yet. Note this preview is
+	// static config, not the daemon's runtime STANDBY check (docs/adr/0002) — a
+	// fresh config with no tunnel configured previews as a full block here, but
+	// the running daemon idles rule-free until a tunnel is actually observed up.
+	if pol, err := policyForMode(cfg, newLogger(cfg), "guard"); err == nil {
 		if rules, err := firewall.RenderRules(pol); err == nil {
-			fmt.Fprintf(os.Stderr, "\nRuleset this config would apply (%s mode):\n\n%s\n", mode, rules)
+			fmt.Fprintf(os.Stderr, "\nRuleset this config would apply once armed:\n\n%s\n", rules)
 		}
 	}
 
@@ -266,7 +263,7 @@ func cmdSetup(args []string) int {
 	} else {
 		fmt.Println("later, enable it with: sudo dezhban install && sudo dezhban start")
 	}
-	if vpnEnabled {
+	if configureVPN {
 		fmt.Println("to connect a brand-new VPN whose server isn't known yet: sudo dezhban switch, then connect it.")
 	}
 	return 0
@@ -304,9 +301,9 @@ func tunnelSelector(detected, configured []string, dst *[]string) huh.Field {
 // wizardInput carries the collected answers into the config.
 type wizardInput struct {
 	pollInterval, hysteresis, logLevel string
-	failClosed, quorum                 bool
+	quorum                             bool
 	countries                          []string
-	vpnEnabled                         bool
+	configureVPN                       bool
 	autoMode                           bool // automatic tunnel detection (no pinned interfaces)
 	tunnels, endpoints                 []string
 	profiles                           []config.Profile
@@ -323,12 +320,10 @@ func applyWizard(cfg *config.Config, in wizardInput) {
 		cfg.Hysteresis = n
 	}
 	cfg.LogLevel = in.logLevel
-	cfg.FailClosed = in.failClosed
 	cfg.ProviderQuorum = in.quorum
 	cfg.BlockedCountries = in.countries // config.Normalize upper-cases + de-dupes on save
 
-	cfg.VPN.Enabled = in.vpnEnabled
-	if in.vpnEnabled {
+	if in.configureVPN {
 		if in.autoMode {
 			// Automatic detection: no pinned interface names (Normalize implies
 			// autodetect), plus live discovery where supported.

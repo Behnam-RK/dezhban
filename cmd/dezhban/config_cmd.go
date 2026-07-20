@@ -25,14 +25,13 @@ Subcommands:
   set k=v [k=v ...] Set several values in one validated, atomic write
   reset <key> [...] Reset key(s) to the shipped default, validate, and save
   reset --all       Reset every tunable to defaults, preserving identity data
-                    (blockedCountries, allowlist, vpn.enabled/interfaces/
-                    endpoints/profiles). Delete the config file for a true wipe.
+                    (blockedCountries, vpn.tunnelInterfaces/endpoints/profiles).
+                    Delete the config file for a true wipe.
   edit              Open the config in $EDITOR (created from defaults if missing)
 
 Keys (dotted; list values are comma-separated):
-  pollInterval blockedCountries failClosed hysteresis providers
-  allowlist.dns allowlist.hosts providerQuorum logLevel
-  vpn.enabled vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
+  pollInterval blockedCountries hysteresis providers providerQuorum logLevel
+  vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
   vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.autoArm vpn.switchWindow
   vpn.reconnectWindow vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
@@ -56,10 +55,6 @@ var configFields = map[string]configField{
 		// config.Normalize (run on save) upper-cases and de-duplicates; just split here.
 		set: func(c *config.Config, v string) error { c.BlockedCountries = splitList(v); return nil },
 	},
-	"failClosed": {
-		get: func(c *config.Config) string { return strconv.FormatBool(c.FailClosed) },
-		set: func(c *config.Config, v string) error { return setBool(&c.FailClosed, v) },
-	},
 	"hysteresis": {
 		get: func(c *config.Config) string { return strconv.Itoa(c.Hysteresis) },
 		set: func(c *config.Config, v string) error {
@@ -75,14 +70,6 @@ var configFields = map[string]configField{
 		get: func(c *config.Config) string { return strings.Join(c.Providers, ",") },
 		set: func(c *config.Config, v string) error { c.Providers = splitList(v); return nil },
 	},
-	"allowlist.dns": {
-		get: func(c *config.Config) string { return strings.Join(c.Allowlist.DNS, ",") },
-		set: func(c *config.Config, v string) error { c.Allowlist.DNS = splitList(v); return nil },
-	},
-	"allowlist.hosts": {
-		get: func(c *config.Config) string { return strings.Join(c.Allowlist.Hosts, ",") },
-		set: func(c *config.Config, v string) error { c.Allowlist.Hosts = splitList(v); return nil },
-	},
 	"providerQuorum": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.ProviderQuorum) },
 		set: func(c *config.Config, v string) error { return setBool(&c.ProviderQuorum, v) },
@@ -90,10 +77,6 @@ var configFields = map[string]configField{
 	"logLevel": {
 		get: func(c *config.Config) string { return c.LogLevel },
 		set: func(c *config.Config, v string) error { c.LogLevel = strings.ToLower(strings.TrimSpace(v)); return nil },
-	},
-	"vpn.enabled": {
-		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.Enabled) },
-		set: func(c *config.Config, v string) error { return setBool(&c.VPN.Enabled, v) },
 	},
 	"vpn.tunnelInterfaces": {
 		get: func(c *config.Config) string { return strings.Join(c.VPN.TunnelInterfaces, ",") },
@@ -347,20 +330,16 @@ func configReset(flagVal string, args []string) int {
 	if len(args) == 1 && args[0] == "--all" {
 		preserved := struct {
 			blocked   []string
-			allowlist config.Allowlist
-			enabled   bool
 			tunnels   []string
 			endpoints []string
 			profiles  []config.Profile
-		}{cfg.BlockedCountries, cfg.Allowlist, cfg.VPN.Enabled, cfg.VPN.TunnelInterfaces, cfg.VPN.Endpoints, cfg.VPN.Profiles}
+		}{cfg.BlockedCountries, cfg.VPN.TunnelInterfaces, cfg.VPN.Endpoints, cfg.VPN.Profiles}
 		*cfg = def
 		cfg.BlockedCountries = preserved.blocked
-		cfg.Allowlist = preserved.allowlist
-		cfg.VPN.Enabled = preserved.enabled
 		cfg.VPN.TunnelInterfaces = preserved.tunnels
 		cfg.VPN.Endpoints = preserved.endpoints
 		cfg.VPN.Profiles = preserved.profiles
-		fmt.Println("reset all tunables to defaults (preserved: blockedCountries, allowlist, vpn.enabled/tunnelInterfaces/endpoints/profiles)")
+		fmt.Println("reset all tunables to defaults (preserved: blockedCountries, vpn.tunnelInterfaces/endpoints/profiles)")
 	} else {
 		keys = args
 		for _, k := range keys {

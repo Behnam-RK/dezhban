@@ -42,9 +42,7 @@ watcher events, geo-poll ticks, control-socket requests — they are all select
 cases feeding the same loop, and only that loop ever touches the firewall. That
 is why dezhban's postures can't race each other.
 
-## The two modes
-
-### VPN guard (`vpn.enabled: true`) — the primary mode
+## The guard
 
 The firewall can't usefully filter by destination under a full tunnel (it only
 sees encrypted packets to one address), so the guard filters by **interface**:
@@ -70,17 +68,31 @@ Which holes does that leave to maintain?
   socket. Recently-seen discovered endpoints linger for `vpn.endpointGrace`
   after the socket dies, so a dropped VPN can redial the *same* server.
 
-### Country-blocklist (`vpn.enabled: false`) — the fallback
+### Before there is anything to guard
 
-For hosts not behind a tunnel. The daemon polls public geo-IP providers every
-`pollInterval`; when your public IP's country matches `blockedCountries` (with
-hysteresis, so one bad reading can't flap the network), it installs a
-destination-based block that keeps DNS and the geo providers reachable so
-recovery detection still works. This mode is honest about being **reactive**:
-it can only block after a poll notices, so it is best-effort — the guard is the
-mode with real guarantees.
+A guard needs a tunnel to pass traffic through; without one it would block
+everything, which is not security but a host with no connectivity. So until a
+tunnel is both configured **and** observed up, the daemon rests in **STANDBY**:
+no rules installed, network fully open, and the UI saying plainly that it is not
+protecting. It arms itself the moment a VPN connects.
 
-## Life of a VPN drop (guard mode)
+dezhban used to ship a second mode for hosts without a tunnel — a
+country-blocklist that polled your public IP and cut egress by destination. It is
+gone ([ADR-0001](adr/0001-single-guard-mode.md)): it applied no rules at rest, so
+it could only block *after* a poll noticed, and it was only meaningful when the
+country you blocked was your real physical location. The guard already contains
+the country check.
+
+### What the country check does here
+
+The daemon polls geo-IP providers every `pollInterval` and asks what country the
+VPN's **exit** is in. A blocked country escalates GUARD → FULL BLOCK, with
+hysteresis so one bad reading can't flap the network. An *undeterminable* country
+holds the current posture rather than escalating — the standing guard is already
+the fail-closed block for physical leaks, and cutting tunnel egress on an unknown
+would livelock the reconnect that could fix the lookup.
+
+## Life of a VPN drop
 
 1. **t = 0 ms** — the tunnel interface disappears. Nothing needs to react: the
    standing rule already blocks every non-tunnel path. Established flows die;
@@ -157,5 +169,5 @@ expiry. `status` shows which trigger opened the current window.
 - `logs/dezhban.log` — persistent history of every decision above.
 - `dezhban doctor` — pre-flight: config sanity, tunnel/endpoint routing checks,
   lockout-risk detection, Touch ID setup hint.
-- `dezhban print-rules --mode guard|fullblock|legacy` — shows the exact ruleset
+- `dezhban print-rules --mode guard|fullblock|switch` — shows the exact ruleset
   any posture would install, without touching the firewall. No root needed.

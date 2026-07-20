@@ -25,13 +25,13 @@ inspect commands (`validate`, `print-rules`, `doctor`, `monitor`) do not.
 ## Shape
 
 Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
-`time` is RFC3339. Fields marked *(vpn)* appear only in VPN guard mode.
+`time` is RFC3339. Fields marked *(vpn)* are present only once the guard has
+something to describe — they are absent in STANDBY, before any tunnel is known.
 
 ```json
 {
   "time": "2026-07-01T12:00:00Z",
-  "mode": "legacy",                     // "vpn" | "legacy"
-  "posture": "allow",                   // allow | block | guard | full-block | switch-window | standby | stopped
+  "posture": "guard",                   // guard | full-block | switch-window | standby | stopped
   "blocked": false,                     // egress currently cut
   "ip": "203.0.113.45",
   "countryCode": "US",
@@ -56,10 +56,10 @@ Defined by `Snapshot` in `internal/state/state.go`. Keys are lowerCamelCase;
 ```
 
 `enforcementErr` is distinct from `lookupErr`: a geo-lookup failure is expected and
-handled by fail-closed, but a non-empty `enforcementErr` means the daemon **tried to
+simply holds the current posture, but a non-empty `enforcementErr` means the daemon **tried to
 apply a firewall change and the backend rejected it** — so `posture`/`blocked`
 describe the data plane truthfully, but the *intended* posture was not achieved (e.g.
-a failed block leaves `posture: "allow"` during a live leak, and a failed VPN probe
+a failed escalation leaves `posture: "guard"` while the exit is forbidden, and a failed VPN probe
 re-cut can leave egress open). Observers should surface it prominently regardless of
 posture — the menubar app shows a red warning icon whenever it is set.
 

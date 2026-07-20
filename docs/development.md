@@ -177,4 +177,5 @@ git config core.hooksPath .githooks
 
 See [architecture.md](architecture.md) for the design invariants any change must
 preserve (the `FirewallBackend` seam, idempotent `Block`, always-safe `Cleanup`,
-fail-closed defaults).
+one posture constructor, an unknown country holding rather than escalating), and
+[adr/](adr/README.md) for why the shape is what it is.

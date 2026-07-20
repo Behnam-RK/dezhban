@@ -12,12 +12,11 @@ struct VPNGuardView: View {
     // The exact vpn.* keys already in configFields — the scope of this pane,
     // not a general config editor.
     private static let keys = [
-        "vpn.enabled", "vpn.tunnelInterfaces", "vpn.endpoints",
+        "vpn.tunnelInterfaces", "vpn.endpoints",
         "vpn.autodetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
         "vpn.endpointRefresh", "vpn.tunnelWatch",
     ]
 
-    @State private var enabled = false
     @State private var tunnelInterfaces = ""
     @State private var endpoints = ""
     @State private var autodetect = false
@@ -32,7 +31,6 @@ struct VPNGuardView: View {
         VStack(spacing: 0) {
             Form {
                 Section("VPN guard") {
-                    Toggle("Enable VPN guard (vpn.enabled)", isOn: $enabled)
                     TextField("Tunnel interfaces (comma-sep)", text: $tunnelInterfaces)
                     TextField("Endpoints (comma-sep)", text: $endpoints)
                 }
@@ -84,7 +82,7 @@ struct VPNGuardView: View {
     private func seed() {
         status = "Loading current config…"
         canApply = false
-        enabled = false; autodetect = false; autoDiscover = false; autoArm = false
+        autodetect = false; autoDiscover = false; autoArm = false
         tunnelInterfaces = ""; endpoints = ""; endpointRefresh = ""; tunnelWatch = ""
         ConfigApply.seed(keys: Self.keys) { values, error in
             if let error = error {
@@ -92,14 +90,13 @@ struct VPNGuardView: View {
                 return
             }
             guard let v = values else { return }
-            enabled = (v[0] == "true")
-            tunnelInterfaces = v[1]
-            endpoints = v[2]
-            autodetect = (v[3] == "true")
-            autoDiscover = (v[4] == "true")
-            autoArm = (v[5] == "true")
-            endpointRefresh = v[6]
-            tunnelWatch = v[7]
+            tunnelInterfaces = v[0]
+            endpoints = v[1]
+            autodetect = (v[2] == "true")
+            autoDiscover = (v[3] == "true")
+            autoArm = (v[4] == "true")
+            endpointRefresh = v[5]
+            tunnelWatch = v[6]
             status = "Seeded from \(DezhbanCLI.resolvedConfigPath())"
             canApply = true
         }
@@ -118,7 +115,6 @@ struct VPNGuardView: View {
         }
 
         let pairs = [
-            "vpn.enabled=\(enabled)",
             "vpn.tunnelInterfaces=\(tunnelInterfaces)",
             "vpn.endpoints=\(endpoints)",
             "vpn.autodetect=\(autodetect)",

@@ -13,7 +13,7 @@ func TestApplyWizardAutoMode(t *testing.T) {
 	cfg := config.Default()
 	applyWizard(&cfg, wizardInput{
 		pollInterval: "30s", hysteresis: "3", logLevel: "info",
-		vpnEnabled: true, autoMode: true,
+		configureVPN: true, autoMode: true,
 		tunnels:          []string{"utun9"}, // must be ignored in auto mode
 		endpoints:        []string{"vpn.example.com"},
 		profiles:         []config.Profile{{Name: "home", Endpoints: []string{"203.0.113.7"}}},
@@ -44,7 +44,7 @@ func TestApplyWizardAdvancedPin(t *testing.T) {
 	cfg := config.Default()
 	applyWizard(&cfg, wizardInput{
 		pollInterval: "30s", hysteresis: "3", logLevel: "info",
-		vpnEnabled: true, autoMode: false,
+		configureVPN: true, autoMode: false,
 		tunnels:   []string{"utun4"},
 		endpoints: []string{"203.0.113.7"},
 	})

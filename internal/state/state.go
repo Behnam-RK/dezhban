@@ -30,8 +30,7 @@ type Tunnel struct {
 // Swift client decodes with an ISO-8601 strategy.
 type Snapshot struct {
 	Time        time.Time `json:"time"`
-	Mode        string    `json:"mode"`         // "vpn" | "legacy"
-	Posture     string    `json:"posture"`      // "allow" | "block" | "guard" | "full-block" | "switch-window" | "stopped"
+	Posture     string    `json:"posture"`      // "guard" | "full-block" | "switch-window" | "standby" | "stopped"
 	Blocked     bool      `json:"blocked"`      // egress currently cut
 	IP          string    `json:"ip,omitempty"` // last observed public IP
 	CountryCode string    `json:"countryCode,omitempty"`

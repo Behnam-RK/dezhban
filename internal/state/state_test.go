@@ -12,7 +12,6 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "state.json") // sub dir must be created
 	want := Snapshot{
 		Time:             time.Date(2026, 7, 1, 12, 0, 0, 0, time.UTC),
-		Mode:             "vpn",
 		Posture:          "guard",
 		Blocked:          false,
 		IP:               "203.0.113.45",
@@ -35,7 +34,7 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	if !got.Time.Equal(want.Time) {
 		t.Errorf("Time: got %v want %v", got.Time, want.Time)
 	}
-	if got.Mode != want.Mode || got.Posture != want.Posture || got.Blocked != want.Blocked {
+	if got.Posture != want.Posture || got.Blocked != want.Blocked {
 		t.Errorf("posture fields mismatch: got %+v", got)
 	}
 	if got.IP != want.IP || got.CountryCode != want.CountryCode || got.Provider != want.Provider {

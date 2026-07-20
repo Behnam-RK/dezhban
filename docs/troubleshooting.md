@@ -72,11 +72,11 @@ reconnect.
 
 **Cause (historical).** A freshly reconnected tunnel reports "up" before it is
 actually routing/DNS-ready. Guard mode used to run the geo lookup during that
-warmup; the lookup failed (`no such host`), and with `failClosed` a run of
-failures escalated to FULL BLOCK with an *empty* country — which cut the tunnel's
+warmup; the lookup failed (`no such host`), and the then-current fail-closed
+behavior escalated a run of failures to FULL BLOCK with an *empty* country — which cut the tunnel's
 own egress and prevented the very reconnect it was waiting for (a livelock).
 
-**Fix (current behavior).** In guard mode an **undeterminable** country now
+**Fix (current behavior).** An **undeterminable** country now
 *holds* the current posture instead of escalating — only a *successful* reading
 of a blocked country produces FULL BLOCK. See
 [modes.md](modes.md) ("Fail-closed in guard mode"). If your endpoints are
@@ -190,7 +190,7 @@ first, no root, no side effects:
 ```sh
 dezhban print-rules --mode guard --config <config>     # or: task rules MODE=guard
 dezhban print-rules --mode fullblock --config <config>
-dezhban print-rules --mode legacy --config <config>
+dezhban print-rules --mode switch --config <config>
 ```
 
 ## Config won't load

@@ -61,7 +61,6 @@ type Request struct {
 type Response struct {
 	OK      bool   `json:"ok"`
 	Error   string `json:"error,omitempty"`
-	Mode    string `json:"mode,omitempty"`
 	Posture string `json:"posture,omitempty"`
 	Blocked bool   `json:"blocked"`
 	// Transient marks a not-OK reply that is NOT the daemon's decision: the

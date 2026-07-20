@@ -65,7 +65,7 @@ func handle(t *testing.T, srv *Server, resp Response) {
 
 func TestRoundTrip(t *testing.T) {
 	srv, _ := newTestServer(t)
-	handle(t, srv, Response{OK: true, Mode: "vpn", Posture: "full-block", Blocked: true})
+	handle(t, srv, Response{OK: true, Posture: "full-block", Blocked: true})
 
 	resp, err := Do(srv.Path(), Request{Op: OpBlock})
 	if err != nil {

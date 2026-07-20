@@ -80,10 +80,9 @@ func do(t *testing.T, path string, req control.Request) control.Response {
 func vpnOpts(be Backend) Options {
 	return Options{
 		Monitor:         steadyMonitor{cc: "US"},
-		Decider:         decision.New([]string{"IR"}, true, 1),
+		Decider:         decision.New([]string{"IR"}, 1),
 		Backend:         be,
 		Interval:        time.Hour,
-		VPN:             true,
 		Tunnels:         []string{"utun4"},
 		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		SwitchWindow:    time.Minute,
@@ -245,38 +244,6 @@ func (b *fullBlockFailsBackend) Apply(p firewall.Policy) error {
 	return nil
 }
 
-// Legacy mode gets the same passwordless block/unblock, but switch windows are a
-// VPN-mode feature and must say so.
-func TestControlLegacyBlockUnblockAndSwitchRefusal(t *testing.T) {
-	be := &fakeBackend{}
-	o := Options{
-		Monitor:   idleMonitor{},
-		Decider:   decision.New([]string{"IR"}, true, 1),
-		Backend:   be,
-		Interval:  time.Hour,
-		Allowlist: oneHostAL,
-	}
-	path := startControlled(t, o)
-
-	resp := do(t, path, control.Request{Op: control.OpBlock})
-	if !resp.OK || resp.Posture != "block" || !resp.Blocked {
-		t.Fatalf("legacy block response = %+v", resp)
-	}
-	resp = do(t, path, control.Request{Op: control.OpUnblock})
-	if !resp.OK || resp.Posture != "allow" || resp.Blocked {
-		t.Fatalf("legacy unblock response = %+v", resp)
-	}
-	if resp = do(t, path, control.Request{Op: control.OpOpenSwitch}); resp.OK {
-		t.Fatal("switch-open accepted in legacy mode")
-	}
-	want := []string{"block", "unblock"}
-	if !equal(be.calls, want) {
-		t.Fatalf("calls = %v, want %v", be.calls, want)
-	}
-}
-
-// The socket must never outlive the daemon: a stale socket would make the CLI
-// think a dead daemon is listening.
 func TestControlSocketRemovedOnShutdown(t *testing.T) {
 	be := &fakeBackend{}
 	path := controlSocket(t)

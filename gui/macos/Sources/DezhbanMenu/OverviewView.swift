@@ -58,6 +58,37 @@ struct OverviewView: View {
         }
     }
 
+    /// One sentence saying what is true right now and what happens next. This
+    /// replaces the old mode label ("VPN guard mode" / "Legacy country-blocklist
+    /// mode"), which named a distinction that no longer exists — and which told a
+    /// user nothing about whether they were actually protected.
+    ///
+    /// STANDBY is the one that must not be soft-pedalled: nothing is blocked, so
+    /// the copy says so outright rather than implying the guard is watching.
+    static func postureBlurb(_ s: Snapshot) -> String {
+        switch s.posture {
+        case "standby":
+            return "Guard off — standby. Nothing is being blocked. Connect your VPN and dezhban arms itself."
+        case "guard":
+            if PostureUI.guardHoldsDownedTunnel(s) {
+                return "Guard active, but no tunnel is up — all egress is cut until your VPN reconnects."
+            }
+            return "Guard active. Traffic leaves only through your VPN tunnel."
+        case "full-block":
+            let cc = s.countryCode.map { " (\($0))" } ?? ""
+            return "Full block. Your VPN is exiting through a country you've blocked\(cc). Everything is cut until it moves."
+        case "switch-window":
+            let auto = s.switch?.isAutoReconnect ?? false
+            return auto
+                ? "Your VPN dropped. The guard is relaxed while it reconnects — your real IP is exposed until it closes."
+                : "Guard relaxed so a new VPN can connect — your real IP is exposed until it closes."
+        case "stopped":
+            return "dezhban is not running. Nothing is being blocked."
+        default:
+            return "Posture: \(s.posture)"
+        }
+    }
+
     private func hero(state iconState: String, symbol: String, title: String) -> some View {
         HStack(spacing: 16) {
             // The bundled dock-size brand bitmap when available (color IS the
@@ -77,7 +108,7 @@ struct OverviewView: View {
                 Text(title)
                     .font(.title2.weight(.semibold))
                 if let s = state.snapshot {
-                    Text(s.mode == "vpn" ? "VPN guard mode" : "Legacy country-blocklist mode")
+                    Text(Self.postureBlurb(s))
                         .foregroundStyle(.secondary)
                 }
             }
@@ -101,16 +132,14 @@ struct OverviewView: View {
             } else if let err = s.lookupErr, !err.isEmpty {
                 row("Last lookup", "failed: \(err)")
             }
-            if s.mode == "vpn" {
-                if let t = s.tunnels?.first {
-                    row("Tunnel", "\(t.up ? "up" : "down")\(t.detail.map { " (\($0))" } ?? "")")
-                }
-                if let eps = s.endpoints, !eps.isEmpty {
-                    row("Endpoints", eps.joined(separator: ", "))
-                }
-                if let p = s.activeProfile, !p.isEmpty {
-                    row("VPN profile", p)
-                }
+            if let t = s.tunnels?.first {
+                row("Tunnel", "\(t.up ? "up" : "down")\(t.detail.map { " (\($0))" } ?? "")")
+            }
+            if let eps = s.endpoints, !eps.isEmpty {
+                row("Endpoints", eps.joined(separator: ", "))
+            }
+            if let p = s.activeProfile, !p.isEmpty {
+                row("VPN profile", p)
             }
             if let bc = s.blockedCountries, !bc.isEmpty {
                 row("Blocking", bc.joined(separator: ", "))
@@ -138,16 +167,14 @@ struct OverviewView: View {
             Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
                 .disabled(!(blocked || guardHolds))
                 .help(routineHint("Releases a manual block and resumes monitoring."))
-            if s.mode == "vpn" {
-                if let sw = s.switch, sw.open {
-                    Button("\(sw.isAutoReconnect ? "Cancel reconnect window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
-                        AppActions.routine(["switch", "--cancel"], "cancel the switch window")
-                    }
-                    .help(routineHint("Closes the window and restores the guard."))
-                } else {
-                    Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
-                        .help(routineHint("Briefly relaxes the guard so a new VPN can connect."))
+            if let sw = s.switch, sw.open {
+                Button("\(sw.isAutoReconnect ? "Cancel reconnect window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
+                    AppActions.routine(["switch", "--cancel"], "cancel the switch window")
                 }
+                .help(routineHint("Closes the window and restores the guard."))
+            } else {
+                Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
+                    .help(routineHint("Briefly relaxes the guard so a new VPN can connect."))
             }
             Spacer()
             Button("Stop kill switch") { AppActions.privileged(["stop"], "stop the kill switch") }

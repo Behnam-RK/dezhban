@@ -12,6 +12,69 @@ changes.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING: the country-blocklist fallback mode is gone.** dezhban now has a
+  single enforcement model — the always-on interface guard. The
+  `vpn.enabled: false` mode watched your public IP and cut egress by destination;
+  it applied **no rules at rest**, so it was "best-effort, not a zero-leak
+  guarantee" by its own documentation, and it was only meaningful when the
+  country you blocked was your *real physical location*. The guard already
+  contains the country check — that is what FULL BLOCK is. See
+  [ADR-0001](docs/adr/0001-single-guard-mode.md).
+- `print-rules --mode legacy` now errors by name instead of rendering a posture
+  that no longer exists. `guard` / `fullblock` / `switch` are unchanged.
+- `status --json` drops `mode` (`"vpn"`/`"legacy"`) and `vpnEnabled`. Both had
+  exactly one possible value after the merge; a constant field is noise, not
+  compatibility. `posture` is unchanged and remains the field to read.
+- There is no `failClosed` setting. Under the guard, the standing rules **are**
+  the fail-closed block, so an undeterminable country holds the current posture
+  rather than escalating — escalating would cut the tunnel's own egress and
+  livelock the reconnect that could fix the lookup.
+
+### Added
+
+- **`vpn.switchWindow: "0"` now disables manual switch windows.** Previously it
+  was silently coerced back to the 15s default, so the setting was accepted and
+  discarded — the worst failure mode a security tool has. It now uses the same
+  explicit-opt-out sentinel `vpn.reconnectWindow` already had. Setting both to
+  `"0"` is the strict zero-leak posture in which nothing can relax the guard.
+  Disabling one never disables the other. `dezhban switch` refuses by name,
+  telling you which setting is responsible. See
+  [ADR-0004](docs/adr/0004-switch-window-fully-disableable.md).
+- **Retired keys are reported, not ignored.** `vpn.enabled`, `failClosed` and
+  `allowlist` still parse without error, do nothing, and are named — with a
+  reason — by `dezhban validate` and once at daemon start. They are never
+  written back when dezhban saves your config.
+- **Architecture decision records** under [`docs/adr/`](docs/adr/), plus a
+  [glossary](docs/glossary.md) fixing the "guard"/"protection"/"kill switch"
+  vocabulary drift. GUARD is the canonical term.
+
+### Changed
+
+- **Upgrade note — no config migration is required.** A pre-merge config loads,
+  validates, and enforces identically; the three retired keys are reported and
+  ignored. Two behavior changes to know about:
+  - A config that had `vpn.enabled: false` was running the fallback mode. It now
+    runs the guard, which means it rests in **STANDBY** (no rules, network fully
+    open) until a tunnel is configured *and* observed up — rather than watching
+    your public IP. If you were relying on the fallback, there is no longer an
+    equivalent; the guard requires a VPN.
+  - `vpn.endpoints` is no longer required at load time. A config with none is
+    valid and rests in STANDBY. The check moved to where it can tell the
+    difference: the runner refuses to *arm* a guard that has tunnels but no
+    endpoints, and `doctor` reports it as a lockout risk beforehand.
+- **STANDBY is a first-class posture**, not an emergent property of `autoArm`.
+  It is the resting state before any tunnel has been observed: no rules, network
+  fully open, and the UI says so — grey icon, never red. This is the job
+  `vpn.enabled: false` was quietly doing as a safety opt-in, now done properly.
+  See [ADR-0002](docs/adr/0002-standby-no-tunnel-posture.md).
+- **One constructor builds every posture** (`firewall.PolicyInput`). The run loop
+  and `print-rules` previously built them separately, and had already drifted —
+  the preview dropped `TunnelGroups` entirely and degraded a zero-tunnel guard on
+  a different condition than the daemon. A preview that can lie about what the
+  daemon would install is a correctness bug, not untidiness.
+
 ## [0.3.0] - 2026-07-20
 
 ### Changed

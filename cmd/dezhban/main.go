@@ -205,6 +205,16 @@ func requireRoot(cmd string) bool {
 
 // loadConfig is a small helper shared by the commands that take --config. It
 // resolves the path (so --config can be omitted) before loading.
+// reportRetired warns once per retired key found in the config file. The keys are
+// inert, so this is the only signal an operator gets that a setting they wrote is
+// not doing anything — silence here would let someone believe a discarded
+// security setting took effect.
+func reportRetired(cfg *config.Config, log *slog.Logger) {
+	for _, r := range cfg.Retired {
+		log.Warn("config key is retired and has no effect", "key", r.Key, "why", r.Reason)
+	}
+}
+
 func loadConfig(path string) (*config.Config, error) {
 	return config.Load(resolveConfigPath(path))
 }
@@ -244,6 +254,7 @@ func cmdRun(args []string) int {
 		return 1
 	}
 	log := newLogger(cfg)
+	reportRetired(cfg, log)
 
 	ov, err := parseOverrides(*simCountry, *simTunDown)
 	if err != nil {
@@ -387,7 +398,7 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 
 	// Switch-window control: poll the root-owned command file. Only active when
 	// the guard is on and a switch window is configured.
-	switchEnabled := cfg.VPN.Enabled && cfg.VPN.SwitchWindow > 0
+	switchEnabled := cfg.VPN.SwitchWindow > 0
 	commandPath := defaultCommandPath()
 	if switchEnabled {
 		if derr := command.Discard(commandPath); derr != nil {
@@ -417,10 +428,8 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		"interval", cfg.PollInterval,
 		"providers", len(providers),
 		"blocked_countries", cfg.BlockedCountries,
-		"fail_closed", cfg.FailClosed,
 		"hysteresis", cfg.Hysteresis,
 		"quorum", cfg.ProviderQuorum,
-		"vpn", cfg.VPN.Enabled,
 		"auto_discover_endpoints", cfg.VPN.AutoDiscoverEndpoints,
 		"tunnel_watch", watcher != nil,
 	)
@@ -439,13 +448,12 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 
 	return runner.Options{
 		Monitor:          mon,
-		Decider:          decision.New(cfg.BlockedCountries, cfg.FailClosed, cfg.Hysteresis),
+		Decider:          decision.New(cfg.BlockedCountries, cfg.Hysteresis),
 		Backend:          fw,
 		Log:              log,
 		Interval:         cfg.PollInterval,
 		Control:          ctl,
 		AllowSwitchOps:   cfg.Control.AllowSwitchOps,
-		VPN:              cfg.VPN.Enabled,
 		Tunnels:          tunnels,
 		Autodetect:       cfg.VPN.Autodetect,
 		AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
@@ -466,11 +474,8 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		ReconnectMinUptime:      adv.ReconnectMinUptime,
 		Learn:                   learnHook,
 		PollCommand:             switchPollOrNil(switchEnabled, pollCommand),
-		// Re-resolve the allowlist at each Block so rotated provider IPs stay
-		// reachable for recovery detection while egress is cut.
-		Allowlist:        func() firewall.Allowlist { return buildAllowlist(cfg, log) },
-		Publish:          publish,
-		BlockedCountries: cfg.BlockedCountries,
+		Publish:                 publish,
+		BlockedCountries:        cfg.BlockedCountries,
 	}, nil
 }
 
@@ -592,25 +597,29 @@ func cmdBlock(args []string) int {
 		log.Error("firewall backend unavailable", "err", err)
 		return 1
 	}
-	// Build the allowlist BEFORE blocking, while DNS still works: resolve the
-	// geo-API provider hostnames to IPs so recovery detection can keep reaching
-	// them once egress is cut.
-	al := buildAllowlist(cfg, log)
 
 	switch {
 	case *force:
-		// Manual override: cut ALL egress (except loopback + allowlist) regardless
-		// of VPN config or guard state. The escape hatch when detection is wrong or
-		// the operator wants an unconditional hard block. `unblock`/`panic` reverse it.
+		// Manual override: cut ALL egress (except loopback + the geo-API providers)
+		// regardless of the guard's own state. The escape hatch when detection is
+		// wrong or the operator wants an unconditional hard block. `unblock`/`panic`
+		// reverse it. Build the allowlist BEFORE blocking, while DNS still works:
+		// resolve the provider hostnames to IPs so recovery detection can still
+		// reach them once egress is cut.
+		al := buildProviderAllowlist(cfg, log)
 		if err := fw.Block(al); err != nil {
 			log.Error("forced block failed", "err", err)
 			return 1
 		}
-		log.Info("network force-blocked (all egress cut except allowlist)", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
-	case *guard || cfg.VPN.Enabled:
-		// VPN mode. `--guard` installs the always-on interface guard (tunnel stays
-		// open, physical egress locked to the endpoint); a plain `block` under
-		// vpn.enabled is a full block that cuts the tunnel too.
+		log.Info("network force-blocked (all egress cut except loopback + geo providers)", "hosts_allowed", len(al.Hosts))
+	default:
+		// `--guard` installs the always-on interface guard (tunnel stays open,
+		// physical egress locked to the endpoint); a plain `block` is a full block
+		// that cuts the tunnel too. Built through the same firewall.PolicyInput
+		// constructor the daemon and print-rules use, so this manual override can
+		// never drift from what the run loop would actually install — in
+		// particular, it must NOT carry a physical dst-IP allowlist: a VPN posture
+		// opens the tunnel endpoint, never a destination allowlist.
 		tunnels := resolveTunnels(cfg, log)
 		if len(tunnels) == 0 {
 			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autodetect)")
@@ -621,15 +630,16 @@ func cmdBlock(args []string) int {
 			log.Error("vpn mode needs at least one reachable endpoint (vpn.endpoints as IP/hostname, or vpn.autoDiscoverEndpoints with the VPN connected)")
 			return 1
 		}
-		mode := firewall.ModeFullBlock
-		if *guard {
-			mode = firewall.ModeGuard
+		in := firewall.PolicyInput{
+			Tunnels:          tunnels,
+			Endpoints:        endpoints,
+			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
+			WindowProtos:     cfg.VPN.Advanced.WindowProtocols,
+			WindowPorts:      cfg.VPN.Advanced.WindowPorts,
 		}
-		pol := firewall.Policy{
-			Mode:         mode,
-			Allowlist:    al,
-			TunnelIfaces: tunnels,
-			VPNEndpoints: endpoints,
+		pol := in.FullBlock()
+		if *guard {
+			pol = in.Guard()
 		}
 		if err := fw.Apply(pol); err != nil {
 			log.Error("block failed", "err", err)
@@ -640,12 +650,6 @@ func cmdBlock(args []string) int {
 		} else {
 			log.Info("network full-blocked (vpn)", "tunnels", tunnels)
 		}
-	default:
-		if err := fw.Block(al); err != nil {
-			log.Error("block failed", "err", err)
-			return 1
-		}
-		log.Info("network blocked", "dns_allowed", len(al.DNS), "hosts_allowed", len(al.Hosts))
 	}
 	return 0
 }
@@ -723,32 +727,22 @@ func resolveEndpointsOnce(cfg *config.Config, log *slog.Logger, tunnels []string
 	return src.Resolve(ctx).Addrs
 }
 
-// buildAllowlist converts the config allowlist into a firewall.Allowlist and
-// augments it with the resolved IPs of the configured geo-API providers, so the
-// monitor can still reach them while a block is in force.
-func buildAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
+// buildProviderAllowlist resolves the configured geo-API providers to IPs, so
+// `block --force` — the only remaining caller — can still reach them while all
+// other egress is cut. This used to also fold in a user-configured
+// destination allowlist (vpn.allowlist.dns/hosts); that key is retired
+// (docs/adr/0001) because it belonged to the country-blocklist model, where
+// the firewall was open at rest and needed an explicit list of exceptions.
+// `--force` is a manual, temporary override, not a standing posture, so it has
+// no equivalent need for user-supplied destinations.
+func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
 	var al firewall.Allowlist
-	for _, s := range cfg.Allowlist.DNS {
-		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
-			al.DNS = append(al.DNS, a.Unmap())
-		} else {
-			log.Warn("ignoring invalid DNS allowlist address", "addr", s, "err", err)
-		}
-	}
-
 	seen := make(map[netip.Addr]bool)
 	add := func(a netip.Addr) {
 		a = a.Unmap()
 		if a.IsValid() && !seen[a] {
 			seen[a] = true
 			al.Hosts = append(al.Hosts, a)
-		}
-	}
-	for _, s := range cfg.Allowlist.Hosts {
-		if a, err := netip.ParseAddr(strings.TrimSpace(s)); err == nil {
-			add(a)
-		} else {
-			log.Warn("ignoring invalid host allowlist address", "addr", s, "err", err)
 		}
 	}
 	for _, raw := range cfg.Providers {
@@ -1079,11 +1073,13 @@ func cmdValidate(args []string) int {
 	fmt.Printf("config OK: %s\n", src)
 	fmt.Printf("  blocked countries: %s\n", strings.Join(blocked, ", "))
 	fmt.Printf("  poll interval:     %s\n", cfg.PollInterval)
-	fmt.Printf("  fail-closed:       %t\n", cfg.FailClosed)
-	fmt.Printf("  vpn guard:         %t\n", cfg.VPN.Enabled)
-	if cfg.VPN.Enabled {
-		fmt.Printf("  vpn tunnels:       %s\n", strings.Join(cfg.VPN.TunnelInterfaces, ", "))
-		fmt.Printf("  vpn endpoints:     %s\n", strings.Join(cfg.VPN.Endpoints, ", "))
+	fmt.Printf("  vpn tunnels:       %s\n", strings.Join(cfg.VPN.TunnelInterfaces, ", "))
+	fmt.Printf("  vpn endpoints:     %s\n", strings.Join(cfg.VPN.Endpoints, ", "))
+	// Retired keys are not an error — the config is valid and will run — but
+	// `validate` is exactly where someone checks whether their file says what
+	// they think it says, so a key that no longer does anything belongs here.
+	for _, r := range cfg.Retired {
+		fmt.Printf("\n  note: %q no longer has any effect.\n        %s\n", r.Key, r.Reason)
 	}
 	return 0
 }
@@ -1165,17 +1161,18 @@ func cmdMonitor(args []string) int {
 
 		// Verdict for THIS reading (hysteresis=1 shows the immediate call; the
 		// configured hysteresis governs how many consecutive readings actually toggle).
-		v := decision.New(cfg.BlockedCountries, cfg.FailClosed, 1).Evaluate(monitor.Result{Reading: r, Err: lookupErr})
+		v := decision.New(cfg.BlockedCountries, 1).Evaluate(monitor.Result{Reading: r, Err: lookupErr})
 		verdict := "ALLOW"
 		if v == decision.Block {
 			verdict = "BLOCK"
 		}
 		reason := "country not in blocklist"
 		switch {
-		case lookupErr != nil && cfg.FailClosed:
-			reason = "lookup failed (fail-closed)"
 		case lookupErr != nil:
-			reason = "lookup failed (fail-open)"
+			// A lookup error is neutral: it holds the current posture rather than
+			// escalating (docs/adr/0001) — under the guard, an unknown exit must
+			// never be treated as if it were a confirmed-bad one.
+			reason = "lookup failed — holding current posture (exit country unknown)"
 		case blocked[r.CountryCode]:
 			reason = "country in blocklist"
 		}
@@ -1217,10 +1214,6 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 	// leaves it empty. Populate it only for non-VPN configs; otherwise a VPN config
 	// with no static tunnels/endpoints (autoDiscover-only) would fail isVPNPolicy
 	// and render phantom physical egress.
-	vpnAllowlist := firewall.Allowlist{}
-	if !cfg.VPN.Enabled {
-		vpnAllowlist = buildAllowlist(cfg, log)
-	}
 	// Built lazily because it resolves endpoints, which does DNS. The `legacy`
 	// posture has no endpoints and never renders them, so resolving there would be
 	// pointless network work that also logs resolution failures for addresses the
@@ -1232,7 +1225,6 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
 			WindowProtos:     cfg.VPN.Advanced.WindowProtocols,
 			WindowPorts:      cfg.VPN.Advanced.WindowPorts,
-			Allowlist:        vpnAllowlist,
 		}
 	}
 	switch mode {
@@ -1243,10 +1235,9 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 	case "switch":
 		return vpnInput().SwitchWindow(), nil
 	case "legacy":
-		// Legacy direct model: full block with the dst-IP allowlist, no tunnel.
-		return firewall.Policy{Mode: firewall.ModeFullBlock, Allowlist: buildAllowlist(cfg, log)}, nil
+		return firewall.Policy{}, fmt.Errorf("mode %q was removed: dezhban has a single guard state machine now (see docs/adr/0001-single-guard-mode.md)", mode)
 	default:
-		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, switch, legacy)", mode)
+		return firewall.Policy{}, fmt.Errorf("unknown mode %q (valid: guard, fullblock, switch)", mode)
 	}
 }
 
@@ -1300,7 +1291,6 @@ func cmdDoctor(args []string) int {
 	fmt.Println("dezhban doctor")
 	fmt.Println()
 	fmt.Println("config:  OK (loaded and validated)")
-	fmt.Printf("  vpn guard enabled: %t\n", cfg.VPN.Enabled)
 	fmt.Println()
 
 	tunnels := resolveTunnels(cfg, log)
@@ -1356,7 +1346,7 @@ func cmdDoctor(args []string) int {
 	// arming it cuts every packet, kills the VPN, and leaves no socket for discovery to
 	// learn from: an unrecoverable blackout, not a kill switch. The daemon refuses to
 	// start in this state; doctor's whole job is to say so BEFORE you find out.
-	lockout := cfg.VPN.Enabled && len(tunnels) > 0 && len(endpoints) == 0
+	lockout := len(tunnels) > 0 && len(endpoints) == 0
 	if lockout {
 		fmt.Println()
 		fmt.Println("LOCKOUT RISK — dezhban will refuse to start:")
@@ -1449,15 +1439,12 @@ func cmdStatus(args []string) int {
 	fmt.Println("service:         ", svc.Status())
 	fmt.Println("daemon control:  ", controlStatus(cfg))
 	fmt.Println("poll interval:   ", cfg.PollInterval)
-	fmt.Println("fail-closed:     ", cfg.FailClosed)
 	fmt.Println("hysteresis:      ", cfg.Hysteresis)
 	fmt.Println("blocked countries:", strings.Join(blocked, ", "))
 	fmt.Println("providers:       ", strings.Join(cfg.Providers, ", "))
 	fmt.Println("log level:       ", cfg.LogLevel)
 
-	// VPN mode fields: only meaningful when the guard is configured.
-	fmt.Println("vpn enabled:     ", cfg.VPN.Enabled)
-	if cfg.VPN.Enabled {
+	{
 		tunnels := cfg.VPN.TunnelInterfaces
 		if len(tunnels) == 0 && cfg.VPN.Autodetect {
 			tunnels = []string{"(autodetect)"}
@@ -1520,7 +1507,9 @@ func statusJSON(cfg *config.Config) int {
 		StateAge         string          `json:"stateAge,omitempty"` // wall-clock age of the snapshot
 		PollInterval     string          `json:"pollInterval"`
 		BlockedCountries []string        `json:"blockedCountries"`
-		VPNEnabled       bool            `json:"vpnEnabled"`
+		// No `vpnEnabled`: with one enforcement model it could only ever be true,
+		// and a constant field invites consumers to branch on nothing. Read
+		// `state.posture` instead — that is where the real distinction lives.
 	}{
 		Version:          buildStamp.Version,
 		Commit:           buildStamp.short(),
@@ -1530,7 +1519,6 @@ func statusJSON(cfg *config.Config) int {
 		StatePath:        statePath,
 		PollInterval:     cfg.PollInterval.String(),
 		BlockedCountries: cfg.BlockedCountries,
-		VPNEnabled:       cfg.VPN.Enabled,
 	}
 	if snap, err := state.Read(statePath); err == nil {
 		out.State = &snap

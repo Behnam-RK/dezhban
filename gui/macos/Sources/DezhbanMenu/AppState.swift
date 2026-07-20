@@ -116,7 +116,7 @@ enum PostureUI {
     /// total egress cut (ModeFullBlock shape under the "guard" posture string),
     /// and the icon must never show a calm green shield while the network is cut.
     static func guardHoldsDownedTunnel(_ s: Snapshot?) -> Bool {
-        guard let s = s, s.mode == "vpn", s.posture == "guard" else { return false }
+        guard let s = s, s.posture == "guard" else { return false }
         guard let tuns = s.tunnels, !tuns.isEmpty else { return true }
         return !tuns.contains(where: { $0.up })
     }

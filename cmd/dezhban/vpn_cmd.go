@@ -50,6 +50,21 @@ func cmdSwitch(args []string) int {
 		return printSwitchStatus(statePath)
 	}
 
+	// Refuse early when the operator disabled manual switch windows. Both the
+	// socket op and the command file would decline anyway, but a generic refusal
+	// from the daemon reads like a malfunction; the user needs to know THEIR
+	// setting is responsible and which one to change. --cancel stays allowed:
+	// closing a window early is a tightening, never a relaxation.
+	if !*doCancel {
+		if cfg, err := loadConfig(*cfgPath); err == nil && cfg.VPN.SwitchWindow <= 0 {
+			fmt.Fprintln(os.Stderr, "switch: manual switch windows are disabled by vpn.switchWindow: \"0\".")
+			fmt.Fprintln(os.Stderr, "        The guard has no sanctioned relaxation while that is set — this is a")
+			fmt.Fprintln(os.Stderr, "        deliberate zero-leak posture. To connect a new VPN, either add its")
+			fmt.Fprintln(os.Stderr, "        server to vpn.endpoints, or set vpn.switchWindow to a duration (e.g. \"15s\").")
+			return 1
+		}
+	}
+
 	dur := ""
 	if *forDur > 0 {
 		dur = forDur.String()

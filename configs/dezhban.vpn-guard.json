@@ -1,19 +1,13 @@
 {
   "pollInterval": "30s",
   "blockedCountries": ["RU", "IR"],
-  "failClosed": true,
   "hysteresis": 3,
   "providers": [
     "https://ipinfo.io/json",
     "http://ip-api.com/json",
     "https://ifconfig.co/json"
   ],
-  "allowlist": {
-    "dns": ["1.1.1.1", "8.8.8.8"],
-    "hosts": []
-  },
   "vpn": {
-    "enabled": true,
     "tunnelInterfaces": ["utun4"],
     "endpoints": ["vpn.example.com", "203.0.113.10"],
     "autodetect": false,

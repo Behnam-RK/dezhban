@@ -99,8 +99,8 @@ func askRules() ([]string, error) {
 		Title("Mode").
 		Options(
 			huh.NewOption("guard — always-on VPN interface guard", "guard"),
-			huh.NewOption("fullblock — everything cut except recovery allowlist", "fullblock"),
-			huh.NewOption("legacy — country-blocklist fallback", "legacy"),
+			huh.NewOption("fullblock — exit country blocked; everything cut but the handshake", "fullblock"),
+			huh.NewOption("switch — the bounded relaxation for connecting a new VPN", "switch"),
 		).
 		Value(&mode))
 	if err != nil {
