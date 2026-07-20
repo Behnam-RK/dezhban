@@ -14,6 +14,17 @@ changes.
 
 ### Changed
 
+- **Upgrade note — posture defaults change for existing configs.** The defaults
+  review below makes `vpn.autoArm` and `vpn.allowPhysicalDNS` default **on**. A
+  config that never set `vpn.autoArm` (the previous default was off, and it was
+  omitted when false) will **arm on VPN connect / park in standby instead of
+  arming from boot** under this release — a real posture change, not a no-op.
+  Every tunnel drop now also opens a **30s reconnect window** by default (real IP
+  may be exposed while the client redials) unless you set `vpn.reconnectWindow:
+  "0"`. To keep the pre-upgrade strict posture, set `vpn.autoArm: false`,
+  `vpn.allowPhysicalDNS: false`, and `vpn.reconnectWindow: "0"`. (An explicit
+  `allowPhysicalDNS: false` already on disk is preserved; only omitted keys pick
+  up the new default.)
 - **Defaults review (2026-07-19)** — the shipped defaults now favor the
   smooth-operation posture; every previous value remains one config line away:
   `vpn.autoArm` **on** (standby until a VPN connects — no more mystery blackout
