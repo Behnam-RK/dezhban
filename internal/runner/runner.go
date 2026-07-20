@@ -198,6 +198,17 @@ func postureName(blocked, window, standby bool) string {
 	}
 }
 
+// anyTunnelUp reports whether at least one tunnel is currently up, i.e. whether
+// there is a VPN exit whose country could meaningfully be measured at all.
+func anyTunnelUp(tunnels []state.Tunnel) bool {
+	for _, t := range tunnels {
+		if t.Up {
+			return true
+		}
+	}
+	return false
+}
+
 // publish builds a full snapshot from the current posture and last-known reading
 // and hands it to o.Publish. It no-ops when Publish is nil, so the hot path pays
 // only a nil check when observability is off. Each call emits a complete snapshot
@@ -224,8 +235,28 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
 	}
+	// Classify a failed exit-country lookup instead of reporting every one as an
+	// error. Three causes currently collapse into one alarming message, and the
+	// most common of them is not a fault at all:
+	//
+	//   no tunnel up   → EXPECTED. There is no VPN exit to measure. This is the
+	//                    normal state during a switch/reconnect window (the
+	//                    tunnel is down — that is why the window exists), in
+	//                    standby, and across any drop. Reporting it as an error
+	//                    trains people to ignore the field.
+	//   tunnel up      → REAL. The exit may be censoring the providers (an
+	//                    Iranian exit blocking them looks exactly like this), or
+	//                    the response was malformed. Worth surfacing.
+	//
+	// Either way the posture HOLDS — an unknown country never escalates. The
+	// difference is only in what we tell the operator, which is precisely the
+	// part that was wrong.
 	if lookupErr != nil {
-		snap.LookupErr = lookupErr.Error()
+		if anyTunnelUp(tunnels) {
+			snap.LookupErr = lookupErr.Error()
+		} else {
+			snap.ExitUnknown = "no tunnel is up, so there is no VPN exit to check"
+		}
 	}
 	if enfErr != nil {
 		snap.EnforcementErr = enfErr.Error()
@@ -991,7 +1022,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	// Startup observation: only meaningful with a tunnel up and an endpoint known.
 	// With zero tunnels (standing posture) a lookup egresses nowhere useful.
 	if len(tunnels) > 0 && len(endpoints) > 0 {
-		lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+		lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
 		if lastRes.Err == nil && !blocked {
 			// A confirmed allowed exit proves the tunnel is carrying traffic.
 			goodExitThisUp = true
@@ -1145,7 +1176,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				o.Log.Debug("vpn tunnel down — skipping geo lookup (guard holds, endpoints open for reconnect)")
 				continue
 			}
-			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked)
+			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
 			if lastRes.Err == nil && !blocked {
 				goodExitThisUp, sawTunnelUp = true, true // confirmed exit through the tunnel
 			}
@@ -1254,7 +1285,11 @@ func sameStrings(a, b []string) bool {
 // so the caller can publish the last-known reading. The second return is the last
 // firewall-action failure (a failed FULL BLOCK / guard restore, or a probe re-cut
 // that left egress open), or nil when the intended posture was achieved.
-func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Policy, blocked *bool) (monitor.Result, error) {
+//
+// tunnelUp only classifies how a FAILED lookup is reported — it never changes
+// enforcement. With no tunnel there is no exit to measure, so a failure is
+// expected rather than a fault.
+func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Policy, blocked *bool, tunnelUp bool) (monitor.Result, error) {
 	var res monitor.Result
 	var enfErr error
 	if *blocked {
@@ -1264,14 +1299,20 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 		res = monitor.Result{Reading: r, Err: err}
 	}
 	if res.Err != nil {
-		o.Log.Warn("country lookup failed", "err", res.Err)
-		// Undeterminable country: hold the current posture. The standing guard
-		// already blocks physical leaks, so an unknown must not escalate
-		// GUARD→FULL BLOCK (which cuts tunnel egress and livelocks the
-		// reconnect) nor lift an active FULL BLOCK on a blip. Only a
-		// *successful* reading moves the state machine. (This makes failClosed
-		// a no-op in VPN guard mode — the guard itself is the fail-closed
-		// block for physical leaks.)
+		// Say which of these it is. A lookup that fails because there is no
+		// tunnel to measure through is not a fault — it is the normal state
+		// during a switch/reconnect window (the tunnel is down; that is why the
+		// window exists), in standby, and across any drop. Logging that at Warn
+		// alongside genuine failures is what made the geo providers look broken.
+		if tunnelUp {
+			o.Log.Warn("exit-country lookup failed with the tunnel up — the exit may be blocking the geo providers; guard holds", "err", res.Err)
+		} else {
+			o.Log.Debug("exit country unknown — no tunnel is up, so there is no VPN exit to check", "err", res.Err)
+		}
+		// Either way: hold the current posture. The standing guard already blocks
+		// physical leaks, so an unknown must not escalate GUARD→FULL BLOCK (which
+		// cuts tunnel egress and livelocks the reconnect) nor lift an active FULL
+		// BLOCK on a blip. Only a *successful* reading moves the state machine.
 		return res, enfErr
 	}
 	cc := res.Reading.CountryCode

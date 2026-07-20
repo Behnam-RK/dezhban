@@ -32,7 +32,8 @@ struct Snapshot: Codable {
     let ip: String?
     let countryCode: String?
     let provider: String?
-    let lookupErr: String?
+    let lookupErr: String?          // a GENUINE failure: a tunnel was up and measuring it failed
+    let exitUnknown: String?        // EXPECTED: no tunnel up, so there is no exit to measure
     let enforcementErr: String?     // last firewall-action failure, nil when clear
     let tunnels: [Tunnel]?
     let endpoints: [String]?

@@ -102,6 +102,20 @@ A failed lookup is fully neutral: it does not commit a pending flip, and it does
 not cancel one either. A blip during a 2-of-3 hysteresis streak must not hand a
 blocked exit a free reprieve.
 
+**Not every failed lookup is a problem.** Three causes used to collapse into one
+alarming message, and the most common was not a fault at all:
+
+| Cause | How it is reported |
+|---|---|
+| No tunnel up — a switch/reconnect window, standby, or a drop | **Not an error.** "Exit country unknown — no tunnel is up, so there is no VPN exit to check." |
+| Tunnel up, providers unreachable | **A real warning.** The exit may be censoring the providers — an Iranian exit blocking them looks exactly like this. The posture holds. |
+| Tunnel up, response malformed | **A real error**, worth showing. |
+
+The first case is why the geo providers used to look broken during every switch
+window: the tunnel is *supposed* to be down then, so the lookup failing is
+correct behaviour. `status --json` splits these into `exitUnknown` (expected) and
+`lookupErr` (genuine).
+
 There is **no `failClosed` setting.** It belonged to the retired fallback model,
 where the firewall was open at rest and an unknown country was the only reason to
 cut anything. Under the guard it had no meaning — the rules are already the

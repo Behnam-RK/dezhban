@@ -34,8 +34,18 @@ type Snapshot struct {
 	Blocked     bool      `json:"blocked"`      // egress currently cut
 	IP          string    `json:"ip,omitempty"` // last observed public IP
 	CountryCode string    `json:"countryCode,omitempty"`
-	Provider    string    `json:"provider,omitempty"`  // geo provider of the last reading
-	LookupErr   string    `json:"lookupErr,omitempty"` // last geo-lookup error (expected; handled by fail-closed)
+	Provider    string    `json:"provider,omitempty"` // geo provider of the last reading
+	// LookupErr is a GENUINE exit-country lookup failure: a tunnel was up, so
+	// there was an exit to measure, and measuring it did not work — the exit may
+	// be censoring the geo providers (an Iranian exit blocking them looks exactly
+	// like this) or the response was malformed. Worth surfacing.
+	LookupErr string `json:"lookupErr,omitempty"`
+	// ExitUnknown explains why the exit country is unknown when that is EXPECTED
+	// rather than a fault — set instead of LookupErr when no tunnel is up, so a
+	// switch window, a standby host, or a drop does not report an alarming
+	// "lookup failed" for the entirely normal condition of having no VPN exit to
+	// measure. Never set at the same time as LookupErr.
+	ExitUnknown string `json:"exitUnknown,omitempty"`
 	// EnforcementErr is the last firewall action failure (Block/Unblock/Apply), "" when
 	// clear. Distinct from LookupErr: a set value means the daemon TRIED to enforce and
 	// the backend rejected it, so posture/blocked describe the data plane truthfully but

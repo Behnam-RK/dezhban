@@ -130,7 +130,14 @@ struct OverviewView: View {
                 let prov = s.provider.map { " via \($0)" } ?? ""
                 row("Public IP", "\(ip) (\(cc)\(prov))")
             } else if let err = s.lookupErr, !err.isEmpty {
+                // Only genuine failures reach lookupErr: a tunnel was up, so
+                // there was an exit to measure, and measuring it did not work.
                 row("Last lookup", "failed: \(err)")
+            } else if let why = s.exitUnknown, !why.isEmpty {
+                // Expected, not a fault — phrased as a state rather than an
+                // error, because reporting it as one is what made the geo
+                // providers look broken during every switch window.
+                row("Exit country", "unknown — \(why)")
             }
             if let t = s.tunnels?.first {
                 row("Tunnel", "\(t.up ? "up" : "down")\(t.detail.map { " (\($0))" } ?? "")")

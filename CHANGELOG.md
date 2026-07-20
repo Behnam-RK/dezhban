@@ -69,6 +69,18 @@ changes.
 
 ### Fixed
 
+- **Failed exit-country lookups are now classified instead of all being reported
+  as errors.** Three causes collapsed into one alarming message, and the most
+  common was not a fault at all: during a switch or reconnect window the tunnel
+  is *supposed* to be down — that is why the window exists — so there is no VPN
+  exit to measure and the lookup failing is correct behaviour. That is now
+  reported as a state (`exitUnknown`: "no tunnel is up, so there is no VPN exit
+  to check") rather than an error. `lookupErr` is reserved for a failure with a
+  tunnel **up**, where there really was an exit to measure and something went
+  wrong — which may mean the exit itself is censoring the geo providers. The two
+  fields are mutually exclusive; the macOS app and `status --json` render them
+  differently. This is what made the geo providers look broken during every
+  window.
 - **IPv4-in-IPv6 addresses are now unmapped at the policy seam — a silent lockout.**
   pf does *not* reject `::ffff:1.2.3.4`; verified with `pfctl -nvf`, it accepts
   the rule and expands it to `pass out quick inet6 … to ::ffff:1.2.3.4`. Real

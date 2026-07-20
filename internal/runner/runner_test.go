@@ -1141,3 +1141,58 @@ func TestVPNAutoWindowNotFromFullBlock(t *testing.T) {
 		}
 	}
 }
+
+// A failed exit-country lookup must be classified, not blanket-reported.
+//
+// The symptom this fixes: dezhban showed geo-provider errors during switch and
+// reconnect windows. Those are the moments the tunnel is DOWN — that is why the
+// window exists — so there is no VPN exit to measure and the lookup failing is
+// correct behaviour. Reporting it as an error trains people to ignore the field,
+// and it was most of what made the providers look broken.
+//
+// A tunnel-up failure is a different thing entirely: the exit may be censoring
+// the providers (an Iranian exit blocking them looks exactly like this), and
+// that IS worth showing.
+func TestLookupFailureClassification(t *testing.T) {
+	cases := []struct {
+		name           string
+		tunnels        []state.Tunnel
+		wantLookupErr  bool
+		wantExitUnknwn bool
+	}{
+		{"tunnel up — genuine failure", []state.Tunnel{{Name: "utun4", Up: true}}, true, false},
+		{"tunnel down — expected", []state.Tunnel{{Name: "utun4", Up: false}}, false, true},
+		{"no tunnels at all — expected", nil, false, true},
+		{"one of several up — genuine", []state.Tunnel{{Name: "utun4", Up: false}, {Name: "utun5", Up: true}}, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got state.Snapshot
+			o := Options{Publish: func(s state.Snapshot) { got = s }}
+			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "")
+
+			if hasErr := got.LookupErr != ""; hasErr != c.wantLookupErr {
+				t.Errorf("LookupErr set = %v, want %v (got %q)", hasErr, c.wantLookupErr, got.LookupErr)
+			}
+			if hasUnk := got.ExitUnknown != ""; hasUnk != c.wantExitUnknwn {
+				t.Errorf("ExitUnknown set = %v, want %v (got %q)", hasUnk, c.wantExitUnknwn, got.ExitUnknown)
+			}
+			// Never both — an observer showing each field independently would
+			// otherwise render the same condition twice, once alarmingly.
+			if got.LookupErr != "" && got.ExitUnknown != "" {
+				t.Error("LookupErr and ExitUnknown are both set; they are mutually exclusive")
+			}
+		})
+	}
+}
+
+// A successful lookup sets neither field, whatever the tunnel state.
+func TestSuccessfulLookupSetsNoErrorFields(t *testing.T) {
+	var got state.Snapshot
+	o := Options{Publish: func(s state.Snapshot) { got = s }}
+	o.publish(false, false, monitor.Reading{CountryCode: "NL"}, nil, nil,
+		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "")
+	if got.LookupErr != "" || got.ExitUnknown != "" {
+		t.Errorf("a successful lookup set LookupErr=%q ExitUnknown=%q, want both empty", got.LookupErr, got.ExitUnknown)
+	}
+}

@@ -36,7 +36,8 @@ something to describe — they are absent in STANDBY, before any tunnel is known
   "ip": "203.0.113.45",
   "countryCode": "US",
   "provider": "ipinfo.io",
-  "lookupErr": "",                      // last geo-lookup error, omitted when none
+  "lookupErr": "",                      // GENUINE failure: a tunnel was up and measuring its exit failed
+  "exitUnknown": "",                    // EXPECTED: no tunnel up, so there is no exit to measure
   "enforcementErr": "",                 // last firewall-action failure, omitted when clear
   "tunnels": [                          // (vpn)
     { "name": "utun4", "up": true, "detail": "utun4 up" }
@@ -55,8 +56,18 @@ something to describe — they are absent in STANDBY, before any tunnel is known
 }
 ```
 
-`enforcementErr` is distinct from `lookupErr`: a geo-lookup failure is expected and
-simply holds the current posture, but a non-empty `enforcementErr` means the daemon **tried to
+`lookupErr` and `exitUnknown` are mutually exclusive, and the split matters. A
+lookup that fails because **no tunnel is up** is not a fault — it is the normal
+state during a switch or reconnect window (the tunnel is down; that is why the
+window exists), in standby, and across any drop. That sets `exitUnknown` with a
+plain-language reason. `lookupErr` is reserved for a failure with a tunnel **up**,
+where there genuinely was an exit to measure — which may mean the exit itself is
+censoring the geo providers. Observers should render `exitUnknown` as a state and
+`lookupErr` as a problem; showing both alike is what made the providers look
+broken during every window.
+
+`enforcementErr` is distinct from both: a geo-lookup failure holds the current
+posture, but a non-empty `enforcementErr` means the daemon **tried to
 apply a firewall change and the backend rejected it** — so `posture`/`blocked`
 describe the data plane truthfully, but the *intended* posture was not achieved (e.g.
 a failed escalation leaves `posture: "guard"` while the exit is forbidden, and a failed VPN probe
