@@ -376,8 +376,13 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		}
 		out := make([]netip.Addr, 0, len(store.Addrs()))
 		for _, s := range store.Addrs() {
+			// Unmap: learned.json stores whatever text it was given, and a
+			// 4-in-6 form here would render as an inet6 rule that real IPv4
+			// traffic never matches — a silently blocked endpoint. The policy
+			// constructor normalises too; this keeps the value canonical for the
+			// grace/prune bookkeeping that compares addresses before it.
 			if a, perr := netip.ParseAddr(s); perr == nil {
-				out = append(out, a)
+				out = append(out, a.Unmap())
 			}
 		}
 		return out
