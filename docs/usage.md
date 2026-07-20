@@ -52,30 +52,30 @@ daemon** over its control socket and need no password at all:
 
 ### Touch ID
 
-**The menubar app uses Touch ID** for the prompts it does raise (start, stop,
-install/uninstall, panic, config writes). It elevates through **Authorization
-Services** — the API behind the System Settings padlock — whose prompt offers "Touch
-ID or password" on any Mac that has it.
-
-It also **caches**: the authorization is held for the life of the app and the system
-grants a grace period, so a second privileged action a moment later usually needs no
-authentication at all.
-
-If your Mac has no Touch ID, or the API is unavailable, the app falls back to the old
-`osascript` dialog — that one is **password-only** and always has been, which is why
-biometrics never worked before.
-
-For the **CLI**, Touch ID comes from `sudo`, and you have to enable it yourself
-(macOS 14+):
+Touch ID for privileged ops — CLI and menubar app alike — comes from **`sudo` +
+`pam_tid`**, which you enable once yourself (macOS 14+):
 
 ```sh
 sudo sh -c 'echo "auth       sufficient     pam_tid.so" > /etc/pam.d/sudo_local'
 ```
 
-That's a change to your system's `sudo` configuration, not to dezhban — it applies to
-every `sudo` you run, and survives OS updates (unlike editing `/etc/pam.d/sudo`
-directly). dezhban's auto-elevation goes through `sudo`, so `dezhban start` and
-friends pick it up automatically.
+That's a change to your system's `sudo` configuration, not to dezhban — it applies
+to every `sudo` you run, and survives OS updates (unlike editing `/etc/pam.d/sudo`
+directly). `dezhban doctor` reminds you when it isn't set up.
+
+With it in place, the **CLI**'s auto-elevation (`dezhban start` and friends) shows
+the Touch ID prompt in the terminal, and the **menubar app** authenticates its
+privileged actions (start, stop, install/uninstall, panic, config writes) through
+the same mechanism — the system Touch ID HUD — with `sudo`'s timestamp cache making
+a second action a moment later silent.
+
+Without `pam_tid`, the app falls back to **Authorization Services** (the API behind
+the System Settings padlock; in practice its `system.privilege.admin` prompt is
+password-only — SecurityAgent does not offer biometrics for that right, which is
+why the app prefers the sudo path), caching the authorization for the life of the
+app; and as a last resort, the legacy `osascript` dialog — also password-only. A
+cancelled Touch ID (or a closed lid, where the sensor is unavailable) falls
+through to the password dialog rather than dead-ending.
 
 When a command does need root and you're on an interactive terminal on unix,
 dezhban **auto-re-runs itself under `sudo`** — so you rarely type `sudo` yourself.
@@ -139,6 +139,7 @@ dezhban config path                # print the resolved config path
 dezhban config show                # print the effective config as JSON
 dezhban config get blockedCountries
 sudo dezhban config set blockedCountries IR,RU   # set, validate, save
+sudo dezhban config reset vpn.switchWindow       # restore a shipped default (--all: every tunable)
 sudo dezhban config set vpn.enabled=true vpn.tunnelInterfaces=utun4 \
      vpn.autoDiscoverEndpoints=true                # several keys, one atomic write
 sudo dezhban config edit           # open the config in $EDITOR, re-validated on save
@@ -159,7 +160,10 @@ the system path need root (hence `sudo`); a permission error prints a `sudo` hin
 ## Connect & switch VPNs
 
 After a one-time `setup`, run dezhban (or install the service) and connect any
-VPN. Known VPNs need no ceremony; a brand-new one uses a switch window.
+VPN. Known VPNs need no ceremony, and a drop or server rotation is covered by the
+[automatic reconnect window](modes.md#automatic-reconnect-window) with no
+interaction; the manual switch window below is the fallback — e.g. for arming a
+brand-new VPN while the guard is already holding the line.
 
 ```sh
 # Known VPNs — register once, then just connect/switch in the VPN's own app:

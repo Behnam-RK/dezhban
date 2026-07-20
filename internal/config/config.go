@@ -48,18 +48,22 @@ type VPN struct {
 	AutoDiscoverEndpoints bool
 	// AllowPhysicalDNS opens plain DNS (port 53) egress on the physical link in
 	// guard and VPN full-block rulesets, so a VPN client can re-resolve its
-	// server hostname and reconnect while the tunnel is down. Off by default:
-	// the residual leak is DNS-query metadata on the physical path.
+	// server hostname and reconnect while the tunnel is down. ON by default
+	// (2026-07-19 defaults review: reconnectability beats hiding DNS-query
+	// metadata for this project's users); set false to close the metadata leak.
 	AllowPhysicalDNS bool
 	// AutoArm starts the daemon PASSIVE (posture "standby", no enforcement)
 	// when no tunnel interface is present, arming the guard automatically the
 	// moment a VPN connects. Never disarms on tunnel loss — a drop is exactly
 	// the leak the kill switch exists for; only an explicit unblock with the
-	// tunnel down returns to standby. Off by default: without it the guard is
-	// armed from startup, which is the stricter posture.
+	// tunnel down returns to standby. ON by default (2026-07-19 defaults
+	// review: a guard armed with no VPN cuts everything, and that mystery
+	// blackout hurt new users more than the pre-first-connect gap); set false
+	// for the stricter armed-from-startup posture.
 	AutoArm bool
 	// EndpointRefresh is how often hostnames are re-resolved and live discovery
-	// re-run. Defaults to 5m.
+	// re-run. Defaults to 1m — local work only, and the fast cadence promotes a
+	// roamed-to server to learned within ~3 minutes.
 	EndpointRefresh time.Duration
 	// EndpointGrace is how long an autodiscovered endpoint stays in the allowed
 	// set after a refresh stops reporting it — the window in which a dropped VPN
@@ -77,8 +81,19 @@ type VPN struct {
 	// SwitchWindow is the default duration of a `dezhban switch` window — a
 	// bounded, explicitly-triggered relaxation during which a brand-new VPN's
 	// handshake to an as-yet-unknown server is allowed so its endpoint can be
-	// learned. Defaults to 2m; validated to [10s, Advanced.SwitchWindowMax].
+	// learned. Defaults to 15s; validated to [10s, Advanced.SwitchWindowMax].
 	SwitchWindow time.Duration
+	// ReconnectWindow is the duration of the AUTOMATIC reconnect window: when
+	// the tunnel drops while the guard is healthy (GUARD posture, not standby,
+	// not FULL BLOCK), the daemon opens a switch-window relaxation for this long
+	// so the VPN client can redial any server — including one dezhban has never
+	// seen (rotating-pool and 443-fronted VPNs pick fresh IPs on every connect).
+	// It closes early the moment a good exit is confirmed, learns the new
+	// endpoint, and on expiry reverts fail-closed. Defaults to 30s; an explicit
+	// "0" disables the automatic window (kept internally as a negative sentinel
+	// so Normalize can tell "disabled" from "absent"); validated to
+	// [5s, Advanced.SwitchWindowMax] otherwise.
+	ReconnectWindow time.Duration
 	// Advanced holds tunables for behaviors that are otherwise baked-in design
 	// decisions. Every field defaults in Normalize; an absent `advanced` block
 	// keeps the recommended defaults. Touch only if you know why.
@@ -132,6 +147,13 @@ type Advanced struct {
 	// EndpointWarnThreshold is the union-size at which doctor warns about
 	// rule-list bloat. Default 256.
 	EndpointWarnThreshold int
+	// ReconnectMinUptime is the anti-flap gate on the automatic reconnect
+	// window: an auto-window opens only if the tunnel had been up at least this
+	// long, or a non-blocked exit was confirmed during that uptime. Without it a
+	// VPN flapping up/down would chain windows and turn the guard into a sieve.
+	// Default 15s; an explicit "0" disables the gate (negative sentinel
+	// internally, same convention as VPN.ReconnectWindow).
+	ReconnectMinUptime time.Duration
 	// WindowProtocols / WindowPorts optionally restrict a switch window to the
 	// given protocols ("udp"/"tcp") and destination ports instead of allowing all
 	// outbound. Empty (default) = allow all outbound for the window's duration.
@@ -220,19 +242,22 @@ type fileControl struct {
 // fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
 // absent block keep defaults.
 type fileVPN struct {
-	Enabled               bool          `json:"enabled"`
-	TunnelInterfaces      []string      `json:"tunnelInterfaces"`
-	Endpoints             []string      `json:"endpoints"`
-	Autodetect            bool          `json:"autodetect"`
-	AutoDiscoverEndpoints bool          `json:"autoDiscoverEndpoints"`
-	AllowPhysicalDNS      bool          `json:"allowPhysicalDNS"`
-	AutoArm               bool          `json:"autoArm,omitempty"`
-	EndpointRefresh       string        `json:"endpointRefresh"`
-	EndpointGrace         string        `json:"endpointGrace,omitempty"`
-	TunnelWatch           string        `json:"tunnelWatch"`
-	Profiles              []fileProfile `json:"profiles,omitempty"`
-	SwitchWindow          string        `json:"switchWindow,omitempty"`
-	Advanced              *fileAdvanced `json:"advanced,omitempty"`
+	Enabled               bool     `json:"enabled"`
+	TunnelInterfaces      []string `json:"tunnelInterfaces"`
+	Endpoints             []string `json:"endpoints"`
+	Autodetect            bool     `json:"autodetect"`
+	AutoDiscoverEndpoints bool     `json:"autoDiscoverEndpoints"`
+	// Pointers: both default to TRUE, so an explicit false must be
+	// distinguishable from an absent key (same convention as fileControl).
+	AllowPhysicalDNS *bool         `json:"allowPhysicalDNS,omitempty"`
+	AutoArm          *bool         `json:"autoArm,omitempty"`
+	EndpointRefresh  string        `json:"endpointRefresh"`
+	EndpointGrace    string        `json:"endpointGrace,omitempty"`
+	TunnelWatch      string        `json:"tunnelWatch"`
+	Profiles         []fileProfile `json:"profiles,omitempty"`
+	SwitchWindow     string        `json:"switchWindow,omitempty"`
+	ReconnectWindow  string        `json:"reconnectWindow,omitempty"`
+	Advanced         *fileAdvanced `json:"advanced,omitempty"`
 }
 
 type fileProfile struct {
@@ -252,23 +277,43 @@ type fileAdvanced struct {
 	EndpointWarnThreshold   int      `json:"endpointWarnThreshold,omitempty"`
 	WindowProtocols         []string `json:"windowProtocols,omitempty"`
 	WindowPorts             []int    `json:"windowPorts,omitempty"`
+	ReconnectMinUptime      string   `json:"reconnectMinUptime,omitempty"`
 }
 
 // Default returns a Config with safe, security-first defaults.
 func Default() Config {
 	return Config{
-		PollInterval:     30 * time.Second,
+		// 15s poll × hysteresis 2 confirms a forbidden exit in ~30s worst-case
+		// (2026-07-19 defaults review) — the default provider order keeps that
+		// volume on unmetered endpoints.
+		PollInterval:     15 * time.Second,
 		BlockedCountries: nil,
 		FailClosed:       true,
-		Hysteresis:       3,
+		Hysteresis:       2,
+		// Ordered by rate-limit headroom: providers are tried in order, so the
+		// FIRST reachable one absorbs nearly all poll traffic (at the 15s default
+		// that is ~5.8k lookups/day). geojs and country.is are unmetered; the
+		// tail (ipinfo 50k/mo, ipapi.co 1k/day) only sees traffic when everything
+		// above it is failing.
 		Providers: []string{
-			"https://ipinfo.io/json",
+			"https://get.geojs.io/v1/ip/country.json",
+			"https://api.country.is/",
 			"http://ip-api.com/json",
+			"https://ipwho.is/",
+			"https://freeipapi.com/api/json",
 			"https://ifconfig.co/json",
+			"https://ipinfo.io/json",
+			"https://ipapi.co/json/",
 		},
 		Allowlist:      Allowlist{},
 		ProviderQuorum: false,
 		LogLevel:       "info",
+		// Mirrors the absent-vpn-block defaults in apply(): both on (2026-07-19
+		// defaults review). Keep the two in sync.
+		VPN: VPN{
+			AllowPhysicalDNS: true,
+			AutoArm:          true,
+		},
 		Control: Control{
 			Enabled: true,
 			// Socket empty → resolved against the daemon's state dir by main.
@@ -345,8 +390,14 @@ func apply(cfg *Config, fc fileConfig) error {
 			Endpoints:             fc.VPN.Endpoints,
 			Autodetect:            fc.VPN.Autodetect,
 			AutoDiscoverEndpoints: fc.VPN.AutoDiscoverEndpoints,
-			AllowPhysicalDNS:      fc.VPN.AllowPhysicalDNS,
-			AutoArm:               fc.VPN.AutoArm,
+			AllowPhysicalDNS:      true, // default on; explicit false below
+			AutoArm:               true, // default on; explicit false below
+		}
+		if fc.VPN.AllowPhysicalDNS != nil {
+			v.AllowPhysicalDNS = *fc.VPN.AllowPhysicalDNS
+		}
+		if fc.VPN.AutoArm != nil {
+			v.AutoArm = *fc.VPN.AutoArm
 		}
 		if fc.VPN.EndpointRefresh != "" {
 			d, err := time.ParseDuration(fc.VPN.EndpointRefresh)
@@ -378,6 +429,20 @@ func apply(cfg *Config, fc fileConfig) error {
 				return fmt.Errorf("vpn.switchWindow: %w", err)
 			}
 			v.SwitchWindow = d
+		}
+		if fc.VPN.ReconnectWindow != "" {
+			d, err := time.ParseDuration(fc.VPN.ReconnectWindow)
+			if err != nil {
+				return fmt.Errorf("vpn.reconnectWindow: %w", err)
+			}
+			if d < 0 {
+				return fmt.Errorf("vpn.reconnectWindow: must not be negative (got %s); use \"0\" to disable", d)
+			}
+			if d == 0 {
+				v.ReconnectWindow = Disabled // explicit opt-out, survives Normalize
+			} else {
+				v.ReconnectWindow = d
+			}
 		}
 		for _, p := range fc.VPN.Profiles {
 			v.Profiles = append(v.Profiles, Profile{
@@ -442,6 +507,20 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 	if err := parse("learnedEndpointTTL", fa.LearnedEndpointTTL, &a.LearnedEndpointTTL); err != nil {
 		return a, err
 	}
+	if fa.ReconnectMinUptime != "" {
+		d, err := time.ParseDuration(fa.ReconnectMinUptime)
+		if err != nil {
+			return a, fmt.Errorf("vpn.advanced.reconnectMinUptime: %w", err)
+		}
+		if d < 0 {
+			return a, fmt.Errorf("vpn.advanced.reconnectMinUptime: must not be negative (got %s); use \"0\" to disable", d)
+		}
+		if d == 0 {
+			a.ReconnectMinUptime = Disabled // explicit opt-out of the anti-flap gate
+		} else {
+			a.ReconnectMinUptime = d
+		}
+	}
 	a.LearnedMaxPerProfile = fa.LearnedMaxPerProfile
 	a.PromoteAfterRefreshes = fa.PromoteAfterRefreshes
 	a.EndpointWarnThreshold = fa.EndpointWarnThreshold
@@ -459,6 +538,8 @@ func toFileConfig(c *Config) fileConfig {
 	failClosed := c.FailClosed
 	hysteresis := c.Hysteresis
 	quorum := c.ProviderQuorum
+	physDNS := c.VPN.AllowPhysicalDNS
+	autoArm := c.VPN.AutoArm
 	ctlEnabled := c.Control.Enabled
 	ctlGroup := c.Control.Group
 	ctlSwitchOps := c.Control.AllowSwitchOps
@@ -477,11 +558,14 @@ func toFileConfig(c *Config) fileConfig {
 			Endpoints:             c.VPN.Endpoints,
 			Autodetect:            c.VPN.Autodetect,
 			AutoDiscoverEndpoints: c.VPN.AutoDiscoverEndpoints,
-			AllowPhysicalDNS:      c.VPN.AllowPhysicalDNS,
+			AllowPhysicalDNS:      &physDNS,
+			AutoArm:               &autoArm,
 			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
+			EndpointGrace:         durString(c.VPN.EndpointGrace),
 			TunnelWatch:           c.VPN.TunnelWatch.String(),
 			Profiles:              toFileProfiles(c.VPN.Profiles),
 			SwitchWindow:          durString(c.VPN.SwitchWindow),
+			ReconnectWindow:       optDurString(c.VPN.ReconnectWindow),
 			Advanced:              toFileAdvanced(c.VPN.Advanced),
 		},
 		Control: &fileControl{
@@ -510,6 +594,16 @@ func durString(d time.Duration) string {
 		return ""
 	}
 	return d.String()
+}
+
+// optDurString serializes a duration that supports the explicit-disable
+// sentinel: negative → "0s" (the user turned it off, and that must round-trip),
+// positive → its string, zero (absent) → "" so omitempty drops it.
+func optDurString(d time.Duration) string {
+	if d < 0 {
+		return "0s"
+	}
+	return durString(d)
 }
 
 // toFileAdvanced projects the runtime Advanced onto the on-disk DTO, emitting
@@ -551,6 +645,10 @@ func toFileAdvanced(a Advanced) *fileAdvanced {
 	}
 	if a.EndpointWarnThreshold != defaultEndpointWarnThreshold {
 		fa.EndpointWarnThreshold = a.EndpointWarnThreshold
+		nonDefault = true
+	}
+	if a.ReconnectMinUptime != defaultReconnectMinUptime {
+		fa.ReconnectMinUptime = optDurString(a.ReconnectMinUptime)
 		nonDefault = true
 	}
 	if !nonDefault {
@@ -638,13 +736,19 @@ func Normalize(cfg *Config) {
 	// VPN guard cadence defaults. Set unconditionally — these are only read in
 	// VPN mode, but defaulting here keeps Validate and the runner simple.
 	if cfg.VPN.EndpointRefresh <= 0 {
-		cfg.VPN.EndpointRefresh = 5 * time.Minute
+		cfg.VPN.EndpointRefresh = time.Minute
+	}
+	if cfg.VPN.EndpointGrace <= 0 {
+		cfg.VPN.EndpointGrace = defaultEndpointGrace
 	}
 	if cfg.VPN.TunnelWatch <= 0 {
 		cfg.VPN.TunnelWatch = 1 * time.Second
 	}
 	if cfg.VPN.SwitchWindow <= 0 {
 		cfg.VPN.SwitchWindow = defaultSwitchWindow
+	}
+	if cfg.VPN.ReconnectWindow == 0 {
+		cfg.VPN.ReconnectWindow = defaultReconnectWindow
 	}
 	normalizeAdvanced(&cfg.VPN.Advanced)
 }
@@ -676,6 +780,9 @@ func normalizeAdvanced(a *Advanced) {
 	if a.EndpointWarnThreshold <= 0 {
 		a.EndpointWarnThreshold = defaultEndpointWarnThreshold
 	}
+	if a.ReconnectMinUptime == 0 {
+		a.ReconnectMinUptime = defaultReconnectMinUptime
+	}
 	// Canonicalize protocol strings so validation and pf/nft/WFP rendering agree:
 	// the renderers emit these values verbatim, so a stray space or capital (" UDP",
 	// "Tcp") would otherwise leak into the ruleset. Normalize runs before Validate.
@@ -687,7 +794,7 @@ func normalizeAdvanced(a *Advanced) {
 // Switch-window / learning defaults. These are the recommended values; the
 // vpn.advanced config block overrides any of them.
 const (
-	defaultSwitchWindow            = 2 * time.Minute
+	defaultSwitchWindow            = 15 * time.Second // 2026-07-19 defaults review: windows exist to be closed fast
 	defaultSwitchWindowMax         = 5 * time.Minute
 	defaultCommandFreshness        = 30 * time.Second
 	defaultWindowDiscoveryInterval = 2 * time.Second
@@ -697,8 +804,18 @@ const (
 	defaultPromoteAfterRefreshes   = 3
 	defaultEndpointWarnThreshold   = 256
 
-	minSwitchWindow = 10 * time.Second // floor for switchWindow / --for
-	maxProfileName  = 64
+	defaultReconnectWindow    = 30 * time.Second
+	defaultReconnectMinUptime = 15 * time.Second
+	defaultEndpointGrace      = 15 * time.Minute
+
+	minSwitchWindow    = 10 * time.Second // floor for switchWindow / --for
+	minReconnectWindow = 5 * time.Second  // floor for the automatic reconnect window
+	maxProfileName     = 64
+
+	// Disabled marks a duration the user explicitly set to "0" (feature
+	// off). The distinct sentinel survives Normalize, which treats a plain zero
+	// as "absent — fill the default".
+	Disabled time.Duration = -1
 )
 
 // targetKind classifies an allowlist/endpoint entry.
@@ -883,6 +1000,10 @@ func validateSwitchWindow(v VPN) error {
 	}
 	if v.SwitchWindow < minSwitchWindow || v.SwitchWindow > max {
 		return fmt.Errorf("vpn.switchWindow %s out of range [%s, %s]", v.SwitchWindow, minSwitchWindow, max)
+	}
+	// ReconnectWindow < 0 is the explicit "disabled" sentinel and always valid.
+	if v.ReconnectWindow > 0 && (v.ReconnectWindow < minReconnectWindow || v.ReconnectWindow > max) {
+		return fmt.Errorf("vpn.reconnectWindow %s out of range [%s, %s] (or \"0\" to disable)", v.ReconnectWindow, minReconnectWindow, max)
 	}
 	return nil
 }

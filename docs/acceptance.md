@@ -111,6 +111,22 @@ The guard is the dangerous mode — a misconfiguration locks the host out. Run
 - [ ] **Dynamic tunnels.** A newly-appeared tunnel is guarded within one watcher
       tick, with no restart. Zero tunnels up = endpoints-open standing posture,
       with geo suppressed.
+- [ ] **Automatic reconnect window.** With a rotating-server VPN (e.g.
+      RocketTunnel) guarded and healthy: disconnect, then hit the client's
+      connect button within `vpn.reconnectWindow` (default 30s) — the VPN
+      reconnects to a **fresh, never-seen server** with no operator action;
+      `status` shows `reconnect state: OPEN` (`status --json`:
+      `switch.trigger: "auto"`) while it lasts, and the menubar app posts the
+      "VPN dropped — reconnect window open" notification.
+- [ ] **Auto-window expiry fails closed.** Disconnect the VPN and let the
+      window lapse with no reconnect: egress is cut, STAYS cut (no second
+      window without a tunnel-up first), and a later client connect to a
+      *known/learned* endpoint still succeeds under the standing posture.
+- [ ] **No auto window from FULL BLOCK.** `--simulate-country IR` → FULL BLOCK,
+      then drop the tunnel: no window opens; recovery still requires the probe
+      confirming an allowed exit (or a manual `switch`).
+- [ ] **Strict opt-out.** With `vpn.reconnectWindow: "0"`, a drop opens nothing
+      and behavior matches the pre-0.3 zero-relaxation guard.
 
 **Full live macOS pass:** `setup` → connect VPN A (guarded) → disconnect →
 `dezhban switch` → connect self-hosted VPN B → the window learns the endpoint and

@@ -258,6 +258,21 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
+	// Persistent log capture, always on: every daemon run appends to
+	// <state dir>/logs/dezhban.log (size-rotated), whether launched from a shell
+	// or by the service manager — stderr is lost when the shell closes and the
+	// platform logger keeps no file an operator (or the GUI) can just read back.
+	// Best-effort: a failure to open the file degrades to the primary logger
+	// only, never blocks enforcement.
+	var persist slog.Handler
+	if fw, err := logging.OpenFile(defaultLogPath()); err != nil {
+		log.Warn("persistent log capture unavailable", "path", defaultLogPath(), "err", err)
+	} else {
+		defer fw.Close()
+		persist = logging.NewTextHandler(effectiveLevel(cfg), fw)
+		log = slog.New(logging.Fanout(log.Handler(), persist))
+	}
+
 	// Run under the service manager. When launched from a shell this behaves like
 	// a foreground daemon (kardianos handles SIGINT/SIGTERM and calls Stop, which
 	// cancels the loop so its deferred Cleanup removes all rules); when launched by
@@ -267,7 +282,7 @@ func cmdRun(args []string) int {
 	build := func(l *slog.Logger) (runner.Options, error) {
 		return assembleOptions(cfg, l, ov)
 	}
-	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath); err != nil {
+	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath, persist); err != nil {
 		log.Error("run loop failed", "err", err)
 		return 1
 	}
@@ -447,6 +462,8 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
 		SwitchWindow:            cfg.VPN.SwitchWindow,
 		SwitchWindowMax:         adv.SwitchWindowMax,
+		ReconnectWindow:         cfg.VPN.ReconnectWindow,
+		ReconnectMinUptime:      adv.ReconnectMinUptime,
 		Learn:                   learnHook,
 		PollCommand:             switchPollOrNil(switchEnabled, pollCommand),
 		// Re-resolve the allowlist at each Block so rotated provider IPs stay
@@ -992,6 +1009,10 @@ func defaultCommandPath() string { return filepath.Join(stateDir(), "command.jso
 // windows / live discovery.
 func defaultLearnedPath() string { return filepath.Join(stateDir(), "learned.json") }
 
+// defaultLogPath is the daemon's persistent, size-rotated log file (0644, like
+// state.json — readable history for the GUI and unprivileged operators).
+func defaultLogPath() string { return filepath.Join(stateDir(), "logs", "dezhban.log") }
+
 // cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
 // interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
 // NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
@@ -1365,6 +1386,18 @@ func cmdDoctor(args []string) int {
 	}
 	fmt.Println()
 
+	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI
+	// actions) authenticate through sudo, and sudo only offers Touch ID when
+	// pam_tid is opted in via /etc/pam.d/sudo_local. Informational only — never
+	// affects the exit code; password auth is degraded UX, not a lockout risk.
+	if runtime.GOOS == "darwin" && !sudoTouchIDConfigured() {
+		fmt.Println("touch id: not configured for sudo — privileged ops will ask for a password.")
+		fmt.Println("  To authenticate with a fingerprint instead (survives OS updates):")
+		fmt.Println()
+		fmt.Println("    echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local")
+		fmt.Println()
+	}
+
 	if *discover {
 		fmt.Println("discover (best-effort, macOS):")
 		cands, err := netdetect.DiscoverEndpoints()
@@ -1451,10 +1484,19 @@ func cmdStatus(args []string) int {
 			fmt.Println("vpn profiles:    ", strings.Join(names, ", "))
 		}
 		fmt.Println("switch window:   ", cfg.VPN.SwitchWindow)
+		if cfg.VPN.ReconnectWindow > 0 {
+			fmt.Println("reconnect window:", cfg.VPN.ReconnectWindow)
+		} else {
+			fmt.Println("reconnect window: off")
+		}
 		// Live switch-window / active-profile state from the daemon's snapshot.
 		if snap, err := state.Read(defaultStatePath()); err == nil {
 			if snap.Switch != nil && snap.Switch.Open {
-				fmt.Printf("switch state:     OPEN until %s\n", snap.Switch.Until.Format(time.Kitchen))
+				kind := "switch state:    "
+				if snap.Switch.Trigger == state.TriggerAuto {
+					kind = "reconnect state: " // auto window opened by a tunnel drop
+				}
+				fmt.Printf("%s OPEN until %s\n", kind, snap.Switch.Until.Format(time.Kitchen))
 			}
 			if snap.ActiveProfile != "" {
 				fmt.Println("active profile:  ", snap.ActiveProfile)

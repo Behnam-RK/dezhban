@@ -17,3 +17,7 @@ func reexecElevated() error {
 func elevatedWrite(path string, data []byte) error {
 	return errors.New("auto-elevation is not supported on Windows")
 }
+
+// sudoTouchIDConfigured: Touch ID is a macOS concept; doctor's hint is gated on
+// darwin, but the symbol must exist for the build.
+func sudoTouchIDConfigured() bool { return false }

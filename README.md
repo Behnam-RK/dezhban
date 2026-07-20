@@ -7,13 +7,18 @@
 A standalone, system-wide and cross-platform **network kill switch** written in Go, built for
 running behind full-tunnel VPNs. Its primary mode is an **always-on interface
 guard**: it lets traffic out only through the VPN tunnel, so the instant the
-tunnel drops it cuts egress with a **zero leak window**, and it full-blocks when
-the VPN exit switches to a forbidden country.
+tunnel drops it cuts egress **instantly**, and it full-blocks when the VPN exit
+switches to a forbidden country. On a drop it then opens a bounded, self-closing
+[reconnect window](docs/modes.md#automatic-reconnect-window) (default 30s) so
+your VPN can redial any server with zero interaction — set
+`vpn.reconnectWindow: "0"` for the strict zero-leak-window behavior instead.
 
 As a **fallback** for hosts *not* behind a VPN, it can instead poll the machine's
 public IP, resolve its country, and cut traffic by destination when that country
 matches a blocklist — best-effort, since a poller can only react after the next
-poll. Both modes and how to choose are in [docs/modes.md](docs/modes.md).
+poll. Both modes and how to choose are in [docs/modes.md](docs/modes.md); for
+the full story of what happens from launch to teardown, read
+[docs/how-it-works.md](docs/how-it-works.md).
 
 > [!WARNING]
 > dezhban deliberately cuts network access. A bad allowlist, a wrong VPN endpoint,
@@ -88,7 +93,9 @@ optional macOS app (menubar + main window). Full command reference: [docs/usage.
 ## Modes at a glance
 
 - **VPN guard** (`vpn.enabled: true`) — **primary/recommended.** Interface-aware,
-  always on, zero leak window. Use it whenever you're behind a full-tunnel VPN.
+  always on, instant cut on a drop (zero leak window with
+  `vpn.reconnectWindow: "0"`; by default a bounded reconnect window follows the
+  cut so the VPN can redial). Use it whenever you're behind a full-tunnel VPN.
 - **Country-blocklist** (`vpn.enabled: false`) — **fallback.** Destination-aware,
   reactive; only meaningful when you're not tunneled. Defaults to off — a
   misconfigured guard can lock a host out, so VPN mode is a deliberate opt-in.

@@ -78,14 +78,24 @@ enum DezhbanCLI {
         return elevate("out=$(\(quoted) 2>&1)")
     }
 
-    /// Runs `script` as root, preferring the Touch ID-capable path.
+    /// Runs `script` as root, preferring the most biometric-capable path available:
     ///
-    /// Authorization Services (Elevation) gets a "Touch ID or password" prompt and caches
-    /// the authorization, so a second action a moment later is usually silent. It returns
-    /// nil only when the path is unusable at all — never for a command that simply failed
-    /// — so falling back here can't mask a real error, and can't turn a cancelled prompt
-    /// into a second prompt.
+    /// 1. **sudo + pam_tid** — the system Touch ID HUD, on Macs where Touch ID for
+    ///    sudo is configured (/etc/pam.d/sudo_local). The only path that reliably
+    ///    offers biometrics: the `system.privilege.admin` SecurityAgent dialog behind
+    ///    Authorization Services is password-only in practice. A Touch ID cancel or an
+    ///    unavailable sensor (clamshell) falls through to the password dialog below —
+    ///    the same "Use Password…" continuation macOS's own biometric prompts offer.
+    /// 2. **Authorization Services** (Elevation) — caches the authorization, so a
+    ///    second action a moment later is usually silent. Returns `unavailable` only
+    ///    when the path is unusable at all — never for a command that simply failed —
+    ///    so falling back can't mask a real error, and can't turn a cancelled prompt
+    ///    into a second prompt.
+    /// 3. **AppleScript** admin dialog — the legacy last resort.
     private static func elevate(_ script: String) -> CommandResult {
+        if let result = Elevation.runViaSudo(shell: script) {
+            return result
+        }
         switch Elevation.run(shell: script) {
         case .completed(let result):
             return result

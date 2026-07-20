@@ -38,7 +38,9 @@ struct OverviewView: View {
                 if let sw = s.switch, sw.open {
                     // The window relaxes egress — the real IP may be exposed. Keep it
                     // loud, with the same rounded-down countdown as the menubar.
-                    banner("Switch window OPEN — closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now)))",
+                    banner(sw.isAutoReconnect
+                           ? "VPN dropped — reconnect window open, redial now (closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now))))"
+                           : "Switch window OPEN — closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now)))",
                            color: .orange)
                 }
 
@@ -138,7 +140,7 @@ struct OverviewView: View {
                 .help(routineHint("Releases a manual block and resumes monitoring."))
             if s.mode == "vpn" {
                 if let sw = s.switch, sw.open {
-                    Button("Cancel VPN switch (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
+                    Button("\(sw.isAutoReconnect ? "Cancel reconnect window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
                         AppActions.routine(["switch", "--cancel"], "cancel the switch window")
                     }
                     .help(routineHint("Closes the window and restores the guard."))

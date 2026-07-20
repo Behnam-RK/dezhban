@@ -147,6 +147,70 @@ enum Elevation {
         authRef = nil
     }
 
+    /// Splits the in-band rc marker off a captured transcript (the shared contract of
+    /// every elevation path: emit `$out`, then `\n<rcMarker><status>`).
+    static func parseCaptured(_ raw: String) -> CommandResult {
+        guard let markerRange = raw.range(of: rcMarker, options: .backwards) else {
+            // No marker: the shell died before it could report. Treat as a failure with
+            // whatever it managed to print, rather than silently passing.
+            return CommandResult(ok: false, output: raw, status: 1)
+        }
+        let output = String(raw[raw.startIndex..<markerRange.lowerBound])
+        let rc = Int32(raw[markerRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1
+        return CommandResult(
+            ok: rc == 0,
+            output: output.trimmingCharacters(in: .newlines),
+            status: rc)
+    }
+
+    /// Whether Touch ID for sudo is configured (`pam_tid` in /etc/pam.d/sudo_local —
+    /// the Apple-documented opt-in). Only then is the sudo path worth trying: without
+    /// pam_tid a GUI-spawned sudo has no terminal to prompt on and always fails.
+    static var sudoTouchIDConfigured: Bool {
+        guard let content = try? String(contentsOfFile: "/etc/pam.d/sudo_local", encoding: .utf8) else {
+            return false
+        }
+        return content.split(separator: "\n").contains {
+            let line = $0.trimmingCharacters(in: .whitespaces)
+            return !line.hasPrefix("#") && line.contains("pam_tid")
+        }
+    }
+
+    /// Runs `capture` as root via `sudo`, which honors pam_tid: on a Mac with Touch ID
+    /// for sudo configured, authentication is the system Touch ID HUD — the only
+    /// elevation path on current macOS that reliably offers biometrics (the
+    /// `system.privilege.admin` SecurityAgent dialog is password-only; see
+    /// authorizationdb). sudo's timestamp cache makes repeat actions silent, mirroring
+    /// the AuthorizationRef cache.
+    ///
+    /// Returns nil when the path is unavailable (pam_tid not configured) or when sudo
+    /// could not authenticate — Touch ID cancelled, sensor unavailable (clamshell), or
+    /// fingerprint mismatch. sudo cannot tell those apart for us, and dead-ending a
+    /// clamshell user would leave them no way to elevate at all, so the caller falls
+    /// back to the password dialog — the same "Use Password…" continuation macOS's own
+    /// biometric prompts offer.
+    static func runViaSudo(shell capture: String) -> CommandResult? {
+        guard sudoTouchIDConfigured else { return nil }
+        let script = "\(capture); rc=$?; printf '%s' \"$out\"; printf '\\n\(rcMarker)%d' \"$rc\""
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
+        p.arguments = ["/bin/sh", "-c", script]
+        let out = Pipe()
+        p.standardOutput = out
+        p.standardError = out
+        p.standardInput = FileHandle.nullDevice // never let sudo wait on a password read
+        do { try p.run() } catch { return nil }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        let raw = String(decoding: data, as: UTF8.self)
+        guard raw.contains(rcMarker) else {
+            // The command never ran: sudo failed to authenticate (cancel / no sensor /
+            // no cached timestamp and pam_tid declined). Let the caller fall back.
+            return nil
+        }
+        return parseCaptured(raw)
+    }
+
     /// Runs `capture` as root. `capture` must leave the command's combined output in
     /// `$out` and its status in `$?` — the same contract DezhbanCLI's AppleScript path
     /// uses, so the two elevation paths are interchangeable.
@@ -195,18 +259,6 @@ enum Elevation {
             fclose(p)
         }
         let raw = String(decoding: data, as: UTF8.self)
-
-        // Split the in-band status off the tail of the output.
-        guard let markerRange = raw.range(of: rcMarker, options: .backwards) else {
-            // No marker: the shell died before it could report. Treat as a failure with
-            // whatever it managed to print, rather than silently passing.
-            return .completed(CommandResult(ok: false, output: raw, status: 1))
-        }
-        let output = String(raw[raw.startIndex..<markerRange.lowerBound])
-        let rc = Int32(raw[markerRange.upperBound...].trimmingCharacters(in: .whitespacesAndNewlines)) ?? 1
-        return .completed(CommandResult(
-            ok: rc == 0,
-            output: output.trimmingCharacters(in: .newlines),
-            status: rc))
+        return .completed(parseCaptured(raw))
     }
 }

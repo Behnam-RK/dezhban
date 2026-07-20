@@ -172,3 +172,19 @@ since the reasoning is not obvious from the code:
 - **The control socket relaxes "root-triggered"** for routine ops. The full cost of
   that trade is spelled out under [Control channels](#control-channels) — it is a
   deliberate concession to usability, not an oversight.
+- **The switch window gained a second sanctioned trigger** (2026-07): the
+  [automatic reconnect window](modes.md#automatic-reconnect-window)
+  (`vpn.reconnectWindow`, default 30s, `"0"` restores the original
+  operator-only behavior). Field testing with rotating-pool anti-censorship
+  VPNs (fresh Cloudflare-fronted server IP on nearly every connect) showed
+  that "keep known endpoints open" can never cover a reconnect, making every
+  drop a manual `switch` — an operator burden that pushed users toward running
+  with the guard off entirely. The trade is explicit and bounded: a tunnel
+  drop from healthy GUARD may expose the real IP for up to `reconnectWindow`
+  seconds while the client redials; in exchange, reconnects and VPN switches
+  are zero-interaction, and the guard still fail-closes on expiry. The
+  alternatives were examined and rejected: standing port/protocol allows
+  (443-fronted VPNs make any filter that admits the VPN admit the leak),
+  per-app allows (not expressible across pf/nft/WFP), and provider IP feeds
+  (Cloudflare-fronted means allowlisting a whole CDN). Zero-leak purists set
+  `"0"` and lose nothing.

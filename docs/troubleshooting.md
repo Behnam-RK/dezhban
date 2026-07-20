@@ -80,9 +80,31 @@ own egress and prevented the very reconnect it was waiting for (a livelock).
 *holds* the current posture instead of escalating — only a *successful* reading
 of a blocked country produces FULL BLOCK. See
 [modes.md](modes.md) ("Fail-closed in guard mode"). If your endpoints are
-hostnames, also set `vpn.allowPhysicalDNS: true` so the client can re-resolve its
+hostnames, keep `vpn.allowPhysicalDNS` on (the default) so the client can re-resolve its
 server on the physical link while the tunnel is down. The residual leak is
 DNS-query metadata only; your traffic stays blocked.
+
+### My VPN can't reconnect after a drop (rotating-server VPNs)
+
+Symptom: the guard cuts egress on a VPN drop (correct), but hitting the client's
+reconnect button does nothing — the VPN never comes back without a manual
+`dezhban switch`.
+
+**Cause.** Rotating-pool and anti-censorship VPNs (NordVPN, ProtonVPN,
+RocketTunnel, …) pick a **fresh server IP on almost every connect**. The guard
+only passes *known* endpoints on the physical link, so the redial targets an
+address dezhban has never seen and is dropped — `endpointGrace` only covers
+redials to the *same* server.
+
+**Fix (current behavior).** The [automatic reconnect
+window](modes.md#automatic-reconnect-window) (`vpn.reconnectWindow`, default
+`30s`) opens on the drop so the client can redial anywhere; the new server is
+learned and the guard snaps back on a confirmed good exit. If you disabled it
+(`"0"`), reconnects to fresh servers need `dezhban switch` — that is the
+configured strict behavior, not a bug. If the window keeps getting suppressed in
+the logs, your tunnel is flapping faster than
+`vpn.advanced.reconnectMinUptime` (default `15s`) — fix the VPN, or lower/zero
+the gate if the flapping is expected.
 
 ### Note for NetworkExtension VPNs (macOS)
 

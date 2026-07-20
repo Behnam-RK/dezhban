@@ -14,8 +14,8 @@ func TestLoadMissingPathReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.PollInterval != 30*time.Second {
-		t.Errorf("PollInterval = %s, want 30s", cfg.PollInterval)
+	if cfg.PollInterval != 15*time.Second {
+		t.Errorf("PollInterval = %s, want 15s", cfg.PollInterval)
 	}
 	if !cfg.FailClosed {
 		t.Error("FailClosed = false, want true (security default)")
@@ -126,8 +126,8 @@ func TestLoadVPNCadenceDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.VPN.EndpointRefresh != 5*time.Minute {
-		t.Errorf("VPN.EndpointRefresh = %s, want default 5m", cfg.VPN.EndpointRefresh)
+	if cfg.VPN.EndpointRefresh != time.Minute {
+		t.Errorf("VPN.EndpointRefresh = %s, want default 1m", cfg.VPN.EndpointRefresh)
 	}
 	if cfg.VPN.TunnelWatch != time.Second {
 		t.Errorf("VPN.TunnelWatch = %s, want default 1s", cfg.VPN.TunnelWatch)
@@ -397,8 +397,8 @@ func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.VPN.SwitchWindow != 2*time.Minute {
-		t.Errorf("default switchWindow = %s, want 2m", cfg.VPN.SwitchWindow)
+	if cfg.VPN.SwitchWindow != 15*time.Second {
+		t.Errorf("default switchWindow = %s, want 15s", cfg.VPN.SwitchWindow)
 	}
 	a := cfg.VPN.Advanced
 	if a.SwitchWindowMax != 5*time.Minute || a.CommandFreshness != 30*time.Second ||
@@ -487,5 +487,108 @@ func TestNormalizeWindowProtocols(t *testing.T) {
 	}
 	if err := validateAdvanced(cfg.VPN.Advanced); err != nil {
 		t.Errorf("validateAdvanced after normalize: %v, want success", err)
+	}
+}
+
+// --- automatic reconnect window config ---
+
+func TestReconnectWindowDefaultsAndDisable(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, body string) string {
+		p := filepath.Join(dir, name)
+		if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+
+	// Absent → default 30s.
+	cfg, err := Load(write("default.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.VPN.ReconnectWindow != defaultReconnectWindow {
+		t.Errorf("ReconnectWindow = %s, want default %s", cfg.VPN.ReconnectWindow, defaultReconnectWindow)
+	}
+	if cfg.VPN.Advanced.ReconnectMinUptime != defaultReconnectMinUptime {
+		t.Errorf("ReconnectMinUptime = %s, want default %s", cfg.VPN.Advanced.ReconnectMinUptime, defaultReconnectMinUptime)
+	}
+
+	// Explicit "0" → disabled (negative sentinel), and it must survive Normalize.
+	cfg, err = Load(write("off.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "reconnectWindow": "0s"}}`))
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.VPN.ReconnectWindow >= 0 {
+		t.Errorf("ReconnectWindow = %s after explicit \"0s\", want the Disabled sentinel (<0)", cfg.VPN.ReconnectWindow)
+	}
+
+	// The disabled state must round-trip through Marshal/Load.
+	data, err := Marshal(cfg)
+	if err != nil {
+		t.Fatalf("Marshal: %v", err)
+	}
+	if !strings.Contains(string(data), `"reconnectWindow": "0s"`) {
+		t.Errorf("Marshal did not emit reconnectWindow \"0s\":\n%s", data)
+	}
+	cfg2, err := Load(write("off-roundtrip.json", string(data)))
+	if err != nil {
+		t.Fatalf("Load(round-trip): %v", err)
+	}
+	if cfg2.VPN.ReconnectWindow >= 0 {
+		t.Errorf("disabled reconnectWindow did not survive a save/load round-trip: %s", cfg2.VPN.ReconnectWindow)
+	}
+
+	// Out of range: below the 5s floor and above switchWindowMax must fail.
+	for _, bad := range []string{`"3s"`, `"10m"`} {
+		_, err := Load(write("bad.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "reconnectWindow": `+bad+`}}`))
+		if err == nil || !strings.Contains(err.Error(), "reconnectWindow") {
+			t.Errorf("reconnectWindow %s: err = %v, want out-of-range error", bad, err)
+		}
+	}
+}
+
+// endpointGrace and autoArm must survive a save/load round-trip — a saved
+// config silently dropping them is how the GUI "reset to zero" bug happened.
+func TestSavePreservesEndpointGraceAndAutoArm(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "endpointGrace": "42m", "autoArm": true}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg2, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load(saved): %v", err)
+	}
+	if cfg2.VPN.EndpointGrace != 42*time.Minute {
+		t.Errorf("EndpointGrace = %s after round-trip, want 42m", cfg2.VPN.EndpointGrace)
+	}
+	if !cfg2.VPN.AutoArm {
+		t.Error("AutoArm = false after round-trip, want true")
+	}
+}
+
+// An absent endpointGrace now normalizes to the effective 15m default so
+// observers (GUI, config show) see the real value instead of 0.
+func TestEndpointGraceDefaultVisible(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.VPN.EndpointGrace != defaultEndpointGrace {
+		t.Errorf("EndpointGrace = %s, want normalized default %s", cfg.VPN.EndpointGrace, defaultEndpointGrace)
 	}
 }

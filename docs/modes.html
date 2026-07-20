@@ -278,8 +278,11 @@
           </div>
           <h3>VPN / full-tunnel guard</h3>
           <span class="tag">Watches your <b>tunnel</b>. Blocks by <b>network interface</b>. The GUARD baseline
-            is enforced the whole time, so a tunnel drop is cut with a <b>zero leak window</b>. Use it whenever
-            you're behind a full-tunnel VPN.</span>
+            is enforced the whole time, so a tunnel drop is cut <b>instantly</b> — followed, by default, by a
+            bounded <b>automatic reconnect window</b> (<code>vpn.reconnectWindow</code>, 30&thinsp;s) so the VPN
+            can redial any server with zero interaction; set it to <code>"0"</code> for a strict zero leak
+            window. Use it whenever you're behind a full-tunnel VPN. Details: modes.md
+            &sect;&nbsp;Automatic reconnect window.</span>
         </header>
 
         <div class="fsm" role="img" aria-label="VPN guard: GUARD resting state is always enforcing and only lets the tunnel egress; transitions to FULL-BLOCK when the exit country is forbidden, and back via a windowed probe.">

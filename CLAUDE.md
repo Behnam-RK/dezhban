@@ -7,8 +7,10 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 **dezhban** (Persian: "gatekeeper") is a standalone, cross-platform **network kill
 switch** written in Go, built primarily for hosts behind a full-tunnel VPN. Its
 main mode is an **always-on interface guard** (`vpn.enabled: true`): egress is
-allowed only through the tunnel, so a tunnel drop is cut with a zero leak window,
-and it full-blocks when the VPN exit lands in a forbidden country. A
+allowed only through the tunnel, so a tunnel drop is cut instantly — by default a
+bounded reconnect window then follows so the VPN can redial (set
+`vpn.reconnectWindow: "0"` for a strict zero-leak cut) — and it full-blocks when
+the VPN exit lands in a forbidden country. A
 **country-blocklist fallback** (`vpn.enabled: false`) polls the public IP and cuts
 traffic by destination when the country is blocklisted — for hosts not behind a
 VPN. See [docs/modes.md](docs/modes.md).
@@ -77,18 +79,20 @@ The design depends on these invariants (rationale in
   JSON keys (including `switch-window`, `activeProfile`, `switch`) are stable
   identifiers (used by `print-rules --mode` and `status --json`) — do not rename
   them. "Primary" / "fallback" are documentation words only.
-- **The switch window is the ONLY sanctioned relaxation of the guard.** It is
-  bounded (default 2m, capped 5m), never automatic — it opens only on an explicit
-  operator command — closes early on a confirmed good exit, and auto-reverts to the
-  prior fail-closed posture on cancel/expiry. Never widen it, never let it open
-  without an explicit command, and never let it outlive its deadline.
-  Two channels can carry that command: the **root-owned command file**
-  (`internal/command`, always available, root-only) and the **control socket**
+- **The bounded switch window is the ONLY sanctioned relaxation of the guard,
+  and it has exactly TWO sanctioned triggers** — nothing else may ever relax it:
+  (1) an explicit operator command, via the **root-owned command file**
+  (`internal/command`, always available, root-only) or the **control socket**
   (`internal/control`, admin-group, gated by `control.allowSwitchOps`, default
-  true). The socket is a deliberate, documented relaxation of "root-triggered" —
-  admins get a passwordless switch — and `control.allowSwitchOps: false` restores
-  root-only. Everything else about the window is unchanged: same clamp, same cap,
-  same auto-revert.
+  true; `false` restores root-only); (2) the **automatic reconnect window**
+  (`vpn.reconnectWindow`, default 30s, `"0"` disables — an explicit opt-out):
+  a tunnel-down edge from *healthy GUARD only* — never from standby, FULL BLOCK,
+  an already-open window, or a tunnel never observed up, and gated against
+  flapping by `vpn.advanced.reconnectMinUptime`. Both triggers share the same
+  machinery and rails: bounded (capped by `switchWindowMax`, 5m), closes early
+  on a confirmed good exit, auto-reverts to the prior fail-closed posture on
+  cancel/expiry, and one auto window per drop (expiry never re-opens). Never
+  widen the window, never add a trigger, never let it outlive its deadline.
 - The daemon owns all `Backend.Apply` calls from the **single run-loop goroutine** —
   keep it that way. Window timer, command poll, watcher, geo ticks, **and
   control-socket requests** are all select cases in that one loop; the socket's

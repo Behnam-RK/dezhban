@@ -68,7 +68,19 @@ type SwitchState struct {
 	Open    bool      `json:"open"`
 	Until   time.Time `json:"until"`
 	Profile string    `json:"profile,omitempty"`
+	// Trigger says what opened the window: TriggerManual (operator command) or
+	// TriggerAuto (automatic reconnect window on a tunnel drop). Additive field —
+	// absent in snapshots from older daemons, so observers must treat "" as
+	// TriggerManual.
+	Trigger string `json:"trigger,omitempty"`
 }
+
+// Trigger values for SwitchState.Trigger. Stable identifiers — status --json
+// consumers match on them.
+const (
+	TriggerManual = "manual"
+	TriggerAuto   = "auto"
+)
 
 // DirMode is the mode of the daemon's state directory. It MUST stay traversable
 // (0755): the daemon runs as root, but the things inside it are read and reached

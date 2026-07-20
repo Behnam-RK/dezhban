@@ -134,7 +134,12 @@ func serviceConfig(configPath string) *service.Config {
 // to the platform logger so the run loop's output reaches journald/syslog/Event
 // Log instead of an unread stderr. level and configPath shape that logger and
 // the boot invocation respectively; baseLog is used interactively.
-func Run(build Builder, baseLog *slog.Logger, level, configPath string) error {
+//
+// persist, when non-nil, is the daemon's always-on file sink: it is fanned in
+// alongside whichever primary logger is selected, so history survives in both
+// the interactive and the managed case (the platform logger alone is stream-
+// only from the GUI's point of view, and stderr is simply lost).
+func Run(build Builder, baseLog *slog.Logger, level, configPath string, persist slog.Handler) error {
 	prog := &program{build: build, log: baseLog}
 	s, err := service.New(prog, serviceConfig(configPath))
 	if err != nil {
@@ -142,7 +147,7 @@ func Run(build Builder, baseLog *slog.Logger, level, configPath string) error {
 	}
 	if !service.Interactive() {
 		if sl, err := s.Logger(nil); err == nil {
-			prog.log = logging.NewService(level, sl)
+			prog.log = slog.New(logging.Fanout(logging.NewService(level, sl).Handler(), persist))
 		}
 	}
 	return s.Run()
