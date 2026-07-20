@@ -32,7 +32,8 @@ Subcommands:
 Keys (dotted; list values are comma-separated):
   pollInterval blockedCountries hysteresis providers providerQuorum logLevel
   vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
-  vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.autoArm vpn.switchWindow
+  vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.allowLocalNetwork
+  vpn.autoArm vpn.switchWindow
   vpn.reconnectWindow vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
@@ -97,6 +98,10 @@ var configFields = map[string]configField{
 	"vpn.allowPhysicalDNS": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AllowPhysicalDNS) },
 		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AllowPhysicalDNS, v) },
+	},
+	"vpn.allowLocalNetwork": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AllowLocalNetwork) },
+		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AllowLocalNetwork, v) },
 	},
 	"vpn.switchWindow": {
 		get: func(c *config.Config) string { return c.VPN.SwitchWindow.String() },

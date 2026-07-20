@@ -233,6 +233,9 @@ func renderRuleset(p Policy) string {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 			}
 			b.WriteString(allowPhysicalDNSRule) // resolution during a restricted window
+			if p.AllowLocalNetwork {
+				b.WriteString(localNetworkRule())
+			}
 			if ports := joinPorts(p.WindowPorts); ports != "" {
 				fmt.Fprintf(&b, "pass out quick proto { %s } to any port { %s } no state\n", windowProtoSet(p.WindowProtos), ports)
 			}
@@ -254,6 +257,9 @@ func renderRuleset(p Policy) string {
 		if p.AllowPhysicalDNS {
 			b.WriteString(allowPhysicalDNSRule)
 		}
+		if p.AllowLocalNetwork {
+			b.WriteString(localNetworkRule())
+		}
 	default: // ModeFullBlock
 		if isVPNPolicy(p) {
 			// VPN full block (including the zero-tunnel standing posture): no
@@ -265,6 +271,9 @@ func renderRuleset(p Policy) string {
 			}
 			if p.AllowPhysicalDNS {
 				b.WriteString(allowPhysicalDNSRule)
+			}
+			if p.AllowLocalNetwork {
+				b.WriteString(localNetworkRule())
 			}
 		} else {
 			// Legacy direct model: dst-IP allowlist.
@@ -311,6 +320,14 @@ func joinPorts(ports []int) string {
 // the tunnel is down. `to any` deliberately — resolution must work regardless
 // of which resolver the system uses on reconnect.
 const allowPhysicalDNSRule = "pass out quick proto { udp tcp } to any port 53 no state\n"
+
+// localNetworkRule renders the destination-scoped LAN pass (vpn.allowLocalNetwork).
+// pf infers each address's family from the address itself, so v4 and v6 prefixes
+// can share one list — verified with `pfctl -nvf`, a mixed list expands to one
+// inet rule and one inet6 rule.
+func localNetworkRule() string {
+	return fmt.Sprintf("pass out quick to { %s } no state\n", strings.Join(LocalNetworkPrefixes, " "))
+}
 
 func joinAddrs(addrs []netip.Addr) string {
 	parts := make([]string, len(addrs))

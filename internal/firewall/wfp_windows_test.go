@@ -192,3 +192,32 @@ func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {
 		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", s)
 	}
 }
+
+// New-NetFirewallRule's -RemoteAddress takes mixed v4/v6 CIDRs in one list, so
+// unlike nft this needs no per-family split — but it must still be
+// destination-scoped, never an interface allow.
+func TestRenderBlockScriptLocalNetwork(t *testing.T) {
+	for _, mode := range []Mode{ModeGuard, ModeFullBlock} {
+		script := renderBlockScript(Policy{
+			Mode:              mode,
+			TunnelIfaces:      []string{"utun4"},
+			VPNEndpoints:      []netip.Addr{mustAddr(t, "203.0.113.5")},
+			AllowLocalNetwork: true,
+		})
+		if !strings.Contains(script, "-RemoteAddress 10.0.0.0/8,") {
+			t.Errorf("mode %s with allowLocalNetwork must emit a destination-scoped LAN allow:\n%s", mode, script)
+		}
+		if !strings.Contains(script, "fc00::/7") {
+			t.Errorf("mode %s LAN allow is missing IPv6 ULA:\n%s", mode, script)
+		}
+	}
+
+	off := renderBlockScript(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "10.0.0.0/8") {
+		t.Errorf("allowLocalNetwork=false must emit no LAN allow:\n%s", off)
+	}
+}

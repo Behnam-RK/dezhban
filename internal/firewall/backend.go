@@ -83,6 +83,12 @@ type Policy struct {
 	// regardless of which resolver the system uses on reconnect. The residual
 	// leak is DNS-query metadata only, gated behind a default-off config flag.
 	AllowPhysicalDNS bool
+	// AllowLocalNetwork adds destination-scoped passes for private, link-local
+	// and multicast ranges (see LocalNetworkPrefixes) to every enforcing posture,
+	// so LAN devices stay reachable while the guard is armed. Destination-scoped,
+	// never interface-scoped: it cannot become an internet path, because packets
+	// to public addresses remain blocked whatever the next hop is.
+	AllowLocalNetwork bool
 	// TunnelGroups are tunnel-interface *class* names (e.g. "utun") rendered as a
 	// pf interface group / nft wildcard ("utun*") so every current and future
 	// interface of that class is passed in ModeGuard without a rule reload when a

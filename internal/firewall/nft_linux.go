@@ -149,6 +149,7 @@ func renderNftRuleset(p Policy) string {
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
 			rule("udp dport 53 accept")
 			rule("tcp dport 53 accept")
+			emitLocalNetwork(rule, p)
 			emitWindowPortAccepts(rule, p)
 		}
 	case ModeGuard:
@@ -163,6 +164,7 @@ func renderNftRuleset(p Policy) string {
 		}
 		emitDaddrAccepts(rule, p.VPNEndpoints, "")
 		emitAllowPhysicalDNS(rule, p)
+		emitLocalNetwork(rule, p)
 	default: // ModeFullBlock
 		if isVPNPolicy(p) {
 			// VPN full block (including the zero-tunnel standing posture): drop the
@@ -172,6 +174,7 @@ func renderNftRuleset(p Policy) string {
 			// recovery (the VPN could never re-establish to be re-evaluated).
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
 			emitAllowPhysicalDNS(rule, p)
+			emitLocalNetwork(rule, p)
 		} else {
 			// Legacy direct model: dst-IP allowlist over udp and tcp port 53.
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "udp dport 53")
@@ -206,6 +209,21 @@ func emitAllowPhysicalDNS(rule func(string), p Policy) {
 	}
 	rule("udp dport 53 accept")
 	rule("tcp dport 53 accept")
+}
+
+// emitLocalNetwork renders the destination-scoped LAN passes
+// (vpn.allowLocalNetwork). Split per family because nft's matchers are
+// per-family: `ip daddr` will not accept a v6 prefix and vice versa.
+func emitLocalNetwork(rule func(string), p Policy) {
+	if !p.AllowLocalNetwork {
+		return
+	}
+	if v4 := LocalNetworkPrefixesFor(false); len(v4) > 0 {
+		rule(fmt.Sprintf("ip daddr { %s } accept", strings.Join(v4, ", ")))
+	}
+	if v6 := LocalNetworkPrefixesFor(true); len(v6) > 0 {
+		rule(fmt.Sprintf("ip6 daddr { %s } accept", strings.Join(v6, ", ")))
+	}
 }
 
 // emitDaddrAccepts emits accept rules for addrs, split by family (nft needs

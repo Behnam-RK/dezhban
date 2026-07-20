@@ -1,6 +1,9 @@
 package firewall
 
-import "net/netip"
+import (
+	"net/netip"
+	"strings"
+)
 
 // PolicyInput is the raw material every dezhban posture is built from: the
 // current tunnel and endpoint sets plus the knobs that shape them. The three
@@ -30,6 +33,8 @@ type PolicyInput struct {
 	// AllowPhysicalDNS opens plain DNS on the physical link so a VPN client can
 	// re-resolve its server hostname while the tunnel is down.
 	AllowPhysicalDNS bool
+	// AllowLocalNetwork keeps LAN destinations reachable while the guard is armed.
+	AllowLocalNetwork bool
 	// WindowProtos / WindowPorts optionally restrict the switch window instead of
 	// passing all outbound.
 	WindowProtos []string
@@ -91,11 +96,12 @@ func canonAllowlist(a Allowlist) Allowlist {
 // which is why the run loop never sets it here.
 func (in PolicyInput) FullBlock() Policy {
 	return Policy{
-		Mode:             ModeFullBlock,
-		Allowlist:        canonAllowlist(in.Allowlist),
-		TunnelIfaces:     in.Tunnels,
-		VPNEndpoints:     canonAddrs(in.Endpoints),
-		AllowPhysicalDNS: in.AllowPhysicalDNS,
+		Mode:              ModeFullBlock,
+		Allowlist:         canonAllowlist(in.Allowlist),
+		TunnelIfaces:      in.Tunnels,
+		VPNEndpoints:      canonAddrs(in.Endpoints),
+		AllowPhysicalDNS:  in.AllowPhysicalDNS,
+		AllowLocalNetwork: in.AllowLocalNetwork,
 	}
 }
 
@@ -113,12 +119,13 @@ func (in PolicyInput) Guard() Policy {
 		return in.FullBlock()
 	}
 	return Policy{
-		Mode:             ModeGuard,
-		Allowlist:        canonAllowlist(in.Allowlist),
-		TunnelIfaces:     in.Tunnels,
-		TunnelGroups:     in.TunnelGroups,
-		VPNEndpoints:     canonAddrs(in.Endpoints),
-		AllowPhysicalDNS: in.AllowPhysicalDNS,
+		Mode:              ModeGuard,
+		Allowlist:         canonAllowlist(in.Allowlist),
+		TunnelIfaces:      in.Tunnels,
+		TunnelGroups:      in.TunnelGroups,
+		VPNEndpoints:      canonAddrs(in.Endpoints),
+		AllowPhysicalDNS:  in.AllowPhysicalDNS,
+		AllowLocalNetwork: in.AllowLocalNetwork,
 	}
 }
 
@@ -136,5 +143,59 @@ func (in PolicyInput) SwitchWindow() Policy {
 		VPNEndpoints: canonAddrs(in.Endpoints),
 		WindowProtos: in.WindowProtos,
 		WindowPorts:  in.WindowPorts,
+		// Matters only for a RESTRICTED window: an unrestricted one already
+		// passes all outbound. Carrying it means a restricted window does not
+		// silently break the LAN that GUARD on either side of it keeps working.
+		AllowLocalNetwork: in.AllowLocalNetwork,
 	}
+}
+
+// LocalNetworkPrefixes are the destination ranges opened by AllowLocalNetwork.
+// Shared by all three backends so "local network" means the same thing on every
+// OS — a per-backend list would drift, and a range present on one platform but
+// not another is the kind of difference nobody notices until a printer stops
+// working on exactly one machine.
+//
+// Deliberately destination ranges, never an interface match. Passing "the LAN
+// interface" would pass everything routed out of it, including the internet;
+// passing these prefixes cannot, because a packet to a public address does not
+// match them regardless of which interface carries it.
+//
+// What is here and why:
+//
+//   - RFC1918 (10/8, 172.16/12, 192.168/16) — ordinary private LANs.
+//   - 100.64/10 (RFC6598, CGNAT) — the range Tailscale and many ISP routers use.
+//   - 169.254/16 + fe80::/10 — link-local, incl. self-assigned addressing.
+//   - fc00::/7 — IPv6 unique-local, the ULA equivalent of RFC1918.
+//   - 224/4 + ff00::/8 — multicast, which is what actually makes discovery work:
+//     mDNS/Bonjour (224.0.0.251, ff02::fb) and SSDP (239.255.255.250) are how a
+//     Mac finds printers, AirPlay targets and Chromecasts. Opening unicast
+//     private ranges alone would leave devices "visible but undiscoverable",
+//     which reads as broken.
+//
+// NOT here: 127/8 and ::1 (loopback is passed unconditionally by every posture,
+// independent of this setting) and 0.0.0.0/8, which is a source-only range.
+var LocalNetworkPrefixes = []string{
+	"10.0.0.0/8",
+	"172.16.0.0/12",
+	"192.168.0.0/16",
+	"100.64.0.0/10",
+	"169.254.0.0/16",
+	"224.0.0.0/4",
+	"fc00::/7",
+	"fe80::/10",
+	"ff00::/8",
+}
+
+// LocalNetworkPrefixesFor returns the local-network prefixes of one address
+// family. nft needs them split (its `ip daddr` / `ip6 daddr` matchers are
+// per-family); pf infers the family per address and does not.
+func LocalNetworkPrefixesFor(v6 bool) []string {
+	out := make([]string, 0, len(LocalNetworkPrefixes))
+	for _, p := range LocalNetworkPrefixes {
+		if strings.Contains(p, ":") == v6 {
+			out = append(out, p)
+		}
+	}
+	return out
 }

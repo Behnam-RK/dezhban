@@ -240,3 +240,45 @@ func TestRenderNftZeroTunnelStandingPosture(t *testing.T) {
 		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", rs)
 	}
 }
+
+// LAN passes must be emitted per family: nft's `ip daddr` rejects a v6 prefix
+// and `ip6 daddr` rejects a v4 one, so a single mixed list would be a ruleset
+// that fails to load — and on a kill switch, failing to load means failing to
+// protect.
+func TestRenderNftLocalNetwork(t *testing.T) {
+	for _, mode := range []Mode{ModeGuard, ModeFullBlock} {
+		rs := renderNftRuleset(Policy{
+			Mode:              mode,
+			TunnelIfaces:      []string{"utun4"},
+			VPNEndpoints:      []netip.Addr{mustAddr(t, "203.0.113.5")},
+			AllowLocalNetwork: true,
+		})
+		for _, w := range []string{
+			"ip daddr { 10.0.0.0/8", // v4 family matcher
+			"ip6 daddr { fc00::/7",  // v6 family matcher
+		} {
+			if !strings.Contains(rs, w) {
+				t.Errorf("mode %s with allowLocalNetwork must emit %q:\n%s", mode, w, rs)
+			}
+		}
+		// No v6 prefix may appear inside an `ip daddr` rule (or vice versa).
+		for _, line := range strings.Split(rs, "\n") {
+			if strings.Contains(line, "ip daddr") && strings.Contains(line, "::") {
+				t.Errorf("v6 prefix inside an `ip daddr` rule — nft will reject this:\n%s", line)
+			}
+			if strings.Contains(line, "ip6 daddr") && strings.Contains(line, "10.0.0.0/8") {
+				t.Errorf("v4 prefix inside an `ip6 daddr` rule — nft will reject this:\n%s", line)
+			}
+		}
+	}
+
+	// Off by request: no LAN rules at all.
+	off := renderNftRuleset(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "10.0.0.0/8") {
+		t.Errorf("allowLocalNetwork=false must emit no LAN pass:\n%s", off)
+	}
+}

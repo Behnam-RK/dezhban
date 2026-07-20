@@ -201,6 +201,7 @@ func renderBlockScript(p Policy) string {
 			}
 			rule("dns-any-udp", "-Protocol UDP -RemotePort 53")
 			rule("dns-any-tcp", "-Protocol TCP -RemotePort 53")
+			emitLocalNetworkRules(rule, p)
 			emitWindowPortRules(rule, p)
 		}
 	case ModeGuard:
@@ -211,6 +212,7 @@ func renderBlockScript(p Policy) string {
 			rule("endpoint", "-RemoteAddress "+psAddrList(p.VPNEndpoints))
 		}
 		emitAllowPhysicalDNSRules(rule, p)
+		emitLocalNetworkRules(rule, p)
 	default: // ModeFullBlock
 		if isVPNPolicy(p) {
 			// VPN full block (including the zero-tunnel standing posture): no
@@ -221,6 +223,7 @@ func renderBlockScript(p Policy) string {
 				rule("endpoint", "-RemoteAddress "+ep)
 			}
 			emitAllowPhysicalDNSRules(rule, p)
+			emitLocalNetworkRules(rule, p)
 		} else {
 			// Legacy direct model: dst-IP allowlist.
 			if dns := psAddrList(p.Allowlist.DNS); dns != "" {
@@ -253,6 +256,16 @@ func emitWindowPortRules(rule func(name, args string), p Policy) {
 				fmt.Sprintf("-Protocol %s -RemotePort %d", up, port))
 		}
 	}
+}
+
+// emitLocalNetworkRules renders the destination-scoped LAN pass
+// (vpn.allowLocalNetwork). New-NetFirewallRule's -RemoteAddress accepts mixed
+// v4/v6 CIDRs in one comma-separated list, so unlike nft this needs no split.
+func emitLocalNetworkRules(rule func(name, args string), p Policy) {
+	if !p.AllowLocalNetwork {
+		return
+	}
+	rule("local-network", "-RemoteAddress "+strings.Join(LocalNetworkPrefixes, ","))
 }
 
 // emitAllowPhysicalDNSRules renders the opt-in plain-DNS pass

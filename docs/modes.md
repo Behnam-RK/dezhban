@@ -109,6 +109,45 @@ fail-closed block. DNS on the physical link stays open by default
 (`vpn.allowPhysicalDNS`) so a client can re-resolve its server hostname while the
 tunnel is down.
 
+## Local network access
+
+The guard blocks everything on the physical interface except the tunnel and the
+VPN server. Taken literally that also cuts your **printer, NAS, router admin
+page, AirPlay/Chromecast targets, local dev servers, and SSH to the machine next
+to you** — none of which have anything to do with the threat the guard exists to
+stop.
+
+So `vpn.allowLocalNetwork` (**on by default**) passes these destinations in every
+enforcing posture:
+
+| Range | What it covers |
+|---|---|
+| `10/8`, `172.16/12`, `192.168/16` | ordinary private LANs |
+| `100.64/10` | CGNAT (RFC6598) — Tailscale, many ISP routers |
+| `169.254/16`, `fe80::/10` | link-local, incl. self-assigned addressing |
+| `fc00::/7` | IPv6 unique-local — the ULA equivalent of RFC1918 |
+| `224/4`, `ff00::/8` | multicast — mDNS/Bonjour and SSDP |
+
+Multicast is what actually makes discovery work: `224.0.0.251` / `ff02::fb`
+(mDNS) and `239.255.255.250` (SSDP) are how a Mac finds printers and AirPlay
+targets. Opening only the unicast ranges would leave devices *visible but
+undiscoverable*, which reads as broken rather than restricted.
+
+**Why this is safe.** The pass is scoped by **destination**, never by interface.
+A packet to a public address does not match these prefixes whatever interface
+carries it, so this cannot become an internet path — it is not a hole in the kill
+switch. And it costs nothing against the threat model: dezhban exists to stop a
+standing direct connection exposing a sanctioned-country IP to a *foreign*
+service, and RFC1918 traffic never leaves the building.
+
+**The one real cost**, stated plainly because a security setting should not hide
+its downside: on an untrusted network — a café, a hotel — this lets you reach,
+and be reached by, the other devices on that network. Set
+`vpn.allowLocalNetwork: false` if that matters more to you than the printer.
+
+`dezhban status` prints an `also reachable:` line naming exactly what is open on
+the physical link, so you never have to infer it from the config.
+
 ## Switching between VPNs
 
 The guard passes egress to the **union** of every configured profile's server

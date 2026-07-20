@@ -70,6 +70,47 @@ Per-OS rule inspection:
       longer exists: `dezhban print-rules --mode legacy` exits non-zero and points
       at ADR-0001.
 
+## Local network access
+
+Only a live host can prove these — CI cannot reach a printer.
+
+- [ ] **Default on: the LAN survives arming.** With the guard armed and
+      `vpn.allowLocalNetwork` unset, reach a printer / NAS / the router's admin
+      page over its private IP → works. `curl -m5 https://example.com` with the
+      tunnel down → still fails. That pairing is the point: LAN open, internet
+      shut.
+- [ ] **Discovery, not just reachability.** AirPlay/Chromecast targets and
+      Bonjour printers still *appear* in their pickers, not merely respond when
+      addressed directly. If they are reachable but invisible, the multicast
+      ranges are not being passed.
+- [ ] **Off closes it.** `vpn.allowLocalNetwork: false` → the same local device
+      is unreachable, and the ruleset contains no RFC1918 prefixes.
+- [ ] **It is NOT an internet path.** With LAN on and the tunnel down, confirm a
+      public address is still blocked — this is the regression test for anyone
+      "simplifying" the destination-scoped pass into an interface-scoped one,
+      which would silently turn the kill switch off.
+- [ ] **IPv6 local works too.** Reach a device over its `fe80::`/`fc00::` address
+      with LAN on; confirm it fails with LAN off.
+- [ ] `dezhban status` reports `also reachable: local network, DNS` (and
+      `(nothing — tunnel and VPN server only)` once both are disabled).
+
+## Address families
+
+- [ ] **A v6 VPN endpoint works end to end.** Set `vpn.endpoints` to an IPv6
+      literal → the ruleset loads and the tunnel connects.
+- [ ] **A mixed v4+v6 endpoint set loads.** Both families in `vpn.endpoints` →
+      `pfctl -a dezhban -sr` shows an `inet` rule and an `inet6` rule, not one
+      malformed list.
+- [ ] **No `::ffff:` form ever reaches the ruleset.** After a switch window has
+      learned an endpoint, inspect `learned.json` and `pfctl -a dezhban -sr`:
+      every address must be in canonical form. A `pass out quick inet6 … to
+      ::ffff:a.b.c.d` rule is the silent-lockout bug — it looks correct and
+      matches nothing.
+- [ ] **IPv6 egress is blocked while the guard is armed.** `curl -6 -m5` to a
+      public v6 host fails; the same request through the tunnel succeeds. Test
+      with real packets, not by reading rules — rule inspection would have called
+      the mapped-address bug "handled".
+
 ## Country check (exit country, not physical location)
 
 - [ ] **Blocklist trips.** Add the VPN exit's country to `blockedCountries` →

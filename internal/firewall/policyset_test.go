@@ -101,3 +101,100 @@ func TestPolicyInputDropsInvalidAddrs(t *testing.T) {
 		t.Errorf("VPNEndpoints = %v, want only the valid address", got)
 	}
 }
+
+// The LAN pass is destination-scoped, and that is the whole safety argument —
+// it is why allowing it by default costs nothing against the threat model.
+//
+// A pass scoped to an INTERFACE ("allow the LAN interface") would pass
+// everything routed out of it, including the internet, which would quietly turn
+// the kill switch off. A pass scoped to DESTINATION PREFIXES cannot: a packet to
+// a public address does not match them whatever interface carries it. This test
+// pins that distinction by asserting no rendered LAN prefix contains a public
+// address, so a future edit that swaps in an interface match or a `to any`
+// fails here rather than in the field.
+func TestLocalNetworkPrefixesAreAllPrivate(t *testing.T) {
+	public := []netip.Addr{
+		mustCanonAddr(t, "8.8.8.8"),
+		mustCanonAddr(t, "1.1.1.1"),
+		mustCanonAddr(t, "203.0.113.9"),
+		mustCanonAddr(t, "2001:4860:4860::8888"),
+	}
+	for _, raw := range LocalNetworkPrefixes {
+		pfx, err := netip.ParsePrefix(raw)
+		if err != nil {
+			t.Fatalf("LocalNetworkPrefixes entry %q does not parse: %v", raw, err)
+		}
+		for _, a := range public {
+			if pfx.Contains(a) {
+				t.Errorf("prefix %s contains public address %s — the LAN pass would become an internet path", raw, a)
+			}
+		}
+	}
+}
+
+// Both families must be represented. A v4-only LAN pass would silently fail on
+// v6-capable networks — the exact retrofit trap worth avoiding, since mDNS on a
+// modern Mac uses ff02::fb as readily as 224.0.0.251.
+func TestLocalNetworkPrefixesCoverBothFamilies(t *testing.T) {
+	v4, v6 := LocalNetworkPrefixesFor(false), LocalNetworkPrefixesFor(true)
+	if len(v4) == 0 || len(v6) == 0 {
+		t.Fatalf("need both families: got %d v4, %d v6", len(v4), len(v6))
+	}
+	if len(v4)+len(v6) != len(LocalNetworkPrefixes) {
+		t.Errorf("split lost or duplicated entries: %d + %d != %d", len(v4), len(v6), len(LocalNetworkPrefixes))
+	}
+	for _, p := range v4 {
+		if netip.MustParsePrefix(p).Addr().Is6() {
+			t.Errorf("v4 split contains v6 prefix %s", p)
+		}
+	}
+	for _, p := range v6 {
+		if netip.MustParsePrefix(p).Addr().Is4() {
+			t.Errorf("v6 split contains v4 prefix %s", p)
+		}
+	}
+}
+
+// Discovery must work, not just unicast reachability. Opening the private
+// unicast ranges alone leaves printers and Chromecasts "visible but
+// undiscoverable", which a user experiences as broken rather than restricted.
+func TestLocalNetworkCoversMulticastDiscovery(t *testing.T) {
+	// mDNS/Bonjour v4 + v6, and SSDP — how macOS finds printers and AirPlay.
+	for _, s := range []string{"224.0.0.251", "239.255.255.250", "ff02::fb"} {
+		a := mustCanonAddr(t, s)
+		var covered bool
+		for _, raw := range LocalNetworkPrefixes {
+			if netip.MustParsePrefix(raw).Contains(a) {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("discovery address %s is not covered — devices would be visible but undiscoverable", s)
+		}
+	}
+}
+
+// The LAN setting must reach every enforcing posture. Missing it on FULL BLOCK
+// would mean a blocked exit country also takes out the printer, which is not
+// what the country check is for.
+func TestAllowLocalNetworkReachesEveryPosture(t *testing.T) {
+	in := PolicyInput{
+		Tunnels:           []string{"utun4"},
+		Endpoints:         []netip.Addr{mustCanonAddr(t, "203.0.113.9")},
+		AllowLocalNetwork: true,
+		// A RESTRICTED window: the unrestricted one already passes everything, so
+		// only this form has anything to carry.
+		WindowProtos: []string{"udp"},
+		WindowPorts:  []int{51820},
+	}
+	for name, pol := range map[string]Policy{
+		"guard":     in.Guard(),
+		"fullblock": in.FullBlock(),
+		"switch":    in.SwitchWindow(),
+	} {
+		if !pol.AllowLocalNetwork {
+			t.Errorf("%s posture dropped AllowLocalNetwork", name)
+		}
+	}
+}

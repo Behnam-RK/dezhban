@@ -55,6 +55,22 @@ type VPN struct {
 	// (2026-07-19 defaults review: reconnectability beats hiding DNS-query
 	// metadata for this project's users); set false to close the metadata leak.
 	AllowPhysicalDNS bool
+	// AllowLocalNetwork passes traffic to private, link-local and multicast
+	// destinations in every enforcing posture, so printers, NAS, the router's
+	// admin page, AirPlay/Chromecast and local dev servers keep working while
+	// the guard is armed. ON by default.
+	//
+	// This costs nothing against dezhban's threat model. The guard exists to stop
+	// a standing direct connection exposing a sanctioned-country IP to a FOREIGN
+	// service; RFC1918/ULA/link-local traffic never leaves the building, so it
+	// cannot carry that exposure. It is destination-scoped, not interface-scoped,
+	// so it can never become an internet path — packets to public addresses stay
+	// blocked whatever the next hop is.
+	//
+	// The one real cost, and the reason the UI must say it plainly rather than
+	// bury it: on an untrusted network (a café, a hotel) this lets you reach —
+	// and be reached by — the other devices on that network.
+	AllowLocalNetwork bool
 	// AutoArm starts the daemon PASSIVE (posture "standby", no enforcement)
 	// when no tunnel interface is present, arming the guard automatically the
 	// moment a VPN connects. Never disarms on tunnel loss — a drop is exactly
@@ -278,15 +294,16 @@ type fileVPN struct {
 	AutoDiscoverEndpoints bool     `json:"autoDiscoverEndpoints"`
 	// Pointers: both default to TRUE, so an explicit false must be
 	// distinguishable from an absent key (same convention as fileControl).
-	AllowPhysicalDNS *bool         `json:"allowPhysicalDNS,omitempty"`
-	AutoArm          *bool         `json:"autoArm,omitempty"`
-	EndpointRefresh  string        `json:"endpointRefresh"`
-	EndpointGrace    string        `json:"endpointGrace,omitempty"`
-	TunnelWatch      string        `json:"tunnelWatch"`
-	Profiles         []fileProfile `json:"profiles,omitempty"`
-	SwitchWindow     string        `json:"switchWindow,omitempty"`
-	ReconnectWindow  string        `json:"reconnectWindow,omitempty"`
-	Advanced         *fileAdvanced `json:"advanced,omitempty"`
+	AllowPhysicalDNS  *bool         `json:"allowPhysicalDNS,omitempty"`
+	AllowLocalNetwork *bool         `json:"allowLocalNetwork,omitempty"`
+	AutoArm           *bool         `json:"autoArm,omitempty"`
+	EndpointRefresh   string        `json:"endpointRefresh"`
+	EndpointGrace     string        `json:"endpointGrace,omitempty"`
+	TunnelWatch       string        `json:"tunnelWatch"`
+	Profiles          []fileProfile `json:"profiles,omitempty"`
+	SwitchWindow      string        `json:"switchWindow,omitempty"`
+	ReconnectWindow   string        `json:"reconnectWindow,omitempty"`
+	Advanced          *fileAdvanced `json:"advanced,omitempty"`
 }
 
 type fileProfile struct {
@@ -338,8 +355,9 @@ func Default() Config {
 		// Mirrors the absent-vpn-block defaults in apply(): both on (2026-07-19
 		// defaults review). Keep the two in sync.
 		VPN: VPN{
-			AllowPhysicalDNS: true,
-			AutoArm:          true,
+			AllowPhysicalDNS:  true,
+			AllowLocalNetwork: true,
+			AutoArm:           true,
 		},
 		Control: Control{
 			Enabled: true,
@@ -423,10 +441,14 @@ func apply(cfg *Config, fc fileConfig) error {
 			Autodetect:            fc.VPN.Autodetect,
 			AutoDiscoverEndpoints: fc.VPN.AutoDiscoverEndpoints,
 			AllowPhysicalDNS:      true, // default on; explicit false below
+			AllowLocalNetwork:     true, // default on; explicit false below
 			AutoArm:               true, // default on; explicit false below
 		}
 		if fc.VPN.AllowPhysicalDNS != nil {
 			v.AllowPhysicalDNS = *fc.VPN.AllowPhysicalDNS
+		}
+		if fc.VPN.AllowLocalNetwork != nil {
+			v.AllowLocalNetwork = *fc.VPN.AllowLocalNetwork
 		}
 		if fc.VPN.AutoArm != nil {
 			v.AutoArm = *fc.VPN.AutoArm
@@ -588,6 +610,7 @@ func toFileConfig(c *Config) fileConfig {
 	hysteresis := c.Hysteresis
 	quorum := c.ProviderQuorum
 	physDNS := c.VPN.AllowPhysicalDNS
+	localNet := c.VPN.AllowLocalNetwork
 	autoArm := c.VPN.AutoArm
 	ctlEnabled := c.Control.Enabled
 	ctlGroup := c.Control.Group
@@ -609,6 +632,7 @@ func toFileConfig(c *Config) fileConfig {
 			Autodetect:            c.VPN.Autodetect,
 			AutoDiscoverEndpoints: c.VPN.AutoDiscoverEndpoints,
 			AllowPhysicalDNS:      &physDNS,
+			AllowLocalNetwork:     &localNet,
 			AutoArm:               &autoArm,
 			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
 			EndpointGrace:         durString(c.VPN.EndpointGrace),

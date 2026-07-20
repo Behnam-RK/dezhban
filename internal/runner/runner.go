@@ -78,6 +78,10 @@ type Options struct {
 	// VPN full-block policies (opt-in plain-DNS pass for hostname re-resolution
 	// while the tunnel is down).
 	AllowPhysicalDNS bool
+	// AllowLocalNetwork keeps LAN destinations reachable while the guard is armed
+	// (vpn.allowLocalNetwork). Destination-scoped, so it can never become an
+	// internet path.
+	AllowLocalNetwork bool
 	// TunnelGroups are tunnel-interface class names (e.g. "utun") passed as an
 	// interface group / wildcard so a newly-appeared tunnel is covered with no
 	// rule reload (pf/nft only). Optional.
@@ -1174,12 +1178,13 @@ func (o Options) vpnPolicies(tunnels []string, endpoints []netip.Addr) (guard, f
 // packets. The runner's separate Allowlist hook feeds the legacy Block path only.
 func (o Options) policyInput(tunnels []string, endpoints []netip.Addr) firewall.PolicyInput {
 	return firewall.PolicyInput{
-		Tunnels:          tunnels,
-		TunnelGroups:     o.TunnelGroups,
-		Endpoints:        endpoints,
-		AllowPhysicalDNS: o.AllowPhysicalDNS,
-		WindowProtos:     o.WindowProtos,
-		WindowPorts:      o.WindowPorts,
+		Tunnels:           tunnels,
+		TunnelGroups:      o.TunnelGroups,
+		Endpoints:         endpoints,
+		AllowPhysicalDNS:  o.AllowPhysicalDNS,
+		AllowLocalNetwork: o.AllowLocalNetwork,
+		WindowProtos:      o.WindowProtos,
+		WindowPorts:       o.WindowPorts,
 	}
 }
 

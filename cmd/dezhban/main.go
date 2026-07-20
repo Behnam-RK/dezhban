@@ -452,17 +452,18 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 	}
 
 	return runner.Options{
-		Monitor:          mon,
-		Decider:          decision.New(cfg.BlockedCountries, cfg.Hysteresis),
-		Backend:          fw,
-		Log:              log,
-		Interval:         cfg.PollInterval,
-		Control:          ctl,
-		AllowSwitchOps:   cfg.Control.AllowSwitchOps,
-		Tunnels:          tunnels,
-		Autodetect:       cfg.VPN.Autodetect,
-		AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
-		ResolveEndpoints: func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
+		Monitor:           mon,
+		Decider:           decision.New(cfg.BlockedCountries, cfg.Hysteresis),
+		Backend:           fw,
+		Log:               log,
+		Interval:          cfg.PollInterval,
+		Control:           ctl,
+		AllowSwitchOps:    cfg.Control.AllowSwitchOps,
+		Tunnels:           tunnels,
+		Autodetect:        cfg.VPN.Autodetect,
+		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
+		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
+		ResolveEndpoints:  func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
 		ResolveEndpointsWith: func(ctx context.Context, tuns []string) netdetect.EndpointSet {
 			return epSrc.ResolveWith(ctx, tuns)
 		},
@@ -636,11 +637,12 @@ func cmdBlock(args []string) int {
 			return 1
 		}
 		in := firewall.PolicyInput{
-			Tunnels:          tunnels,
-			Endpoints:        endpoints,
-			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
-			WindowProtos:     cfg.VPN.Advanced.WindowProtocols,
-			WindowPorts:      cfg.VPN.Advanced.WindowPorts,
+			Tunnels:           tunnels,
+			Endpoints:         endpoints,
+			AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
+			AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
+			WindowProtos:      cfg.VPN.Advanced.WindowProtocols,
+			WindowPorts:       cfg.VPN.Advanced.WindowPorts,
 		}
 		pol := in.FullBlock()
 		if *guard {
@@ -1225,11 +1227,12 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 	// ruleset does not contain.
 	vpnInput := func() firewall.PolicyInput {
 		return firewall.PolicyInput{
-			Tunnels:          tunnels,
-			Endpoints:        resolveEndpointsOnce(cfg, log, tunnels),
-			AllowPhysicalDNS: cfg.VPN.AllowPhysicalDNS,
-			WindowProtos:     cfg.VPN.Advanced.WindowProtocols,
-			WindowPorts:      cfg.VPN.Advanced.WindowPorts,
+			Tunnels:           tunnels,
+			Endpoints:         resolveEndpointsOnce(cfg, log, tunnels),
+			AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
+			AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
+			WindowProtos:      cfg.VPN.Advanced.WindowProtocols,
+			WindowPorts:       cfg.VPN.Advanced.WindowPorts,
 		}
 	}
 	switch mode {
@@ -1448,6 +1451,23 @@ func cmdStatus(args []string) int {
 	fmt.Println("blocked countries:", strings.Join(blocked, ", "))
 	fmt.Println("providers:       ", strings.Join(cfg.Providers, ", "))
 	fmt.Println("log level:       ", cfg.LogLevel)
+	// What stays reachable on the PHYSICAL link while the guard is armed. These
+	// are the only standing exceptions to "only the tunnel may egress", so they
+	// belong in status rather than buried in the config file — an operator
+	// checking their posture should not have to infer them.
+	{
+		var open []string
+		if cfg.VPN.AllowLocalNetwork {
+			open = append(open, "local network")
+		}
+		if cfg.VPN.AllowPhysicalDNS {
+			open = append(open, "DNS")
+		}
+		if len(open) == 0 {
+			open = []string{"(nothing — tunnel and VPN server only)"}
+		}
+		fmt.Println("also reachable:  ", strings.Join(open, ", "))
+	}
 
 	{
 		tunnels := cfg.VPN.TunnelInterfaces

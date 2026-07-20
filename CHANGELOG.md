@@ -34,6 +34,23 @@ changes.
 
 ### Added
 
+- **`vpn.allowLocalNetwork` (default `true`) — LAN devices keep working while the
+  guard is armed.** There was previously **no local-network handling anywhere**:
+  none of the three backends contained a single reference to RFC1918, link-local
+  or multicast, so arming the guard made printers, NAS, the router's admin page,
+  AirPlay/Chromecast and local dev servers unreachable with no setting to get
+  them back. The passes are **destination-scoped**, never interface-scoped, so
+  they cannot become an internet path — packets to public addresses stay blocked
+  whatever the next hop is — and they cost nothing against the threat model,
+  since this traffic never leaves the building. Multicast is included because
+  mDNS/SSDP is what actually makes discovery work; unicast alone would leave
+  devices visible but undiscoverable. Set `false` on untrusted networks, where
+  the real cost is that other devices there can reach you.
+  See [ADR-0005](docs/adr/0005-allow-local-network-by-default.md).
+- `dezhban status` now prints an `also reachable:` line naming exactly what stays
+  open on the physical link (local network, DNS, or neither). These are the only
+  standing exceptions to "only the tunnel may egress", so they should not have to
+  be inferred from the config file.
 - **`vpn.switchWindow: "0"` now disables manual switch windows.** Previously it
   was silently coerced back to the 15s default, so the setting was accepted and
   discarded — the worst failure mode a security tool has. It now uses the same
@@ -49,6 +66,21 @@ changes.
 - **Architecture decision records** under [`docs/adr/`](docs/adr/), plus a
   [glossary](docs/glossary.md) fixing the "guard"/"protection"/"kill switch"
   vocabulary drift. GUARD is the canonical term.
+
+### Fixed
+
+- **IPv4-in-IPv6 addresses are now unmapped at the policy seam — a silent lockout.**
+  pf does *not* reject `::ffff:1.2.3.4`; verified with `pfctl -nvf`, it accepts
+  the rule and expands it to `pass out quick inet6 … to ::ffff:1.2.3.4`. Real
+  IPv4 traffic never matches that, so the pass is effectively absent while
+  looking perfectly present in `pfctl -sr` — and when the address is a VPN
+  endpoint, the tunnel's own handshake is blocked and the VPN can never connect.
+  Callers each remembered `.Unmap()` individually except the learned-endpoint
+  reload, which is exactly how a per-caller convention fails. Now normalised once
+  in `firewall.PolicyInput` so no backend or caller has to defend itself.
+  Invalid addresses are dropped rather than rendered, since the zero
+  `netip.Addr` stringifies to `invalid IP` — a ruleset pf genuinely does reject,
+  turning one bad entry into a total failure to install any rules.
 
 ### Changed
 

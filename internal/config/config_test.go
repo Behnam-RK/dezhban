@@ -746,3 +746,60 @@ func TestLegacyConfigMigrates(t *testing.T) {
 		t.Errorf("saved config still reports retired keys: %v", again.Retired)
 	}
 }
+
+// allowLocalNetwork defaults ON, and an explicit false must survive — the same
+// tri-state the other posture booleans use. Getting this wrong in the "absent"
+// direction silently breaks every LAN device the moment the guard arms; getting
+// it wrong in the "explicit false" direction silently re-opens the LAN for
+// someone who deliberately closed it on an untrusted network.
+func TestAllowLocalNetworkTriState(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"absent vpn block", `{}`, true},
+		{"absent key", `{"vpn":{"endpoints":["1.2.3.4"]}}`, true},
+		{"explicit true", `{"vpn":{"endpoints":["1.2.3.4"],"allowLocalNetwork":true}}`, true},
+		{"explicit false", `{"vpn":{"endpoints":["1.2.3.4"],"allowLocalNetwork":false}}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cfg.json")
+			if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.VPN.AllowLocalNetwork != c.want {
+				t.Errorf("AllowLocalNetwork = %v, want %v", cfg.VPN.AllowLocalNetwork, c.want)
+			}
+		})
+	}
+}
+
+// An explicit false must also survive a save/reload round trip, or `config set`
+// on any unrelated key would quietly re-open the LAN.
+func TestAllowLocalNetworkFalseRoundTrips(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "in.json")
+	if err := os.WriteFile(src, []byte(`{"vpn":{"endpoints":["1.2.3.4"],"allowLocalNetwork":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(src)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	again, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load saved: %v", err)
+	}
+	if again.VPN.AllowLocalNetwork {
+		t.Error("allowLocalNetwork came back enabled after a round trip")
+	}
+}

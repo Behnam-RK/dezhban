@@ -240,3 +240,39 @@ func TestApplyGuardAcceptsTunnelGroupOnly(t *testing.T) {
 		t.Errorf("group-only guard should still render:\n%s", rs)
 	}
 }
+
+// pf infers each address's family from the address itself, so v4 and v6 LAN
+// prefixes share one list — verified with `pfctl -nvf`, a mixed list expands to
+// an inet rule plus per-prefix inet6 rules. (nft is the one that needs a split.)
+func TestRenderLocalNetwork(t *testing.T) {
+	for _, mode := range []Mode{ModeGuard, ModeFullBlock} {
+		rs := renderRuleset(Policy{
+			Mode:              mode,
+			TunnelIfaces:      []string{"utun4"},
+			VPNEndpoints:      []netip.Addr{mustAddr(t, "203.0.113.5")},
+			AllowLocalNetwork: true,
+		})
+		for _, w := range []string{"10.0.0.0/8", "192.168.0.0/16", "fc00::/7", "224.0.0.0/4"} {
+			if !strings.Contains(rs, w) {
+				t.Errorf("mode %s with allowLocalNetwork must pass %s:\n%s", mode, w, rs)
+			}
+		}
+		// Destination-scoped, never interface-scoped: an `on <iface>` LAN pass
+		// would carry internet traffic too and silently disable the kill switch.
+		for _, line := range strings.Split(rs, "\n") {
+			if strings.Contains(line, "10.0.0.0/8") && strings.Contains(line, " on ") {
+				t.Errorf("LAN pass is interface-scoped — it would become an internet path:\n%s", line)
+			}
+		}
+		assertDefaultDenyLast(t, rs)
+	}
+
+	off := renderRuleset(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "10.0.0.0/8") {
+		t.Errorf("allowLocalNetwork=false must emit no LAN pass:\n%s", off)
+	}
+}
