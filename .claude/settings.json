@@ -4,10 +4,21 @@
     "on this machine read it — unlike settings.local.json (gitignored) and",
     "~/.claude/settings.json (per-profile, keyed by CLAUDE_CONFIG_DIR).",
     "Subagents inherit these, so approvals no longer have to be re-granted per agent.",
-    "Note: plan mode still gates non-read-only tools regardless of this allow-list."
+    "Plan mode DOES honour this allow-list for read-only tools — it only blocks",
+    "mutations unconditionally. So anything read-only that prompts during planning",
+    "is simply missing from the list below; add it here rather than re-approving.",
+    "Caveat: Bash patterns match the whole command string, so a novel compound",
+    "command (a for-loop, an unlisted pipe) still prompts even when every program",
+    "inside it is listed. Prefer one allow-listed command per call."
   ],
   "permissions": {
     "allow": [
+      "WebSearch",
+      "WebFetch",
+      "Agent",
+      "TaskOutput",
+      "ToolSearch",
+
       "mcp__jcodemunch__*",
       "mcp__jdocmunch__*",
       "mcp__serena__*",
@@ -59,7 +70,11 @@
       "Bash(bioutil -r)",
       "Bash(scutil --nc list)",
       "Bash(ifconfig*)",
-      "Bash(launchctl list*)"
+      "Bash(launchctl list*)",
+      "Bash(shasum *)",
+      "Bash(codesign *)",
+      "Bash(pkgutil *)",
+      "Bash(shellcheck *)"
     ]
   }
 }
