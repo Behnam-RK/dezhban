@@ -15,12 +15,14 @@ const Repo = "Behnam-RK/dezhban"
 // httptest server instead of the real GitHub API.
 var apiLatestURL = "https://api.github.com/repos/" + Repo + "/releases/latest"
 
-// CheckResult is what Check reports.
+// CheckResult is what Check reports. JSON keys are lowerCamelCase to match
+// state.Snapshot's convention — `upgrade check --json` is what the GUI's
+// UpdateChecker.swift decodes, the same cross-language wire contract.
 type CheckResult struct {
-	Available bool   // a newer final release exists
-	Current   string // currentVersion normalised to X.Y.Z, or "" for a dev build
-	Latest    string // the latest release's version, X.Y.Z (no leading v)
-	URL       string // the release page, for a human to read notes
+	Available bool   `json:"available"` // a newer final release exists
+	Current   string `json:"current"`   // currentVersion normalised to X.Y.Z, or "" for a dev build
+	Latest    string `json:"latest"`    // the latest release's version, X.Y.Z (no leading v)
+	URL       string `json:"url"`       // the release page, for a human to read notes
 }
 
 type ghRelease struct {

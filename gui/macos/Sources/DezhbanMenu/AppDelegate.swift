@@ -14,9 +14,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
     private var timer: Timer?
+    private var updateTimer: Timer?
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
+
+    /// Every ~24h, not more often — this is a background courtesy check, not
+    /// a thing to hammer GitHub with. See UpdateChecker's doc comment.
+    private static let updateCheckInterval: TimeInterval = 24 * 60 * 60
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationManager.requestAuthorizationIfNeeded()
@@ -30,8 +35,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         refresh()
         AppState.shared.refreshServiceState()
+        AppState.shared.checkForUpdates()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.refresh()
+        }
+        updateTimer = Timer.scheduledTimer(withTimeInterval: Self.updateCheckInterval, repeats: true) { _ in
+            AppState.shared.checkForUpdates()
         }
     }
 
