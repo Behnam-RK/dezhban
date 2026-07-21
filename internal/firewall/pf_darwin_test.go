@@ -93,7 +93,7 @@ func TestRenderRulesetGuard(t *testing.T) {
 	}
 	// Passes must be stateless so a tunnel transport connection already open at
 	// block time isn't dropped by pf's default `flags S/SA keep state`.
-	for _, line := range strings.Split(strings.TrimSpace(rs), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(rs), "\n") {
 		if strings.HasPrefix(line, "pass") && !strings.HasSuffix(line, "no state") {
 			t.Errorf("guard pass rule is not stateless (drops mid-stream flows): %q", line)
 		}
@@ -259,7 +259,7 @@ func TestRenderLocalNetwork(t *testing.T) {
 		}
 		// Destination-scoped, never interface-scoped: an `on <iface>` LAN pass
 		// would carry internet traffic too and silently disable the kill switch.
-		for _, line := range strings.Split(rs, "\n") {
+		for line := range strings.SplitSeq(rs, "\n") {
 			if strings.Contains(line, "10.0.0.0/8") && strings.Contains(line, " on ") {
 				t.Errorf("LAN pass is interface-scoped — it would become an internet path:\n%s", line)
 			}
@@ -274,6 +274,38 @@ func TestRenderLocalNetwork(t *testing.T) {
 	})
 	if strings.Contains(off, "10.0.0.0/8") {
 		t.Errorf("allowLocalNetwork=false must emit no LAN pass:\n%s", off)
+	}
+}
+
+// The LAN pass must not depend on isVPNPolicy. A FULL BLOCK with no tunnels, no
+// endpoints and allowPhysicalDNS off takes the renderer's legacy branch, and the
+// LAN emission used to be nested inside the VPN branch — so allowLocalNetwork
+// was silently discarded in exactly that shape, contradicting ADR-0005 ("a
+// blocked exit country should not also take out the printer").
+//
+// Reachable for real: the daemon's `relaxed` start path applies this posture
+// when no endpoints are known yet, and `print-rules --mode fullblock` renders
+// it. Every other LAN test sets TunnelIfaces+VPNEndpoints, which forces
+// isVPNPolicy true and hides the bug.
+func TestRenderLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
+	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
+	if isVPNPolicy(p) {
+		t.Fatal("precondition: this policy must take the non-VPN branch")
+	}
+	rs := renderRuleset(p)
+	if !strings.Contains(rs, "10.0.0.0/8") {
+		t.Errorf("LAN pass dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", rs)
+	}
+	assertDefaultDenyLast(t, rs)
+
+	// `block --force` must be unaffected: it never sets AllowLocalNetwork, so it
+	// still cuts everything but loopback and its geo-provider allowlist.
+	forced := renderRuleset(Policy{
+		Mode:      ModeFullBlock,
+		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
+	})
+	if strings.Contains(forced, "10.0.0.0/8") {
+		t.Errorf("block --force must not gain a LAN pass:\n%s", forced)
 	}
 }
 
@@ -293,7 +325,7 @@ func TestRenderTunnelScopedProviders(t *testing.T) {
 		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
 	})
 	var found bool
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if !strings.Contains(line, "104.16.1.1") {
 			continue
 		}
@@ -316,7 +348,7 @@ func TestRenderTunnelScopedProviders(t *testing.T) {
 	// Matched narrowly on the TUNNEL-scoped form: `allowPhysicalDNS` legitimately
 	// renders `to any port 53` on the physical link, and this assertion must not
 	// blame that rule for a leak it is not responsible for.
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if strings.Contains(line, "port 53") && strings.Contains(line, "on {") {
 			t.Errorf("FULL BLOCK emits a tunnel-scoped DNS pass — every lookup would leak to the forbidden exit:\n%s", line)
 		}

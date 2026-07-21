@@ -28,7 +28,7 @@ func assertAtomicReplace(t *testing.T, rs string) {
 		"add table inet dezhban",
 	}
 	idx := 0
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if idx < len(want) && strings.TrimSpace(line) == want[idx] {
 			idx++
 		}
@@ -78,7 +78,7 @@ func TestRenderNftEmptyAllowlist(t *testing.T) {
 		t.Errorf("empty allowlist produced an invalid empty set:\n%s", rs)
 	}
 	// Only loopback should be accepted with no DNS/hosts.
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if strings.Contains(line, "daddr") {
 			t.Errorf("empty allowlist should emit no daddr accept rules: %q", line)
 		}
@@ -262,7 +262,7 @@ func TestRenderNftLocalNetwork(t *testing.T) {
 			}
 		}
 		// No v6 prefix may appear inside an `ip daddr` rule (or vice versa).
-		for _, line := range strings.Split(rs, "\n") {
+		for line := range strings.SplitSeq(rs, "\n") {
 			if strings.Contains(line, "ip daddr") && strings.Contains(line, "::") {
 				t.Errorf("v6 prefix inside an `ip daddr` rule — nft will reject this:\n%s", line)
 			}
@@ -280,6 +280,30 @@ func TestRenderNftLocalNetwork(t *testing.T) {
 	})
 	if strings.Contains(off, "10.0.0.0/8") {
 		t.Errorf("allowLocalNetwork=false must emit no LAN pass:\n%s", off)
+	}
+}
+
+// The LAN pass must not depend on isVPNPolicy — see the pf twin of this test in
+// pf_darwin_test.go for the full rationale. Nested inside the VPN branch,
+// allowLocalNetwork was silently discarded for a FULL BLOCK with no tunnels, no
+// endpoints and allowPhysicalDNS off.
+func TestRenderNftLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
+	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
+	if isVPNPolicy(p) {
+		t.Fatal("precondition: this policy must take the non-VPN branch")
+	}
+	rs := renderNftRuleset(p)
+	if !strings.Contains(rs, "10.0.0.0/8") {
+		t.Errorf("LAN pass dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", rs)
+	}
+
+	// `block --force` must be unaffected.
+	forced := renderNftRuleset(Policy{
+		Mode:      ModeFullBlock,
+		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
+	})
+	if strings.Contains(forced, "10.0.0.0/8") {
+		t.Errorf("block --force must not gain a LAN pass:\n%s", forced)
 	}
 }
 
@@ -302,7 +326,7 @@ func TestRenderNftTunnelScopedProviders(t *testing.T) {
 			t.Errorf("FULL BLOCK must scope the provider pass with %q:\n%s", w, rs)
 		}
 	}
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if strings.Contains(line, "104.16.1.1") && !strings.Contains(line, "oifname") {
 			t.Errorf("provider pass is not tunnel-scoped — it would measure the ISP's country with the tunnel down:\n%s", line)
 		}

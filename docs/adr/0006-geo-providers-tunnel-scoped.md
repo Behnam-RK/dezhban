@@ -110,6 +110,24 @@ Separately, classify lookup failures instead of surfacing them all identically.
   Scoping the pass to the system resolvers instead was considered and rejected for now:
   it needs per-OS resolver discovery (`scutil` on macOS, `resolv.conf` on Linux) that does
   not exist in the tree, and the fallback above already covers the stale case.
+- **`vpn.allowPhysicalDNS` is a known, deliberate exception to the rule above, and it
+  predates this ADR.** `allowPhysicalDNSRule` is `pass out quick proto { udp tcp } to any
+  port 53` — unscoped in *both* dimensions, so unlike the rejected draft it is not even
+  tunnel-scoped. In FULL BLOCK it therefore matches on the tunnel too (there is no
+  `on <iface>` clause and `quick` wins before the default deny), which means that when the
+  flag is on and the system resolver is the VPN-pushed one, application DNS does reach the
+  forbidden exit's resolver — the very exposure this ADR rejects for the provider rule.
+
+  It is kept because it is a different bargain, explicitly taken: it is **off by default**,
+  it is documented as a metadata-only residual leak, and it exists to solve a problem the
+  provider rule does not have — a VPN client that must re-resolve its *server hostname*
+  while the tunnel is **down**, which is precisely when no tunnel-scoped rule can help.
+
+  The asymmetry is that the provider rule had a safe alternative (scope it, and degrade to
+  lift-and-probe when that is impossible) and `allowPhysicalDNS` does not. If per-OS
+  resolver discovery ever lands, both should be scoped and this exception closed; until
+  then, treat "never re-add a port 53 rule beside the provider pass" as a rule about *new*
+  rules, not a claim that FULL BLOCK is currently free of DNS egress.
 - A new matched posture must be implemented across pf, nft, and WFP.
 
 ### Risks

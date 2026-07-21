@@ -222,6 +222,30 @@ func TestRenderBlockScriptLocalNetwork(t *testing.T) {
 	}
 }
 
+// The LAN allow must not depend on isVPNPolicy — see the pf twin of this test in
+// pf_darwin_test.go for the full rationale. Nested inside the VPN branch,
+// allowLocalNetwork was silently discarded for a FULL BLOCK with no tunnels, no
+// endpoints and allowPhysicalDNS off.
+func TestRenderBlockScriptLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
+	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
+	if isVPNPolicy(p) {
+		t.Fatal("precondition: this policy must take the non-VPN branch")
+	}
+	script := renderBlockScript(p)
+	if !strings.Contains(script, "10.0.0.0/8") {
+		t.Errorf("LAN allow dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", script)
+	}
+
+	// `block --force` must be unaffected.
+	forced := renderBlockScript(Policy{
+		Mode:      ModeFullBlock,
+		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
+	})
+	if strings.Contains(forced, "10.0.0.0/8") {
+		t.Errorf("block --force must not gain a LAN allow:\n%s", forced)
+	}
+}
+
 // The provider pass must be tunnel-scoped and must not drag a blanket DNS rule
 // along with it. See tunnelProviderRules in pf_darwin.go for why an unscoped
 // port-53 rule would leak every hostname this host resolves to the very exit
@@ -233,7 +257,7 @@ func TestRenderBlockScriptTunnelScopedProviders(t *testing.T) {
 		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
 		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
 	})
-	for _, line := range strings.Split(script, "\n") {
+	for line := range strings.SplitSeq(script, "\n") {
 		if strings.Contains(line, "104.16.1.1") && !strings.Contains(line, "-InterfaceAlias") {
 			t.Errorf("provider pass is not tunnel-scoped — it would measure the ISP's country with the tunnel down:\n%s", line)
 		}

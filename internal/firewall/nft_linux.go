@@ -175,13 +175,16 @@ func renderNftRuleset(p Policy) string {
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
 			emitTunnelProviders(rule, p)
 			emitAllowPhysicalDNS(rule, p)
-			emitLocalNetwork(rule, p)
 		} else {
 			// Legacy direct model: dst-IP allowlist over udp and tcp port 53.
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "udp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "tcp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.Hosts, "")
 		}
+		// Outside the isVPNPolicy split on purpose — see the same hoist in
+		// pf_darwin.go. AllowLocalNetwork belongs to the posture, not to which
+		// FULL BLOCK shape rendered it.
+		emitLocalNetwork(rule, p)
 	}
 	return b.String()
 }

@@ -224,7 +224,6 @@ func renderBlockScript(p Policy) string {
 			}
 			emitTunnelProviderRules(rule, p)
 			emitAllowPhysicalDNSRules(rule, p)
-			emitLocalNetworkRules(rule, p)
 		} else {
 			// Legacy direct model: dst-IP allowlist.
 			if dns := psAddrList(p.Allowlist.DNS); dns != "" {
@@ -235,6 +234,10 @@ func renderBlockScript(p Policy) string {
 				rule("hosts", "-RemoteAddress "+hosts)
 			}
 		}
+		// Outside the isVPNPolicy split on purpose — see the same hoist in
+		// pf_darwin.go. AllowLocalNetwork belongs to the posture, not to which
+		// FULL BLOCK shape rendered it.
+		emitLocalNetworkRules(rule, p)
 	}
 
 	// Set the profile outbound default last, once the allow rules are in place.
@@ -312,7 +315,7 @@ func queryOutboundDefaults() (map[string]string, error) {
 		return nil, err
 	}
 	res := make(map[string]string)
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		if name, action, ok := strings.Cut(line, "="); ok {
 			res[strings.TrimSpace(name)] = strings.TrimSpace(action)

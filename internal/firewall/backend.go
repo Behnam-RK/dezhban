@@ -82,6 +82,14 @@ type Policy struct {
 	// while the tunnel is down. Deliberately `to any`: resolution must work
 	// regardless of which resolver the system uses on reconnect. The residual
 	// leak is DNS-query metadata only, gated behind a default-off config flag.
+	//
+	// Note that the rule is unscoped by INTERFACE as well as by destination, so
+	// in FULL BLOCK it matches on the tunnel too — if the system resolver is the
+	// VPN-pushed one, application DNS reaches the forbidden exit's resolver. That
+	// is the same exposure ADR-0006 rejects for the geo-provider pass; it is
+	// tolerated here only because this flag is off by default and solves a
+	// tunnel-DOWN problem no tunnel-scoped rule can. See the "known, deliberate
+	// exception" note in docs/adr/0006 before adding any further port-53 rule.
 	AllowPhysicalDNS bool
 	// AllowLocalNetwork adds destination-scoped passes for private, link-local
 	// and multicast ranges (see LocalNetworkPrefixes) to every enforcing posture,
