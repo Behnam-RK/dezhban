@@ -171,25 +171,77 @@ cmd_resolve() {
 # notes
 # ---------------------------------------------------------------------------
 
-# unreleased_body prints the [Unreleased] section's body, with the blank lines the
-# heading split leaves behind trimmed off. Fails if the section is empty — a
-# release with no notes is a bug, not a valid release.
-unreleased_body() {
+# raw_unreleased_body prints the [Unreleased] section's body verbatim, untrimmed
+# and possibly blank. It only fails if the heading itself is missing. Internal
+# helper shared by unreleased_body (which additionally validates non-emptiness)
+# and cmd_check_rolled (which needs to tell "rolled" from "not rolled" without
+# dying on the empty case that PROVES a final was rolled).
+#
+# Stop at the next version heading OR at the reference-link block at the foot of
+# the file. The link stop is load-bearing: until the first release there IS no
+# next heading, so without it the extraction runs to EOF and swallows
+# "[Unreleased]: https://..." into the release notes.
+raw_unreleased_body() {
 	grep -q '^## \[Unreleased\]$' "$CHANGELOG" || die "$CHANGELOG has no '## [Unreleased]' heading"
-	# Stop at the next version heading OR at the reference-link block at the foot
-	# of the file. The link stop is load-bearing: until the first release there IS
-	# no next heading, so without it the extraction runs to EOF and swallows
-	# "[Unreleased]: https://..." into the release notes.
-	local body
-	body="$(awk '
+	awk '
 		/^## \[Unreleased\]$/ { flag = 1; next }
 		/^## \[/              { flag = 0 }
 		/^\[[^]]+\]:[[:space:]]/ { flag = 0 }
 		flag
-	' "$CHANGELOG")"
+	' "$CHANGELOG"
+}
+
+# unreleased_body prints the [Unreleased] section's body, with the blank lines the
+# heading split leaves behind trimmed off. Fails if the section is empty — a
+# release with no notes is a bug, not a valid release.
+unreleased_body() {
+	local body
+	body="$(raw_unreleased_body)"
 	body="$(printf '%s\n' "$body" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
 	[ -n "$(echo "$body" | tr -d '[:space:]')" ] || die "[Unreleased] is empty; nothing to release"
 	printf '%s\n' "$body"
+}
+
+# section_body <version> prints the body of an already-rolled "## [<version>] -
+# <date>" heading, trimmed the same way unreleased_body is. This is what a FINAL
+# release's notes are read from: rolling happens locally now (see cmd_roll /
+# `task release`), so by the time this runs [Unreleased] is expected to be empty
+# and the real content has already moved under the dated heading.
+section_body() {
+	local version="$1"
+	grep -q "^## \[$version\][[:space:]]*-" "$CHANGELOG" \
+		|| die "$CHANGELOG has no '## [$version] - ...' heading — roll it locally first (see \`task release\`)"
+	local body
+	body="$(awk -v ver="$version" '
+		$0 ~ ("^## \\[" ver "\\][[:space:]]*-") { flag = 1; next }
+		/^## \[/                                { flag = 0 }
+		/^\[[^]]+\]:[[:space:]]/                { flag = 0 }
+		flag
+	' "$CHANGELOG")"
+	body="$(printf '%s\n' "$body" | sed -e '/./,$!d' -e :a -e '/^\n*$/{$d;N;ba' -e '}')"
+	[ -n "$(echo "$body" | tr -d '[:space:]')" ] || die "[$version] section is empty"
+	printf '%s\n' "$body"
+}
+
+# check-rolled <version> <kind> — the gate that replaces CI rolling the
+# CHANGELOG itself. A final release is rolled LOCALLY now (`task release`, or
+# `scripts/release.sh roll` by hand) and pushed before dispatch, so by the time
+# this runs on the pinned commit, [Unreleased] must already be empty and the
+# dated heading must already exist. An rc never rolls, so its check is the
+# inverse: [Unreleased] must still hold the pending notes.
+cmd_check_rolled() {
+	local version="${1:?check-rolled: need a version}" kind="${2:?check-rolled: need a kind}"
+
+	if [ "$kind" = rc ]; then
+		unreleased_body >/dev/null # dies with a clear message if empty/missing
+		return 0
+	fi
+
+	local raw; raw="$(raw_unreleased_body)"
+	[ -z "$(echo "$raw" | tr -d '[:space:]')" ] \
+		|| die "[Unreleased] still has content — CHANGELOG.md has not been rolled for $version. Run \`task release\` locally (it rolls, commits, and pushes before dispatching), or \`bash scripts/release.sh roll $version\` by hand, then push to main."
+	grep -q "^## \[$version\][[:space:]]*-" "$CHANGELOG" \
+		|| die "$CHANGELOG has no '## [$version] - ...' heading — roll it locally before dispatching (see \`task release\`)."
 }
 
 # notes <version> <kind> — the full release body.
@@ -207,9 +259,11 @@ cmd_notes() {
 			> current \`[Unreleased]\` section as it stands.
 
 		EOF
+		unreleased_body
+	else
+		# Rolled locally before dispatch — read the dated section, not [Unreleased].
+		section_body "$version"
 	fi
-
-	unreleased_body
 	cat <<-EOF
 
 		## Install (macOS)
@@ -351,17 +405,21 @@ usage() {
 		  resolve --version X.Y.Z[-rc.N] | --bump patch|minor|major|rc
 		                          resolve + validate the next version; prints
 		                          TAG/VERSION/VERSION_NUM/KIND/PREV_TAG
-		  notes <version> [kind]  render the release body from [Unreleased]
+		  notes <version> [kind]  render the release body (rolled section for
+		                          final, [Unreleased] for rc)
 		  roll <version>          rewrite CHANGELOG.md for a final release
+		  check-rolled <version> <kind>
+		                          gate: final must be rolled, rc must not be
 		  preflight               local go/no-go checks (needs gh)
 	EOF
 	exit 2
 }
 
 case "${1:-}" in
-	resolve)   shift; cmd_resolve "$@" ;;
-	notes)     shift; cmd_notes "$@" ;;
-	roll)      shift; cmd_roll "$@" ;;
-	preflight) shift; cmd_preflight "$@" ;;
+	resolve)      shift; cmd_resolve "$@" ;;
+	notes)        shift; cmd_notes "$@" ;;
+	roll)         shift; cmd_roll "$@" ;;
+	check-rolled) shift; cmd_check_rolled "$@" ;;
+	preflight)    shift; cmd_preflight "$@" ;;
 	*) usage ;;
 esac

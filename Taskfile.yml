@@ -205,6 +205,28 @@ tasks:
     cmds:
       - VERSION={{.VERSION}} bash packaging/macos/build-pkg.sh {{.ABS_DIST}}
 
+  pkg:linux:
+    desc: Build .deb/.rpm packages into ./dist/ for both Linux arches (needs nfpm)
+    preconditions:
+      - sh: command -v nfpm >/dev/null 2>&1
+        msg: 'nfpm required — https://nfpm.goreleaser.com/install/ (or: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@latest)'
+    deps:
+      - build:all
+    cmds:
+      - |
+        set -eu
+        mkdir -p {{.DIST}}/nfpm-stage
+        for arch in amd64 arm64; do
+          cp {{.DIST}}/{{.BINARY}}-linux-$arch {{.DIST}}/nfpm-stage/dezhban
+          chmod 0755 {{.DIST}}/nfpm-stage/dezhban
+          for packager in deb rpm; do
+            echo "building $packager ($arch, {{.VERSION_BARE}})"
+            VERSION={{.VERSION_BARE}} GOARCH=$arch nfpm package \
+              --config nfpm.yaml --packager "$packager" --target {{.DIST}}/
+          done
+        done
+        rm -rf {{.DIST}}/nfpm-stage
+
   install:
     desc: 'Real install: build the .pkg, run the macOS Installer, open the app (asks to wipe first; FRESH=1/0 skips the question; sudo)'
     platforms: [darwin]
@@ -351,7 +373,7 @@ tasks:
         echo "next tag    $TAG   ($KIND)"
         echo "prev tag    ${PREV_TAG:-(none)}"
         echo "numeric     $VERSION_NUM   (pkg receipt / CFBundleShortVersionString)"
-        echo "artifacts   dist/dezhban-$VERSION.pkg, 5 CLI binaries, app zip, SHA256SUMS"
+        echo "artifacts   .pkg, 5 CLI binaries, 4 tarballs, 2 .deb, 2 .rpm, app zip, SHA256SUMS(.sig)"
         echo
         echo "--- release notes ------------------------------------------------------"
         bash scripts/release.sh notes "$VERSION" "$KIND"
@@ -373,7 +395,7 @@ tasks:
         echo "--- end diff (working tree restored) -----------------------------------"
 
   release:
-    desc: 'Cut a release: preflight, confirm, dispatch the workflow, watch it (VERSION=|BUMP=, or asked)'
+    desc: 'Cut a release: preflight, roll+commit+push the CHANGELOG, dispatch, watch it (VERSION=|BUMP=, or asked)'
     cmds:
       - |
         set -eu
@@ -406,6 +428,17 @@ tasks:
 
         bash scripts/release.sh preflight
 
+        # Roll the CHANGELOG for real (not a scratch copy — see release:preview
+        # for that). This is the whole point of the new flow: CI never writes to
+        # the repo, so the roll has to happen here, as you, before dispatch.
+        # An rc never rolls; main stays untouched for it.
+        if [ "$KIND" != rc ]; then
+          bash scripts/release.sh roll "$VERSION"
+          echo "--- CHANGELOG diff -----------------------------------------------------"
+          git --no-pager diff -- CHANGELOG.md
+          echo "--- end diff --------------------------------------------------------------"
+        fi
+
         echo
         echo "  about to release   $TAG  ($KIND)"
         echo "  from commit        $(git rev-parse --short HEAD)"
@@ -413,9 +446,10 @@ tasks:
           echo "  effect             tags $TAG, publishes it as a --prerelease"
           echo "                     main is untouched; no CHANGELOG roll"
         else
-          echo "  effect             tags $TAG, publishes it as the latest release,"
-          echo "                     opens a chore(release) PR with the rolled CHANGELOG"
-          echo "                     (main is never pushed to directly)"
+          echo "  effect             commits + pushes the rolled CHANGELOG to main"
+          echo "                     (as you — no PR, this repo's ruleset lets its"
+          echo "                     owner bypass it; only github-actions[bot] can't),"
+          echo "                     then tags $TAG and publishes it as the latest release"
         fi
         echo
 
@@ -432,7 +466,14 @@ tasks:
           echo "  no terminal to confirm on — re-run with CONFIRM=$TAG" >&2
           exit 1
         fi
-        [ "$reply" = "$TAG" ] || { echo "  got '$reply', expected '$TAG' — aborted."; exit 1; }
+        [ "$reply" = "$TAG" ] || { echo "  got '$reply', expected '$TAG' — aborted."; git checkout -- CHANGELOG.md 2>/dev/null || true; exit 1; }
+
+        if [ "$KIND" != rc ]; then
+          git add CHANGELOG.md
+          git commit -q -m "chore(release): $TAG"
+          git push origin main
+          echo "  pushed the rolled CHANGELOG to main ($(git rev-parse --short HEAD))"
+        fi
 
         # Note which run is the newest BEFORE dispatching, so we watch the run we
         # just created rather than a stale one (the dispatch is asynchronous, and

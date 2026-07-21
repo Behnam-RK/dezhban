@@ -240,6 +240,10 @@ final class AppState: ObservableObject {
     /// can never cause a wrong action, just a wrong hint.
     @Published var controlIsReachable = false
     @Published var selectedSection: SidebarSection? = .overview
+    /// Last update check result (nil: none run yet, or the last one found
+    /// nothing worth reporting — see UpdateChecker.check's doc comment on why
+    /// a failure never surfaces as an error here).
+    @Published var updateCheck: UpgradeCheckResult?
 
     let console = Console()
 
@@ -270,6 +274,17 @@ final class AppState: ObservableObject {
                 self?.serviceIsInstalled = installed
                 self?.controlIsReachable = control
             }
+        }
+    }
+
+    /// Runs an update check off the main thread. Called at launch and from a
+    /// ~24h timer (AppDelegate) — never more often than that, and never from
+    /// anywhere but here: see UpdateChecker's doc comment on why this is
+    /// user-context-only, on a schedule, not the root daemon on a fixed poll.
+    func checkForUpdates() {
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let result = UpdateChecker.check()
+            DispatchQueue.main.async { self?.updateCheck = result }
         }
     }
 }

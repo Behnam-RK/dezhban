@@ -18,7 +18,14 @@ New records use [template.md](template.md) and take the next free number.
 | [0004](0004-switch-window-fully-disableable.md) | The switch window must be fully disableable | accepted, implementation pending |
 | [0005](0005-allow-local-network-by-default.md) | Local network access is allowed by default | accepted, implementation pending |
 | [0006](0006-geo-providers-tunnel-scoped.md) | Geo-provider passes are tunnel-scoped, never physical | accepted, implementation pending |
+| [0007](0007-upgrade-disclosed-window-not-holding-block.md) | `dezhban upgrade` discloses the activation window instead of holding a block through it | accepted, implemented |
 
 > **0006 is the one to read first if you are touching the geo lookup.** It records why
 > the obvious implementation silently defeats the exit-country check, and it exists
 > because that mistake has already been proposed once.
+>
+> **0007 is the one to read before "simplifying" `dezhban upgrade`'s
+> apply/activate split**, or before adding a holding block around the restart
+> window — it records why that gap is disclosed rather than covered, and why
+> collapsing the two phases would quietly reopen the FULL BLOCK problem this
+> design exists to prevent.

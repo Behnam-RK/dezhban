@@ -2,9 +2,10 @@ name: Release
 
 # Manually-dispatched release. The ordering is the whole design:
 #
-#   prepare  resolve the version and gate on CI — WITHOUT writing anything
+#   prepare  resolve the version, require it's already rolled, gate on CI —
+#            WITHOUT writing anything
 #   build    cross-compile everything and smoke-test the installer
-#   publish  only now: tag, publish, and open the CHANGELOG PR
+#   publish  only now: tag and publish
 #
 # Nothing touches the repository until every artifact has been built and the
 # installer has been proven to install and uninstall cleanly. A failed build
@@ -12,14 +13,18 @@ name: Release
 # tagged first, so a failed build stranded a tag that the workflow's own "tag
 # already exists" guard then refused to retry.)
 #
-# The workflow NEVER pushes to main. The `main` ruleset requires a pull request,
-# and github-actions[bot] cannot bypass it — GitHub only allows the Actions app as
-# a ruleset bypass actor on ORG-owned repos, and this one is user-owned. Tags are
-# not branch-ruled, so the tag and the release go out directly; a final release's
-# CHANGELOG roll arrives as an auto-opened PR for you to merge.
+# The workflow NEVER writes to main. A final release's CHANGELOG roll happens
+# LOCALLY before you dispatch — `task release` runs `scripts/release.sh roll`,
+# commits, and pushes as you, which the `main` ruleset allows (you're a bypass
+# actor on your own repo; only github-actions[bot] is not, since GitHub only
+# offers that bypass on ORG-owned rulesets). `prepare`'s "Require CHANGELOG
+# already rolled" step is the gate that catches dispatching before that push:
+# it fails loudly rather than shipping a release whose notes are stale. Tags
+# aren't branch-ruled either way, so CI still tags and publishes directly.
 #
 # All version/CHANGELOG logic lives in scripts/release.sh — the same code
-# `task release:preview` runs locally, so a preview cannot drift from this.
+# `task release` and `task release:preview` run locally, so neither can drift
+# from what CI checks.
 #
 # There is no tag-push trigger by design: `publish` is what creates the tag.
 
@@ -58,7 +63,6 @@ on:
 permissions:
   contents: write
   actions: read           # reading ci.yml's conclusion for the release gate
-  pull-requests: write    # the CHANGELOG roll lands as a PR (main requires one)
 
 concurrency:
   group: release
@@ -117,6 +121,14 @@ jobs:
             echo "kind=$KIND"
           } >> "$GITHUB_OUTPUT"
 
+      # A final must already be rolled on main (see the header comment); an rc
+      # must NOT be. Catches "forgot to roll before dispatching" here, loudly,
+      # instead of shipping a release whose notes are the previous version's.
+      - name: Require CHANGELOG already rolled
+        run: |
+          bash scripts/release.sh check-rolled \
+            "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.kind }}"
+
       # Ship only what CI actually blessed. Waits out an in-flight run (you may
       # well dispatch straight after a merge), aborts on red or missing.
       - name: Require green CI on the release commit
@@ -162,9 +174,8 @@ jobs:
         run: |
           echo "::warning title=CI gate forced::Releasing ${{ steps.version.outputs.tag }} WITHOUT a green CI check on ${{ steps.pin.outputs.sha }}"
 
-      # Extracted here, from the un-rolled CHANGELOG. This must happen BEFORE
-      # `publish` rolls it — rolling empties the [Unreleased] section these notes
-      # are read from.
+      # A final reads its already-rolled dated section; an rc reads [Unreleased]
+      # (checked non-empty/empty respectively by the gate above).
       - name: Render release notes
         run: bash scripts/release.sh notes "${{ steps.version.outputs.version }}" "${{ steps.version.outputs.kind }}" > release-notes.md
 
@@ -272,9 +283,17 @@ jobs:
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Pinned for reproducibility — the same version this was built and tested
+      # against (see nfpm.yaml for why contents.src is a fixed staged path
+      # rather than an env-expanded glob).
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
 
       - name: Build all CLI platforms
         run: task build:all VERSION=${{ needs.prepare.outputs.tag }}
+
+      - name: Build .deb/.rpm packages
+        run: task pkg:linux VERSION=${{ needs.prepare.outputs.tag }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -285,6 +304,8 @@ jobs:
             dist/dezhban-linux-amd64
             dist/dezhban-linux-arm64
             dist/dezhban-windows-amd64.exe
+            dist/*.deb
+            dist/*.rpm
 
   # The first and only job that writes anything. Skipped entirely on a dry run.
   publish:
@@ -317,18 +338,52 @@ jobs:
       - uses: actions/download-artifact@v4
         with: { name: release-notes, path: . }
 
-      # SHA256SUMS covers the .pkg too — it is the asset most people download, and
-      # an unsigned installer is exactly the one worth verifying by hash.
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # Per-target tarballs for package managers (the Homebrew formula) that
+      # expect an archive, not a bare binary. The bare binaries are kept
+      # published too, unchanged — install.sh and existing users depend on
+      # those exact names.
+      - name: Tarball the CLI binaries
+        run: |
+          set -eu
+          cd dist
+          for f in dezhban-darwin-arm64 dezhban-darwin-amd64 dezhban-linux-amd64 dezhban-linux-arm64; do
+            os_arch="${f#dezhban-}"
+            stage="dezhban-$os_arch"
+            mkdir -p "$stage"
+            cp "$f" "$stage/dezhban"
+            cp ../LICENSE ../README.md "$stage/"
+            tar -czf "dezhban-${{ needs.prepare.outputs.version }}-$os_arch.tar.gz" -C "$stage" .
+            rm -rf "$stage"
+          done
+
+      # SHA256SUMS covers everything in dist at this point — the .pkg, the app
+      # zip, the bare binaries, and the tarballs just added above.
       - name: Checksums
         run: cd dist && shasum -a 256 * > SHA256SUMS
 
+      # Signs SHA256SUMS so `dezhban upgrade` (and anything else that cares) can
+      # tell "the release CI actually built this" from "whatever the CDN served".
+      # See internal/update/sig.go for why ed25519 over cosign/sigstore, and for
+      # where the matching public key lives.
+      - name: Sign checksums
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -eu
+          [ -n "$RELEASE_SIGNING_KEY" ] || {
+            echo "error: RELEASE_SIGNING_KEY secret is not set." >&2
+            echo "       See internal/update/sig.go for what to generate and where it goes." >&2
+            exit 1
+          }
+          go run ./tools/relsign dist/SHA256SUMS dist/SHA256SUMS.sig
+
       # The tag lands on prepare.sha — the exact tree that was built and tested —
-      # for BOTH kinds. The workflow never pushes to main: the `main` ruleset
-      # requires a pull request, and github-actions[bot] cannot bypass it (GitHub
-      # only allows the Actions app as a bypass actor on ORG-owned rulesets, and
-      # this repo is user-owned). Tags are not branch-ruled, so tagging is fine.
-      #
-      # A final's CHANGELOG roll therefore arrives as a PR, opened below.
+      # for BOTH kinds. Tags aren't branch-ruled, so tagging and pushing the tag
+      # directly is fine even though the workflow never pushes to main itself.
       - name: Tag the release commit
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -362,66 +417,19 @@ jobs:
             dist/dezhban-linux-amd64 \
             dist/dezhban-linux-arm64 \
             dist/dezhban-windows-amd64.exe \
+            "dist/dezhban-$VERSION-darwin-arm64.tar.gz" \
+            "dist/dezhban-$VERSION-darwin-amd64.tar.gz" \
+            "dist/dezhban-$VERSION-linux-amd64.tar.gz" \
+            "dist/dezhban-$VERSION-linux-arm64.tar.gz" \
+            "dist/dezhban_${VERSION}_amd64.deb" \
+            "dist/dezhban_${VERSION}_arm64.deb" \
+            "dist/dezhban-$VERSION-1.x86_64.rpm" \
+            "dist/dezhban-$VERSION-1.aarch64.rpm" \
             dist/Dezhban-macos.app.zip \
-            dist/SHA256SUMS
+            dist/SHA256SUMS \
+            dist/SHA256SUMS.sig
 
           echo "### Published [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
-
-      # A final's CHANGELOG roll lands as a PR, because main requires one. Runs
-      # AFTER the release is out, and is deliberately NON-FATAL: by this point the
-      # tag is pushed and the release is published — that IS the release, and this
-      # is bookkeeping. Failing the job here would paint a perfectly good release
-      # red and imply it needs re-running, which it must not be. (v0.1.0 shipped
-      # exactly this way: the PR step failed, the release was fine.)
-      #
-      # On failure it prints the one-click compare link, so finishing by hand is
-      # trivial. An rc rolls nothing and skips this entirely.
-      - name: Open the CHANGELOG PR
-        if: ${{ needs.prepare.outputs.kind == 'final' }}
-        continue-on-error: true
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          TAG: ${{ needs.prepare.outputs.tag }}
-          VERSION: ${{ needs.prepare.outputs.version }}
-        run: |
-          set -eu
-          branch="release/$TAG"
-          compare="https://github.com/$GITHUB_REPOSITORY/compare/main...$branch?expand=1"
-
-          # Whatever else happens, leave the operator a working one-click path.
-          trap 'echo "### CHANGELOG PR not opened automatically — [open it here]($compare)" >> "$GITHUB_STEP_SUMMARY"' EXIT
-
-          bash scripts/release.sh roll "$VERSION"
-
-          git checkout -b "$branch"
-          git add CHANGELOG.md
-          git commit -m "chore(release): $TAG [skip ci]"
-          git push origin "$branch"
-
-          # Plain <<EOF, body at the block's own indent. NOT <<-EOF with tabs:
-          # YAML forbids tabs as indentation, so a tab-indented heredoc silently
-          # terminates the `run: |` block scalar and GitHub then fails to parse the
-          # workflow at all (it drops the workflow_dispatch trigger). YAML strips
-          # this indent, so the shell sees the body at column 0.
-          cat > pr-body.md <<EOF
-          Rolls \`## [Unreleased]\` into \`## [$VERSION]\` for
-          [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG), which is
-          **already published** — this PR is the bookkeeping.
-
-          Opened by the Release workflow. It does not push to \`main\` directly: the
-          branch ruleset requires a pull request, and \`github-actions[bot]\` cannot
-          bypass it.
-          EOF
-
-          url="$(gh pr create \
-            --base main \
-            --head "$branch" \
-            --title "chore(release): $TAG" \
-            --body-file pr-body.md)"
-
-          trap - EXIT   # opened it; don't print the manual fallback
-          echo "### CHANGELOG PR: $url" >> "$GITHUB_STEP_SUMMARY"
-          echo "merge it to roll the changelog on main" >> "$GITHUB_STEP_SUMMARY"
 
   # Make a dry run say so loudly, rather than looking like a release that silently
   # did nothing.

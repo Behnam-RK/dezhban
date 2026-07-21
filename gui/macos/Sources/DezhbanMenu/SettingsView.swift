@@ -15,6 +15,7 @@ struct SettingsView: View {
 
     @State private var loginEnabled = false
     @State private var notifyEnabled = true
+    @State private var checkUpdatesEnabled = true
     @State private var blockedCountries = ""
     @State private var switchWindow = ""
     @State private var endpointGrace = ""
@@ -38,6 +39,11 @@ struct SettingsView: View {
                         .help("macOS notifications for the transitions that matter: guard armed, egress "
                             + "blocked, warnings (enforcement error / switch window open), standby, stopped. "
                             + "Nothing else.")
+                    Toggle("Check for updates automatically", isOn: checkUpdatesBinding)
+                        .help("Checks GitHub for a newer release at launch and every ~24h — never from the "
+                            + "root daemon, only here, in this app, on this schedule. Turn off to stop this "
+                            + "host contacting GitHub about updates entirely; \"Check Now\" in About still "
+                            + "works either way.")
                 }
                 Section("Protection") {
                     TextField("Blocked countries (comma-sep, e.g. IR,CN)", text: $blockedCountries)
@@ -147,6 +153,17 @@ struct SettingsView: View {
             })
     }
 
+    private var checkUpdatesBinding: Binding<Bool> {
+        Binding(
+            get: { checkUpdatesEnabled },
+            set: { on in
+                UpdateChecker.isEnabled = on
+                checkUpdatesEnabled = UpdateChecker.isEnabled
+                status = on ? "Automatic update checks on." : "Automatic update checks off."
+                if on { state.checkForUpdates() }
+            })
+    }
+
     // MARK: - seeding
 
     /// Re-reads everything the pane shows: config fields via `config get`
@@ -158,6 +175,7 @@ struct SettingsView: View {
         canApply = false
         loginEnabled = LoginItem.isEnabled
         notifyEnabled = NotificationManager.isEnabled
+        checkUpdatesEnabled = UpdateChecker.isEnabled
         blockedCountries = ""; switchWindow = ""; endpointGrace = ""
         state.refreshServiceState()
         ConfigApply.seed(keys: Self.keys) { values, error in

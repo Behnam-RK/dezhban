@@ -28,12 +28,19 @@ teardown, read [docs/how-it-works.md](docs/how-it-works.md).
 
 ## Install
 
-### macOS — the installer (recommended)
+### macOS and Linux — one line (recommended)
 
-Download **`dezhban-<version>.pkg`** from the
-[Releases page](https://github.com/Behnam-RK/dezhban/releases). It installs the CLI
-(`/usr/local/bin/dezhban`), the menubar app (`/Applications/Dezhban.app`), and
-registers the background service — **asking for your password exactly once**.
+```sh
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
+```
+
+This installs the CLI (`/usr/local/bin/dezhban`), the menubar app on macOS
+(`/Applications/Dezhban.app`), and registers the background service —
+**asking for your password exactly once**, and verifying the download's
+checksum before installing anything. It works with **zero Gatekeeper
+friction** on macOS: `curl` deliberately doesn't set `com.apple.quarantine` on
+what it downloads (that's documented Apple behavior, not a workaround — see
+[docs/install.md](docs/install.md) for why there's no signed `.pkg` instead).
 
 After that, the everyday operations (**block**, **unblock**, **switching VPNs**)
 never ask again: the background service performs them for you over a local control
@@ -48,25 +55,32 @@ sudo dezhban setup     # choose your settings
 sudo dezhban start     # arm it
 ```
 
-> [!NOTE]
-> The `.pkg` is **unsigned** (no Apple Developer certificate), so Gatekeeper blocks
-> a double-click. Either install from the terminal —
-> `sudo installer -pkg dezhban-<version>.pkg -target /` — or double-click, dismiss
-> the warning, and approve it in **System Settings → Privacy & Security → Open
-> Anyway**. On macOS 14 and earlier, right-click → **Open** also works.
-
 To remove everything: `sudo sh /usr/local/share/dezhban/uninstall.sh`.
 
-### Other platforms
+### Windows
 
-Prebuilt binaries for macOS (arm64/amd64), Linux (amd64/arm64), and Windows (amd64)
-are on the same Releases page: download `dezhban-<os>-<arch>` (or `.exe` on
-Windows). `Dezhban-macos.app.zip` is the menubar app on its own, for people who
-already have the CLI. `SHA256SUMS` is attached to every release for verification.
+```powershell
+irm https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.ps1 | iex
+```
 
-> [!NOTE]
-> `Dezhban.app` from the zip is unsigned too — right-click → **Open** in Finder, or
-> `xattr -dr com.apple.quarantine Dezhban.app`.
+Run from an elevated (Administrator) PowerShell. Same checksum verification,
+same "registers but doesn't start enforcement" behavior.
+
+### Other ways to install
+
+All of these, plus checksum/signature verification details, are covered in
+[docs/install.md](docs/install.md):
+
+- **The `.pkg`** — download from the [Releases page](https://github.com/Behnam-RK/dezhban/releases)
+  and `sudo installer -pkg dezhban-<version>.pkg -target /` (it's unsigned, so a
+  double-click is blocked by Gatekeeper — see docs/install.md for why).
+- **`.deb`/`.rpm`** — also on the Releases page, for a package-manager-tracked
+  install (`dpkg -i` / `rpm -i`).
+- **Bare binaries** — `dezhban-<os>-<arch>` on the Releases page, for anyone
+  scripting their own install.
+
+Once installed, keep it current with `sudo dezhban upgrade check` (macOS also
+gets `upgrade download`/`upgrade apply` — see [docs/upgrade.md](docs/upgrade.md)).
 
 See [docs/releasing.md](docs/releasing.md) for how releases are cut.
 

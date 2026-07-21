@@ -75,6 +75,7 @@ Commands:
   setup       Interactive wizard to create or update the config
   config      Inspect or change the config without hand-editing JSON
   completion  Print a shell completion script (bash|zsh|fish)
+  upgrade     Check/download/apply a newer release (check: no root; apply: macOS, root)
   version     Print the version
 
 Global flags:
@@ -141,6 +142,8 @@ func run(args []string) int {
 		return cmdConfig(rest)
 	case "completion":
 		return cmdCompletion(rest)
+	case "upgrade":
+		return cmdUpgrade(rest)
 	case "version", "--version":
 		return cmdVersion()
 	case "help", "--help", "-h":

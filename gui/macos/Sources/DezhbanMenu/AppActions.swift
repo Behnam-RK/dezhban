@@ -88,6 +88,62 @@ enum AppActions {
         [["panic"], ["stop"], ["uninstall"]]
     }
 
+    /// download then apply, under ONE admin prompt — same reasoning as
+    /// installCommands: the prompt is the expensive thing, and these two
+    /// steps are meaningless run apart (apply has nothing staged without
+    /// download just having run).
+    static var upgradeCommands: [[String]] {
+        [["upgrade", "download"], ["upgrade", "apply"]]
+    }
+
+    /// Downloads and applies the staged .pkg, then relaunches the app — it
+    /// was just replaced on disk out from under this running process (`upgrade
+    /// apply` installs a new Dezhban.app regardless of whether daemon
+    /// activation happened this instant or was deferred by the gate; see
+    /// docs/upgrade.md). `present` gets the full transcript either way, so a
+    /// failure — or a deferred activation, which is still `ok` — is always
+    /// visible, not silently swallowed by the relaunch.
+    static func performUpgrade(present: @escaping (CommandResult) -> Void) {
+        capturedSequence(upgradeCommands) { result in
+            present(result)
+            if result.ok {
+                relaunch()
+            }
+        }
+    }
+
+    /// Relaunches Dezhban.app: spawns a detached watcher that waits for THIS
+    /// process to actually exit, then opens the (just-replaced) app bundle
+    /// fresh, and terminates this instance. Simpler and more robust than any
+    /// in-process "restart" trick — this process's own code is the OLD
+    /// version now sitting on an unlinked inode; the only clean way back to
+    /// the new one is a fresh process launched from the new bundle on disk.
+    private static func relaunch() {
+        let pid = ProcessInfo.processInfo.processIdentifier
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = [
+            "-c",
+            "while kill -0 \(pid) 2>/dev/null; do sleep 0.2; done; open '/Applications/Dezhban.app'",
+        ]
+        try? task.run() // best-effort: if this fails, the user still has the new .pkg on disk and can reopen the app by hand
+        NSApp.terminate(nil)
+    }
+
+    /// Confirms before an upgrade: it restarts this app unconditionally and
+    /// may briefly restart enforcement (only if the daemon is in a safe
+    /// posture — see docs/upgrade.md), so it deserves the same "are you sure"
+    /// treatment as Panic, not a silent one-click action.
+    static func confirmUpgrade(to version: String) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = .informational
+        alert.messageText = "Download and install v\(version)?"
+        alert.informativeText = "This restarts the app. If the daemon is in a safe posture (guard or standby), it also briefly restarts enforcement to activate the new version — never during FULL BLOCK or an open switch window."
+        alert.addButton(withTitle: "Upgrade")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     /// Panic is the last-resort override, so — unlike Block/Unblock — it asks
     /// for confirmation before tearing down every dezhban rule.
     static func confirmPanic() -> Bool {

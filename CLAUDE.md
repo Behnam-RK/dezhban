@@ -61,9 +61,14 @@ dev tooling only, never the daemon path); non-TTY prints the grouped menu
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
-`switch`, `vpn`, `setup`, `config`, `completion`, `version`, plus a global `-v`/`--verbose`. `validate`, `print-rules`, `doctor`,
-and `monitor` are read-only (no root, no firewall effects); the rest of the
-privileged set requires root/admin. Full reference: [docs/usage.md](docs/usage.md).
+`switch`, `vpn`, `setup`, `config`, `completion`, `upgrade`, `version`, plus a global
+`-v`/`--verbose`. `validate`, `print-rules`, `doctor`, `monitor`, and `upgrade check`
+are read-only (no root, no firewall effects); the rest of the privileged set
+requires root/admin, including `upgrade download`/`upgrade apply` (macOS only —
+`download`'s staging directory is root-owned so a local user can't swap the
+verified `.pkg` before `apply` installs it). Full reference:
+[docs/usage.md](docs/usage.md); the upgrade design in full:
+[docs/upgrade.md](docs/upgrade.md).
 
 ## Rules that must not be broken
 
@@ -100,6 +105,24 @@ The design depends on these invariants (rationale in
   block lasts. Providers are refreshed while the guard is healthy; a mid-block
   rotation correctly degrades to lift-and-probe, which heals it
   ([docs/adr/0006](docs/adr/0006-geo-providers-tunnel-scoped.md)).
+- **`dezhban upgrade` never gets its own firewall pass, and the check that
+  drives it never runs in the daemon.** The geo-provider pass above is
+  already the only destination-scoped hole, tightly justified; a
+  `pass to github.com` would be a second, weaker one — and unlike the geo
+  pass, reachable even during FULL BLOCK. `upgrade check` therefore runs only
+  in the GUI (user context, on launch + ~24h) or the CLI on demand, inherits
+  the guard's tunnel-only routing for free, and simply fails if the tunnel is
+  down — it does not open anything to succeed anyway. Applying is two
+  phases: installing the `.pkg` opens no gap (the running daemon keeps
+  enforcing on its old inode while the files land); only *activating* (the
+  restart) is the exposure, and it is gated on `internal/update.CanActivate`
+  — healthy `guard` or `standby` only, re-checked at the instant of restart,
+  never `full-block` or an open switch window (restarting through FULL BLOCK
+  would lift a block on a forbidden-country exit — the one thing this tool
+  exists to prevent, caused by the updater). The upgrade path also never
+  invokes `uninstall.sh` — that removes `/etc/dezhban` unless `KEEP_CONFIG=1`,
+  and an upgrade must never touch config or learned state. See
+  [docs/upgrade.md](docs/upgrade.md).
 - **`vpn.allowLocalNetwork` passes destinations, never interfaces**, and only
   locally-scoped ones — an interface-scoped pass would carry internet traffic and
   silently disable the kill switch, and globally-routable multicast (`232/8`,

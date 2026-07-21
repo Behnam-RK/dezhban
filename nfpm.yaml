@@ -1,0 +1,57 @@
+# .deb/.rpm packaging for the dezhban CLI, built with nfpm (github.com/goreleaser/nfpm).
+# Invoked by `task pkg:linux` (per-arch) and wired into release.yml's build-cli job.
+#
+# CLI only — no menubar app (that's macOS/.pkg-only), and no static systemd unit
+# file: postinstall.sh calls `dezhban install`, which renders the unit via
+# kardianos/service at install time, the same way the .pkg's postinstall lets it
+# render the launchd plist. One code path owns that shape everywhere, instead of
+# a shipped unit file that could drift from internal/svc/program.go.
+#
+# $VERSION and $GOARCH are expanded from the environment by nfpm itself — set
+# both before invoking `nfpm package`. GOARCH must be nfpm's arch name (amd64 /
+# arm64), which happens to already match Go's GOARCH for these two.
+#
+# contents[].src below is a FIXED path, not `dist/dezhban-linux-${GOARCH}`: nfpm
+# expands ${VAR} in plain string fields (version, arch, above) but not inside
+# contents.src, which it treats as a glob pattern matched before any expansion
+# runs. `task pkg:linux` stages the right per-arch binary to this fixed path
+# before invoking nfpm, once per arch, rather than fighting that.
+name: dezhban
+arch: "${GOARCH}"
+platform: linux
+version: "${VERSION}"
+section: net
+priority: optional
+maintainer: "Behnam RK <behnam.rk47@gmail.com>"
+homepage: "https://github.com/Behnam-RK/dezhban"
+license: MIT
+description: |
+  Network kill switch for hosts behind a full-tunnel VPN.
+  .
+  Egress is allowed only through the tunnel, so a tunnel drop is cut instantly,
+  and it full-blocks when the VPN exit lands in a forbidden country. Registers
+  a systemd service on install but does not arm enforcement — run
+  `dezhban setup` then `dezhban start` after installing.
+
+contents:
+  - src: "./dist/nfpm-stage/dezhban"
+    dst: /usr/local/bin/dezhban
+    file_info:
+      mode: 0755
+
+# The Linux backend shells out to `nft` (CLAUDE.md: "Linux/Windows backends
+# shell out to nft / netsh rather than linking libraries") — without it,
+# `panic`'s teardown fails outright (confirmed: a container with no nftables
+# package logs "nft: executable file not found in $PATH" on removal). Same
+# package name on both families.
+overrides:
+  deb:
+    depends:
+      - nftables
+  rpm:
+    depends:
+      - nftables
+
+scripts:
+  postinstall: packaging/linux/postinstall.sh
+  preremove: packaging/linux/preremove.sh

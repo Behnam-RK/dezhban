@@ -1,0 +1,64 @@
+# Template for the dezhban Homebrew FORMULA (not a cask — see the note below).
+# Not consumed by anything in this repo; scripts/gen-homebrew-formula.sh fills
+# in @VERSION@ and the four @SHA256_*@ placeholders from a real release's
+# SHA256SUMS and prints the finished formula, ready to commit into a separate
+# behnam-rk/homebrew-tap repository as Formula/dezhban.rb.
+#
+# Deliberately a formula, not a cask: Homebrew casks without codesigning and
+# notarization are being removed from the official tap by Sept 2026, and
+# dezhban has no Apple Developer ID (see packaging/macos/build-pkg.sh). That
+# policy targets .app-bundle casks; a CLI formula that installs a bare binary
+# is unaffected. Which is also the scope limit this formula is honest about:
+# CLI ONLY. Homebrew has no way to install a privileged system service, so the
+# menubar app and the LaunchDaemon registration are out of its reach — see the
+# caveats block below, which says so to the user directly rather than implying
+# parity with scripts/install.sh or the .pkg.
+class Dezhban < Formula
+  desc "Network kill switch for hosts behind a full-tunnel VPN"
+  homepage "https://github.com/Behnam-RK/dezhban"
+  version "@VERSION@"
+  license "MIT"
+
+  on_macos do
+    if Hardware::CPU.arm?
+      url "https://github.com/Behnam-RK/dezhban/releases/download/v#{version}/dezhban-#{version}-darwin-arm64.tar.gz"
+      sha256 "@SHA256_DARWIN_ARM64@"
+    else
+      url "https://github.com/Behnam-RK/dezhban/releases/download/v#{version}/dezhban-#{version}-darwin-amd64.tar.gz"
+      sha256 "@SHA256_DARWIN_AMD64@"
+    end
+  end
+
+  on_linux do
+    if Hardware::CPU.arm?
+      url "https://github.com/Behnam-RK/dezhban/releases/download/v#{version}/dezhban-#{version}-linux-arm64.tar.gz"
+      sha256 "@SHA256_LINUX_ARM64@"
+    else
+      url "https://github.com/Behnam-RK/dezhban/releases/download/v#{version}/dezhban-#{version}-linux-amd64.tar.gz"
+      sha256 "@SHA256_LINUX_AMD64@"
+    end
+  end
+
+  def install
+    bin.install "dezhban"
+  end
+
+  def caveats
+    <<~EOS
+      This installs the dezhban CLI ONLY. Homebrew cannot register a privileged
+      system service, so the LaunchDaemon/systemd unit is not set up by `brew
+      install` — finish it yourself:
+
+        sudo dezhban install --config /etc/dezhban/dezhban.json
+        sudo dezhban setup
+        sudo dezhban start
+
+      The menubar app is macOS/.pkg-only (or scripts/install.sh) and is not
+      distributed through Homebrew at all.
+    EOS
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/dezhban version")
+  end
+end

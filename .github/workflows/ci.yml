@@ -72,6 +72,21 @@ jobs:
             echo "These files need gofmt:"; echo "$unformatted"; exit 1
           fi
 
+  # scripts/*.sh run as root on other people's machines (install.sh, upgrade
+  # helpers) — lint them like it matters.
+  shellcheck:
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'run-ci')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # -S warning: fail on warning/error, not on shellcheck's "info"-level style
+      # notes (e.g. SC2015's A && B || C caveat in release.sh, a pre-existing,
+      # deliberate idiom there — not something this gate exists to relitigate).
+      - name: shellcheck
+        run: shellcheck -S warning scripts/*.sh packaging/macos/*.sh packaging/linux/*.sh
+
   # Cross-compile all five release targets and assert every artifact exists.
   build-all:
     if: >-
