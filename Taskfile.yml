@@ -373,7 +373,7 @@ tasks:
         echo "next tag    $TAG   ($KIND)"
         echo "prev tag    ${PREV_TAG:-(none)}"
         echo "numeric     $VERSION_NUM   (pkg receipt / CFBundleShortVersionString)"
-        echo "artifacts   dist/dezhban-$VERSION.pkg, 5 CLI binaries, app zip, SHA256SUMS"
+        echo "artifacts   .pkg, 5 CLI binaries, 4 tarballs, 2 .deb, 2 .rpm, app zip, SHA256SUMS(.sig)"
         echo
         echo "--- release notes ------------------------------------------------------"
         bash scripts/release.sh notes "$VERSION" "$KIND"

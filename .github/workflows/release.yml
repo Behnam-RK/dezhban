@@ -283,9 +283,17 @@ jobs:
         with:
           version: 3.x
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      # Pinned for reproducibility — the same version this was built and tested
+      # against (see nfpm.yaml for why contents.src is a fixed staged path
+      # rather than an env-expanded glob).
+      - name: Install nfpm
+        run: go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.47.0
 
       - name: Build all CLI platforms
         run: task build:all VERSION=${{ needs.prepare.outputs.tag }}
+
+      - name: Build .deb/.rpm packages
+        run: task pkg:linux VERSION=${{ needs.prepare.outputs.tag }}
 
       - uses: actions/upload-artifact@v4
         with:
@@ -296,6 +304,8 @@ jobs:
             dist/dezhban-linux-amd64
             dist/dezhban-linux-arm64
             dist/dezhban-windows-amd64.exe
+            dist/*.deb
+            dist/*.rpm
 
   # The first and only job that writes anything. Skipped entirely on a dry run.
   publish:
@@ -411,6 +421,10 @@ jobs:
             "dist/dezhban-$VERSION-darwin-amd64.tar.gz" \
             "dist/dezhban-$VERSION-linux-amd64.tar.gz" \
             "dist/dezhban-$VERSION-linux-arm64.tar.gz" \
+            "dist/dezhban_${VERSION}_amd64.deb" \
+            "dist/dezhban_${VERSION}_arm64.deb" \
+            "dist/dezhban-$VERSION-1.x86_64.rpm" \
+            "dist/dezhban-$VERSION-1.aarch64.rpm" \
             dist/Dezhban-macos.app.zip \
             dist/SHA256SUMS \
             dist/SHA256SUMS.sig
