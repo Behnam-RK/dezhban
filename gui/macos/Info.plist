@@ -7,7 +7,7 @@
 	<key>CFBundleDisplayName</key>
 	<string>Dezhban</string>
 	<key>CFBundleIdentifier</key>
-	<string>com.dezhban.DezhbanMenu</string>
+	<string>com.behnam-rk.dezhban.app</string>
 	<key>CFBundleExecutable</key>
 	<string>DezhbanMenu</string>
 	<key>CFBundlePackageType</key>
