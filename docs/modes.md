@@ -72,6 +72,12 @@ the *physical* link would instead succeed and report your ISP's country (a norma
 allowed one), so FULL BLOCK would never fire. See
 [ADR-0006](adr/0006-geo-providers-tunnel-scoped.md).
 
+The pass carries **no DNS rule**. A tunnel-scoped but destination-unscoped port-53
+rule would send *every* application's DNS through the tunnel to the forbidden
+exit's resolver, handing the exit whose country you are refusing a running log of
+every hostname you look up. Provider addresses are refreshed while the guard is
+healthy instead, and a mid-block rotation falls back to lift-and-probe below.
+
 If no provider address can be resolved, recovery falls back to briefly lifting the
 guard for one bounded lookup and re-cutting — a small leak, but far better than a
 block that can never observe its way out. The tunnel transport survives either
@@ -85,9 +91,14 @@ exit.
 #          block drop out all
 #
 # FULL BLOCK — pass quick on lo0 all no state
-#              pass out quick to { <vpn endpoint> } no state   # reconnect path
+#              pass out quick to { <vpn endpoint> } no state       # reconnect path
+#              pass out quick on { utun4 } to { <providers> } no state   # exit lookup
 #              block drop out all
 ```
+
+> Shown without the default-on passes (`allowLocalNetwork`, `allowPhysicalDNS`)
+> so the guard itself is legible. `dezhban print-rules --mode guard` prints the
+> real thing for *your* config, and applies nothing.
 
 Configure the tunnel interface(s) and VPN endpoint IP(s) — see the `vpn` block in
 [config.md](config.md). Find your tunnel interface with:
@@ -159,6 +170,12 @@ Multicast is what actually makes discovery work: `224.0.0.251` / `ff02::fb`
 (mDNS) and `239.255.255.250` (SSDP) are how a Mac finds printers and AirPlay
 targets. Opening only the unicast ranges would leave devices *visible but
 undiscoverable*, which reads as broken rather than restricted.
+
+Only the **locally-scoped** multicast ranges are passed, not all of `224/4` and
+`ff00::/8`. Multicast has globally-routable scopes — `232/8` (SSM), `233/8`
+(GLOP), `ff0e::/16` (global) are designed to cross the internet — and a range
+that can leave the building has no place in a pass justified by "this traffic
+never leaves the building".
 
 **Why this is safe.** The pass is scoped by **destination**, never by interface.
 A packet to a public address does not match these prefixes whatever interface

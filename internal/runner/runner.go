@@ -1164,6 +1164,14 @@ func (o Options) runGuard(ctx context.Context) error {
 			// rotate addresses, and a stale set means the tunnel-scoped pass no
 			// longer covers where the lookup actually connects — which would send
 			// recovery back to lift-and-probe without anyone noticing.
+			//
+			// This refresh is expected to SUCCEED in GUARD and FAIL in FULL BLOCK:
+			// the provider pass deliberately carries no DNS rule (an unscoped one
+			// would leak every lookup to the forbidden exit — see ADR-0006), so
+			// there is no resolution path while cut. That is why the branch below
+			// fires rarely. A rotation mid-block therefore degrades to
+			// lift-and-probe, whose guard lift lets the next refresh through and
+			// heals the scoped pass.
 			if o.ResolveProviders != nil {
 				if fresh := o.ResolveProviders(ctx); len(fresh) > 0 && !sameAddrs(fresh, providers) {
 					providers = fresh

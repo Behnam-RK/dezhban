@@ -26,9 +26,16 @@ GOOS=linux go build ./... && GOOS=windows go build ./...
 
 ## Enforcement — all platforms
 
-- [ ] **Block cuts egress, allowlist survives.** `sudo dezhban block` → general
-      egress dies (`curl https://example.com` fails) but loopback works, DNS
-      resolves, and the configured geo-API host is still reachable.
+- [ ] **Block cuts egress.** `sudo dezhban block` → general egress dies
+      (`curl https://example.com` fails) but loopback works, DNS resolves (with
+      `vpn.allowPhysicalDNS` on, the default), the VPN endpoint stays reachable
+      so the tunnel can reconnect, and LAN devices still answer (with
+      `vpn.allowLocalNetwork` on, the default). This is FULL BLOCK — it carries
+      **no** destination allowlist; a VPN posture opens the tunnel endpoint.
+- [ ] **`block --force` keeps the geo providers reachable.** `sudo dezhban block
+      --force` → all egress cut except loopback and the resolved geo-API
+      provider IPs, which it pins on the *physical* link before cutting so
+      recovery detection still works with no daemon and no tunnel.
 - [ ] **Status is truthful.** `dezhban status` reports `blocked: true`, with
       accurate country and service fields.
 - [ ] **Block is idempotent.** Re-run `sudo dezhban block` → no duplicate rules.
@@ -128,9 +135,19 @@ Only a live host can prove these — CI cannot reach a printer.
       providers on the physical link — that is precisely the bug ADR-0006
       exists to prevent, and it would close switch windows early on a bogus
       "good exit".
-- [ ] **Rotation is handled.** Leave the daemon in FULL BLOCK longer than
-      `vpn.endpointRefresh` and confirm recovery still works after the
-      providers' CDN addresses rotate.
+- [ ] **The pass carries no DNS rule.** `pfctl -a dezhban -sr` in FULL BLOCK must
+      show **no** port-53 rule scoped to the tunnel (`on { utunN } … port 53`).
+      Such a rule is destination-unscoped, so it would send every application's
+      DNS through the tunnel to the forbidden exit's resolver. A `to any port 53`
+      rule with no `on` clause is the separate, opt-out `vpn.allowPhysicalDNS`
+      pass on the physical link — that one is expected unless you set it `false`.
+- [ ] **Rotation degrades safely, then heals.** Leave the daemon in FULL BLOCK
+      longer than `vpn.endpointRefresh` and let the providers' CDN addresses
+      rotate. Re-resolution has no DNS path in FULL BLOCK, so the scoped pass
+      goes stale, the lookup fails, and **the posture holds** (an undeterminable
+      country never escalates). Recovery falls back to lift-and-probe, which
+      lifts the guard — the next refresh then succeeds and the scoped pass heals
+      itself. Confirm recovery still completes.
 - [ ] **The fallback survives.** Point `providers` at an unresolvable host so no
       IP resolves → the daemon logs that recovery will briefly lift the guard,
       and recovery still works via lift-and-probe. A FULL BLOCK that can never

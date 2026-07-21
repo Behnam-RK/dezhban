@@ -129,10 +129,13 @@ machine (hysteresis again). Three outcomes:
   the standing guard already covers the leak the failure might hide.
 - **Confirmed blocked country** → **FULL BLOCK**: the tunnel-egress pass is
   dropped so none of your traffic reaches the forbidden exit, but the endpoint
-  handshake stays open so the encrypted transport survives. Recovery is a
-  time-windowed probe: each tick the guard briefly lifts for one lookup through
-  the tunnel, then re-cuts, until the exit reads allowed again — then GUARD is
-  restored automatically.
+  handshake stays open so the encrypted transport survives. Recovery needs no
+  rule change at all: FULL BLOCK carries a pass scoped to the tunnel interface
+  *and* the geo providers' addresses, so each lookup completes with everything
+  else still cut. Once the exit reads allowed again, GUARD is restored
+  automatically. Only if no provider address can be resolved does it fall back to
+  the older lift-and-probe — briefly lifting the guard for one bounded lookup and
+  re-cutting. See [ADR-0006](adr/0006-geo-providers-tunnel-scoped.md).
 
 ## The switch window — the only sanctioned relaxation
 

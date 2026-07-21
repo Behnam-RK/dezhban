@@ -89,6 +89,22 @@ The design depends on these invariants (rationale in
   commits a flip nor cancels one that real readings were counting toward. There
   is **no `failClosed` switch**; it belonged to the retired fallback model, where
   the firewall was open at rest and an unknown country was the only reason to cut.
+- **The FULL BLOCK geo-provider pass is scoped to the tunnel interface AND the
+  provider addresses, and carries no DNS rule.** Never relax it to one half:
+  destination-only (a pass on the *physical* link) would let the lookup succeed
+  with the tunnel down and report the ISP's country — an allowed one — so FULL
+  BLOCK would never fire and `finishCloseProbe` would close a window early on a
+  bogus "good exit"; interface-only is just `ModeGuard`. And never re-add a
+  `port 53` rule beside it: tunnel-scoped but destination-unscoped, it sends
+  *every* application's DNS to the forbidden exit's resolver for as long as the
+  block lasts. Providers are refreshed while the guard is healthy; a mid-block
+  rotation correctly degrades to lift-and-probe, which heals it
+  ([docs/adr/0006](docs/adr/0006-geo-providers-tunnel-scoped.md)).
+- **`vpn.allowLocalNetwork` passes destinations, never interfaces**, and only
+  locally-scoped ones — an interface-scoped pass would carry internet traffic and
+  silently disable the kill switch, and globally-routable multicast (`232/8`,
+  `233/8`, `ff0e::/16`) has no place in a pass justified by "this traffic never
+  leaves the building" ([docs/adr/0005](docs/adr/0005-allow-local-network-by-default.md)).
 - The `guard` / `fullblock` / `switch` mode strings and the state-file JSON keys
   (including `switch-window`, `activeProfile`, `switch`) are stable identifiers
   (used by `print-rules --mode` and `status --json`) — do not rename them.

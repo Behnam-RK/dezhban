@@ -19,9 +19,10 @@ touches unrelated rules:
 - **Windows** → WFP via `netsh`/PowerShell, tagged sublayer (`wfp_windows.go`)
 
 Backends are selected by build tags (`//go:build darwin|linux|windows`), so each
-target compiles only its own backend. The two enforcement modes the backend
-applies (interface guard vs destination allowlist) are described in
-[modes.md](modes.md).
+target compiles only its own backend. The postures the backend renders — STANDBY,
+GUARD, FULL BLOCK, SWITCH WINDOW — are described in [modes.md](modes.md), and all
+four are built from one constructor (`firewall.PolicyInput`) so the daemon and
+`print-rules` can never disagree about what a posture looks like.
 
 ## State export
 
