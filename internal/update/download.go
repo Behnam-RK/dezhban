@@ -112,9 +112,21 @@ func fetch(client *http.Client, url, dst string) error {
 // slice (lines of "<hex>  <name>").
 func checksumFor(sums []byte, name string) (string, error) {
 	for line := range strings.SplitSeq(string(sums), "\n") {
-		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == name {
-			return fields[0], nil
+		line = strings.TrimRight(line, "\r")
+		hash, rest, ok := strings.Cut(line, " ")
+		if !ok {
+			continue
+		}
+		// sha256sum-format lines separate the hash from the name with either
+		// two spaces (text mode: "<hash>  <name>", what `shasum -a 256` in
+		// release.yml actually emits) or one space plus a leading "*"
+		// (binary mode: "<hash> *<name>"). strings.Fields(line) with a
+		// len(fields)==2 check — the previous approach — silently rejected
+		// binary-mode lines and any name containing a space; matching on the
+		// remainder after the first separator handles both.
+		rest = strings.TrimPrefix(strings.TrimLeft(rest, " "), "*")
+		if rest == name {
+			return hash, nil
 		}
 	}
 	return "", fmt.Errorf("no checksum entry for %s in SHA256SUMS", name)

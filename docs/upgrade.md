@@ -120,14 +120,28 @@ the old one is still running, so the rollback copy is still live and must be
 kept. The documented next step there is `sudo dezhban restart` — which
 activates the new version but knows nothing about the stash and does not
 clear it. So after a deferred upgrade you are expected to find
-`/var/db/dezhban/upgrade-stash/` still present, and the next `upgrade apply`
-will refuse until it is dealt with.
+`/var/db/dezhban/upgrade-stash/` still present.
 
-Either way the resolution is the same, and `upgrade apply` prints it: confirm
-which version is actually running (`dezhban version`). If it is the one you
-want, discard the stash with `sudo rm -rf /var/db/dezhban/upgrade-stash` and
-retry. If it is not — something interrupted an attempt before it could
-resolve either way — finish restoring from the stash by hand first.
+The next `upgrade apply` no longer has to be told what to do about that by
+hand. It asks the evidence directly — `dezhban version` on the stashed
+binary versus the one currently installed — and classifies:
+
+- **Stashed version older than what's running now**: some activation already
+  happened and came back healthy since that stash was made. It has served
+  its purpose; `upgrade apply` clears it automatically and continues.
+- **Stashed version equal to what's running now**: activation is still
+  pending — this is the ordinary deferred-upgrade case above. `upgrade
+  apply` refuses, same as before, and prints the recovery below.
+- **Anything else** (a version it can't parse, or — should never happen — the
+  stash reporting a *newer* version than what's installed): refuses rather
+  than guess, for the same reason `decision.Evaluate` never escalates on an
+  undeterminable reading.
+
+When it does refuse, confirm which version is actually running (`dezhban
+version`). If it is the one you want, discard the stash with `sudo rm -rf
+/var/db/dezhban/upgrade-stash` and retry. If it is not — something
+interrupted an attempt before it could resolve either way — finish restoring
+from the stash by hand first.
 
 ## Config, preferences, and everything else that must survive
 

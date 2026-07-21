@@ -89,6 +89,58 @@ func HasStash(dir string) bool {
 	return err == nil && len(entries) > 0
 }
 
+// StashVerdict classifies a leftover rollback stash against the version
+// currently on disk, so `upgrade apply`'s HasStash guard (cmd/dezhban) can
+// tell "a previous upgrade already activated fine and this is just unswept
+// disk" from "activation is still deferred and this copy is still needed" —
+// see docs/upgrade.md's "If the restart doesn't come back healthy" section.
+//
+// Pure and filesystem-free on purpose, matching this file's existing split
+// with cmd/dezhban: the decision belongs here, where it is unit-testable
+// without root or a real service; only the exec calls that obtain
+// stashedVersion/onDiskVersion in the first place live in cmd/.
+type StashVerdict int
+
+const (
+	// StashUnknown means the two versions could not be compared with
+	// confidence: a dev build on either side, an unparseable version string,
+	// or the stash reporting a NEWER version than what's on disk (which
+	// should never happen in practice and is refused rather than guessed
+	// at). Callers must refuse — the same "an undeterminable reading holds,
+	// never escalates" rule CLAUDE.md documents for decision.Evaluate.
+	StashUnknown StashVerdict = iota
+	// StashPending means the stashed version equals what's on disk: the
+	// payload landed but activation hasn't happened (or been confirmed
+	// healthy) yet. The stash is still the only rollback copy — refuse.
+	StashPending
+	// StashObsolete means the stash is OLDER than what's on disk: some
+	// activation already happened and came back healthy since this stash
+	// was made. It has outlived its purpose and is safe to clear.
+	StashObsolete
+)
+
+// ClassifyStash compares a stashed binary's version against the version
+// currently installed on disk. Both arguments are bare version strings as
+// normalizeVersion expects (a leading "v" is fine; callers are responsible
+// for stripping any other prefix — e.g. the "dezhban " that `dezhban
+// version`'s output carries — before calling this). See StashVerdict for
+// what each outcome means and what callers must do with it.
+func ClassifyStash(stashedVersion, onDiskVersion string) StashVerdict {
+	stashed := normalizeVersion(stashedVersion)
+	onDisk := normalizeVersion(onDiskVersion)
+	if stashed == "" || onDisk == "" {
+		return StashUnknown
+	}
+	switch {
+	case semverLess(stashed, onDisk):
+		return StashObsolete
+	case stashed == onDisk:
+		return StashPending
+	default: // stashed > onDisk — should never happen; refuse rather than guess
+		return StashUnknown
+	}
+}
+
 func copyFile(src, dst string, mode fs.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {

@@ -123,6 +123,21 @@ func TestChecksumFor(t *testing.T) {
 	}
 }
 
+// TestChecksumForBinaryModeAndSpaces pins the fix for two cases the previous
+// len(fields)==2 approach silently rejected: sha256sum's BINARY-mode line
+// format ("<hash> *<name>", one space and a leading asterisk, vs. text
+// mode's two plain spaces), and a name containing a space (which
+// strings.Fields would have split into 3+ fields, never matching).
+func TestChecksumForBinaryModeAndSpaces(t *testing.T) {
+	sums := []byte("cccc *binary-mode-file\ndddd  a name with spaces.pkg\n")
+	if got, err := checksumFor(sums, "binary-mode-file"); err != nil || got != "cccc" {
+		t.Errorf("checksumFor(binary-mode) = %q, %v, want \"cccc\", nil", got, err)
+	}
+	if got, err := checksumFor(sums, "a name with spaces.pkg"); err != nil || got != "dddd" {
+		t.Errorf("checksumFor(name with spaces) = %q, %v, want \"dddd\", nil", got, err)
+	}
+}
+
 // shaHex is a tiny test helper mirroring sha256File but over an in-memory
 // byte slice, so fixtures don't need to round-trip through a temp file just
 // to compute the digest they're about to serve.

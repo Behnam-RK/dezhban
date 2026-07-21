@@ -272,6 +272,37 @@ Per OS, privileged:
 - [ ] **`restart` applies a config change** (there is no live reload), and `start`
       and `stop` are idempotent.
 
+## Upgrade
+
+macOS only, privileged (`dezhban upgrade download`/`apply`). See
+[docs/upgrade.md](upgrade.md) for the full design.
+
+- [ ] **Tunnel down.** `dezhban upgrade check` with the tunnel down fails
+      cleanly and opens nothing — it inherits the guard's tunnel-only routing
+      rather than getting its own firewall pass.
+- [ ] **Deferred activation during FULL BLOCK.** With the guard in FULL
+      BLOCK, `dezhban upgrade apply` installs the payload, refuses to
+      activate, and leaves the old daemon enforcing normally.
+- [ ] **The deferred stash resolves itself.** From the state above: `sudo
+      dezhban restart` to activate, confirm the new version is running with
+      `dezhban version`, then run `upgrade apply` again for a DIFFERENT
+      release — it should clear the now-obsolete stash automatically instead
+      of refusing (see docs/upgrade.md, "If the restart doesn't come back
+      healthy").
+- [ ] **Rollback.** Force the new version to never publish a healthy
+      snapshot (e.g. stop the daemon right after the restart) → `upgrade
+      apply` restores the previous binary/app and restarts back into it
+      within ~30s.
+- [ ] **Config and learned state survive.** `/etc/dezhban/dezhban.json` and
+      `/var/db/dezhban/learned.json` are byte-identical before and after a
+      full upgrade.
+- [ ] **The upgraded app launches.** After `upgrade apply` activates,
+      confirm `/Applications/Dezhban.app` opens normally
+      (`AppActions.relaunch()`'s `open` succeeds) — proves the ad-hoc
+      signature survived packaging into the `.pkg` and reinstall, the same
+      invariant release.yml's smoke test now asserts with `codesign
+      --verify`.
+
 ## Setup wizard
 
 - [ ] A fresh `dezhban setup` on macOS produces an autodetect + auto-discovery

@@ -191,24 +191,47 @@ func cmdUpgradeApply(args []string) int {
 	}
 
 	stashDir := upgradeStashDir()
-	// A stash outliving its upgrade is expected in more than the scary case.
-	// Both DEFERRED paths below (--no-activate, and a gate that refused to
+	// A stash outliving its upgrade is expected, not just possible. Both
+	// DEFERRED paths below (--no-activate, and a gate that refused to
 	// activate) finish successfully with the stash still on disk on purpose —
-	// activation hasn't happened yet, so the rollback copy is still live. The
+	// activation hasn't happened, so the rollback copy is still live. The
 	// operator's documented next step there is `sudo dezhban restart`, which
-	// has no idea the stash exists and never clears it. So the common reason
-	// to land here is a perfectly healthy deferred upgrade, not a crash
-	// mid-apply — say so, and name the way out, instead of pointing at the
-	// docs and leaving `upgrade` wedged for someone who did nothing wrong.
+	// has no idea the stash exists and never clears it. Same wedge on a THIRD
+	// door: rollback() now clears its own stash on full success, but an older
+	// stash from before that fix, or one left by some other interruption,
+	// lands here too.
+	//
+	// So before refusing outright, ask the evidence rather than assume the
+	// scary case: exec the stashed binary and the one currently on disk for
+	// their own version strings (the same move `validate` gets below — ask
+	// the binary, not this process's possibly-stale idea of the world) and
+	// classify. If the stash is OLDER than what's running, some activation
+	// already landed and came back healthy since it was made — it has served
+	// its purpose and clearing it is safe. Anything else (equal — activation
+	// is still pending; unreadable or newer — should never happen) still
+	// refuses: guessing wrong here would discard the one rollback copy a
+	// genuinely interrupted upgrade still depends on.
 	if update.HasStash(stashDir) {
-		fmt.Fprintln(os.Stderr, "upgrade apply: a rollback stash from a previous upgrade is still present at", stashDir)
-		fmt.Fprintln(os.Stderr, "               that is expected if the last apply deferred activation (--no-activate, or")
-		fmt.Fprintln(os.Stderr, "               the gate refusing while FULL BLOCK / a switch window was up) and you have")
-		fmt.Fprintln(os.Stderr, "               since activated it with 'sudo dezhban restart'.")
-		fmt.Fprintln(os.Stderr, "               if the running version is the one you want, discard it and retry:")
-		fmt.Fprintln(os.Stderr, "                 sudo rm -rf", stashDir)
-		fmt.Fprintln(os.Stderr, "               otherwise see docs/upgrade.md for restoring from it by hand.")
-		return 1
+		verdict := update.ClassifyStash(
+			execVersion(filepath.Join(stashDir, "dezhban")),
+			execVersion("/usr/local/bin/dezhban"),
+		)
+		if verdict != update.StashObsolete {
+			fmt.Fprintln(os.Stderr, "upgrade apply: a rollback stash from a previous upgrade is still present at", stashDir)
+			fmt.Fprintln(os.Stderr, "               that is expected if the last apply deferred activation (--no-activate, or")
+			fmt.Fprintln(os.Stderr, "               the gate refusing while FULL BLOCK / a switch window was up) and you have")
+			fmt.Fprintln(os.Stderr, "               since activated it with 'sudo dezhban restart'.")
+			fmt.Fprintln(os.Stderr, "               if the running version is the one you want, discard it and retry:")
+			fmt.Fprintln(os.Stderr, "                 sudo rm -rf", stashDir)
+			fmt.Fprintln(os.Stderr, "               otherwise see docs/upgrade.md for restoring from it by hand.")
+			return 1
+		}
+		fmt.Println("a rollback stash from a previous upgrade is present but obsolete — a newer version is already")
+		fmt.Println("running than what it holds, so that upgrade already activated. clearing it before continuing.")
+		if err := update.ClearStash(stashDir); err != nil {
+			fmt.Fprintln(os.Stderr, "upgrade apply: could not clear the obsolete stash:", err)
+			return 1
+		}
 	}
 
 	// Stash the CURRENT binary/app BEFORE installer runs — this has to happen
@@ -217,6 +240,7 @@ func cmdUpgradeApply(args []string) int {
 	fmt.Println("stashing the current version for rollback...")
 	if err := update.StashFile(stashDir, "/usr/local/bin/dezhban"); err != nil {
 		fmt.Fprintln(os.Stderr, "upgrade apply: could not stash the current binary:", err)
+		_ = update.ClearStash(stashDir)
 		return 1
 	}
 	if err := update.StashDir(stashDir, "/Applications/Dezhban.app"); err != nil {
@@ -280,6 +304,20 @@ func stagedPkg(dir string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("no .pkg found in %s", dir)
+}
+
+// execVersion runs `<bin> version` and returns the bare version string —
+// buildStamp.line()'s "dezhban " prefix stripped, so the result is directly
+// comparable via update.ClassifyStash. Returns "" on any failure (bin
+// missing, not executable, unexpected output): ClassifyStash already treats
+// an empty/unparseable version as its safe StashUnknown verdict, so a failed
+// exec here degrades to "refuse" rather than needing its own special case.
+func execVersion(bin string) string {
+	out, err := exec.Command(bin, "version").Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimPrefix(strings.TrimSpace(string(out)), "dezhban ")
 }
 
 // slogCloser pairs a logger with the file handle backing it, so callers can
@@ -378,12 +416,29 @@ func rollback(stashDir string) int {
 		fmt.Fprintln(os.Stderr, "the stash is kept at", stashDir, "— restore it by hand, or reinstall")
 		return 1
 	}
+	appRestored := true
 	if err := update.RestoreDir(stashDir, "Dezhban.app", "/Applications/Dezhban.app"); err != nil {
 		fmt.Fprintln(os.Stderr, "rollback: could not restore the app:", err)
+		appRestored = false
 	}
 	if code := cmdRestart(nil); code != 0 {
 		fmt.Fprintln(os.Stderr, "rollback: the restored version also failed to restart cleanly — run 'dezhban panic' and investigate")
+		fmt.Fprintln(os.Stderr, "the stash is kept at", stashDir, "in case manual recovery is still needed")
 		return 1
+	}
+
+	// The stash's only job was rollback insurance for THIS restart, and it just
+	// did its job — clear it, or the next `upgrade apply` refuses at the
+	// HasStash guard over a rollback that actually succeeded (the same wedge
+	// deferred activation causes, just via a different door). Only when the
+	// app half also restored: if it didn't, the stash is still the one intact
+	// copy of the working app bundle, and manual recovery may still need it.
+	if appRestored {
+		if err := update.ClearStash(stashDir); err != nil {
+			fmt.Fprintln(os.Stderr, "warning: rollback succeeded but could not clear the stash:", err)
+		}
+	} else {
+		fmt.Fprintln(os.Stderr, "the stash is kept at", stashDir, "— the app half of the restore failed; see above")
 	}
 	fmt.Println("rolled back — the previous version is running again")
 	return 1 // the upgrade itself still failed; report non-zero even though rollback succeeded
@@ -394,13 +449,23 @@ func rollback(stashDir string) int {
 // process is healthy) that is neither the terminal "stopped" posture nor
 // carrying an EnforcementErr — the same "a set EnforcementErr means posture
 // was not actually achieved" rule state.Snapshot's own doc comment states.
+// postureStopped mirrors the literal posture string runner.go publishes into
+// state.Snapshot.Posture (internal/runner/runner.go's final-snapshot-before-
+// teardown write) when the daemon is shutting down. Named here rather than
+// left as a bare literal for the same reason internal/update/gate.go names
+// posturePassGuard/posturePassStandby instead of importing constants:
+// internal/state has no exported constants for these values, and this
+// package doesn't add any either — that would be a second source of truth
+// for strings internal/runner already owns.
+const postureStopped = "stopped"
+
 func waitForHealthySnapshot(path string, after time.Time, budget time.Duration) (state.Snapshot, bool) {
 	deadline := time.Now().Add(budget)
 	var last state.Snapshot
 	for {
 		if snap, err := state.Read(path); err == nil {
 			last = snap
-			if snap.Time.After(after) && snap.Posture != "stopped" && snap.EnforcementErr == "" {
+			if snap.Time.After(after) && snap.Posture != postureStopped && snap.EnforcementErr == "" {
 				return snap, true
 			}
 		}

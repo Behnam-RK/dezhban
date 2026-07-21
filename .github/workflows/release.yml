@@ -238,6 +238,16 @@ jobs:
           test -x /usr/local/bin/dezhban || { echo "CLI not installed" >&2; exit 1; }
           /usr/local/bin/dezhban version -v
           test -d /Applications/Dezhban.app || { echo "app not installed" >&2; exit 1; }
+
+          # The app is ad-hoc signed at build time (gui/macos/build-app.sh) because
+          # Apple Silicon's kernel refuses to exec an unsigned arm64 binary at all —
+          # a hard launch requirement, not a Gatekeeper nicety. pkgbuild treats the
+          # payload as an opaque byte stream, so this SHOULD always pass; assert it
+          # rather than assume it, since a broken seal here means the shipped app
+          # simply never launches for anyone who installs this exact artifact.
+          codesign --verify --deep --strict /Applications/Dezhban.app \
+            || { echo "error: installed app failed signature verification" >&2; exit 1; }
+
           test -f /Library/LaunchDaemons/dezhban.plist || { echo "LaunchDaemon not registered" >&2; exit 1; }
           test -x /usr/local/share/dezhban/uninstall.sh || { echo "uninstaller not installed" >&2; exit 1; }
 

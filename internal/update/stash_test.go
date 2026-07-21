@@ -115,3 +115,28 @@ func TestHasStashEmpty(t *testing.T) {
 		t.Error("HasStash true for a directory that does not exist")
 	}
 }
+
+func TestClassifyStash(t *testing.T) {
+	cases := []struct {
+		name            string
+		stashed, onDisk string
+		want            StashVerdict
+	}{
+		{"stashed older, plain vX.Y.Z", "v0.4.0", "v0.5.0", StashObsolete},
+		{"stashed older, no leading v either side", "0.4.0", "0.5.0", StashObsolete},
+		{"stashed equals on-disk — still pending activation", "v0.5.0", "v0.5.0", StashPending},
+		{"stashed newer than on-disk — should never happen, refuse", "v0.6.0", "v0.5.0", StashUnknown},
+		{"stashed is a dev build", "v0.4.0-3-gabc123-dirty", "v0.5.0", StashUnknown},
+		{"on-disk is a dev build", "v0.4.0", "v0.5.0-3-gabc123-dirty", StashUnknown},
+		{"both empty (unparseable exec output)", "", "", StashUnknown},
+		{"stashed empty only", "", "v0.5.0", StashUnknown},
+		{"an rc compares by its base core, same as normalizeVersion", "v0.4.0-rc.1", "v0.5.0", StashObsolete},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := ClassifyStash(c.stashed, c.onDisk); got != c.want {
+				t.Errorf("ClassifyStash(%q, %q) = %v, want %v", c.stashed, c.onDisk, got, c.want)
+			}
+		})
+	}
+}

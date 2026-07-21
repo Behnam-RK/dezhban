@@ -100,7 +100,13 @@ sha256_check() {
 }
 
 verify() {
-	grep " $1\$" "$tmp/SHA256SUMS" | ( cd "$tmp" && sha256_check ) >/dev/null \
+	# awk field match, not `grep " $1\$"`: $1 becomes part of a regex there, so
+	# an asset name containing a "." (every name this script passes does —
+	# "Dezhban-macos.app.zip") matches any character instead of a literal dot.
+	# Not exploitable today (both call sites pass names this script itself
+	# builds), but it is not an exact match either, and awk's $2 == n costs
+	# nothing to get right.
+	awk -v n="$1" '$2 == n' "$tmp/SHA256SUMS" | ( cd "$tmp" && sha256_check ) >/dev/null \
 		|| die "checksum mismatch for $1 — aborting install. This may mean a bad mirror or a tampered download; do not retry blindly."
 }
 
