@@ -28,8 +28,13 @@ import (
 const upgradeUsage = `usage: dezhban upgrade <subcommand>
 
   check      Ask GitHub for the latest release and report if one is newer (no root)
-  download   Fetch and verify the latest .pkg, staged for apply (no root)
+  download   Fetch and verify the latest .pkg, staged for apply (root — see below)
   apply      Install the staged .pkg and, unless --no-activate, restart into it (root)
+
+download needs root too, not just apply: its staging directory is root-owned
+on purpose. A writable-by-anyone staging area would let a local user swap the
+verified .pkg for something else before apply installs it — exactly the
+tampering window signature verification exists to close.
 
 Self-apply is macOS only (Linux/Windows package managers own their own
 upgrade path — this repo does not reimplement apt/dnf/winget). "upgrade check"
@@ -117,6 +122,14 @@ func cmdUpgradeDownload(args []string) int {
 
 	if runtime.GOOS != "darwin" {
 		fmt.Fprintln(os.Stderr, "upgrade download: self-upgrade is macOS-only — see docs/upgrade.md")
+		return 1
+	}
+	// Root, not just "download": the staging directory lives under
+	// /var/db/dezhban (root-owned, 0755 — see state.DirMode), and it has to.
+	// A world-writable staging area would let any local user swap the
+	// verified .pkg for something else between download and apply — a real
+	// TOCTOU hole that would undermine the whole point of verifying it here.
+	if !requireRoot("upgrade download") {
 		return 1
 	}
 

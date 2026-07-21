@@ -24,6 +24,7 @@ Commands:
   setup        Interactive wizard to create or update the config
   config       Inspect or change the config without hand-editing JSON
   completion   Print a shell completion script (bash|zsh|fish)
+  upgrade      Check/download/apply a newer release (check: no root; download/apply: root, macOS)
   version      Print the version
 
 Global: -v / --verbose   override the configured log level to debug
@@ -47,6 +48,8 @@ daemon** over its control socket and need no password at all:
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
 | `setup`, `config set`/`edit` | Yes, but only for the config write itself. |
+| `upgrade check` | **No** — read-only, no root. |
+| `upgrade download`, `upgrade apply` | Yes — root, macOS only. `download`'s staging directory is root-owned on purpose: a writable-by-anyone staging area would let a local user swap the verified `.pkg` before `apply` installs it. |
 
 `dezhban status` prints a `daemon control:` line saying which mode you're in.
 
@@ -219,6 +222,24 @@ sudo dezhban uninstall
 stopping the service never leaves a block-all rule behind. If the service crashes
 while blocked, the rules persist by design (a kill switch must not fail open); use
 `sudo dezhban panic` to flush them even with no daemon running.
+
+## Upgrade
+
+```sh
+dezhban upgrade check              # no root — is a newer release out?
+sudo dezhban upgrade download       # macOS only — fetch + verify the .pkg
+sudo dezhban upgrade apply           # macOS only — install it, then activate
+sudo dezhban upgrade apply --no-activate   # install without restarting
+```
+
+`check` works on every platform and is read-only. `download`/`apply` are
+macOS only — Linux and Windows package managers own their own upgrade path.
+`apply` installs the `.pkg` (zero enforcement gap) and then, unless
+`--no-activate`, restarts into it — but only when the daemon's posture makes
+that safe (healthy `guard` or `standby`; never `full-block` or an open
+switch window). See [docs/upgrade.md](upgrade.md) for the full design: why
+it's split this way, the activation gate, rollback, and the menubar app's
+**About → Updates** panel.
 
 ## macOS app
 
