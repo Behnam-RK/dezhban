@@ -191,9 +191,23 @@ func cmdUpgradeApply(args []string) int {
 	}
 
 	stashDir := upgradeStashDir()
+	// A stash outliving its upgrade is expected in more than the scary case.
+	// Both DEFERRED paths below (--no-activate, and a gate that refused to
+	// activate) finish successfully with the stash still on disk on purpose —
+	// activation hasn't happened yet, so the rollback copy is still live. The
+	// operator's documented next step there is `sudo dezhban restart`, which
+	// has no idea the stash exists and never clears it. So the common reason
+	// to land here is a perfectly healthy deferred upgrade, not a crash
+	// mid-apply — say so, and name the way out, instead of pointing at the
+	// docs and leaving `upgrade` wedged for someone who did nothing wrong.
 	if update.HasStash(stashDir) {
-		fmt.Fprintln(os.Stderr, "upgrade apply: a stash from an interrupted previous upgrade is still present at", stashDir)
-		fmt.Fprintln(os.Stderr, "               resolve that first (see docs/upgrade.md) before applying another update")
+		fmt.Fprintln(os.Stderr, "upgrade apply: a rollback stash from a previous upgrade is still present at", stashDir)
+		fmt.Fprintln(os.Stderr, "               that is expected if the last apply deferred activation (--no-activate, or")
+		fmt.Fprintln(os.Stderr, "               the gate refusing while FULL BLOCK / a switch window was up) and you have")
+		fmt.Fprintln(os.Stderr, "               since activated it with 'sudo dezhban restart'.")
+		fmt.Fprintln(os.Stderr, "               if the running version is the one you want, discard it and retry:")
+		fmt.Fprintln(os.Stderr, "                 sudo rm -rf", stashDir)
+		fmt.Fprintln(os.Stderr, "               otherwise see docs/upgrade.md for restoring from it by hand.")
 		return 1
 	}
 

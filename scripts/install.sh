@@ -3,8 +3,11 @@
 # channel (see docs/install.md for why): curl deliberately does NOT set
 # com.apple.quarantine on what it downloads — Apple's own documented behaviour,
 # not a workaround — so this is the one macOS install path with zero Gatekeeper
-# friction. There is no free way to make a double-clicked .pkg or .app behave
-# the same; that needs a $99/yr Apple Developer ID (see
+# friction. That property is now ENFORCED rather than assumed: the install steps
+# below strip com.apple.quarantine from both the binary and the app bundle, so
+# the guarantee holds even if an asset ever arrives by some route that does flag
+# it. There is no free way to make a double-clicked .pkg or .app behave the
+# same; that needs a $99/yr Apple Developer ID (see
 # packaging/macos/build-pkg.sh's dormant INSTALLER_SIGN_IDENTITY seam).
 #
 #   curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
@@ -124,21 +127,58 @@ note "installing the CLI to /usr/local/bin/dezhban"
 install -m 0755 "$tmp/$asset" /usr/local/bin/dezhban.new
 mv -f /usr/local/bin/dezhban.new /usr/local/bin/dezhban
 
+# Same enforcement as the .app below, and it matters just as much here: a
+# quarantined bare executable is refused on exec too (not only bundles), so a
+# flagged binary would fail as a launchd-started daemon — i.e. the kill switch
+# silently never comes up. Cheap no-op when the flag was never set.
+[ "$goos" = darwin ] && { xattr -d com.apple.quarantine /usr/local/bin/dezhban 2>/dev/null || true; }
+
 if [ "$goos" = darwin ]; then
 	note "installing the menubar app to /Applications/Dezhban.app"
 	rm -rf /Applications/Dezhban.app
 	ditto -xk "$tmp/Dezhban-macos.app.zip" /Applications
+
+	# Gatekeeper: ENFORCE the invariant this script's header only asserts.
+	#
+	# The zero-friction property depends on nothing in the pipeline attaching
+	# com.apple.quarantine — true today because curl doesn't, but `ditto -xk`
+	# faithfully restores whatever xattrs the archive carries, so the moment an
+	# asset is fetched by anything else (a corporate proxy that rewrites
+	# downloads, a mirror, a user hand-fetching the zip in a browser and
+	# re-running this against it) the app inherits a quarantine flag and macOS
+	# refuses to launch it as "from an unidentified developer" — which, with no
+	# Developer ID here, the user cannot clear from the Gatekeeper dialog at
+	# all, only via this same xattr call. Stripping it unconditionally costs
+	# nothing when it was already absent, and is the difference between a
+	# documented guarantee and a lucky one.
+	xattr -dr com.apple.quarantine /Applications/Dezhban.app 2>/dev/null || true
+
+	# The bundle is ad-hoc signed at build time (gui/macos/build-app.sh) because
+	# Apple Silicon's kernel will not exec an unsigned arm64 binary — that is a
+	# hard launch requirement, not a Gatekeeper nicety. Verify the seal survived
+	# the zip round-trip: a warning here explains a "damaged app" message that is
+	# otherwise very hard to diagnose. Non-fatal — the CLI, which is the actual
+	# kill switch, is already installed and works without the menubar app.
+	if ! codesign --verify --deep /Applications/Dezhban.app 2>/dev/null; then
+		echo "warning: /Applications/Dezhban.app failed signature verification — the menubar app may not launch." >&2
+		echo "         The CLI is installed and fully functional; reinstall the app later if you want it." >&2
+	fi
 fi
 
 CONFIG_DIR=/etc/dezhban
 mkdir -p "$CONFIG_DIR"
 note "registering the service (not starting it — see 'next steps' below)"
-dezhban --no-sudo install --config "$CONFIG_DIR/dezhban.json" \
+# Absolute path, never a bare `dezhban`: /usr/local/bin is not necessarily first
+# on root's PATH — on Apple Silicon, Homebrew's /opt/homebrew/bin usually is,
+# and this repo now ships a Homebrew formula that puts a dezhban there. Resolving
+# through PATH could register the service using a DIFFERENT build than the one
+# just installed two lines above.
+/usr/local/bin/dezhban --no-sudo install --config "$CONFIG_DIR/dezhban.json" \
 	|| die "could not register the service; the CLI is installed at /usr/local/bin/dezhban — retry with 'sudo dezhban install'"
 
 if [ "$was_running" = 1 ]; then
 	note "restarting the service"
-	dezhban --no-sudo start
+	/usr/local/bin/dezhban --no-sudo start
 fi
 
 # The uninstaller comes from the SAME tag being installed — same guarantee the

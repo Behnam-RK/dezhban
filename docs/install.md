@@ -41,6 +41,21 @@ not because it evades a check, but because the check was never designed to
 fire on this path in the first place. This is the same mechanism rustup,
 Homebrew's own installer, and most modern CLI tools rely on.
 
+The script does not merely rely on that, though. `ditto -xk` faithfully
+restores whatever extended attributes an archive carries, so an asset that
+ever arrived by some other route — a proxy that rewrites downloads, a mirror,
+a user who fetched the zip in a browser and re-ran the script against it —
+would drag a quarantine flag in with it. The install steps therefore strip
+`com.apple.quarantine` from both `/usr/local/bin/dezhban` and
+`/Applications/Dezhban.app` explicitly, and verify the app's ad-hoc signature
+survived the round-trip. It is a no-op on the normal path; it turns the
+guarantee from lucky into enforced on every other one.
+
+This matters more than cosmetics for the CLI specifically: a quarantined bare
+executable is refused on `exec` too, not just an app bundle on double-click.
+A flagged `/usr/local/bin/dezhban` would fail when **launchd** tried to start
+it — the kill switch would simply never come up.
+
 ### Why isn't there a signed `.pkg` instead?
 
 Because a signed, notarized `.pkg` requires enrolling in the **Apple

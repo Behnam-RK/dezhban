@@ -111,13 +111,23 @@ apply` **automatically restores the stash and restarts back into the
 version that was known good** — then reports the failure clearly.
 
 The stash is deleted the moment the new version *does* come back healthy —
-it exists only for this one risk window, not as permanent leftover disk. If
-you ever see it left behind (`/var/db/dezhban/upgrade-stash/` still present,
-and the next `upgrade apply` refuses to run with "a stash from an
-interrupted previous upgrade is still present"), it means something
-interrupted a previous attempt before it could resolve either way — resolve
-it by hand (confirm which version is actually running, then either finish
-restoring or delete the stash) before trying again.
+it exists only for this one risk window, not as permanent leftover disk.
+
+It does, however, outlive an apply that **deferred** activation, and that is
+correct rather than a fault: with `--no-activate`, or when the gate refused
+because FULL BLOCK or a switch window was up, the new version is on disk but
+the old one is still running, so the rollback copy is still live and must be
+kept. The documented next step there is `sudo dezhban restart` — which
+activates the new version but knows nothing about the stash and does not
+clear it. So after a deferred upgrade you are expected to find
+`/var/db/dezhban/upgrade-stash/` still present, and the next `upgrade apply`
+will refuse until it is dealt with.
+
+Either way the resolution is the same, and `upgrade apply` prints it: confirm
+which version is actually running (`dezhban version`). If it is the one you
+want, discard the stash with `sudo rm -rf /var/db/dezhban/upgrade-stash` and
+retry. If it is not — something interrupted an attempt before it could
+resolve either way — finish restoring from the stash by hand first.
 
 ## Config, preferences, and everything else that must survive
 

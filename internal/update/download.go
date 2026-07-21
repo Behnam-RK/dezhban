@@ -22,6 +22,16 @@ const (
 // httptest server instead of real GitHub release asset URLs.
 var downloadBaseURL = "https://github.com/" + Repo + "/releases/download"
 
+// maxAssetBytes caps what a single asset may write to disk. Nothing here is
+// remotely near it (the .pkg is a few MB; SHA256SUMS is under a kilobyte), so
+// it is not a tuning knob — it is a bound on a root process streaming a remote
+// body into a root-owned staging directory BEFORE any of it has been verified.
+// Without one, a hostile or simply broken endpoint fills the boot volume, and
+// on macOS a full boot volume is its own kind of outage. Truncating rather
+// than erroring is fine and deliberate: a truncated asset fails the signature
+// or checksum check immediately after, which is exactly the outcome wanted.
+const maxAssetBytes = 512 << 20 // 512 MiB
+
 // Download fetches the .pkg for the given version (bare, no "v") plus
 // SHA256SUMS and SHA256SUMS.sig into dir, verifies the ed25519 signature over
 // SHA256SUMS, then verifies the .pkg's own checksum against it. Returns the
@@ -92,7 +102,7 @@ func fetch(client *http.Client, url, dst string) error {
 		return err
 	}
 	defer f.Close()
-	if _, err := io.Copy(f, resp.Body); err != nil {
+	if _, err := io.Copy(f, io.LimitReader(resp.Body, maxAssetBytes)); err != nil {
 		return fmt.Errorf("downloading %s: %w", url, err)
 	}
 	return nil
