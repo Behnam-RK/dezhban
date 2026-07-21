@@ -33,13 +33,14 @@ ok "go build"
 go test ./... || fail "go test failed"
 ok "go test"
 
-# 5. Shell scripts — scripts/*.sh and packaging/macos/*.sh run as root on other
-# people's machines (install.sh, upgrade helpers, the pkg postinstall). Mirrors
-# ci.yml's shellcheck job exactly (same -S warning threshold), so a local commit
-# can't drift from what CI will enforce. Soft-skips if shellcheck isn't
-# installed locally — CI is still the real gate, this is just an earlier catch.
+# 5. Shell scripts — scripts/*.sh, packaging/macos/*.sh, packaging/linux/*.sh run
+# as root on other people's machines (install.sh, upgrade helpers, the pkg
+# postinstall/preremove hooks). Mirrors ci.yml's shellcheck job exactly (same
+# -S warning threshold), so a local commit can't drift from what CI will
+# enforce. Soft-skips if shellcheck isn't installed locally — CI is still the
+# real gate, this is just an earlier catch.
 if command -v shellcheck >/dev/null 2>&1; then
-	shellcheck -S warning scripts/*.sh packaging/macos/*.sh || fail "shellcheck failed"
+	shellcheck -S warning scripts/*.sh packaging/macos/*.sh packaging/linux/*.sh || fail "shellcheck failed"
 	ok "shellcheck"
 else
 	warn "shellcheck not installed — skipping locally (CI still runs it)"

@@ -120,5 +120,15 @@ if [[ -n "${DEZHBAN_VERSION:-}" ]]; then
 	fi
 fi
 
+# Ad-hoc sign, LAST — after lipo and the PlistBuddy edits above, either of which
+# invalidates a prior signature. Not a Gatekeeper measure (there is no Developer
+# ID here — see packaging/macos/build-pkg.sh's INSTALLER_SIGN_IDENTITY /
+# NOTARIZE_PROFILE seam for that, still dormant): Apple Silicon's kernel refuses
+# to execute an unsigned arm64 binary at all, ad-hoc or not. Go's linker already
+# ad-hoc-signs the CLI's own output; the assembled .app bundle needed the same
+# for its seal to actually match its contents rather than by accident.
+echo "==> codesign (ad-hoc)"
+codesign -s - --force --deep "$APP"
+
 echo "==> built $APP"
 echo "    open it with:  open \"$APP\""

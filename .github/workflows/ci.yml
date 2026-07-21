@@ -85,7 +85,7 @@ jobs:
       # notes (e.g. SC2015's A && B || C caveat in release.sh, a pre-existing,
       # deliberate idiom there — not something this gate exists to relitigate).
       - name: shellcheck
-        run: shellcheck -S warning scripts/*.sh packaging/macos/*.sh
+        run: shellcheck -S warning scripts/*.sh packaging/macos/*.sh packaging/linux/*.sh
 
   # Cross-compile all five release targets and assert every artifact exists.
   build-all:
