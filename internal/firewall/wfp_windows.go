@@ -201,6 +201,7 @@ func renderBlockScript(p Policy) string {
 			}
 			rule("dns-any-udp", "-Protocol UDP -RemotePort 53")
 			rule("dns-any-tcp", "-Protocol TCP -RemotePort 53")
+			emitLocalNetworkRules(rule, p)
 			emitWindowPortRules(rule, p)
 		}
 	case ModeGuard:
@@ -211,6 +212,7 @@ func renderBlockScript(p Policy) string {
 			rule("endpoint", "-RemoteAddress "+psAddrList(p.VPNEndpoints))
 		}
 		emitAllowPhysicalDNSRules(rule, p)
+		emitLocalNetworkRules(rule, p)
 	default: // ModeFullBlock
 		if isVPNPolicy(p) {
 			// VPN full block (including the zero-tunnel standing posture): no
@@ -220,6 +222,7 @@ func renderBlockScript(p Policy) string {
 			if ep := psAddrList(p.VPNEndpoints); ep != "" {
 				rule("endpoint", "-RemoteAddress "+ep)
 			}
+			emitTunnelProviderRules(rule, p)
 			emitAllowPhysicalDNSRules(rule, p)
 		} else {
 			// Legacy direct model: dst-IP allowlist.
@@ -231,6 +234,10 @@ func renderBlockScript(p Policy) string {
 				rule("hosts", "-RemoteAddress "+hosts)
 			}
 		}
+		// Outside the isVPNPolicy split on purpose — see the same hoist in
+		// pf_darwin.go. AllowLocalNetwork belongs to the posture, not to which
+		// FULL BLOCK shape rendered it.
+		emitLocalNetworkRules(rule, p)
 	}
 
 	// Set the profile outbound default last, once the allow rules are in place.
@@ -253,6 +260,32 @@ func emitWindowPortRules(rule func(name, args string), p Policy) {
 				fmt.Sprintf("-Protocol %s -RemotePort %d", up, port))
 		}
 	}
+}
+
+// emitTunnelProviderRules renders the tunnel-scoped geo-provider pass used in
+// FULL BLOCK. WFP matches interface by exact alias only, so tunnel GROUPS cannot
+// be expressed here — with only a group configured this emits nothing and the
+// daemon falls back to lift-and-probe.
+//
+// Deliberately NO accompanying DNS pass; see tunnelProviderRules in pf_darwin.go
+// for why an unscoped port-53 rule here would leak every hostname this host
+// resolves to the very exit FULL BLOCK is refusing.
+func emitTunnelProviderRules(rule func(name, args string), p Policy) {
+	if len(p.ProviderAddrs) == 0 || len(p.TunnelIfaces) == 0 {
+		return
+	}
+	rule("providers-via-tunnel",
+		"-InterfaceAlias "+psStringList(p.TunnelIfaces)+" -RemoteAddress "+psAddrList(p.ProviderAddrs))
+}
+
+// emitLocalNetworkRules renders the destination-scoped LAN pass
+// (vpn.allowLocalNetwork). New-NetFirewallRule's -RemoteAddress accepts mixed
+// v4/v6 CIDRs in one comma-separated list, so unlike nft this needs no split.
+func emitLocalNetworkRules(rule func(name, args string), p Policy) {
+	if !p.AllowLocalNetwork {
+		return
+	}
+	rule("local-network", "-RemoteAddress "+strings.Join(LocalNetworkPrefixes, ","))
 }
 
 // emitAllowPhysicalDNSRules renders the opt-in plain-DNS pass
@@ -282,7 +315,7 @@ func queryOutboundDefaults() (map[string]string, error) {
 		return nil, err
 	}
 	res := make(map[string]string)
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		line = strings.TrimSpace(line)
 		if name, action, ok := strings.Cut(line, "="); ok {
 			res[strings.TrimSpace(name)] = strings.TrimSpace(action)

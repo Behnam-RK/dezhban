@@ -19,9 +19,10 @@ touches unrelated rules:
 - **Windows** → WFP via `netsh`/PowerShell, tagged sublayer (`wfp_windows.go`)
 
 Backends are selected by build tags (`//go:build darwin|linux|windows`), so each
-target compiles only its own backend. The two enforcement modes the backend
-applies (interface guard vs destination allowlist) are described in
-[modes.md](modes.md).
+target compiles only its own backend. The postures the backend renders — STANDBY,
+GUARD, FULL BLOCK, SWITCH WINDOW — are described in [modes.md](modes.md), and all
+four are built from one constructor (`firewall.PolicyInput`) so the daemon and
+`print-rules` can never disagree about what a posture looks like.
 
 ## State export
 
@@ -110,15 +111,16 @@ These invariants are load-bearing — the whole design depends on them:
 - `Cleanup()` must always be safe to call and is wired to run on shutdown
   (`defer` + `signal.NotifyContext`). A stale block-all rule can lock the user out
   of their own network — `panic` removes rules even with no daemon running.
-- Default to **fail-closed** — but the meaning is scoped per mode, and conflating
-  the two will livelock the daemon:
-  - *Country-blocklist fallback:* when the country can't be determined, **block**.
-    The allowlist (loopback + DNS + geo-API egress) must stay open so recovery
-    detection still works, or the machine can lock itself out.
-  - *VPN guard:* the standing guard rule **is** the fail-closed block for physical
-    leaks, so an undeterminable country **holds** the current posture. Only a
-    *successful* blocked-country reading escalates to FULL BLOCK. Escalating on an
-    unknown would cut the tunnel's own egress and livelock the reconnect.
+- **An undeterminable country HOLDS the current posture — it never escalates.**
+  The standing guard rule **is** the fail-closed block for physical leaks, so only
+  a *successful* blocked-country reading escalates to FULL BLOCK, and only a
+  successful allowed reading restores GUARD. Escalating on an unknown would cut
+  the tunnel's own egress and livelock the reconnect that could fix the lookup.
+  This lives in `decision.Evaluate`, which short-circuits on `r.Err != nil`
+  without touching the hysteresis streak — so a blip neither commits a flip nor
+  cancels one that real readings were counting toward. There is no `failClosed`
+  switch; it belonged to the retired fallback model, where the firewall was open
+  at rest and an unknown country was the only reason to cut anything.
 - **One goroutine applies rules.** Every `Backend.Apply` call comes from the single
   run-loop goroutine in `internal/runner`. The window timer, command poll, tunnel
   watcher, geo ticks, and control-socket requests are all *select cases* in that one
@@ -150,14 +152,20 @@ The choices below were locked early and the codebase still rests on them. They a
 recorded here because the rationale, not the choice, is the part that is expensive
 to reconstruct.
 
+Later decisions — and the alternatives examined for each — live as
+**[architecture decision records](adr/README.md)**. Read those before reversing
+anything they describe: several record choices that look wrong until you know the
+failure they were built to prevent.
+
 | Decision | Choice | Rationale |
 |---|---|---|
 | Language | **Go** | One static binary per OS, `go build` cross-compiles, no runtime to install |
 | Platform order | **macOS first**, then Linux, then Windows | Prove one backend end-to-end, then port behind the `FirewallBackend` interface |
 | Detection | **API-based**, offline IP-range hybrid deferred | Simple to start; robustness can be added once the loop is proven |
-| Fail mode | **Fail-closed** | Block when the country is undeterminable — the safe default for a security tool (but see the mode-scoping above) |
+| Fail mode | **Fail-closed by construction** | The standing guard rules *are* the block, so there is no undeterminable-country decision to get wrong — an unknown holds the posture (see above). The old `failClosed` switch belonged to the retired fallback model ([ADR-0001](adr/0001-single-guard-mode.md)) |
 | Enforcement primitive | **Interface-aware** — pass on tunnel + endpoint handshake, block physical | A destination-IP allowlist is meaningless under a full tunnel: pf/nft see only the outer packets to the VPN endpoint |
-| Guard model | **Always-on interface guard** | A VPN drop is cut instantly, with a zero leak window. A reactive poller leaks for one poll interval |
+| Guard model | **Always-on interface guard — the only model** | A VPN drop is cut instantly, with a zero leak window. A reactive poller leaks for one poll interval, which is why the country-blocklist fallback was removed rather than kept as a peer ([ADR-0001](adr/0001-single-guard-mode.md)) |
+| Resting posture | **STANDBY — no rules until a tunnel is observed** | A guard with no tunnel blocks everything, which is a blackout rather than security. This is the safety job `vpn.enabled: false` was quietly doing ([ADR-0002](adr/0002-standby-no-tunnel-posture.md)) |
 | Recovery | **Wait for the VPN to return to an allowed country** | While full-blocked, observe the exit through a time-windowed probe and restore the guard once the exit is allowed again |
 
 Two of these were revisited during the build and are worth naming as *deviations*,

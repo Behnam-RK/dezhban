@@ -192,3 +192,91 @@ func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {
 		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", s)
 	}
 }
+
+// New-NetFirewallRule's -RemoteAddress takes mixed v4/v6 CIDRs in one list, so
+// unlike nft this needs no per-family split — but it must still be
+// destination-scoped, never an interface allow.
+func TestRenderBlockScriptLocalNetwork(t *testing.T) {
+	for _, mode := range []Mode{ModeGuard, ModeFullBlock} {
+		script := renderBlockScript(Policy{
+			Mode:              mode,
+			TunnelIfaces:      []string{"utun4"},
+			VPNEndpoints:      []netip.Addr{mustAddr(t, "203.0.113.5")},
+			AllowLocalNetwork: true,
+		})
+		if !strings.Contains(script, "-RemoteAddress 10.0.0.0/8,") {
+			t.Errorf("mode %s with allowLocalNetwork must emit a destination-scoped LAN allow:\n%s", mode, script)
+		}
+		if !strings.Contains(script, "fc00::/7") {
+			t.Errorf("mode %s LAN allow is missing IPv6 ULA:\n%s", mode, script)
+		}
+	}
+
+	off := renderBlockScript(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "10.0.0.0/8") {
+		t.Errorf("allowLocalNetwork=false must emit no LAN allow:\n%s", off)
+	}
+}
+
+// The LAN allow must not depend on isVPNPolicy — see the pf twin of this test in
+// pf_darwin_test.go for the full rationale. Nested inside the VPN branch,
+// allowLocalNetwork was silently discarded for a FULL BLOCK with no tunnels, no
+// endpoints and allowPhysicalDNS off.
+func TestRenderBlockScriptLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
+	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
+	if isVPNPolicy(p) {
+		t.Fatal("precondition: this policy must take the non-VPN branch")
+	}
+	script := renderBlockScript(p)
+	if !strings.Contains(script, "10.0.0.0/8") {
+		t.Errorf("LAN allow dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", script)
+	}
+
+	// `block --force` must be unaffected.
+	forced := renderBlockScript(Policy{
+		Mode:      ModeFullBlock,
+		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
+	})
+	if strings.Contains(forced, "10.0.0.0/8") {
+		t.Errorf("block --force must not gain a LAN allow:\n%s", forced)
+	}
+}
+
+// The provider pass must be tunnel-scoped and must not drag a blanket DNS rule
+// along with it. See tunnelProviderRules in pf_darwin.go for why an unscoped
+// port-53 rule would leak every hostname this host resolves to the very exit
+// FULL BLOCK is refusing.
+func TestRenderBlockScriptTunnelScopedProviders(t *testing.T) {
+	script := renderBlockScript(Policy{
+		Mode:          ModeFullBlock,
+		TunnelIfaces:  []string{"utun4"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	for line := range strings.SplitSeq(script, "\n") {
+		if strings.Contains(line, "104.16.1.1") && !strings.Contains(line, "-InterfaceAlias") {
+			t.Errorf("provider pass is not tunnel-scoped — it would measure the ISP's country with the tunnel down:\n%s", line)
+		}
+		// Narrowly the TUNNEL-scoped form: allowPhysicalDNS legitimately renders a
+		// `-RemotePort 53` rule with no interface scope on the physical link.
+		if strings.Contains(line, "-RemotePort 53") && strings.Contains(line, "-InterfaceAlias") {
+			t.Errorf("FULL BLOCK emits a tunnel-scoped DNS pass — every lookup would leak to the forbidden exit:\n%s", line)
+		}
+	}
+
+	// WFP matches interfaces by exact alias only, so a group alone cannot be
+	// scoped: emit nothing and let the daemon fall back to lift-and-probe.
+	grp := renderBlockScript(Policy{
+		Mode:          ModeFullBlock,
+		TunnelGroups:  []string{"utun"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	if strings.Contains(grp, "104.16.1.1") {
+		t.Errorf("a tunnel group cannot be expressed in WFP — the provider pass must be omitted, not emitted unscoped:\n%s", grp)
+	}
+}

@@ -82,7 +82,34 @@ type Policy struct {
 	// while the tunnel is down. Deliberately `to any`: resolution must work
 	// regardless of which resolver the system uses on reconnect. The residual
 	// leak is DNS-query metadata only, gated behind a default-off config flag.
+	//
+	// Note that the rule is unscoped by INTERFACE as well as by destination, so
+	// in FULL BLOCK it matches on the tunnel too — if the system resolver is the
+	// VPN-pushed one, application DNS reaches the forbidden exit's resolver. That
+	// is the same exposure ADR-0006 rejects for the geo-provider pass; it is
+	// tolerated here only because this flag is off by default and solves a
+	// tunnel-DOWN problem no tunnel-scoped rule can. See the "known, deliberate
+	// exception" note in docs/adr/0006 before adding any further port-53 rule.
 	AllowPhysicalDNS bool
+	// AllowLocalNetwork adds destination-scoped passes for private, link-local
+	// and multicast ranges (see LocalNetworkPrefixes) to every enforcing posture,
+	// so LAN devices stay reachable while the guard is armed. Destination-scoped,
+	// never interface-scoped: it cannot become an internet path, because packets
+	// to public addresses remain blocked whatever the next hop is.
+	AllowLocalNetwork bool
+	// ProviderAddrs are the resolved geo-API provider IPs, passed in FULL BLOCK
+	// scoped to BOTH the tunnel interface AND these destinations, so the
+	// exit-country lookup can traverse the tunnel while every other byte stays
+	// cut. Only meaningful in ModeFullBlock — ModeGuard already passes all tunnel
+	// egress, so the rule would be redundant there.
+	//
+	// The double scoping is the entire point and must never be relaxed to one
+	// half. Destination-only (a pass on the PHYSICAL link) would let the lookup
+	// succeed with the tunnel down and report the ISP's country — a normal,
+	// allowed one — so FULL BLOCK would never fire and a window would close early
+	// on a bogus "good exit". Interface-only would just be ModeGuard. See
+	// docs/adr/0006.
+	ProviderAddrs []netip.Addr
 	// TunnelGroups are tunnel-interface *class* names (e.g. "utun") rendered as a
 	// pf interface group / nft wildcard ("utun*") so every current and future
 	// interface of that class is passed in ModeGuard without a rule reload when a

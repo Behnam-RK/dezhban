@@ -22,14 +22,17 @@ type Allowlist struct {
 	Hosts []string `json:"hosts"`
 }
 
-// VPN configures the interface-aware kill-switch guard for hosts behind a
-// full-tunnel VPN. When Enabled, enforcement uses the tunnel interface(s) and
-// VPN endpoint(s) instead of the destination-IP allowlist (which is meaningless
-// under a tunnel). See docs/plans VPN mode. Disabled by default — the always-on
-// guard can lock a host out if misconfigured, so it is opt-in.
+// VPN configures the interface-aware kill-switch guard. Enforcement always uses
+// the tunnel interface(s) and VPN endpoint(s); the destination-IP allowlist model
+// it replaced is meaningless under a tunnel, where the firewall sees only
+// encrypted outer packets to one address.
+//
+// There is no longer an Enabled flag. It used to select between two enforcement
+// models AND double as the safety opt-in that stopped a misconfigured guard from
+// locking a host out. The first job is gone (see docs/adr/0001); the second is
+// now done properly by the STANDBY posture, which simply installs no rules until
+// a tunnel has actually been observed (docs/adr/0002).
 type VPN struct {
-	// Enabled turns on VPN guard mode.
-	Enabled bool
 	// TunnelInterfaces are the VPN tunnel interface names (e.g. "utun4"). For now
 	// these are concrete names; autodetect/pattern expansion lands with netdetect.
 	TunnelInterfaces []string
@@ -52,6 +55,22 @@ type VPN struct {
 	// (2026-07-19 defaults review: reconnectability beats hiding DNS-query
 	// metadata for this project's users); set false to close the metadata leak.
 	AllowPhysicalDNS bool
+	// AllowLocalNetwork passes traffic to private, link-local and multicast
+	// destinations in every enforcing posture, so printers, NAS, the router's
+	// admin page, AirPlay/Chromecast and local dev servers keep working while
+	// the guard is armed. ON by default.
+	//
+	// This costs nothing against dezhban's threat model. The guard exists to stop
+	// a standing direct connection exposing a sanctioned-country IP to a FOREIGN
+	// service; RFC1918/ULA/link-local traffic never leaves the building, so it
+	// cannot carry that exposure. It is destination-scoped, not interface-scoped,
+	// so it can never become an internet path — packets to public addresses stay
+	// blocked whatever the next hop is.
+	//
+	// The one real cost, and the reason the UI must say it plainly rather than
+	// bury it: on an untrusted network (a café, a hotel) this lets you reach —
+	// and be reached by — the other devices on that network.
+	AllowLocalNetwork bool
 	// AutoArm starts the daemon PASSIVE (posture "standby", no enforcement)
 	// when no tunnel interface is present, arming the guard automatically the
 	// moment a VPN connects. Never disarms on tunnel loss — a drop is exactly
@@ -81,7 +100,16 @@ type VPN struct {
 	// SwitchWindow is the default duration of a `dezhban switch` window — a
 	// bounded, explicitly-triggered relaxation during which a brand-new VPN's
 	// handshake to an as-yet-unknown server is allowed so its endpoint can be
-	// learned. Defaults to 15s; validated to [10s, Advanced.SwitchWindowMax].
+	// learned. Defaults to 15s; an explicit "0" disables manual switch windows
+	// entirely (kept internally as a negative sentinel so Normalize can tell
+	// "disabled" from "absent", exactly like ReconnectWindow); validated to
+	// [10s, Advanced.SwitchWindowMax] otherwise.
+	//
+	// Disabling is a TIGHTENING: the switch window is the only sanctioned
+	// relaxation of the guard, so turning it off leaves nothing that can relax it.
+	// The cost is that a brand-new VPN's server must be added to config by hand,
+	// since there is no longer a window in which its handshake could be observed.
+	// Independent of ReconnectWindow — disabling one never disables the other.
 	SwitchWindow time.Duration
 	// ReconnectWindow is the duration of the AUTOMATIC reconnect window: when
 	// the tunnel drops while the guard is healthy (GUARD posture, not standby,
@@ -98,6 +126,14 @@ type VPN struct {
 	// decisions. Every field defaults in Normalize; an absent `advanced` block
 	// keeps the recommended defaults. Touch only if you know why.
 	Advanced Advanced
+}
+
+// Retired names a config key that no longer does anything, so the loader can
+// report it instead of ignoring it silently. A setting that is accepted and
+// discarded without a word is the worst failure mode a security tool has.
+type Retired struct {
+	Key    string
+	Reason string
 }
 
 // Profile is a named VPN whose server endpoint(s) dezhban keeps reachable on the
@@ -169,14 +205,10 @@ type Config struct {
 	PollInterval time.Duration
 	// BlockedCountries are ISO-3166 alpha-2 codes that trigger a block.
 	BlockedCountries []string
-	// FailClosed blocks traffic when the country cannot be determined.
-	FailClosed bool
 	// Hysteresis is the consecutive agreeing readings required before toggling.
 	Hysteresis int
 	// Providers are geo-location endpoint URLs, tried for redundancy.
 	Providers []string
-	// Allowlist holds destinations kept reachable while blocking.
-	Allowlist Allowlist
 	// ProviderQuorum requires a majority of providers to agree on the country.
 	ProviderQuorum bool
 	// LogLevel is one of debug, info, warn, error.
@@ -185,6 +217,10 @@ type Config struct {
 	VPN VPN
 	// Control configures the daemon's live control socket (passwordless routine ops).
 	Control Control
+	// Retired lists keys present in the file that no longer do anything. The
+	// config still loads — the keys are simply inert — but callers report them so
+	// an operator is never left believing a discarded setting took effect.
+	Retired []Retired
 }
 
 // Control configures the daemon's control socket: a unix socket the CLI (and,
@@ -216,16 +252,21 @@ type Control struct {
 // because JSON has no native duration type. Pointer fields distinguish
 // "absent" (keep default) from a zero value the user set deliberately.
 type fileConfig struct {
-	PollInterval     string       `json:"pollInterval"`
-	BlockedCountries []string     `json:"blockedCountries"`
-	FailClosed       *bool        `json:"failClosed"`
-	Hysteresis       *int         `json:"hysteresis"`
-	Providers        []string     `json:"providers"`
-	Allowlist        Allowlist    `json:"allowlist"`
-	ProviderQuorum   *bool        `json:"providerQuorum"`
-	LogLevel         string       `json:"logLevel"`
-	VPN              *fileVPN     `json:"vpn"`
-	Control          *fileControl `json:"control,omitempty"`
+	PollInterval     string   `json:"pollInterval"`
+	BlockedCountries []string `json:"blockedCountries"`
+	// FailClosed and Allowlist are retired (docs/adr/0006; the fallback model
+	// they belonged to is gone, docs/adr/0001). Kept here, DETECTION-ONLY, so
+	// apply() can report a config that still sets them via cfg.Retired instead
+	// of silently accepting and discarding a security-relevant key. Never read
+	// into the runtime Config and never written back by Save.
+	FailClosed     *bool        `json:"failClosed,omitempty"`
+	Hysteresis     *int         `json:"hysteresis"`
+	Providers      []string     `json:"providers"`
+	Allowlist      *Allowlist   `json:"allowlist,omitempty"`
+	ProviderQuorum *bool        `json:"providerQuorum"`
+	LogLevel       string       `json:"logLevel"`
+	VPN            *fileVPN     `json:"vpn"`
+	Control        *fileControl `json:"control,omitempty"`
 }
 
 // fileControl is the on-disk shape of the control block. The pointers distinguish
@@ -242,22 +283,27 @@ type fileControl struct {
 // fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
 // absent block keep defaults.
 type fileVPN struct {
-	Enabled               bool     `json:"enabled"`
+	// Enabled is RETIRED. It is kept here only so a pre-merge config can be
+	// recognised and reported, never written: a pointer with omitempty means an
+	// absent key stays absent on save, and toFile never sets it. See
+	// docs/adr/0001-single-guard-mode.md.
+	Enabled               *bool    `json:"enabled,omitempty"`
 	TunnelInterfaces      []string `json:"tunnelInterfaces"`
 	Endpoints             []string `json:"endpoints"`
 	Autodetect            bool     `json:"autodetect"`
 	AutoDiscoverEndpoints bool     `json:"autoDiscoverEndpoints"`
 	// Pointers: both default to TRUE, so an explicit false must be
 	// distinguishable from an absent key (same convention as fileControl).
-	AllowPhysicalDNS *bool         `json:"allowPhysicalDNS,omitempty"`
-	AutoArm          *bool         `json:"autoArm,omitempty"`
-	EndpointRefresh  string        `json:"endpointRefresh"`
-	EndpointGrace    string        `json:"endpointGrace,omitempty"`
-	TunnelWatch      string        `json:"tunnelWatch"`
-	Profiles         []fileProfile `json:"profiles,omitempty"`
-	SwitchWindow     string        `json:"switchWindow,omitempty"`
-	ReconnectWindow  string        `json:"reconnectWindow,omitempty"`
-	Advanced         *fileAdvanced `json:"advanced,omitempty"`
+	AllowPhysicalDNS  *bool         `json:"allowPhysicalDNS,omitempty"`
+	AllowLocalNetwork *bool         `json:"allowLocalNetwork,omitempty"`
+	AutoArm           *bool         `json:"autoArm,omitempty"`
+	EndpointRefresh   string        `json:"endpointRefresh"`
+	EndpointGrace     string        `json:"endpointGrace,omitempty"`
+	TunnelWatch       string        `json:"tunnelWatch"`
+	Profiles          []fileProfile `json:"profiles,omitempty"`
+	SwitchWindow      string        `json:"switchWindow,omitempty"`
+	ReconnectWindow   string        `json:"reconnectWindow,omitempty"`
+	Advanced          *fileAdvanced `json:"advanced,omitempty"`
 }
 
 type fileProfile struct {
@@ -288,7 +334,6 @@ func Default() Config {
 		// volume on unmetered endpoints.
 		PollInterval:     15 * time.Second,
 		BlockedCountries: nil,
-		FailClosed:       true,
 		Hysteresis:       2,
 		// Ordered by rate-limit headroom: providers are tried in order, so the
 		// FIRST reachable one absorbs nearly all poll traffic (at the 15s default
@@ -305,14 +350,14 @@ func Default() Config {
 			"https://ipinfo.io/json",
 			"https://ipapi.co/json/",
 		},
-		Allowlist:      Allowlist{},
 		ProviderQuorum: false,
 		LogLevel:       "info",
 		// Mirrors the absent-vpn-block defaults in apply(): both on (2026-07-19
 		// defaults review). Keep the two in sync.
 		VPN: VPN{
-			AllowPhysicalDNS: true,
-			AutoArm:          true,
+			AllowPhysicalDNS:  true,
+			AllowLocalNetwork: true,
+			AutoArm:           true,
 		},
 		Control: Control{
 			Enabled: true,
@@ -366,7 +411,10 @@ func apply(cfg *Config, fc fileConfig) error {
 		cfg.BlockedCountries = fc.BlockedCountries
 	}
 	if fc.FailClosed != nil {
-		cfg.FailClosed = *fc.FailClosed
+		cfg.Retired = append(cfg.Retired, Retired{
+			Key:    "failClosed",
+			Reason: "belonged to the retired country-blocklist model; the guard's standing rules are the fail-closed block now (docs/adr/0001, docs/adr/0006)",
+		})
 	}
 	if fc.Hysteresis != nil {
 		cfg.Hysteresis = *fc.Hysteresis
@@ -374,8 +422,11 @@ func apply(cfg *Config, fc fileConfig) error {
 	if fc.Providers != nil {
 		cfg.Providers = fc.Providers
 	}
-	if fc.Allowlist.DNS != nil || fc.Allowlist.Hosts != nil {
-		cfg.Allowlist = fc.Allowlist
+	if fc.Allowlist != nil {
+		cfg.Retired = append(cfg.Retired, Retired{
+			Key:    "allowlist",
+			Reason: "belonged to the retired country-blocklist model; a VPN posture opens the tunnel endpoint, not a physical destination allowlist (docs/adr/0001)",
+		})
 	}
 	if fc.ProviderQuorum != nil {
 		cfg.ProviderQuorum = *fc.ProviderQuorum
@@ -385,16 +436,19 @@ func apply(cfg *Config, fc fileConfig) error {
 	}
 	if fc.VPN != nil {
 		v := VPN{
-			Enabled:               fc.VPN.Enabled,
 			TunnelInterfaces:      fc.VPN.TunnelInterfaces,
 			Endpoints:             fc.VPN.Endpoints,
 			Autodetect:            fc.VPN.Autodetect,
 			AutoDiscoverEndpoints: fc.VPN.AutoDiscoverEndpoints,
 			AllowPhysicalDNS:      true, // default on; explicit false below
+			AllowLocalNetwork:     true, // default on; explicit false below
 			AutoArm:               true, // default on; explicit false below
 		}
 		if fc.VPN.AllowPhysicalDNS != nil {
 			v.AllowPhysicalDNS = *fc.VPN.AllowPhysicalDNS
+		}
+		if fc.VPN.AllowLocalNetwork != nil {
+			v.AllowLocalNetwork = *fc.VPN.AllowLocalNetwork
 		}
 		if fc.VPN.AutoArm != nil {
 			v.AutoArm = *fc.VPN.AutoArm
@@ -428,7 +482,19 @@ func apply(cfg *Config, fc fileConfig) error {
 			if err != nil {
 				return fmt.Errorf("vpn.switchWindow: %w", err)
 			}
-			v.SwitchWindow = d
+			if d < 0 {
+				return fmt.Errorf("vpn.switchWindow: must not be negative (got %s); use \"0\" to disable", d)
+			}
+			if d == 0 {
+				// Same explicit-opt-out sentinel as reconnectWindow. Without it
+				// Normalize would coerce 0 back to the default and silently ignore
+				// the operator asking for a strictly zero-leak posture — the worst
+				// kind of bug in a security tool: a setting that is accepted,
+				// discarded, and never reported.
+				v.SwitchWindow = Disabled
+			} else {
+				v.SwitchWindow = d
+			}
 		}
 		if fc.VPN.ReconnectWindow != "" {
 			d, err := time.ParseDuration(fc.VPN.ReconnectWindow)
@@ -457,6 +523,12 @@ func apply(cfg *Config, fc fileConfig) error {
 				return err
 			}
 			v.Advanced = adv
+		}
+		if fc.VPN.Enabled != nil {
+			cfg.Retired = append(cfg.Retired, Retired{
+				Key:    "vpn.enabled",
+				Reason: "dezhban now has a single guard state machine; with no tunnel it rests in standby rather than enforcing (docs/adr/0001, 0002)",
+			})
 		}
 		cfg.VPN = v
 	}
@@ -535,36 +607,38 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 // tunnelInterfaces/endpoints whenever a config was saved with the guard disabled
 // (e.g. `config set vpn.enabled false`), making them unrecoverable on re-enable.
 func toFileConfig(c *Config) fileConfig {
-	failClosed := c.FailClosed
 	hysteresis := c.Hysteresis
 	quorum := c.ProviderQuorum
 	physDNS := c.VPN.AllowPhysicalDNS
+	localNet := c.VPN.AllowLocalNetwork
 	autoArm := c.VPN.AutoArm
 	ctlEnabled := c.Control.Enabled
 	ctlGroup := c.Control.Group
 	ctlSwitchOps := c.Control.AllowSwitchOps
 	return fileConfig{
-		PollInterval:     c.PollInterval.String(),
+		PollInterval: c.PollInterval.String(),
+		// FailClosed and Allowlist are deliberately omitted (nil): they are
+		// retired, detection-only on read, and must never be written back by
+		// Save even if the loaded file still had them (apply() already reported
+		// them into cfg.Retired; that is the only trace they leave).
 		BlockedCountries: c.BlockedCountries,
-		FailClosed:       &failClosed,
 		Hysteresis:       &hysteresis,
 		Providers:        c.Providers,
-		Allowlist:        c.Allowlist,
 		ProviderQuorum:   &quorum,
 		LogLevel:         c.LogLevel,
 		VPN: &fileVPN{
-			Enabled:               c.VPN.Enabled,
 			TunnelInterfaces:      c.VPN.TunnelInterfaces,
 			Endpoints:             c.VPN.Endpoints,
 			Autodetect:            c.VPN.Autodetect,
 			AutoDiscoverEndpoints: c.VPN.AutoDiscoverEndpoints,
 			AllowPhysicalDNS:      &physDNS,
+			AllowLocalNetwork:     &localNet,
 			AutoArm:               &autoArm,
 			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
 			EndpointGrace:         durString(c.VPN.EndpointGrace),
 			TunnelWatch:           c.VPN.TunnelWatch.String(),
 			Profiles:              toFileProfiles(c.VPN.Profiles),
-			SwitchWindow:          durString(c.VPN.SwitchWindow),
+			SwitchWindow:          optDurString(c.VPN.SwitchWindow),
 			ReconnectWindow:       optDurString(c.VPN.ReconnectWindow),
 			Advanced:              toFileAdvanced(c.VPN.Advanced),
 		},
@@ -730,7 +804,7 @@ func Normalize(cfg *Config) {
 	// from pinning a stale utunN across reconnects. Explicit TunnelInterfaces
 	// still win. (Strictly compat-safe: a config previously rejected for having
 	// neither now validates; one that already had either is unchanged.)
-	if cfg.VPN.Enabled && len(cfg.VPN.TunnelInterfaces) == 0 {
+	if len(cfg.VPN.TunnelInterfaces) == 0 {
 		cfg.VPN.Autodetect = true
 	}
 	// VPN guard cadence defaults. Set unconditionally — these are only read in
@@ -744,7 +818,7 @@ func Normalize(cfg *Config) {
 	if cfg.VPN.TunnelWatch <= 0 {
 		cfg.VPN.TunnelWatch = 1 * time.Second
 	}
-	if cfg.VPN.SwitchWindow <= 0 {
+	if cfg.VPN.SwitchWindow == 0 {
 		cfg.VPN.SwitchWindow = defaultSwitchWindow
 	}
 	if cfg.VPN.ReconnectWindow == 0 {
@@ -908,19 +982,25 @@ func (c *Config) Validate() error {
 			return fmt.Errorf("blocked country %q must be a 2-letter ISO-3166 code", code)
 		}
 	}
-	if c.VPN.Enabled {
+	{
 		// Tunnel interfaces are discovered at runtime when Autodetect is set
 		// (Normalize implies it when none are pinned), so there is no
 		// "tunnelInterfaces or autodetect" gate any more — an enabled guard always
 		// has a way to find its tunnel.
 		//
-		// At least one endpoint across the UNION of legacy endpoints, profile
-		// endpoints, and auto-discovery: a guard with no way to learn any server
-		// address can never let the tunnel reconnect. learned.json is deliberately
-		// NOT consulted here — validation must be deterministic offline.
-		if len(c.VPN.Endpoints) == 0 && !c.VPN.AutoDiscoverEndpoints && !anyProfileHasEndpoint(c.VPN.Profiles) {
-			return errors.New("vpn.enabled requires at least one endpoint (vpn.endpoints or vpn.profiles[].endpoints) or vpn.autoDiscoverEndpoints")
-		}
+		// A config with no endpoints is VALID and rests in STANDBY. It used to be a
+		// load-time error, because `vpn.enabled: true` was a promise to enforce and
+		// a guard that can never learn a server address can never let the tunnel
+		// reconnect. With the mode flag gone, every config is a guard config, so
+		// rejecting here would make a fresh install — which legitimately knows no
+		// endpoints yet — fail to load at all.
+		//
+		// The protection did not disappear, it moved to where it can tell the
+		// difference: the runner refuses to ARM a guard that has tunnels but no
+		// endpoints (that specific pair is the unrecoverable blackout), and `doctor`
+		// reports the same condition as a lockout risk before you hit it. Knowing
+		// no endpoints AND no tunnel is simply standby, which is safe.
+		//
 		// Endpoints may be IP literals or hostnames; hostnames are resolved at
 		// runtime. Reject only entries that are neither.
 		for _, ep := range c.VPN.Endpoints {
@@ -942,15 +1022,6 @@ func (c *Config) Validate() error {
 		}
 	}
 	return nil
-}
-
-func anyProfileHasEndpoint(ps []Profile) bool {
-	for _, p := range ps {
-		if len(p.Endpoints) > 0 {
-			return true
-		}
-	}
-	return false
 }
 
 func validateProfiles(ps []Profile) error {
@@ -998,8 +1069,10 @@ func validateSwitchWindow(v VPN) error {
 	if max <= 0 {
 		max = defaultSwitchWindowMax
 	}
-	if v.SwitchWindow < minSwitchWindow || v.SwitchWindow > max {
-		return fmt.Errorf("vpn.switchWindow %s out of range [%s, %s]", v.SwitchWindow, minSwitchWindow, max)
+	// SwitchWindow < 0 is the explicit "disabled" sentinel and always valid: it
+	// removes the only sanctioned relaxation of the guard, which is a tightening.
+	if v.SwitchWindow > 0 && (v.SwitchWindow < minSwitchWindow || v.SwitchWindow > max) {
+		return fmt.Errorf("vpn.switchWindow %s out of range [%s, %s] (or \"0\" to disable)", v.SwitchWindow, minSwitchWindow, max)
 	}
 	// ReconnectWindow < 0 is the explicit "disabled" sentinel and always valid.
 	if v.ReconnectWindow > 0 && (v.ReconnectWindow < minReconnectWindow || v.ReconnectWindow > max) {

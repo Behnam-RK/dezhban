@@ -17,9 +17,6 @@ func TestLoadMissingPathReturnsDefaults(t *testing.T) {
 	if cfg.PollInterval != 15*time.Second {
 		t.Errorf("PollInterval = %s, want 15s", cfg.PollInterval)
 	}
-	if !cfg.FailClosed {
-		t.Error("FailClosed = false, want true (security default)")
-	}
 }
 
 func TestLoadOverlaysAndNormalizes(t *testing.T) {
@@ -41,8 +38,10 @@ func TestLoadOverlaysAndNormalizes(t *testing.T) {
 	if cfg.PollInterval != 5*time.Second {
 		t.Errorf("PollInterval = %s, want 5s", cfg.PollInterval)
 	}
-	if cfg.FailClosed {
-		t.Error("FailClosed = true, want false (explicitly set)")
+	// failClosed is retired: accepted without error, has no effect on runtime
+	// Config, and is reported so an operator isn't left thinking it did something.
+	if len(cfg.Retired) != 1 || cfg.Retired[0].Key != "failClosed" {
+		t.Errorf("Retired = %v, want exactly one entry for failClosed", cfg.Retired)
 	}
 	if got := cfg.BlockedCountries; len(got) != 2 || got[0] != "RU" || got[1] != "IR" {
 		t.Errorf("BlockedCountries = %v, want [RU IR] (upper-cased, trimmed)", got)
@@ -68,9 +67,6 @@ func TestLoadVPNBlock(t *testing.T) {
 	cfg, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if !cfg.VPN.Enabled {
-		t.Error("VPN.Enabled = false, want true")
 	}
 	if got := cfg.VPN.TunnelInterfaces; len(got) != 1 || got[0] != "utun4" {
 		t.Errorf("VPN.TunnelInterfaces = %v, want [utun4] (trimmed)", got)
@@ -175,7 +171,6 @@ func TestValidateErrors(t *testing.T) {
 		"bad hyst":               `{"hysteresis": 0}`,
 		"bad country":            `{"blockedCountries": ["USA"]}`,
 		"no providers":           `{"providers": []}`,
-		"vpn no endpoints":       `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"]}}`,
 		"vpn bad endpoint":       `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["bad endpoint!"]}}`,
 		"vpn bad refresh":        `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "endpointRefresh": "soon"}}`,
 		"profile dup name":       `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": ["1.2.3.4"]}, {"name": "A", "endpoints": ["5.6.7.8"]}]}}`,
@@ -269,6 +264,12 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 			if err != nil {
 				t.Fatalf("Load saved: %v", err)
 			}
+			// Retired describes the FILE that was read, not the configuration
+			// itself: cfg1 comes from a fixture that may still carry a retired key,
+			// while Save never writes one. Comparing it would assert that a
+			// migration note survives a round trip, which is exactly what must not
+			// happen.
+			cfg1.Retired, cfg2.Retired = nil, nil
 			if !reflect.DeepEqual(cfg1, cfg2) {
 				t.Errorf("round-trip mismatch:\n before = %+v\n after  = %+v", cfg1, cfg2)
 			}
@@ -282,7 +283,6 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
 	cfg := Default()
 	cfg.VPN = VPN{
-		Enabled:          false,
 		TunnelInterfaces: []string{"utun4"},
 		Endpoints:        []string{"203.0.113.5"},
 		Autodetect:       true,
@@ -294,9 +294,6 @@ func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
 	got, err := Load(path)
 	if err != nil {
 		t.Fatalf("Load: %v", err)
-	}
-	if got.VPN.Enabled {
-		t.Error("VPN.Enabled = true, want false")
 	}
 	if g := got.VPN.TunnelInterfaces; len(g) != 1 || g[0] != "utun4" {
 		t.Errorf("VPN.TunnelInterfaces = %v, want [utun4]", g)
@@ -590,5 +587,219 @@ func TestEndpointGraceDefaultVisible(t *testing.T) {
 	}
 	if cfg.VPN.EndpointGrace != defaultEndpointGrace {
 		t.Errorf("EndpointGrace = %s, want normalized default %s", cfg.VPN.EndpointGrace, defaultEndpointGrace)
+	}
+}
+
+// Both windows must be independently disableable with "0". switchWindow could
+// not be disabled at all before the single-mode merge: Normalize coerced any
+// value <= 0 back to the default, so an operator asking for a strictly
+// zero-leak posture was silently overridden. reconnectWindow already had the
+// sentinel; this asserts the pair now behaves the same and that disabling one
+// never disables the other.
+func TestWindowDisableMatrix(t *testing.T) {
+	cases := []struct {
+		name                      string
+		body                      string
+		wantSwitchOff, wantRecOff bool
+	}{
+		{"both default", `{"vpn":{"endpoints":["1.2.3.4"]}}`, false, false},
+		{"switch off only", `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"0"}}`, true, false},
+		{"reconnect off only", `{"vpn":{"endpoints":["1.2.3.4"],"reconnectWindow":"0"}}`, false, true},
+		{"both off", `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"0","reconnectWindow":"0"}}`, true, true},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cfg.json")
+			if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			// The runner gates both features on `> 0`, so "disabled" must survive
+			// Normalize as a non-positive value rather than being defaulted back.
+			if off := cfg.VPN.SwitchWindow <= 0; off != c.wantSwitchOff {
+				t.Errorf("switchWindow disabled = %v, want %v (got %s)", off, c.wantSwitchOff, cfg.VPN.SwitchWindow)
+			}
+			if off := cfg.VPN.ReconnectWindow <= 0; off != c.wantRecOff {
+				t.Errorf("reconnectWindow disabled = %v, want %v (got %s)", off, c.wantRecOff, cfg.VPN.ReconnectWindow)
+			}
+		})
+	}
+}
+
+// A disabled switchWindow must round-trip as "0", not as the default it would
+// have been coerced to.
+func TestDisabledSwitchWindowRoundTrips(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "in.json")
+	if err := os.WriteFile(src, []byte(`{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"0"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(src)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	again, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load saved: %v", err)
+	}
+	if again.VPN.SwitchWindow > 0 {
+		t.Errorf("switchWindow came back enabled (%s) after a round trip", again.VPN.SwitchWindow)
+	}
+}
+
+// A pre-merge config must load, enforce identically, and say exactly which of
+// its keys stopped meaning anything — without the loader rewriting the user's
+// file behind their back. Silently accepting a discarded security setting is
+// the failure mode this whole mechanism exists to prevent.
+func TestLegacyConfigMigrates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.json")
+	body := `{
+		"pollInterval": "30s",
+		"blockedCountries": ["IR"],
+		"failClosed": true,
+		"hysteresis": 3,
+		"allowlist": {"dns": ["1.1.1.1"], "hosts": ["9.9.9.9"]},
+		"vpn": {
+			"enabled": true,
+			"tunnelInterfaces": ["utun4"],
+			"endpoints": ["203.0.113.9"]
+		}
+	}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+
+	// Every retired key is reported, exactly once, with a reason.
+	want := map[string]bool{"failClosed": true, "allowlist": true, "vpn.enabled": true}
+	got := map[string]bool{}
+	for _, r := range cfg.Retired {
+		if got[r.Key] {
+			t.Errorf("Retired reports %q more than once", r.Key)
+		}
+		got[r.Key] = true
+		if r.Reason == "" {
+			t.Errorf("Retired key %q has no reason — the operator learns nothing", r.Key)
+		}
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("Retired keys = %v, want %v", got, want)
+	}
+
+	// The surviving settings are untouched: migration drops, it does not reinterpret.
+	if cfg.PollInterval != 30*time.Second || cfg.Hysteresis != 3 {
+		t.Errorf("carried-over settings changed: poll=%s hysteresis=%d", cfg.PollInterval, cfg.Hysteresis)
+	}
+	if g := cfg.BlockedCountries; len(g) != 1 || g[0] != "IR" {
+		t.Errorf("BlockedCountries = %v, want [IR]", g)
+	}
+	if g := cfg.VPN.TunnelInterfaces; len(g) != 1 || g[0] != "utun4" {
+		t.Errorf("VPN.TunnelInterfaces = %v, want [utun4]", g)
+	}
+	if g := cfg.VPN.Endpoints; len(g) != 1 || g[0] != "203.0.113.9" {
+		t.Errorf("VPN.Endpoints = %v, want [203.0.113.9]", g)
+	}
+
+	// Load must NOT rewrite the user's file — migration is reported, not applied
+	// in place. `dezhban config migrate` is the explicit, opt-in writer.
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != body {
+		t.Error("Load rewrote the config file; migration must be reported, not applied silently")
+	}
+
+	// Saving explicitly drops the retired keys rather than echoing them back.
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	saved, err := os.ReadFile(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, dead := range []string{"failClosed", "allowlist"} {
+		if strings.Contains(string(saved), dead) {
+			t.Errorf("Save wrote retired key %s back to disk:\n%s", dead, saved)
+		}
+	}
+	// vpn.enabled is checked via reload rather than by substring: "enabled" is
+	// also a live key under the control block, so a raw text match would be a
+	// false positive.
+	//
+	// And the saved file is clean on reload: nothing left to report.
+	again, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load saved: %v", err)
+	}
+	if len(again.Retired) != 0 {
+		t.Errorf("saved config still reports retired keys: %v", again.Retired)
+	}
+}
+
+// allowLocalNetwork defaults ON, and an explicit false must survive — the same
+// tri-state the other posture booleans use. Getting this wrong in the "absent"
+// direction silently breaks every LAN device the moment the guard arms; getting
+// it wrong in the "explicit false" direction silently re-opens the LAN for
+// someone who deliberately closed it on an untrusted network.
+func TestAllowLocalNetworkTriState(t *testing.T) {
+	cases := []struct {
+		name string
+		body string
+		want bool
+	}{
+		{"absent vpn block", `{}`, true},
+		{"absent key", `{"vpn":{"endpoints":["1.2.3.4"]}}`, true},
+		{"explicit true", `{"vpn":{"endpoints":["1.2.3.4"],"allowLocalNetwork":true}}`, true},
+		{"explicit false", `{"vpn":{"endpoints":["1.2.3.4"],"allowLocalNetwork":false}}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "cfg.json")
+			if err := os.WriteFile(path, []byte(c.body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if cfg.VPN.AllowLocalNetwork != c.want {
+				t.Errorf("AllowLocalNetwork = %v, want %v", cfg.VPN.AllowLocalNetwork, c.want)
+			}
+		})
+	}
+}
+
+// An explicit false must also survive a save/reload round trip, or `config set`
+// on any unrelated key would quietly re-open the LAN.
+func TestAllowLocalNetworkFalseRoundTrips(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "in.json")
+	if err := os.WriteFile(src, []byte(`{"vpn":{"endpoints":["1.2.3.4"],"allowLocalNetwork":false}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(src)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	again, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load saved: %v", err)
+	}
+	if again.VPN.AllowLocalNetwork {
+		t.Error("allowLocalNetwork came back enabled after a round trip")
 	}
 }

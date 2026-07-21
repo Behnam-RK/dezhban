@@ -12,6 +12,146 @@ changes.
 
 ## [Unreleased]
 
+### Removed
+
+- **BREAKING: the country-blocklist fallback mode is gone.** dezhban now has a
+  single enforcement model — the always-on interface guard. The
+  `vpn.enabled: false` mode watched your public IP and cut egress by destination;
+  it applied **no rules at rest**, so it was "best-effort, not a zero-leak
+  guarantee" by its own documentation, and it was only meaningful when the
+  country you blocked was your *real physical location*. The guard already
+  contains the country check — that is what FULL BLOCK is. See
+  [ADR-0001](docs/adr/0001-single-guard-mode.md).
+- `print-rules --mode legacy` now errors by name instead of rendering a posture
+  that no longer exists. `guard` / `fullblock` / `switch` are unchanged.
+- `status --json` drops `mode` (`"vpn"`/`"legacy"`) and `vpnEnabled`. Both had
+  exactly one possible value after the merge; a constant field is noise, not
+  compatibility. `posture` is unchanged and remains the field to read.
+- There is no `failClosed` setting. Under the guard, the standing rules **are**
+  the fail-closed block, so an undeterminable country holds the current posture
+  rather than escalating — escalating would cut the tunnel's own egress and
+  livelock the reconnect that could fix the lookup.
+
+### Added
+
+- **`vpn.allowLocalNetwork` (default `true`) — LAN devices keep working while the
+  guard is armed.** There was previously **no local-network handling anywhere**:
+  none of the three backends contained a single reference to RFC1918, link-local
+  or multicast, so arming the guard made printers, NAS, the router's admin page,
+  AirPlay/Chromecast and local dev servers unreachable with no setting to get
+  them back. The passes are **destination-scoped**, never interface-scoped, so
+  they cannot become an internet path — packets to public addresses stay blocked
+  whatever the next hop is — and they cost nothing against the threat model,
+  since this traffic never leaves the building. Multicast is included because
+  mDNS/SSDP is what actually makes discovery work; unicast alone would leave
+  devices visible but undiscoverable. Set `false` on untrusted networks, where
+  the real cost is that other devices there can reach you.
+  See [ADR-0005](docs/adr/0005-allow-local-network-by-default.md).
+- `dezhban status` now prints an `also reachable:` line naming exactly what stays
+  open on the physical link (local network, DNS, or neither). These are the only
+  standing exceptions to "only the tunnel may egress", so they should not have to
+  be inferred from the config file.
+- **`vpn.switchWindow: "0"` now disables manual switch windows.** Previously it
+  was silently coerced back to the 15s default, so the setting was accepted and
+  discarded — the worst failure mode a security tool has. It now uses the same
+  explicit-opt-out sentinel `vpn.reconnectWindow` already had. Setting both to
+  `"0"` is the strict zero-leak posture in which nothing can relax the guard.
+  Disabling one never disables the other. `dezhban switch` refuses by name,
+  telling you which setting is responsible. See
+  [ADR-0004](docs/adr/0004-switch-window-fully-disableable.md).
+- **Retired keys are reported, not ignored.** `vpn.enabled`, `failClosed` and
+  `allowlist` still parse without error, do nothing, and are named — with a
+  reason — by `dezhban validate` and once at daemon start. They are never
+  written back when dezhban saves your config.
+- **Architecture decision records** under [`docs/adr/`](docs/adr/), plus a
+  [glossary](docs/glossary.md) fixing the "guard"/"protection"/"kill switch"
+  vocabulary drift. GUARD is the canonical term.
+
+### Fixed
+
+- **The recovery probe no longer lifts the guard — a recurring leak is gone.**
+  While in FULL BLOCK, observing the exit country meant applying the **GUARD**
+  ruleset (full tunnel egress) for up to 8 seconds on *every* probe tick, just to
+  make one HTTP request, for as long as a forbidden exit persisted. FULL BLOCK
+  now carries a standing pass scoped to the tunnel interface **and** the geo
+  providers' addresses, so the lookup completes with no rule change and no leak.
+  The double scoping is load-bearing: with the tunnel down the lookup fails and
+  the posture holds — correct, since there is no exit to measure — whereas a pass
+  on the *physical* link would succeed and report the ISP's country, silently
+  defeating the check. Provider IPs refresh on the endpoint cadence, since
+  CDN-fronted providers rotate. If none resolve, recovery falls back to the old
+  lift-and-probe rather than losing the ability to recover at all.
+  The provider rule deliberately carries **no DNS pass**: a tunnel-scoped but
+  destination-unscoped `port 53` rule would send *every application's* DNS
+  through the tunnel to the forbidden exit's resolver for as long as FULL BLOCK
+  lasted, handing the exit whose country we are refusing a running log of every
+  hostname the host looks up. The set is refreshed while the guard is healthy,
+  and a mid-block rotation falls back to lift-and-probe, which heals it.
+  See [ADR-0006](docs/adr/0006-geo-providers-tunnel-scoped.md).
+- **The local-network pass no longer includes globally-routable multicast.**
+  `224.0.0.0/4` and `ff00::/8` were shorthand for "multicast", but they contain
+  scopes designed to cross the internet (`232/8` SSM, `233/8` GLOP, `ff0e::/16`
+  global) — which a pass justified by "this traffic never leaves the building"
+  must not contain. Narrowed to the local and administratively-scoped ranges
+  that discovery actually uses: `224.0.0.0/24`, `239.0.0.0/8`, `ff02::/16`,
+  `ff05::/16`. mDNS, Bonjour, SSDP, AirPlay and Chromecast are unaffected.
+- Invalid addresses dropped at the policy seam are now logged. Dropping is
+  correct — one `invalid IP` entry would make pf reject the whole ruleset — but
+  a silent drop of a VPN endpoint presents as a tunnel that will not handshake,
+  with nothing connecting the two.
+- FULL BLOCK now carries tunnel **groups** as well as concrete interfaces, so a
+  host that names only an interface class (`utun`) gets a scoped provider pass
+  instead of silently degrading to lift-and-probe.
+- **Failed exit-country lookups are now classified instead of all being reported
+  as errors.** Three causes collapsed into one alarming message, and the most
+  common was not a fault at all: during a switch or reconnect window the tunnel
+  is *supposed* to be down — that is why the window exists — so there is no VPN
+  exit to measure and the lookup failing is correct behaviour. That is now
+  reported as a state (`exitUnknown`: "no tunnel is up, so there is no VPN exit
+  to check") rather than an error. `lookupErr` is reserved for a failure with a
+  tunnel **up**, where there really was an exit to measure and something went
+  wrong — which may mean the exit itself is censoring the geo providers. The two
+  fields are mutually exclusive; the macOS app and `status --json` render them
+  differently. This is what made the geo providers look broken during every
+  window.
+- **IPv4-in-IPv6 addresses are now unmapped at the policy seam — a silent lockout.**
+  pf does *not* reject `::ffff:1.2.3.4`; verified with `pfctl -nvf`, it accepts
+  the rule and expands it to `pass out quick inet6 … to ::ffff:1.2.3.4`. Real
+  IPv4 traffic never matches that, so the pass is effectively absent while
+  looking perfectly present in `pfctl -sr` — and when the address is a VPN
+  endpoint, the tunnel's own handshake is blocked and the VPN can never connect.
+  Callers each remembered `.Unmap()` individually except the learned-endpoint
+  reload, which is exactly how a per-caller convention fails. Now normalised once
+  in `firewall.PolicyInput` so no backend or caller has to defend itself.
+  Invalid addresses are dropped rather than rendered, since the zero
+  `netip.Addr` stringifies to `invalid IP` — a ruleset pf genuinely does reject,
+  turning one bad entry into a total failure to install any rules.
+
+### Changed
+
+- **Upgrade note — no config migration is required.** A pre-merge config loads,
+  validates, and enforces identically; the three retired keys are reported and
+  ignored. Two behavior changes to know about:
+  - A config that had `vpn.enabled: false` was running the fallback mode. It now
+    runs the guard, which means it rests in **STANDBY** (no rules, network fully
+    open) until a tunnel is configured *and* observed up — rather than watching
+    your public IP. If you were relying on the fallback, there is no longer an
+    equivalent; the guard requires a VPN.
+  - `vpn.endpoints` is no longer required at load time. A config with none is
+    valid and rests in STANDBY. The check moved to where it can tell the
+    difference: the runner refuses to *arm* a guard that has tunnels but no
+    endpoints, and `doctor` reports it as a lockout risk beforehand.
+- **STANDBY is a first-class posture**, not an emergent property of `autoArm`.
+  It is the resting state before any tunnel has been observed: no rules, network
+  fully open, and the UI says so — grey icon, never red. This is the job
+  `vpn.enabled: false` was quietly doing as a safety opt-in, now done properly.
+  See [ADR-0002](docs/adr/0002-standby-no-tunnel-posture.md).
+- **One constructor builds every posture** (`firewall.PolicyInput`). The run loop
+  and `print-rules` previously built them separately, and had already drifted —
+  the preview dropped `TunnelGroups` entirely and degraded a zero-tunnel guard on
+  a different condition than the daemon. A preview that can lie about what the
+  daemon would install is a correctness bug, not untidiness.
+
 ## [0.3.0] - 2026-07-20
 
 ### Changed

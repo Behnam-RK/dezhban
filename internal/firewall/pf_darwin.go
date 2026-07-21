@@ -233,6 +233,9 @@ func renderRuleset(p Policy) string {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 			}
 			b.WriteString(allowPhysicalDNSRule) // resolution during a restricted window
+			if p.AllowLocalNetwork {
+				b.WriteString(localNetworkRule())
+			}
 			if ports := joinPorts(p.WindowPorts); ports != "" {
 				fmt.Fprintf(&b, "pass out quick proto { %s } to any port { %s } no state\n", windowProtoSet(p.WindowProtos), ports)
 			}
@@ -254,6 +257,9 @@ func renderRuleset(p Policy) string {
 		if p.AllowPhysicalDNS {
 			b.WriteString(allowPhysicalDNSRule)
 		}
+		if p.AllowLocalNetwork {
+			b.WriteString(localNetworkRule())
+		}
 	default: // ModeFullBlock
 		if isVPNPolicy(p) {
 			// VPN full block (including the zero-tunnel standing posture): no
@@ -263,6 +269,10 @@ func renderRuleset(p Policy) string {
 			if len(p.VPNEndpoints) > 0 {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 			}
+			// Tunnel-scoped geo-provider pass: lets the exit-country lookup run
+			// through the tunnel WITHOUT lifting the guard, which is what the
+			// recovery probe used to do for ~8s on every tick.
+			b.WriteString(tunnelProviderRules(p))
 			if p.AllowPhysicalDNS {
 				b.WriteString(allowPhysicalDNSRule)
 			}
@@ -274,6 +284,19 @@ func renderRuleset(p Policy) string {
 			if len(p.Allowlist.Hosts) > 0 {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.Allowlist.Hosts))
 			}
+		}
+		// Outside the isVPNPolicy split on purpose. AllowLocalNetwork is a
+		// property of the POSTURE, not of which FULL BLOCK shape rendered it:
+		// ADR-0005 keeps the LAN reachable in FULL BLOCK deliberately, so a
+		// blocked exit country does not also take out the printer. Nested inside
+		// the VPN branch it was silently dropped whenever isVPNPolicy was false
+		// — a policy with no tunnels, no endpoints and allowPhysicalDNS off,
+		// which is reachable via the daemon's `relaxed` start path and rendered
+		// by `print-rules --mode fullblock`. `block --force` is unaffected: it
+		// never sets AllowLocalNetwork, so it still cuts everything but loopback
+		// and the geo providers.
+		if p.AllowLocalNetwork {
+			b.WriteString(localNetworkRule())
 		}
 	}
 	b.WriteString("block drop out all\n")
@@ -311,6 +334,45 @@ func joinPorts(ports []int) string {
 // the tunnel is down. `to any` deliberately — resolution must work regardless
 // of which resolver the system uses on reconnect.
 const allowPhysicalDNSRule = "pass out quick proto { udp tcp } to any port 53 no state\n"
+
+// tunnelProviderRules renders the tunnel-scoped geo-provider passes used in FULL
+// BLOCK, so the exit-country lookup can traverse the tunnel while all other user
+// traffic stays cut. Empty when there is no tunnel or no resolved provider IP —
+// with either missing the rule cannot be built, and the daemon falls back to the
+// old lift-and-probe rather than losing the ability to recover.
+//
+// ONE rule, scoped to both the tunnel interface and the provider addresses.
+//
+// Deliberately NO accompanying DNS pass. An earlier draft added
+// `on <tunnel> proto { udp tcp } to any port 53` so provider hostnames could be
+// re-resolved — but `to any` is destination-unscoped, so it passed EVERY
+// application's DNS through the tunnel to the forbidden exit's resolver, for as
+// long as FULL BLOCK lasted. That hands the exit whose country we are refusing a
+// continuous log of every hostname this host looks up: precisely the exposure
+// FULL BLOCK exists to prevent, and far broader than the daemon's own need.
+//
+// Losing it is safe because the provider set is refreshed on the endpoint
+// cadence while the guard is HEALTHY, where tunnel DNS is already unrestricted,
+// so FULL BLOCK begins with a fresh set. If the providers do rotate mid-block
+// the lookup fails, the posture holds, and recovery falls back to lift-and-probe
+// — which lifts the guard, letting the next refresh succeed and the scoped rule
+// heal itself. A bounded, self-clearing leak beats a continuous metadata one.
+func tunnelProviderRules(p Policy) string {
+	ifaces := append(append([]string{}, p.TunnelIfaces...), p.TunnelGroups...)
+	if len(ifaces) == 0 || len(p.ProviderAddrs) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("pass out quick on { %s } to { %s } no state\n",
+		strings.Join(ifaces, " "), joinAddrs(p.ProviderAddrs))
+}
+
+// localNetworkRule renders the destination-scoped LAN pass (vpn.allowLocalNetwork).
+// pf infers each address's family from the address itself, so v4 and v6 prefixes
+// can share one list — verified with `pfctl -nvf`, a mixed list expands to one
+// inet rule and one inet6 rule.
+func localNetworkRule() string {
+	return fmt.Sprintf("pass out quick to { %s } no state\n", strings.Join(LocalNetworkPrefixes, " "))
+}
 
 func joinAddrs(addrs []netip.Addr) string {
 	parts := make([]string, len(addrs))

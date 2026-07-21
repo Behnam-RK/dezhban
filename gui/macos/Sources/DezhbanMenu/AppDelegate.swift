@@ -177,16 +177,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Switch window: connect a brand-new VPN whose server isn't known yet.
         // Time-critical mid-flow, and the countdown is glanceable — so it stays.
-        if s?.mode == "vpn" {
-            if let sw = s?.switch, sw.open {
-                let left = max(0, sw.until.timeIntervalSinceNow)
-                addAction("Cancel VPN switch (\(PostureUI.mmss(left)) left)", #selector(cancelSwitch),
-                          enabled: isRunning)
-                    .toolTip = routineHint("Closes the window and restores the guard.")
-            } else {
-                addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
-                    .toolTip = routineHint("Briefly relaxes the guard so a new VPN can connect.")
-            }
+        if let sw = s?.switch, sw.open {
+            let left = max(0, sw.until.timeIntervalSinceNow)
+            addAction("Cancel VPN switch (\(PostureUI.mmss(left)) left)", #selector(cancelSwitch),
+                      enabled: isRunning)
+                .toolTip = routineHint("Closes the window and restores the guard.")
+        } else {
+            addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
+                .toolTip = routineHint("Briefly relaxes the guard so a new VPN can connect.")
         }
 
         // Panic is the lockout escape hatch: it must never depend on the main

@@ -107,10 +107,6 @@ func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard,
 
 // oneHostAL is a non-empty allowlist so the legacy mid-block refresh re-Blocks
 // (an empty refresh is deliberately skipped — see TestLegacyRefreshSkipWhenEmpty).
-func oneHostAL() firewall.Allowlist {
-	return firewall.Allowlist{Hosts: []netip.Addr{netip.MustParseAddr("9.9.9.9")}}
-}
-
 func equal(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -127,23 +123,21 @@ func equal(a, b []string) bool {
 
 func TestPostureName(t *testing.T) {
 	cases := []struct {
-		vpn, blocked, window, standby bool
-		want                          string
+		blocked, window, standby bool
+		want                     string
 	}{
-		{false, false, false, false, "allow"},
-		{false, true, false, false, "block"},
-		{true, false, false, false, "guard"},
-		{true, true, false, false, "full-block"},
-		{true, false, true, false, "switch-window"},
-		{true, true, true, false, "switch-window"}, // window overrides
-		{true, false, false, true, "standby"},      // vpn.autoArm, no tunnel yet
-		{true, true, false, true, "full-block"},    // a block outranks standby
-		{true, false, true, true, "switch-window"}, // so does a window
+		{false, false, false, "guard"},
+		{true, false, false, "full-block"},
+		{false, true, false, "switch-window"},
+		{true, true, false, "switch-window"}, // a window outranks a full block
+		{false, false, true, "standby"},      // no tunnel observed yet
+		{true, false, true, "full-block"},    // a full block outranks standby
+		{false, true, true, "switch-window"}, // so does a window
 	}
 	for _, c := range cases {
-		if got := postureName(c.vpn, c.blocked, c.window, c.standby); got != c.want {
-			t.Errorf("postureName(vpn=%v, blocked=%v, window=%v, standby=%v) = %q, want %q",
-				c.vpn, c.blocked, c.window, c.standby, got, c.want)
+		if got := postureName(c.blocked, c.window, c.standby); got != c.want {
+			t.Errorf("postureName(blocked=%v, window=%v, standby=%v) = %q, want %q",
+				c.blocked, c.window, c.standby, got, c.want)
 		}
 	}
 }
@@ -151,222 +145,6 @@ func TestPostureName(t *testing.T) {
 // TestLegacyPublishesPostureTransitions asserts a snapshot fires on every poll
 // with the correct posture as the daemon crosses allow→block→allow, then a
 // terminal "stopped" snapshot on shutdown so observers flip immediately.
-func TestLegacyPublishesPostureTransitions(t *testing.T) {
-	var snaps []state.Snapshot
-	be := &fakeBackend{}
-	o := Options{
-		Monitor: &fakeMonitor{results: []monitor.Result{
-			reading("US"), // allow
-			reading("IR"), // block (enter)
-			reading("US"), // allow (unblock)
-		}},
-		Decider:          decision.New([]string{"IR"}, false, 1),
-		Backend:          be,
-		Log:              discardLog(),
-		Allowlist:        oneHostAL,
-		BlockedCountries: []string{"IR"},
-		Publish:          func(s state.Snapshot) { snaps = append(snaps, s) },
-	}
-	if err := Run(context.Background(), o); err != nil {
-		t.Fatal(err)
-	}
-
-	var postures []string
-	for _, s := range snaps {
-		postures = append(postures, s.Posture)
-		if s.Mode != "legacy" {
-			t.Errorf("mode = %q, want legacy", s.Mode)
-		}
-	}
-	// Three poll transitions plus one terminal "stopped" on shutdown.
-	if want := []string{"allow", "block", "allow", "stopped"}; !equal(postures, want) {
-		t.Fatalf("postures = %v, want %v", postures, want)
-	}
-	// The poll snapshots carry the blocklist; the terminal stopped snapshot need not.
-	for _, s := range snaps[:3] {
-		if len(s.BlockedCountries) != 1 || s.BlockedCountries[0] != "IR" {
-			t.Errorf("blockedCountries = %v, want [IR]", s.BlockedCountries)
-		}
-	}
-	if snaps[0].Blocked || !snaps[1].Blocked || snaps[2].Blocked {
-		t.Errorf("blocked flags = [%v %v %v], want [false true false]",
-			snaps[0].Blocked, snaps[1].Blocked, snaps[2].Blocked)
-	}
-	if last := snaps[3]; last.Posture != "stopped" || last.Blocked {
-		t.Errorf("terminal snapshot = {posture:%q blocked:%v}, want {stopped false}", last.Posture, last.Blocked)
-	}
-}
-
-// TestLegacyBlockFailurePublishesEnforcementErr asserts that when the backend
-// rejects a Block, the published snapshot surfaces the failure (EnforcementErr set)
-// instead of a healthy-looking "allow" — otherwise the menubar would show a green
-// shield during an active leak where the kill switch failed to engage.
-func TestLegacyBlockFailurePublishesEnforcementErr(t *testing.T) {
-	var snaps []state.Snapshot
-	be := &fakeBackend{blockErr: errors.New("pfctl: cannot load rules")}
-	o := Options{
-		Monitor:   &fakeMonitor{results: []monitor.Result{reading("IR")}}, // decision Block → Block fails
-		Decider:   decision.New([]string{"IR"}, false, 1),
-		Backend:   be,
-		Log:       discardLog(),
-		Allowlist: oneHostAL,
-		Publish:   func(s state.Snapshot) { snaps = append(snaps, s) },
-	}
-	if err := Run(context.Background(), o); err != nil {
-		t.Fatal(err)
-	}
-	if len(snaps) == 0 {
-		t.Fatal("no snapshots published")
-	}
-	s := snaps[0] // the poll snapshot for the failed block (before the terminal stopped)
-	if s.Posture != "allow" || s.Blocked {
-		t.Errorf("posture=%q blocked=%v, want allow/false (block failed, nothing in force)", s.Posture, s.Blocked)
-	}
-	if s.EnforcementErr == "" {
-		t.Error("EnforcementErr empty; want the block failure surfaced so the leak isn't shown as healthy")
-	}
-}
-
-// TestPublishStallDoesNotBlockEnforcement asserts the core invariant behind the
-// non-blocking publish: a wedged state-file writer (sink that never returns) must not
-// stall the enforcement loop, and Cleanup must still run on shutdown despite it.
-// (signalBackend is the concurrency-safe backend defined below.)
-func TestPublishStallDoesNotBlockEnforcement(t *testing.T) {
-	release := make(chan struct{})
-	be := &signalBackend{blockCh: make(chan struct{}, 1)}
-	o := Options{
-		Monitor:   &fakeMonitor{results: []monitor.Result{reading("IR")}}, // triggers Block
-		Decider:   decision.New([]string{"IR"}, false, 1),
-		Backend:   be,
-		Log:       discardLog(),
-		Allowlist: oneHostAL,
-		// Sink wedges on every publish until released — simulating a hung state-dir volume.
-		Publish: func(s state.Snapshot) { <-release },
-	}
-	errc := make(chan error, 1)
-	go func() { errc <- Run(context.Background(), o) }()
-
-	// Enforcement must reach Block even though the publish sink is wedged.
-	select {
-	case <-be.blockCh:
-	case <-time.After(2 * time.Second):
-		close(release) // unwedge so the goroutine can exit
-		t.Fatal("enforcement stalled: Block not called while publish sink was blocked")
-	}
-
-	// Let the wedged writer drain so Run's bounded flush returns promptly rather than
-	// waiting out its 2s timeout.
-	close(release)
-	select {
-	case err := <-errc:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("Run did not return after the sink was released")
-	}
-	// Cleanup must have run on shutdown regardless of the stalled writer.
-	if !be.has("cleanup") {
-		t.Error("Cleanup did not run despite the stalled publish writer")
-	}
-}
-
-// --- legacy mode ---
-
-func TestLegacyBlockRefreshThenUnblock(t *testing.T) {
-	be := &fakeBackend{}
-	o := Options{
-		Monitor: &fakeMonitor{results: []monitor.Result{
-			reading("US"), // allow, not blocked → no-op
-			reading("IR"), // block (enter)
-			reading("IR"), // still blocked → allowlist refresh (re-Block)
-			reading("US"), // unblock
-			reading("US"), // already allowed → no-op
-		}},
-		Decider:   decision.New([]string{"IR"}, false, 1),
-		Backend:   be,
-		Log:       discardLog(),
-		Allowlist: oneHostAL,
-	}
-	if err := Run(context.Background(), o); err != nil {
-		t.Fatal(err)
-	}
-	// Two Blocks: one on entry, one mid-block refresh (idempotent), then Unblock.
-	want := []string{"block", "block", "unblock", "cleanup"}
-	if !equal(be.calls, want) {
-		t.Fatalf("calls = %v, want %v", be.calls, want)
-	}
-}
-
-func TestLegacyFailOpenReleasesOnError(t *testing.T) {
-	be := &fakeBackend{}
-	o := Options{
-		Monitor: &fakeMonitor{results: []monitor.Result{
-			reading("IR"), // block
-			failResult(),  // fail-open: error → Allow → unblock
-		}},
-		Decider:   decision.New([]string{"IR"}, false, 1), // fail-open
-		Backend:   be,
-		Log:       discardLog(),
-		Allowlist: oneHostAL,
-	}
-	if err := Run(context.Background(), o); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"block", "unblock", "cleanup"}
-	if !equal(be.calls, want) {
-		t.Fatalf("calls = %v, want %v", be.calls, want)
-	}
-}
-
-func TestLegacyFailClosedHoldsOnError(t *testing.T) {
-	be := &fakeBackend{}
-	o := Options{
-		Monitor: &fakeMonitor{results: []monitor.Result{
-			reading("IR"), // block
-			failResult(),  // fail-closed: error → Block → stays blocked (refresh)
-		}},
-		Decider:   decision.New([]string{"IR"}, true, 1), // fail-closed
-		Backend:   be,
-		Log:       discardLog(),
-		Allowlist: oneHostAL,
-	}
-	if err := Run(context.Background(), o); err != nil {
-		t.Fatal(err)
-	}
-	// Never unblocks: a lookup error keeps the block (and refreshes the allowlist).
-	want := []string{"block", "block", "cleanup"}
-	if !equal(be.calls, want) {
-		t.Fatalf("calls = %v, want %v", be.calls, want)
-	}
-}
-
-// A mid-block allowlist refresh that resolves no provider IPs must not re-Block
-// (which would narrow the rules to an empty list and strand recovery). The
-// existing block is kept; only the entry Block fires.
-func TestLegacyRefreshSkipWhenEmpty(t *testing.T) {
-	be := &fakeBackend{}
-	o := Options{
-		Monitor: &fakeMonitor{results: []monitor.Result{
-			reading("IR"), // enter block (empty allowlist allowed on entry)
-			reading("IR"), // refresh resolves nothing → keep existing block, no re-Block
-		}},
-		Decider:   decision.New([]string{"IR"}, true, 1),
-		Backend:   be,
-		Log:       discardLog(),
-		Allowlist: func() firewall.Allowlist { return firewall.Allowlist{} }, // always empty
-	}
-	if err := Run(context.Background(), o); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"block", "cleanup"}
-	if !equal(be.calls, want) {
-		t.Fatalf("calls = %v, want %v", be.calls, want)
-	}
-}
-
-// --- VPN mode ---
-
 func TestVPNGuardFullBlockAndProbeRecovery(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -376,11 +154,10 @@ func TestVPNGuardFullBlockAndProbeRecovery(t *testing.T) {
 			reading("IR"), // full block (enter)
 			reading("US"), // probe sees allowed country → recover to guard
 		}},
-		Decider:   decision.New([]string{"IR"}, true, 1),
+		Decider:   decision.New([]string{"IR"}, 1),
 		Backend:   be,
 		Log:       discardLog(),
 		Interval:  time.Millisecond,
-		VPN:       true,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 	}
@@ -432,11 +209,10 @@ func TestVPNProbeRespectsHysteresis(t *testing.T) {
 			reading("US"), // probe: streak 1 toward allow → still blocked
 			reading("US"), // probe: streak 2 → recover to guard
 		}},
-		Decider:   decision.New([]string{"IR"}, true, 2),
+		Decider:   decision.New([]string{"IR"}, 2),
 		Backend:   be,
 		Log:       discardLog(),
 		Interval:  time.Millisecond,
-		VPN:       true,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 	}
@@ -471,11 +247,10 @@ func TestVPNHoldsGuardOnLookupError(t *testing.T) {
 			failResult(), // undeterminable → hold guard (must NOT full block)
 			failResult(), // still undeterminable → still guard
 		}},
-		Decider:   decision.New([]string{"IR"}, true, 1), // failClosed, hysteresis 1
+		Decider:   decision.New([]string{"IR"}, 1), // failClosed, hysteresis 1
 		Backend:   be,
 		Log:       discardLog(),
 		Interval:  time.Millisecond,
-		VPN:       true,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 	}
@@ -501,11 +276,10 @@ func TestVPNHoldsFullBlockOnProbeError(t *testing.T) {
 			failResult(),  // probe error → hold block
 			failResult(),  // probe error → hold block
 		}},
-		Decider:   decision.New([]string{"IR"}, true, 1),
+		Decider:   decision.New([]string{"IR"}, 1),
 		Backend:   be,
 		Log:       discardLog(),
 		Interval:  time.Millisecond,
-		VPN:       true,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 	}
@@ -532,11 +306,10 @@ func TestVPNStartupGuardFailureAborts(t *testing.T) {
 	be := &failingGuardBackend{}
 	o := Options{
 		Monitor:   &fakeMonitor{},
-		Decider:   decision.New([]string{"IR"}, true, 1),
+		Decider:   decision.New([]string{"IR"}, 1),
 		Backend:   be,
 		Log:       discardLog(),
 		Interval:  time.Millisecond,
-		VPN:       true,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 	}
@@ -643,38 +416,6 @@ func downWatcher() *netdetect.Watcher {
 
 // In legacy mode a tunnel drop must block immediately, with no geo reading at
 // all, and a still-down tunnel must not auto-unblock.
-func TestLegacyTunnelDownBlocks(t *testing.T) {
-	be := &signalBackend{blockCh: make(chan struct{}, 4)}
-	ctx, cancel := context.WithCancel(context.Background())
-	o := Options{
-		Monitor:   idleMonitor{},
-		Decider:   decision.New([]string{"IR"}, false, 1),
-		Backend:   be,
-		Log:       discardLog(),
-		Allowlist: oneHostAL,
-		Watcher:   downWatcher(),
-	}
-	done := make(chan error, 1)
-	go func() { done <- Run(ctx, o) }()
-
-	select {
-	case <-be.blockCh:
-	case <-time.After(2 * time.Second):
-		cancel()
-		t.Fatal("tunnel-down did not trigger an immediate block")
-	}
-	cancel()
-	if err := <-done; err != nil {
-		t.Fatal(err)
-	}
-	if be.has("unblock") {
-		t.Error("a still-down tunnel must not auto-unblock")
-	}
-}
-
-// In VPN mode the watcher is observability-only: a tunnel drop must NOT apply any
-// firewall transition (the standing guard rule already cuts the leak). Only the
-// startup guard should appear, plus cleanup.
 func TestVPNWatcherObservabilityOnly(t *testing.T) {
 	be := &fakeBackend{}
 	// steadyMonitor always reports US (allowed), so the guard holds throughout and
@@ -684,11 +425,10 @@ func TestVPNWatcherObservabilityOnly(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:   steadyMonitor{cc: "US"},
-		Decider:   decision.New([]string{"IR"}, true, 1),
+		Decider:   decision.New([]string{"IR"}, 1),
 		Backend:   be,
 		Log:       discardLog(),
 		Interval:  time.Millisecond,
-		VPN:       true,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		Watcher:   downWatcher(),
@@ -727,11 +467,10 @@ func TestVPNTunnelDownSkipsGeoStep(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:   mon,
-		Decider:   decision.New([]string{"IR"}, true, 1), // fail-closed, no hysteresis
+		Decider:   decision.New([]string{"IR"}, 1), // fail-closed, no hysteresis
 		Backend:   be,
 		Log:       discardLog(),
 		Interval:  100 * time.Millisecond, // geo ticks land long after the down edge (~1ms)
-		VPN:       true,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		Watcher:   downWatcher(), // samples down every 1ms → down edge within a few ms
@@ -886,11 +625,10 @@ func TestVPNNewTunnelReappliesGuard(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:    steadyMonitor{cc: "US"},
-		Decider:    decision.New([]string{"IR"}, true, 1),
+		Decider:    decision.New([]string{"IR"}, 1),
 		Backend:    be,
 		Log:        discardLog(),
 		Interval:   time.Hour, // suppress geoTick during the test
-		VPN:        true,
 		Autodetect: true,
 		Tunnels:    []string{"utun4"},
 		Endpoints:  []netip.Addr{netip.MustParseAddr("203.0.113.7")},
@@ -924,11 +662,10 @@ func TestVPNZeroTunnelStandingPosture(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:    steadyMonitor{cc: "US"},
-		Decider:    decision.New([]string{"IR"}, true, 1),
+		Decider:    decision.New([]string{"IR"}, 1),
 		Backend:    be,
 		Log:        discardLog(),
 		Interval:   time.Millisecond, // geoTick would fire fast — must be suppressed
-		VPN:        true,
 		Autodetect: true,
 		Tunnels:    nil, // no tunnels
 		Endpoints:  []netip.Addr{netip.MustParseAddr("203.0.113.7")},
@@ -973,11 +710,10 @@ func TestSwitchWindowCancelRevertsToGuard(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:         steadyMonitor{cc: "US"},
-		Decider:         decision.New([]string{"IR"}, true, 1),
+		Decider:         decision.New([]string{"IR"}, 1),
 		Backend:         be,
 		Log:             discardLog(),
 		Interval:        time.Hour,
-		VPN:             true,
 		Tunnels:         []string{"utun4"},
 		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		SwitchWindow:    20 * time.Second,
@@ -1012,11 +748,10 @@ func TestSwitchWindowEarlyCloseLearnsEndpoint(t *testing.T) {
 	o := Options{
 		Publish:                 func(s state.Snapshot) { snaps = append(snaps, s) },
 		Monitor:                 steadyMonitor{cc: "US"}, // exit verified allowed
-		Decider:                 decision.New([]string{"IR"}, true, 1),
+		Decider:                 decision.New([]string{"IR"}, 1),
 		Backend:                 be,
 		Log:                     discardLog(),
 		Interval:                time.Hour,
-		VPN:                     true,
 		Tunnels:                 []string{"utun4"},
 		Endpoints:               []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		SwitchWindow:            5 * time.Second, // long; must close EARLY, not on expiry
@@ -1095,11 +830,10 @@ func TestSwitchWindowVerifiedCloseHoldsOpenOnApplyFailure(t *testing.T) {
 	o := Options{
 		Publish:                 func(s state.Snapshot) { snaps = append(snaps, s) },
 		Monitor:                 steadyMonitor{cc: "US"}, // exit would verify allowed
-		Decider:                 decision.New([]string{"IR"}, true, 1),
+		Decider:                 decision.New([]string{"IR"}, 1),
 		Backend:                 be,
 		Log:                     discardLog(),
 		Interval:                time.Hour,
-		VPN:                     true,
 		Tunnels:                 []string{"utun4"},
 		Endpoints:               []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		SwitchWindow:            5 * time.Second,
@@ -1166,11 +900,10 @@ func TestVPNRefusesToArmGuardThatWouldCutTheTunnelsOwnTransport(t *testing.T) {
 	be := &fakeBackend{}
 	o := Options{
 		Monitor:  &fakeMonitor{},
-		Decider:  decision.New([]string{"IR"}, true, 1),
+		Decider:  decision.New([]string{"IR"}, 1),
 		Backend:  be,
 		Log:      discardLog(),
 		Interval: time.Millisecond,
-		VPN:      true,
 		Tunnels:  []string{"utun4"}, // tunnel is up
 		// Endpoints: none — discovery found nothing (WireGuard's unconnected UDP
 		// socket never shows up as a connected flow).
@@ -1217,11 +950,10 @@ func TestVPNArmsStandingPostureWithNoTunnelAndNoEndpoint(t *testing.T) {
 	cancel() // one pass through startup, then stop
 	o := Options{
 		Monitor:    &fakeMonitor{},
-		Decider:    decision.New([]string{"IR"}, true, 1),
+		Decider:    decision.New([]string{"IR"}, 1),
 		Backend:    be,
 		Log:        discardLog(),
 		Interval:   time.Millisecond,
-		VPN:        true,
 		Autodetect: true,
 	}
 	if err := Run(ctx, o); err != nil {
@@ -1272,11 +1004,10 @@ func TestVPNAutoReconnectWindowOpensAndExpires(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:         steadyMonitor{cc: "US"},
-		Decider:         decision.New([]string{"IR"}, true, 1),
+		Decider:         decision.New([]string{"IR"}, 1),
 		Backend:         be,
 		Log:             discardLog(),
 		Interval:        time.Millisecond,
-		VPN:             true,
 		Tunnels:         []string{"utun4"},
 		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		Watcher:         edgeWatcher(5),
@@ -1316,11 +1047,10 @@ func TestVPNAutoWindowRequiresObservedUp(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:         steadyFailMonitor{},
-		Decider:         decision.New([]string{"IR"}, true, 1),
+		Decider:         decision.New([]string{"IR"}, 1),
 		Backend:         be,
 		Log:             discardLog(),
 		Interval:        time.Millisecond,
-		VPN:             true,
 		Tunnels:         []string{"utun4"},
 		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		Watcher:         downWatcher(),
@@ -1365,11 +1095,10 @@ func TestVPNAutoWindowFlapGuard(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:            steadyFailMonitor{},
-		Decider:            decision.New([]string{"IR"}, true, 1),
+		Decider:            decision.New([]string{"IR"}, 1),
 		Backend:            be,
 		Log:                discardLog(),
 		Interval:           time.Millisecond,
-		VPN:                true,
 		Tunnels:            []string{"utun4"},
 		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		Watcher:            flapWatcher(),
@@ -1394,11 +1123,10 @@ func TestVPNAutoWindowNotFromFullBlock(t *testing.T) {
 	defer cancel()
 	o := Options{
 		Monitor:         steadyMonitor{cc: "IR"}, // forbidden exit → FULL BLOCK at startup
-		Decider:         decision.New([]string{"IR"}, true, 1),
+		Decider:         decision.New([]string{"IR"}, 1),
 		Backend:         be,
 		Log:             discardLog(),
 		Interval:        time.Millisecond,
-		VPN:             true,
 		Tunnels:         []string{"utun4"},
 		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		Watcher:         edgeWatcher(5),
@@ -1411,5 +1139,105 @@ func TestVPNAutoWindowNotFromFullBlock(t *testing.T) {
 		if c == "apply-switch" {
 			t.Fatalf("auto window opened from FULL BLOCK; calls = %v", be.calls)
 		}
+	}
+}
+
+// A failed exit-country lookup must be classified, not blanket-reported.
+//
+// The symptom this fixes: dezhban showed geo-provider errors during switch and
+// reconnect windows. Those are the moments the tunnel is DOWN — that is why the
+// window exists — so there is no VPN exit to measure and the lookup failing is
+// correct behaviour. Reporting it as an error trains people to ignore the field,
+// and it was most of what made the providers look broken.
+//
+// A tunnel-up failure is a different thing entirely: the exit may be censoring
+// the providers (an Iranian exit blocking them looks exactly like this), and
+// that IS worth showing.
+func TestLookupFailureClassification(t *testing.T) {
+	cases := []struct {
+		name           string
+		tunnels        []state.Tunnel
+		wantLookupErr  bool
+		wantExitUnknwn bool
+	}{
+		{"tunnel up — genuine failure", []state.Tunnel{{Name: "utun4", Up: true}}, true, false},
+		{"tunnel down — expected", []state.Tunnel{{Name: "utun4", Up: false}}, false, true},
+		{"no tunnels at all — expected", nil, false, true},
+		{"one of several up — genuine", []state.Tunnel{{Name: "utun4", Up: false}, {Name: "utun5", Up: true}}, true, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got state.Snapshot
+			o := Options{Publish: func(s state.Snapshot) { got = s }}
+			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "")
+
+			if hasErr := got.LookupErr != ""; hasErr != c.wantLookupErr {
+				t.Errorf("LookupErr set = %v, want %v (got %q)", hasErr, c.wantLookupErr, got.LookupErr)
+			}
+			if hasUnk := got.ExitUnknown != ""; hasUnk != c.wantExitUnknwn {
+				t.Errorf("ExitUnknown set = %v, want %v (got %q)", hasUnk, c.wantExitUnknwn, got.ExitUnknown)
+			}
+			// Never both — an observer showing each field independently would
+			// otherwise render the same condition twice, once alarmingly.
+			if got.LookupErr != "" && got.ExitUnknown != "" {
+				t.Error("LookupErr and ExitUnknown are both set; they are mutually exclusive")
+			}
+		})
+	}
+}
+
+// A successful lookup sets neither field, whatever the tunnel state.
+func TestSuccessfulLookupSetsNoErrorFields(t *testing.T) {
+	var got state.Snapshot
+	o := Options{Publish: func(s state.Snapshot) { got = s }}
+	o.publish(false, false, monitor.Reading{CountryCode: "NL"}, nil, nil,
+		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "")
+	if got.LookupErr != "" || got.ExitUnknown != "" {
+		t.Errorf("a successful lookup set LookupErr=%q ExitUnknown=%q, want both empty", got.LookupErr, got.ExitUnknown)
+	}
+}
+
+// With tunnel-scoped provider passes in the FULL BLOCK ruleset, the recovery
+// probe must NOT lift the guard.
+//
+// The old path applied ModeGuard — full tunnel egress — for up to
+// probeEgressBudget on EVERY probe tick, just to make one HTTP request, and kept
+// doing it for as long as a forbidden exit persisted. That is a recurring leak
+// measured in seconds per tick, and it is what the tunnel-scoped pass removes.
+func TestProbeSkipsGuardLiftWhenProvidersArePassed(t *testing.T) {
+	be := &fakeBackend{}
+	o := Options{Backend: be, Log: discardLog(), Monitor: &fakeMonitor{results: []monitor.Result{reading("IR")}}}
+
+	fullBlock := firewall.Policy{
+		Mode:          firewall.ModeFullBlock,
+		TunnelIfaces:  []string{"utun4"},
+		ProviderAddrs: []netip.Addr{netip.MustParseAddr("104.16.1.1")},
+	}
+	guard := firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: []string{"utun4"}}
+
+	if _, err := o.probe(context.Background(), guard, fullBlock); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	if len(be.calls) != 0 {
+		t.Errorf("probe touched the firewall (%v) — with providers passed it must observe without lifting", be.calls)
+	}
+}
+
+// Without provider passes the fallback must still work: lift, observe, re-cut.
+// Losing that would leave a FULL BLOCK unable to observe its way out — a block
+// that can never lift is worse than a bounded leak.
+func TestProbeFallsBackToLiftWhenNoProviders(t *testing.T) {
+	be := &fakeBackend{}
+	o := Options{Backend: be, Log: discardLog(), Monitor: &fakeMonitor{results: []monitor.Result{reading("IR")}}}
+
+	fullBlock := firewall.Policy{Mode: firewall.ModeFullBlock, TunnelIfaces: []string{"utun4"}}
+	guard := firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: []string{"utun4"}}
+
+	if _, err := o.probe(context.Background(), guard, fullBlock); err != nil {
+		t.Fatalf("probe: %v", err)
+	}
+	want := []string{"apply-guard", "apply-fullblock"}
+	if strings.Join(be.calls, ",") != strings.Join(want, ",") {
+		t.Errorf("fallback probe calls = %v, want %v (lift then re-cut)", be.calls, want)
 	}
 }

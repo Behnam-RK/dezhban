@@ -41,15 +41,24 @@ command set.
 |---|---|---|---|
 | `pollInterval` | duration string | `"15s"` | How often the public IP / country is checked. Must be > 0. With the default `hysteresis: 2`, a forbidden exit is confirmed in ~30s worst-case; the default provider order keeps this volume on unmetered endpoints. |
 | `blockedCountries` | `[]string` | `[]` | ISO-3166 alpha-2 codes (e.g. `"RU"`, `"IR"`). Upper-cased on load; each must be exactly 2 letters. A match triggers a block. |
-| `failClosed` | bool | `true` | **Fallback (non-VPN) mode:** when the country can't be determined, block anyway (security-first); the allowlist stays open so recovery still works. **In VPN guard mode this is a no-op** — the standing guard is itself the fail-closed block for physical leaks, so an undeterminable country *holds* the current posture rather than escalating to FULL BLOCK (escalating would cut the tunnel's own egress and livelock the reconnect). Only a *successful* reading of a blocked country triggers FULL BLOCK. |
-| `hysteresis` | int | `2` | Consecutive agreeing readings required before toggling block/allow. Must be ≥ 1. Damps flapping. |
+| `hysteresis` | int | `2` | Consecutive agreeing readings required before toggling block/allow. Must be ≥ 1. Damps flapping. A *failed* lookup is neutral — it neither commits a pending flip nor cancels one. |
 | `providers` | `[]string` | 8 geo-IP URLs | Geo-location endpoints, tried **in order** for redundancy — the first reachable one absorbs nearly all poll traffic, so the default list is ordered by rate-limit headroom: `get.geojs.io`, `api.country.is`, `ip-api.com`, `ipwho.is`, `freeipapi.com`, `ifconfig.co`, `ipinfo.io`, `ipapi.co`. Only these known URLs are usable (each needs a response parser); unknown URLs are skipped with a warning. At least one required. |
-| `allowlist.dns` | `[]string` | `[]` | Resolver IPs kept reachable while blocking, so hostname re-resolution works. |
-| `allowlist.hosts` | `[]string` | `[]` | Extra host IPs always allowed. Provider IPs are added automatically at block time. |
 | `providerQuorum` | bool | `false` | Require a majority of providers to agree on the country before acting. |
 | `logLevel` | string | `"info"` | One of `debug`, `info`, `warn`, `error`. The `-v`/`--verbose` flag overrides this to `debug`. |
-| `vpn` | object | disabled | VPN interface-guard config — see below. |
+| `vpn` | object | — | VPN interface-guard config — see below. |
 | `control` | object | enabled | Control socket — the reason routine ops don't ask for a password. See below. |
+
+### Retired keys
+
+These are still **parsed without error**, have **no effect**, and are **reported**
+by `dezhban validate` and once at daemon start. They are never written back when
+dezhban saves your config. Nothing you have to do — but nothing they do, either.
+
+| Key | Why it's gone |
+|---|---|
+| `vpn.enabled` | There is one enforcement model now. Its second job — the safety opt-in that stopped a misconfigured guard locking a host out — is done properly by the STANDBY posture, which installs no rules until a tunnel is observed up. [ADR-0001](adr/0001-single-guard-mode.md), [ADR-0002](adr/0002-standby-no-tunnel-posture.md) |
+| `failClosed` | Belonged to the retired country-blocklist model, where the firewall was open at rest and an undeterminable country was the only reason to cut. Under the guard, the standing rules *are* the fail-closed block, so an unknown country holds the posture instead of escalating. [ADR-0001](adr/0001-single-guard-mode.md) |
+| `allowlist` | Belonged to the same model. A VPN posture opens the tunnel **endpoint**, not a destination allowlist — against a tunnel's encrypted outer packets a dst-IP list means nothing. Geo-provider IPs are still resolved automatically where they're needed. [ADR-0001](adr/0001-single-guard-mode.md) |
 
 ## `control` block
 
@@ -88,25 +97,26 @@ Name a group explicitly to opt in.
 
 ## `vpn` block
 
-For hosts behind a full-tunnel VPN, the guard cuts the **physical** interface
-while keeping the **tunnel** open, instead of the destination-IP allowlist (which
-is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you out.
+The guard cuts the **physical** interface while keeping the **tunnel** open. This
+is the only enforcement model dezhban has; there is no flag to turn it on,
+because with no tunnel configured or observed the daemon simply rests in STANDBY
+and installs no rules at all.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `vpn.enabled` | bool | `false` | Turns on guard mode. |
-| `vpn.tunnelInterfaces` | `[]string` | `[]` | Tunnel interface names (e.g. `["utun4"]`). Required unless `autodetect` is set. Run `dezhban detect-vpn` to find them. |
-| `vpn.endpoints` | `[]string` | `[]` | VPN server addresses reachable on the physical interface — kept open so the tunnel can stay up and reconnect. Each entry may be an **IP or a hostname** (hostnames are re-resolved at runtime). Required when `enabled`, unless `autoDiscoverEndpoints` is set. |
-| `vpn.autodetect` | bool | `false` | Discover the tunnel interface(s) at runtime via `netdetect`, growing/pruning the guard set as VPNs come and go. Explicit `tunnelInterfaces` always win (and are pinned — never pruned). **Implied `true`** when the guard is enabled with no `tunnelInterfaces`, so a config never pins a `utunN` that renumbers across reconnects. |
+| `vpn.tunnelInterfaces` | `[]string` | `[]` | Tunnel interface names (e.g. `["utun4"]`). Leave empty to let `autodetect` find them (which is implied when this is empty). Run `dezhban detect-vpn` to see them. |
+| `vpn.endpoints` | `[]string` | `[]` | VPN server addresses reachable on the physical interface — kept open so the tunnel can stay up and reconnect. Each entry may be an **IP or a hostname** (hostnames are re-resolved at runtime). Not required to load — a config with none is valid and rests in STANDBY — but the guard will not arm until it knows at least one, from here, a profile, or `autoDiscoverEndpoints`. |
+| `vpn.autodetect` | bool | `false` | Discover the tunnel interface(s) at runtime via `netdetect`, growing/pruning the guard set as VPNs come and go. Explicit `tunnelInterfaces` always win (and are pinned — never pruned). **Implied `true`** when there are no `tunnelInterfaces`, so a config never pins a `utunN` that renumbers across reconnects. |
 | `vpn.profiles` | `[]object` | `[]` | Named VPNs whose server endpoints are always kept reachable (the guard passes the **union** of all profiles' endpoints), so switching between known VPNs needs no reconfiguration. Each: `{name, endpoints[], ifaceHint?}`. `ifaceHint` is display-only. Manage with `dezhban vpn add/remove/import`, not `config set`. |
-| `vpn.switchWindow` | duration | `15s` | Default length of a `dezhban switch` window — a bounded, explicitly-triggered relaxation for connecting a brand-new VPN whose server isn't known yet (it closes early on a confirmed good exit, so the duration only bounds the slow case; pass `--for` for a longer one-off). Validated to `[10s, advanced.switchWindowMax]`. |
+| `vpn.switchWindow` | duration | `15s` | Default length of a `dezhban switch` window — a bounded, explicitly-triggered relaxation for connecting a brand-new VPN whose server isn't known yet (it closes early on a confirmed good exit, so the duration only bounds the slow case; pass `--for` for a longer one-off). Set `"0"` to disable manual switch windows entirely — a *tightening*, at the cost of having to add a new VPN's server to `vpn.endpoints` by hand. Independent of `reconnectWindow`. Validated to `[10s, advanced.switchWindowMax]`, or exactly `"0"`. |
 | `vpn.reconnectWindow` | duration | `30s` | Length of the **automatic reconnect window**: a tunnel drop from healthy GUARD opens a switch-window relaxation for this long, so the VPN client can redial *any* server — including one dezhban has never seen — with zero interaction. Closes early (and learns the new endpoint) the moment a good exit is confirmed; on expiry the guard fail-closes and stays closed. Set `"0"` to disable and get the strict zero-relaxation behavior. Validated to `[5s, advanced.switchWindowMax]`. See [modes.md](modes.md#automatic-reconnect-window). |
 | `vpn.autoDiscoverEndpoints` | bool | `false` | Continuously learn the live VPN server IP from the active socket (**macOS only**; ignored elsewhere, where hostnames/IPs are used). Lets a rotating-pool VPN (NordVPN/ProtonVPN/…) run with no hand-typed endpoint. |
 | `vpn.allowPhysicalDNS` | bool | `true` | Open plain DNS (port 53) egress on the **physical** link in GUARD and VPN FULL BLOCK, so a VPN client can re-resolve its server hostname and reconnect while the tunnel is down. **On by default** (2026-07 defaults review: reconnectability wins for this project's users); set `false` to close the residual leak — DNS-query metadata (which resolver you query, and that you're reconnecting) on the physical path. Your actual traffic stays blocked either way. |
+| `vpn.allowLocalNetwork` | bool | `true` | Keep **local** destinations reachable while the guard is armed: printers, NAS, the router's admin page, AirPlay/Chromecast, local dev servers, SSH to another machine on the desk. Without it, arming the guard makes every one of them unreachable with no way to get them back. **Destination-scoped** (RFC1918 + CGNAT + link-local + IPv6 ULA + multicast — see [modes.md](modes.md#local-network-access)), never interface-scoped, so it cannot become an internet path: packets to public addresses stay blocked whatever the next hop is. Costs nothing against the threat model — this traffic never leaves the building, so it cannot expose your country to a foreign service. **The one real cost:** on an untrusted network (café, hotel) it lets you reach, and be reached by, the other devices there. Set `false` to close that. |
 | `vpn.autoArm` | bool | `true` | Start PASSIVE (posture `standby`, nothing enforced) when no tunnel interface is present, and arm the guard automatically the moment a VPN connects (endpoints are re-checked at arm time; arming is held while none are known). Never disarms on tunnel loss — a drop is exactly the leak the kill switch exists for; an explicit `unblock` with the tunnel down returns to standby. **On by default** (2026-07 defaults review: a guard armed with no VPN is a mystery blackout for new users); set `false` for the stricter armed-from-startup posture. |
 | `vpn.endpointRefresh` | duration | `1m` | How often hostnames are re-resolved and live discovery re-run. Local work only (DNS + a socket scan), so the fast cadence costs nothing against geo-API quotas and promotes roamed-to servers to learned within ~3 minutes. |
 | `vpn.endpointGrace` | duration | `15m` | How long an autodiscovered endpoint stays in the allowed set after a refresh stops reporting it. Discovery can only see an endpoint while its socket lives, and the socket dies with the tunnel — the grace is the window in which a dropped VPN can redial the *same* server without a switch window. A genuinely rotated-away server ages out once unseen past the grace. |
-| `vpn.tunnelWatch` | duration | `1s` | How often the tunnel interface(s) are sampled for up/down. In guard mode this powers logging/`monitor`; in legacy (direct) mode a drop blocks immediately (kill switch). |
+| `vpn.tunnelWatch` | duration | `1s` | How often the tunnel interface(s) are sampled for up/down. Drives the tunnel-down edge that arms the guard out of STANDBY and opens the automatic reconnect window, plus logging and `monitor`. |
 
 ### Validation rules (enforced by `validate` and at load)
 
@@ -114,10 +124,19 @@ is meaningless under a tunnel). Opt-in — a misconfigured guard can lock you ou
 - `hysteresis` ≥ 1
 - at least one `providers` entry
 - every `blockedCountries` code is 2 letters
-- when `vpn.enabled`: at least one endpoint across the **union** of `vpn.endpoints`, `vpn.profiles[].endpoints`, **or** `autoDiscoverEndpoints` (tunnel interfaces need not be set — autodetect is implied)
 - `vpn.profiles`: unique names (`[A-Za-z0-9._-]`, ≤64), each with ≥1 valid endpoint
-- `vpn.switchWindow` within `[10s, advanced.switchWindowMax]`
+- `vpn.switchWindow` within `[10s, advanced.switchWindowMax]`, or exactly `"0"` (disabled)
 - `vpn.reconnectWindow` within `[5s, advanced.switchWindowMax]`, or exactly `"0"` (disabled)
+
+**Endpoints are deliberately *not* a load-time requirement.** They used to be,
+because `vpn.enabled: true` was a promise to enforce and a guard that can never
+learn a server address can never let the tunnel reconnect. With one mode, every
+config is a guard config, so rejecting here would make a fresh install — which
+legitimately knows no endpoints yet — fail to load at all. The check moved to
+where it can tell the difference: the runner refuses to *arm* a guard that has
+tunnels but no endpoints (that specific pair is the unrecoverable blackout), and
+`dezhban doctor` reports the same condition as a lockout risk before you hit it.
+Knowing no endpoints *and* no tunnel is simply STANDBY, which is safe.
 
 ### Getting `vpn.endpoints` right
 
@@ -152,7 +171,7 @@ inputs to watch enforcement actually fire:
 
 ```sh
 sudo dezhban run --simulate-country IR --config <config>       # drive a real block from anywhere
-sudo dezhban run --simulate-tunnel-down 8s --config <config>   # exercise the failover path (legacy kill switch)
+sudo dezhban run --simulate-tunnel-down 8s --config <config>   # exercise the tunnel-drop path (cut + reconnect window)
 ```
 
 ## VPN profiles and switching between many VPNs
@@ -176,7 +195,7 @@ freely — is served by two mechanisms:
   snaps shut:
 
   ```sh
-  sudo dezhban switch          # opens a ~2m window, watches for the new tunnel + server
+  sudo dezhban switch          # opens a window (15s default), watches for the new tunnel + server
   # …connect your VPN in its app…
   sudo dezhban vpn promote <name>   # make the learned endpoint permanent (see: dezhban vpn list)
   ```
@@ -207,8 +226,8 @@ entirely to keep the defaults; set only the knobs you need.
 
 ## Sample configs
 
-- [`configs/dezhban.example.json`](../configs/dezhban.example.json) — reference, legacy (non-VPN) mode.
-- [`configs/dezhban.vpn-guard.json`](../configs/dezhban.vpn-guard.json) — VPN guard mode.
+- [`configs/dezhban.example.json`](../configs/dezhban.example.json) — reference: fully automatic (autodetect + endpoint discovery).
+- [`configs/dezhban.vpn-guard.json`](../configs/dezhban.vpn-guard.json) — explicitly pinned tunnel interface and endpoints.
 - [`configs/dezhban.profiles.json`](../configs/dezhban.profiles.json) — autodetect + multiple VPN profiles + switch window.
 - [`configs/dezhban.dev.json`](../configs/dezhban.dev.json) — debug logging, fast poll, no blocking; for local dry-runs.
 - `configs/dezhban.local.json` — your private config (git-ignored; may hold a real endpoint IP).

@@ -28,7 +28,7 @@ func assertAtomicReplace(t *testing.T, rs string) {
 		"add table inet dezhban",
 	}
 	idx := 0
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if idx < len(want) && strings.TrimSpace(line) == want[idx] {
 			idx++
 		}
@@ -78,7 +78,7 @@ func TestRenderNftEmptyAllowlist(t *testing.T) {
 		t.Errorf("empty allowlist produced an invalid empty set:\n%s", rs)
 	}
 	// Only loopback should be accepted with no DNS/hosts.
-	for _, line := range strings.Split(rs, "\n") {
+	for line := range strings.SplitSeq(rs, "\n") {
 		if strings.Contains(line, "daddr") {
 			t.Errorf("empty allowlist should emit no daddr accept rules: %q", line)
 		}
@@ -238,5 +238,112 @@ func TestRenderNftZeroTunnelStandingPosture(t *testing.T) {
 	}
 	if strings.Contains(rs, "1.1.1.1") {
 		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", rs)
+	}
+}
+
+// LAN passes must be emitted per family: nft's `ip daddr` rejects a v6 prefix
+// and `ip6 daddr` rejects a v4 one, so a single mixed list would be a ruleset
+// that fails to load — and on a kill switch, failing to load means failing to
+// protect.
+func TestRenderNftLocalNetwork(t *testing.T) {
+	for _, mode := range []Mode{ModeGuard, ModeFullBlock} {
+		rs := renderNftRuleset(Policy{
+			Mode:              mode,
+			TunnelIfaces:      []string{"utun4"},
+			VPNEndpoints:      []netip.Addr{mustAddr(t, "203.0.113.5")},
+			AllowLocalNetwork: true,
+		})
+		for _, w := range []string{
+			"ip daddr { 10.0.0.0/8", // v4 family matcher
+			"ip6 daddr { fc00::/7",  // v6 family matcher
+		} {
+			if !strings.Contains(rs, w) {
+				t.Errorf("mode %s with allowLocalNetwork must emit %q:\n%s", mode, w, rs)
+			}
+		}
+		// No v6 prefix may appear inside an `ip daddr` rule (or vice versa).
+		for line := range strings.SplitSeq(rs, "\n") {
+			if strings.Contains(line, "ip daddr") && strings.Contains(line, "::") {
+				t.Errorf("v6 prefix inside an `ip daddr` rule — nft will reject this:\n%s", line)
+			}
+			if strings.Contains(line, "ip6 daddr") && strings.Contains(line, "10.0.0.0/8") {
+				t.Errorf("v4 prefix inside an `ip6 daddr` rule — nft will reject this:\n%s", line)
+			}
+		}
+	}
+
+	// Off by request: no LAN rules at all.
+	off := renderNftRuleset(Policy{
+		Mode:         ModeGuard,
+		TunnelIfaces: []string{"utun4"},
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
+	})
+	if strings.Contains(off, "10.0.0.0/8") {
+		t.Errorf("allowLocalNetwork=false must emit no LAN pass:\n%s", off)
+	}
+}
+
+// The LAN pass must not depend on isVPNPolicy — see the pf twin of this test in
+// pf_darwin_test.go for the full rationale. Nested inside the VPN branch,
+// allowLocalNetwork was silently discarded for a FULL BLOCK with no tunnels, no
+// endpoints and allowPhysicalDNS off.
+func TestRenderNftLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
+	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
+	if isVPNPolicy(p) {
+		t.Fatal("precondition: this policy must take the non-VPN branch")
+	}
+	rs := renderNftRuleset(p)
+	if !strings.Contains(rs, "10.0.0.0/8") {
+		t.Errorf("LAN pass dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", rs)
+	}
+
+	// `block --force` must be unaffected.
+	forced := renderNftRuleset(Policy{
+		Mode:      ModeFullBlock,
+		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
+	})
+	if strings.Contains(forced, "10.0.0.0/8") {
+		t.Errorf("block --force must not gain a LAN pass:\n%s", forced)
+	}
+}
+
+// The provider pass must be tunnel-scoped, must cover every tunnel matcher, and
+// must not drag a blanket DNS rule along with it. See tunnelProviderRules in
+// pf_darwin.go for why an unscoped `dport 53` would leak every hostname this
+// host resolves to the very exit FULL BLOCK is refusing.
+func TestRenderNftTunnelScopedProviders(t *testing.T) {
+	rs := renderNftRuleset(Policy{
+		Mode:          ModeFullBlock,
+		TunnelIfaces:  []string{"utun4"},
+		TunnelGroups:  []string{"wg"},
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	// Both the concrete interface and the class wildcard get the pass: taking
+	// only one would leave the lookup unable to reach a tunnel the guard passes.
+	for _, w := range []string{`oifname { "utun4" } ip daddr`, `oifname "wg*" ip daddr`} {
+		if !strings.Contains(rs, w) {
+			t.Errorf("FULL BLOCK must scope the provider pass with %q:\n%s", w, rs)
+		}
+	}
+	for line := range strings.SplitSeq(rs, "\n") {
+		if strings.Contains(line, "104.16.1.1") && !strings.Contains(line, "oifname") {
+			t.Errorf("provider pass is not tunnel-scoped — it would measure the ISP's country with the tunnel down:\n%s", line)
+		}
+		// Narrowly the TUNNEL-scoped form: allowPhysicalDNS legitimately renders a
+		// bare `udp dport 53 accept` on the physical link.
+		if strings.Contains(line, "dport 53") && strings.Contains(line, "oifname") {
+			t.Errorf("FULL BLOCK emits a tunnel-scoped DNS pass — every lookup would leak to the forbidden exit:\n%s", line)
+		}
+	}
+
+	// No tunnel to scope to → emit nothing rather than an unscoped pass.
+	noTun := renderNftRuleset(Policy{
+		Mode:          ModeFullBlock,
+		VPNEndpoints:  []netip.Addr{mustAddr(t, "203.0.113.5")},
+		ProviderAddrs: []netip.Addr{mustAddr(t, "104.16.1.1")},
+	})
+	if strings.Contains(noTun, "104.16.1.1") {
+		t.Errorf("with no tunnel the provider pass must be omitted, not emitted unscoped:\n%s", noTun)
 	}
 }

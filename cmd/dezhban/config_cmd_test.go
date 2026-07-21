@@ -70,13 +70,10 @@ func TestConfigSetAppliesAllPairsInOneWrite(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// vpn.enabled is deliberately FIRST here even though it is only legal once
-	// autoDiscoverEndpoints is also set. Per-key writes had to be hand-ordered to keep
-	// the file valid at every step; a batch validates once, at the end, so no ordering
-	// is needed — that this passes is the point of the test.
+	// A batch validates once, at the end, so no key ordering is needed to keep the
+	// file valid at every intermediate step — that this passes is the point.
 	code := cmdConfig([]string{
 		"set",
-		"vpn.enabled=true",
 		"vpn.tunnelInterfaces=utun4",
 		"vpn.autodetect=true",
 		"vpn.autoDiscoverEndpoints=true",
@@ -91,7 +88,7 @@ func TestConfigSetAppliesAllPairsInOneWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !got.VPN.Enabled || !got.VPN.Autodetect ||
+	if !got.VPN.Autodetect ||
 		len(got.VPN.TunnelInterfaces) != 1 || got.VPN.TunnelInterfaces[0] != "utun4" ||
 		got.LogLevel != "debug" {
 		t.Fatalf("not every pair was applied: %+v", got.VPN)

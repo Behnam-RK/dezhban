@@ -12,17 +12,18 @@ struct VPNGuardView: View {
     // The exact vpn.* keys already in configFields — the scope of this pane,
     // not a general config editor.
     private static let keys = [
-        "vpn.enabled", "vpn.tunnelInterfaces", "vpn.endpoints",
+        "vpn.tunnelInterfaces", "vpn.endpoints",
         "vpn.autodetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
+        "vpn.allowLocalNetwork",
         "vpn.endpointRefresh", "vpn.tunnelWatch",
     ]
 
-    @State private var enabled = false
     @State private var tunnelInterfaces = ""
     @State private var endpoints = ""
     @State private var autodetect = false
     @State private var autoDiscover = false
     @State private var autoArm = false
+    @State private var allowLocalNetwork = true
     @State private var endpointRefresh = ""
     @State private var tunnelWatch = ""
     @State private var status = ""
@@ -32,7 +33,6 @@ struct VPNGuardView: View {
         VStack(spacing: 0) {
             Form {
                 Section("VPN guard") {
-                    Toggle("Enable VPN guard (vpn.enabled)", isOn: $enabled)
                     TextField("Tunnel interfaces (comma-sep)", text: $tunnelInterfaces)
                     TextField("Endpoints (comma-sep)", text: $endpoints)
                 }
@@ -43,6 +43,14 @@ struct VPNGuardView: View {
                         .help("With no VPN connected the daemon idles in standby (nothing blocked) and arms "
                             + "the guard the moment a tunnel appears. It never disarms on a drop — that's the "
                             + "kill switch — only an explicit Unblock with the VPN off returns to standby.")
+                }
+                Section("Local network") {
+                    Toggle("Keep local devices reachable", isOn: $allowLocalNetwork)
+                        .help("Printers, NAS, your router's admin page, AirPlay and Chromecast, and local "
+                            + "dev servers keep working while the guard is armed. This is not a hole in the "
+                            + "kill switch: it allows local destinations only, so anything on the internet "
+                            + "stays blocked. The one cost is on untrusted Wi-Fi (a café, a hotel), where it "
+                            + "also lets other devices on that network reach you.")
                 }
                 Section("Timing") {
                     TextField("Endpoint refresh (e.g. 30s)", text: $endpointRefresh)
@@ -84,7 +92,7 @@ struct VPNGuardView: View {
     private func seed() {
         status = "Loading current config…"
         canApply = false
-        enabled = false; autodetect = false; autoDiscover = false; autoArm = false
+        autodetect = false; autoDiscover = false; autoArm = false; allowLocalNetwork = true
         tunnelInterfaces = ""; endpoints = ""; endpointRefresh = ""; tunnelWatch = ""
         ConfigApply.seed(keys: Self.keys) { values, error in
             if let error = error {
@@ -92,12 +100,12 @@ struct VPNGuardView: View {
                 return
             }
             guard let v = values else { return }
-            enabled = (v[0] == "true")
-            tunnelInterfaces = v[1]
-            endpoints = v[2]
-            autodetect = (v[3] == "true")
-            autoDiscover = (v[4] == "true")
-            autoArm = (v[5] == "true")
+            tunnelInterfaces = v[0]
+            endpoints = v[1]
+            autodetect = (v[2] == "true")
+            autoDiscover = (v[3] == "true")
+            autoArm = (v[4] == "true")
+            allowLocalNetwork = (v[5] == "true")
             endpointRefresh = v[6]
             tunnelWatch = v[7]
             status = "Seeded from \(DezhbanCLI.resolvedConfigPath())"
@@ -118,12 +126,12 @@ struct VPNGuardView: View {
         }
 
         let pairs = [
-            "vpn.enabled=\(enabled)",
             "vpn.tunnelInterfaces=\(tunnelInterfaces)",
             "vpn.endpoints=\(endpoints)",
             "vpn.autodetect=\(autodetect)",
             "vpn.autoDiscoverEndpoints=\(autoDiscover)",
             "vpn.autoArm=\(autoArm)",
+            "vpn.allowLocalNetwork=\(allowLocalNetwork)",
             "vpn.endpointRefresh=\(refresh)",
             "vpn.tunnelWatch=\(watch)",
         ]

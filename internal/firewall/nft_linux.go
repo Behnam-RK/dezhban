@@ -149,6 +149,7 @@ func renderNftRuleset(p Policy) string {
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
 			rule("udp dport 53 accept")
 			rule("tcp dport 53 accept")
+			emitLocalNetwork(rule, p)
 			emitWindowPortAccepts(rule, p)
 		}
 	case ModeGuard:
@@ -163,6 +164,7 @@ func renderNftRuleset(p Policy) string {
 		}
 		emitDaddrAccepts(rule, p.VPNEndpoints, "")
 		emitAllowPhysicalDNS(rule, p)
+		emitLocalNetwork(rule, p)
 	default: // ModeFullBlock
 		if isVPNPolicy(p) {
 			// VPN full block (including the zero-tunnel standing posture): drop the
@@ -171,6 +173,7 @@ func renderNftRuleset(p Policy) string {
 			// the server and the tunnel can reconnect. A cut endpoint would livelock
 			// recovery (the VPN could never re-establish to be re-evaluated).
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
+			emitTunnelProviders(rule, p)
 			emitAllowPhysicalDNS(rule, p)
 		} else {
 			// Legacy direct model: dst-IP allowlist over udp and tcp port 53.
@@ -178,6 +181,10 @@ func renderNftRuleset(p Policy) string {
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "tcp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.Hosts, "")
 		}
+		// Outside the isVPNPolicy split on purpose — see the same hoist in
+		// pf_darwin.go. AllowLocalNetwork belongs to the posture, not to which
+		// FULL BLOCK shape rendered it.
+		emitLocalNetwork(rule, p)
 	}
 	return b.String()
 }
@@ -206,6 +213,61 @@ func emitAllowPhysicalDNS(rule func(string), p Policy) {
 	}
 	rule("udp dport 53 accept")
 	rule("tcp dport 53 accept")
+}
+
+// emitTunnelProviders renders the tunnel-scoped geo-provider passes used in FULL
+// BLOCK, so the exit-country lookup traverses the tunnel while all other user
+// traffic stays cut. No-op without both a tunnel and a resolved provider IP —
+// the daemon then falls back to lift-and-probe rather than losing recovery.
+//
+// Deliberately NO accompanying DNS pass; see tunnelProviderRules in pf_darwin.go
+// for why an unscoped `dport 53` here would leak every hostname this host
+// resolves to the very exit FULL BLOCK is refusing.
+func emitTunnelProviders(rule func(string), p Policy) {
+	if len(p.ProviderAddrs) == 0 {
+		return
+	}
+	// Every tunnel matcher gets the pass, not just the first: a host may have both
+	// concrete interfaces and a class wildcard, and taking only one would leave
+	// the lookup unable to reach a tunnel the guard itself passes.
+	//
+	// Groups are emitted as separate rules rather than folded into the set with
+	// the concrete names, matching the ModeGuard path above: nft does not accept
+	// wildcard interface names inside a set literal.
+	var oifs []string
+	if len(p.TunnelIfaces) > 0 {
+		oifs = append(oifs, "oifname "+nftIfaceSet(p.TunnelIfaces))
+	}
+	for _, g := range p.TunnelGroups {
+		oifs = append(oifs, fmt.Sprintf("oifname %q", g+"*"))
+	}
+	if len(oifs) == 0 {
+		return
+	}
+	v4, v6 := splitAddrFamilies(p.ProviderAddrs)
+	for _, oif := range oifs {
+		if len(v4) > 0 {
+			rule(fmt.Sprintf("%s ip daddr %s accept", oif, nftAddrSet(v4)))
+		}
+		if len(v6) > 0 {
+			rule(fmt.Sprintf("%s ip6 daddr %s accept", oif, nftAddrSet(v6)))
+		}
+	}
+}
+
+// emitLocalNetwork renders the destination-scoped LAN passes
+// (vpn.allowLocalNetwork). Split per family because nft's matchers are
+// per-family: `ip daddr` will not accept a v6 prefix and vice versa.
+func emitLocalNetwork(rule func(string), p Policy) {
+	if !p.AllowLocalNetwork {
+		return
+	}
+	if v4 := LocalNetworkPrefixesFor(false); len(v4) > 0 {
+		rule(fmt.Sprintf("ip daddr { %s } accept", strings.Join(v4, ", ")))
+	}
+	if v6 := LocalNetworkPrefixesFor(true); len(v6) > 0 {
+		rule(fmt.Sprintf("ip6 daddr { %s } accept", strings.Join(v6, ", ")))
+	}
 }
 
 // emitDaddrAccepts emits accept rules for addrs, split by family (nft needs

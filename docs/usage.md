@@ -123,7 +123,7 @@ dezhban monitor     --config <config>                 # live: IP, country, tunne
 ```
 
 `monitor` streams the live state the decision rests on; add `--once` for a single
-snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `legacy`. See
+snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`. See
 [config.md](config.md) for the full field reference and [troubleshooting.md](troubleshooting.md)
 for the lockout-recovery runbook.
 
@@ -140,16 +140,16 @@ dezhban config show                # print the effective config as JSON
 dezhban config get blockedCountries
 sudo dezhban config set blockedCountries IR,RU   # set, validate, save
 sudo dezhban config reset vpn.switchWindow       # restore a shipped default (--all: every tunable)
-sudo dezhban config set vpn.enabled=true vpn.tunnelInterfaces=utun4 \
+sudo dezhban config set vpn.tunnelInterfaces=utun4 \
      vpn.autoDiscoverEndpoints=true                # several keys, one atomic write
 sudo dezhban config edit           # open the config in $EDITOR, re-validated on save
 ```
 
 `config set` takes either one `<key> <value>` pair or any number of `key=value`
 pairs. The multi-pair form applies them all to one in-memory config, validates
-**once**, and writes **once** — so there is no ordering to get right (a key that is
-only legal alongside another, like `vpn.enabled`, can come first) and no
-half-applied config if one value is rejected. It is also one privileged write, i.e.
+**once**, and writes **once** — so there is no ordering to get right (a key whose
+validity depends on another, like an endpoint alongside its profile, can come
+first) and no half-applied config if one value is rejected. It is also one privileged write, i.e.
 one password prompt instead of one per key; the macOS app's VPN Guard pane uses it
 for exactly that reason.
 
@@ -172,7 +172,7 @@ dezhban vpn import ~/wg0.conf          # WireGuard .conf / OpenVPN .ovpn / V2Ray
 dezhban vpn list                        # profiles + learned endpoints + active state
 
 # A brand-new VPN whose server dezhban has never seen:
-sudo dezhban switch                     # open a ~2m window; connect it in its app now
+sudo dezhban switch                     # open a window (15s default); connect it in its app now
 sudo dezhban switch --for 90s --name windscribe   # custom duration + attribution
 sudo dezhban switch --cancel            # close the window early
 dezhban switch --status                 # is a window open?
@@ -191,7 +191,7 @@ source <(dezhban completion zsh)     # or bash; add to your ~/.zshrc / ~/.bashrc
 dezhban completion fish | source     # fish
 ```
 
-Completes subcommands, `--mode` values (`guard|fullblock|legacy`), the `config`
+Completes subcommands, `--mode` values (`guard|fullblock|switch`), the `config`
 subcommands, and file paths for `--config`.
 
 ## Run as a service
@@ -243,7 +243,7 @@ Two surfaces, split by urgency:
     missing, service not installed, and daemon stopped each render an
     explanation with the one relevant action inline (Install service… / Start
     kill switch).
-  - **VPN Guard** — edits `vpn.enabled` + tunnels/endpoints/autodetection through
+  - **VPN Guard** — edits tunnels/endpoints/autodetection through
     the same validation as `config set`, then (after an explicit restart-warning
     choice) restarts the daemon to apply and verifies the new posture.
   - **Settings** — startup ("Start protection at boot" installs the launchd

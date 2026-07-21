@@ -5,7 +5,7 @@
 ![dezhban — system-wide network kill switch](gui/assets/png/banner-1280x640.png)
 
 A standalone, system-wide and cross-platform **network kill switch** written in Go, built for
-running behind full-tunnel VPNs. Its primary mode is an **always-on interface
+running behind full-tunnel VPNs. It enforces with an **always-on interface
 guard**: it lets traffic out only through the VPN tunnel, so the instant the
 tunnel drops it cuts egress **instantly**, and it full-blocks when the VPN exit
 switches to a forbidden country. On a drop it then opens a bounded, self-closing
@@ -13,12 +13,12 @@ switches to a forbidden country. On a drop it then opens a bounded, self-closing
 your VPN can redial any server with zero interaction — set
 `vpn.reconnectWindow: "0"` for the strict zero-leak-window behavior instead.
 
-As a **fallback** for hosts *not* behind a VPN, it can instead poll the machine's
-public IP, resolve its country, and cut traffic by destination when that country
-matches a blocklist — best-effort, since a poller can only react after the next
-poll. Both modes and how to choose are in [docs/modes.md](docs/modes.md); for
-the full story of what happens from launch to teardown, read
-[docs/how-it-works.md](docs/how-it-works.md).
+Before any tunnel has been seen — a fresh install, or a host whose VPN was
+removed — it rests in **standby**: no rules at all, the network fully open, and
+the UI saying plainly that it is not protecting. It arms itself the moment a VPN
+connects. The postures and what each one means are in
+[docs/modes.md](docs/modes.md); for the full story of what happens from launch to
+teardown, read [docs/how-it-works.md](docs/how-it-works.md).
 
 > [!WARNING]
 > dezhban deliberately cuts network access. A bad allowlist, a wrong VPN endpoint,
@@ -85,35 +85,45 @@ sudo dezhban run                  # run the daemon (root; drives the firewall)
 sudo dezhban panic                # always-available teardown, no daemon needed
 ```
 
+Want the guided version, with the "will this lock me out?" checks explained?
+See [docs/quick-start.md](docs/quick-start.md).
+
 `--config` is optional — dezhban resolves it from `$DEZHBAN_CONFIG` or the system
 path (`dezhban config path`). Tab-completion: `source <(dezhban completion zsh)`.
 The binary can also install itself as a boot-persistent service and ships an
 optional macOS app (menubar + main window). Full command reference: [docs/usage.md](docs/usage.md).
 
-## Modes at a glance
+## Postures at a glance
 
-- **VPN guard** (`vpn.enabled: true`) — **primary/recommended.** Interface-aware,
-  always on, instant cut on a drop (zero leak window with
+There is one enforcement model — the guard. What changes is the posture:
+
+- **STANDBY** — no rules, network fully open, **not protecting.** The resting
+  state before any tunnel has been observed. Arms itself when a VPN connects.
+- **GUARD** — the healthy state. Only the tunnel may carry traffic off the
+  machine, so a drop is cut instantly (zero leak window with
   `vpn.reconnectWindow: "0"`; by default a bounded reconnect window follows the
-  cut so the VPN can redial). Use it whenever you're behind a full-tunnel VPN.
-- **Country-blocklist** (`vpn.enabled: false`) — **fallback.** Destination-aware,
-  reactive; only meaningful when you're not tunneled. Defaults to off — a
-  misconfigured guard can lock a host out, so VPN mode is a deliberate opt-in.
+  cut so the VPN can redial).
+- **FULL BLOCK** — the VPN's exit landed in a blocked country. All user traffic
+  is cut, but the endpoint handshake stays open so the tunnel can recover.
+- **SWITCH WINDOW** — the one sanctioned relaxation, bounded and self-closing,
+  from exactly two triggers: an explicit operator command, or the automatic
+  reconnect window.
 
-Details, rulesets, and the deciding question: [docs/modes.md](docs/modes.md).
+Details and rulesets: [docs/modes.md](docs/modes.md).
 
 ## Configuration
 
 JSON, with durations as strings (e.g. `"30s"`). Sample configs live in `configs/`
-(`dezhban.vpn-guard.json` for the guard, `dezhban.example.json` for the fallback).
-Full field reference, the `vpn` block, and validation rules:
-[docs/config.md](docs/config.md).
+(`dezhban.example.json` is fully automatic; `dezhban.vpn-guard.json` pins the
+tunnel interface and endpoints explicitly). Full field reference, the `vpn` block,
+and validation rules: [docs/config.md](docs/config.md).
 
 ## Documentation
 
 | Doc | What's in it |
 |---|---|
-| [docs/modes.md](docs/modes.md) | The two enforcement modes and which one you want. |
+| [docs/quick-start.md](docs/quick-start.md) | **New here?** Install → set up → verify → arm, and how to read the menubar icon. |
+| [docs/modes.md](docs/modes.md) | Every posture and the exact ruleset it installs. |
 | [docs/config.md](docs/config.md) | Config field reference and sample configs. |
 | [docs/usage.md](docs/usage.md) | CLI commands, flags, service install, the macOS app. |
 | [docs/architecture.md](docs/architecture.md) | Three-layer design and the invariants it rests on. |

@@ -23,13 +23,17 @@ struct SwitchState: Codable {
 /// JSON keys match the lowerCamelCase struct tags in internal/state/state.go.
 struct Snapshot: Codable {
     let time: Date
-    let mode: String            // "vpn" | "legacy"
-    let posture: String         // "allow" | "block" | "guard" | "full-block" | "switch-window" | "stopped"
+    // No `mode`. dezhban has a single enforcement model now, so the field was
+    // removed from the daemon's snapshot rather than frozen at one value. It was
+    // non-optional here, which means leaving it would have failed decoding of
+    // every snapshot the new daemon writes. `posture` carries the real state.
+    let posture: String         // "standby" | "guard" | "full-block" | "switch-window" | "stopped"
     let blocked: Bool
     let ip: String?
     let countryCode: String?
     let provider: String?
-    let lookupErr: String?
+    let lookupErr: String?          // a GENUINE failure: a tunnel was up and measuring it failed
+    let exitUnknown: String?        // EXPECTED: no tunnel up, so there is no exit to measure
     let enforcementErr: String?     // last firewall-action failure, nil when clear
     let tunnels: [Tunnel]?
     let endpoints: [String]?

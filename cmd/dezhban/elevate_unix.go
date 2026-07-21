@@ -71,7 +71,7 @@ func sudoTouchIDConfigured() bool {
 	if err != nil {
 		return false
 	}
-	for _, line := range strings.Split(string(data), "\n") {
+	for line := range strings.SplitSeq(string(data), "\n") {
 		l := strings.TrimSpace(line)
 		if !strings.HasPrefix(l, "#") && strings.Contains(l, "pam_tid") {
 			return true

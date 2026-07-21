@@ -5,19 +5,30 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 ## What this is
 
 **dezhban** (Persian: "gatekeeper") is a standalone, cross-platform **network kill
-switch** written in Go, built primarily for hosts behind a full-tunnel VPN. Its
-main mode is an **always-on interface guard** (`vpn.enabled: true`): egress is
-allowed only through the tunnel, so a tunnel drop is cut instantly — by default a
-bounded reconnect window then follows so the VPN can redial (set
+switch** written in Go, for hosts behind a full-tunnel VPN. It has **one**
+enforcement model: an **always-on interface guard**. Egress is allowed only
+through the tunnel, so a tunnel drop is cut instantly — by default a bounded
+reconnect window then follows so the VPN can redial (set
 `vpn.reconnectWindow: "0"` for a strict zero-leak cut) — and it full-blocks when
-the VPN exit lands in a forbidden country. A
-**country-blocklist fallback** (`vpn.enabled: false`) polls the public IP and cuts
-traffic by destination when the country is blocklisted — for hosts not behind a
-VPN. See [docs/modes.md](docs/modes.md).
+the VPN exit lands in a forbidden country. See [docs/modes.md](docs/modes.md).
 
-`vpn.enabled` defaults to `false`: the always-on guard can lock a host out if
-misconfigured, so it is a deliberate safety opt-in — not a statement that the
-fallback is the normal mode.
+There used to be a second, `vpn.enabled: false` **country-blocklist fallback**
+that cut traffic by destination IP. It is **gone**
+([docs/adr/0001](docs/adr/0001-single-guard-mode.md)): it was not a peer of the
+guard but a strictly weaker product, "best-effort, not a zero-leak guarantee" by
+its own documentation, and only meaningful when the blocked country was the
+user's real physical location. The guard already contains the country check —
+that is what FULL BLOCK is.
+
+`vpn.enabled` also did a second, unnamed job: it was the safety opt-in that kept
+a misconfigured guard from locking a host out. That job now belongs to the
+**STANDBY** posture ([docs/adr/0002](docs/adr/0002-standby-no-tunnel-posture.md)),
+which installs no rules at all until a tunnel has been both configured *and*
+observed up. Deleting the flag therefore removed a mode selector, not a guard rail.
+
+`vpn.enabled`, `failClosed`, and `allowlist` are retired keys: still parsed, never
+acted on, and reported by `dezhban validate` and at daemon start so nobody is left
+believing a discarded security setting took effect.
 
 The feature set is complete and the phase plans it was built from are retired (they
 live in git history). What survives them is the verification they specified:
@@ -68,17 +79,40 @@ The design depends on these invariants (rationale in
 - `Cleanup()` must always be safe to call and is wired to run on shutdown
   (`defer` + `signal.NotifyContext`). A stale block-all rule can lock the user
   out — `panic` removes rules even with no daemon.
-- Default to **fail-closed** *in the fallback/legacy model*: block when the
-  country is undeterminable, but keep the allowlist (loopback + DNS + geo-API
-  egress) open so recovery can fire. **In VPN guard mode this is scoped
-  differently:** the standing guard rule is itself the fail-closed block for
-  physical leaks, so an undeterminable country *holds* the current posture — only
-  a *successful* blocked-country reading escalates to FULL BLOCK. Escalating on
-  an unknown would cut the tunnel's own egress and livelock the reconnect.
-- The `guard` / `fullblock` / `legacy` / `switch` mode strings and the state-file
-  JSON keys (including `switch-window`, `activeProfile`, `switch`) are stable
-  identifiers (used by `print-rules --mode` and `status --json`) — do not rename
-  them. "Primary" / "fallback" are documentation words only.
+- **An undeterminable country HOLDS the current posture — it never escalates.**
+  The standing guard rule is itself the fail-closed block for physical leaks, so
+  only a *successful* blocked-country reading may escalate to FULL BLOCK, and
+  only a successful allowed reading may restore GUARD. Escalating on an unknown
+  would cut the tunnel's own egress and livelock the very reconnect that could
+  fix the lookup. This lives in `decision.Evaluate`, which short-circuits on
+  `r.Err != nil` without touching the hysteresis streak — so a blip neither
+  commits a flip nor cancels one that real readings were counting toward. There
+  is **no `failClosed` switch**; it belonged to the retired fallback model, where
+  the firewall was open at rest and an unknown country was the only reason to cut.
+- **The FULL BLOCK geo-provider pass is scoped to the tunnel interface AND the
+  provider addresses, and carries no DNS rule.** Never relax it to one half:
+  destination-only (a pass on the *physical* link) would let the lookup succeed
+  with the tunnel down and report the ISP's country — an allowed one — so FULL
+  BLOCK would never fire and `finishCloseProbe` would close a window early on a
+  bogus "good exit"; interface-only is just `ModeGuard`. And never re-add a
+  `port 53` rule beside it: tunnel-scoped but destination-unscoped, it sends
+  *every* application's DNS to the forbidden exit's resolver for as long as the
+  block lasts. Providers are refreshed while the guard is healthy; a mid-block
+  rotation correctly degrades to lift-and-probe, which heals it
+  ([docs/adr/0006](docs/adr/0006-geo-providers-tunnel-scoped.md)).
+- **`vpn.allowLocalNetwork` passes destinations, never interfaces**, and only
+  locally-scoped ones — an interface-scoped pass would carry internet traffic and
+  silently disable the kill switch, and globally-routable multicast (`232/8`,
+  `233/8`, `ff0e::/16`) has no place in a pass justified by "this traffic never
+  leaves the building" ([docs/adr/0005](docs/adr/0005-allow-local-network-by-default.md)).
+- The `guard` / `fullblock` / `switch` mode strings and the state-file JSON keys
+  (including `switch-window`, `activeProfile`, `switch`) are stable identifiers
+  (used by `print-rules --mode` and `status --json`) — do not rename them.
+  **`legacy` was deliberately thawed and removed** with the fallback model
+  ([docs/adr/0001](docs/adr/0001-single-guard-mode.md)); `print-rules --mode legacy`
+  now errors by name rather than silently rendering something else. `Snapshot.Mode`
+  and `status --json`'s `vpnEnabled` are gone too — a field with one possible
+  value is noise, not compatibility.
 - **The bounded switch window is the ONLY sanctioned relaxation of the guard,
   and it has exactly TWO sanctioned triggers** — nothing else may ever relax it:
   (1) an explicit operator command, via the **root-owned command file**
@@ -93,6 +127,15 @@ The design depends on these invariants (rationale in
   on a confirmed good exit, auto-reverts to the prior fail-closed posture on
   cancel/expiry, and one auto window per drop (expiry never re-opens). Never
   widen the window, never add a trigger, never let it outlive its deadline.
+- **Both windows are independently disableable, and "disabled" must survive
+  `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
+  `vpn.reconnectWindow: "0"` removes trigger (2); both set to `"0"` is the strict
+  zero-leak posture in which *nothing* can relax the guard. Each parses to the
+  negative `config.Disabled` sentinel, because `Normalize` coerces a plain `0`
+  back to the default — accepting a security setting and silently discarding it
+  is the worst bug this tool can have. Disabling one must never disable the
+  other: the manual path gates on `switchEnabled`, the automatic path gates only
+  on `ReconnectWindow > 0`. `TestWindowDisableMatrix` pins all four permutations.
 - The daemon owns all `Backend.Apply` calls from the **single run-loop goroutine** —
   keep it that way. Window timer, command poll, watcher, geo ticks, **and
   control-socket requests** are all select cases in that one loop; the socket's

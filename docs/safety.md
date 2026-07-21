@@ -44,11 +44,14 @@ is [testing-macos-block.md](testing-macos-block.md).
   points at a tunnel-internal address, the guard blocks the tunnel's own transport
   and drops the tunnel it was supposed to protect. Verify with `dezhban doctor
   --discover` *before* enabling. See [modes.md](modes.md).
-- **Fail-closed means different things in the two modes,** and the difference is a
-  safety property, not a detail: in the country-blocklist fallback an undeterminable
-  country **blocks**; under the VPN guard it **holds** the current posture, because
-  escalating on an unknown would cut the tunnel's own egress and livelock the
-  reconnect. See [architecture.md](architecture.md#rules-that-must-not-be-broken).
+- **An undeterminable country holds the posture; it never escalates.** This is a
+  safety property, not a detail. The standing guard is already the fail-closed
+  block for physical leaks, so escalating on an unknown would cut the tunnel's own
+  egress and livelock the reconnect that could fix the lookup. A failed lookup is
+  fully neutral: it neither commits a pending flip nor cancels one that real
+  readings were counting toward. There is no `failClosed` setting — it belonged to
+  the retired fallback model, where the firewall was open at rest.
+  See [architecture.md](architecture.md#rules-that-must-not-be-broken).
 
 ## Who can relax the guard
 

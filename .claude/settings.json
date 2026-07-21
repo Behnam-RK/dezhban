@@ -1,0 +1,65 @@
+{
+  "$comment": [
+    "Shared project permissions. This file is checked in, so BOTH Claude profiles",
+    "on this machine read it — unlike settings.local.json (gitignored) and",
+    "~/.claude/settings.json (per-profile, keyed by CLAUDE_CONFIG_DIR).",
+    "Subagents inherit these, so approvals no longer have to be re-granted per agent.",
+    "Note: plan mode still gates non-read-only tools regardless of this allow-list."
+  ],
+  "permissions": {
+    "allow": [
+      "mcp__jcodemunch__*",
+      "mcp__jdocmunch__*",
+      "mcp__serena__*",
+      "mcp__plugin_context-mode_context-mode__*",
+      "mcp__plugin_context7_context7__*",
+
+      "Bash(go build *)",
+      "Bash(go vet *)",
+      "Bash(go test *)",
+      "Bash(go doc *)",
+      "Bash(go env *)",
+      "Bash(go version *)",
+      "Bash(go mod *)",
+      "Bash(gofmt *)",
+      "Bash(swift build *)",
+      "Bash(swift package *)",
+
+      "Bash(task --list*)",
+      "Bash(task validate *)",
+      "Bash(task rules *)",
+      "Bash(task doctor *)",
+
+      "Bash(rtk *)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show*)",
+      "Bash(git ls-files*)",
+      "Bash(git ls-tree*)",
+      "Bash(git branch*)",
+      "Bash(git check-ignore *)",
+      "Bash(gh pr view *)",
+      "Bash(gh pr list *)",
+      "Bash(gh api *)",
+
+      "Bash(ls *)",
+      "Bash(cat *)",
+      "Bash(head *)",
+      "Bash(tail *)",
+      "Bash(wc *)",
+      "Bash(find *)",
+      "Bash(grep *)",
+      "Bash(rg *)",
+      "Bash(awk *)",
+      "Bash(sed -n *)",
+      "Bash(file *)",
+      "Bash(stat *)",
+      "Bash(sw_vers*)",
+      "Bash(bioutil -r)",
+      "Bash(scutil --nc list)",
+      "Bash(ifconfig*)",
+      "Bash(launchctl list*)"
+    ]
+  }
+}

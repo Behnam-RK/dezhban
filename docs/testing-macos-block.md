@@ -205,8 +205,8 @@ diff /tmp/g.before /tmp/g.after     # expect: no difference
 
 ### Step G4 — full block (forbidden country) cuts the tunnel too
 
-A plain `block` while `vpn.enabled` is the forbidden-country posture: it cuts the
-tunnel as well, leaving only loopback.
+A plain `block` (no `--guard`) is the forbidden-country posture: it cuts the
+tunnel as well, leaving only loopback and the endpoint handshake.
 
 ```bash
 sudo /tmp/dezhban block --config configs/dezhban.example.json   # no --guard
