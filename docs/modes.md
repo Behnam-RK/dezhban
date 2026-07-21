@@ -1,8 +1,8 @@
 # Postures
 
-> There is also a styled single-page view, [modes.html](modes.html) — but it still
-> describes the retired two-mode design and is pending a rewrite. **This page is
-> the authority.**
+> This is the reference page: every posture and the exact rules it installs. If
+> you are setting dezhban up for the first time, start with the
+> [quick start](quick-start.md) instead.
 
 dezhban has **one** enforcement model: an always-on **interface guard**. Under a
 full tunnel the firewall on the physical interface sees only encrypted outer

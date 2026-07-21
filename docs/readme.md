@@ -5,8 +5,9 @@ Detailed docs live here:
 
 | Doc | What's in it |
 |---|---|
+| [quick-start.md](quick-start.md) | **Start here if you're new.** Install, set up, check it won't lock you out, arm it, and read the menubar icon. |
 | [how-it-works.md](how-it-works.md) | The narrative walkthrough — startup, the standing guard, life of a VPN drop, exit-country policing, the switch window, and the escape hatches. Read this first to understand the machine. |
-| [modes.md](modes.md) | The two enforcement modes — **VPN guard (primary)** vs country-blocklist (fallback): how each works, the rulesets, and which one you want. |
+| [modes.md](modes.md) | Every posture — STANDBY, GUARD, FULL BLOCK, SWITCH WINDOW — and the exact ruleset each one installs. |
 | [config.md](config.md) | Full JSON config field reference, the `vpn` block, validation rules, and sample configs. |
 | [usage.md](usage.md) | Every CLI command and flag, safe read-only inspection, running as a service, and the macOS app. |
 | [architecture.md](architecture.md) | The three-layer design, the `FirewallBackend` seam, the non-negotiable invariants, and the dependency strategy. |

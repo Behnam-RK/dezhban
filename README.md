@@ -85,6 +85,9 @@ sudo dezhban run                  # run the daemon (root; drives the firewall)
 sudo dezhban panic                # always-available teardown, no daemon needed
 ```
 
+Want the guided version, with the "will this lock me out?" checks explained?
+See [docs/quick-start.md](docs/quick-start.md).
+
 `--config` is optional — dezhban resolves it from `$DEZHBAN_CONFIG` or the system
 path (`dezhban config path`). Tab-completion: `source <(dezhban completion zsh)`.
 The binary can also install itself as a boot-persistent service and ships an
@@ -119,7 +122,8 @@ and validation rules: [docs/config.md](docs/config.md).
 
 | Doc | What's in it |
 |---|---|
-| [docs/modes.md](docs/modes.md) | The two enforcement modes and which one you want. |
+| [docs/quick-start.md](docs/quick-start.md) | **New here?** Install → set up → verify → arm, and how to read the menubar icon. |
+| [docs/modes.md](docs/modes.md) | Every posture and the exact ruleset it installs. |
 | [docs/config.md](docs/config.md) | Config field reference and sample configs. |
 | [docs/usage.md](docs/usage.md) | CLI commands, flags, service install, the macOS app. |
 | [docs/architecture.md](docs/architecture.md) | Three-layer design and the invariants it rests on. |
