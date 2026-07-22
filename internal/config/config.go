@@ -80,6 +80,17 @@ type VPN struct {
 	// blackout hurt new users more than the pre-first-connect gap); set false
 	// for the stricter armed-from-startup posture.
 	AutoArm bool
+	// ArmAtBoot arms the guard directly at startup even when AutoArm's live
+	// probe finds no tunnel interface present yet — provided a tunnel has been
+	// observed up at least once on this host (internal/armed) and an endpoint
+	// is known. Without it, a normal boot (this daemon typically starts before
+	// the VPN client brings its interface up) lands in AutoArm's standby and
+	// opens the network until the VPN connects; with it, the network stays
+	// blocked across the reboot instead. ON by default (2026-07-22): this only
+	// changes behavior on a host that has already proven its VPN works, so a
+	// fresh install still cannot lock itself out — see
+	// docs/adr/0008-arm-at-boot.md.
+	ArmAtBoot bool
 	// EndpointRefresh is how often hostnames are re-resolved and live discovery
 	// re-run. Defaults to 1m — local work only, and the fast cadence promotes a
 	// roamed-to server to learned within ~3 minutes.
@@ -122,6 +133,19 @@ type VPN struct {
 	// so Normalize can tell "disabled" from "absent"); validated to
 	// (0, Advanced.ReconnectWindowMax] otherwise — no floor.
 	ReconnectWindow time.Duration
+	// PauseMax caps an operator-requested bounded pause (`dezhban pause` / the
+	// GUI's "Pause protection"): a deliberate, timed drop to the real ISP IP,
+	// e.g. to reach a sanctioned-country-only service the VPN's exit can't
+	// reach. It is a THIRD relaxation of the guard alongside the switch window
+	// and the automatic reconnect window — sharing their bounded-timer
+	// machinery, but with its own cap, never shared with SwitchWindowMax or
+	// ReconnectWindowMax (collapsing caps silently truncates whichever
+	// trigger has the larger budget). Defaults to 30m; an explicit "0"
+	// disables pausing entirely (kept internally as a negative sentinel so
+	// Normalize can tell "disabled" from "absent", exactly like SwitchWindow /
+	// ReconnectWindow). Unlike those two, PauseMax is the cap itself — the
+	// requested duration comes from the CLI/GUI call, not a config default.
+	PauseMax time.Duration
 	// Advanced holds tunables for behaviors that are otherwise baked-in design
 	// decisions. Every field defaults in Normalize; an absent `advanced` block
 	// keeps the recommended defaults. Touch only if you know why.
@@ -255,6 +279,12 @@ type Control struct {
 	// gets its own switch: set it false to force switch ops back to the root-owned
 	// command file (`sudo dezhban switch`).
 	AllowSwitchOps bool
+	// AllowPauseOps permits opening/ending a pause over the socket. Default
+	// true — independently gated from AllowSwitchOps because pause is a
+	// separate relaxation (see VPN.PauseMax): set it false to force pause ops
+	// back to the root-owned command file (`sudo dezhban pause`) without
+	// touching switch-window availability.
+	AllowPauseOps bool
 }
 
 // fileConfig is the on-disk JSON shape. Durations are strings (e.g. "30s")
@@ -287,6 +317,7 @@ type fileControl struct {
 	Socket         string  `json:"socket,omitempty"`
 	Group          *string `json:"group,omitempty"`
 	AllowSwitchOps *bool   `json:"allowSwitchOps,omitempty"`
+	AllowPauseOps  *bool   `json:"allowPauseOps,omitempty"`
 }
 
 // fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
@@ -306,12 +337,14 @@ type fileVPN struct {
 	AllowPhysicalDNS      *bool         `json:"allowPhysicalDNS,omitempty"`
 	AllowLocalNetwork     *bool         `json:"allowLocalNetwork,omitempty"`
 	AutoArm               *bool         `json:"autoArm,omitempty"`
+	ArmAtBoot             *bool         `json:"armAtBoot,omitempty"`
 	EndpointRefresh       string        `json:"endpointRefresh"`
 	EndpointGrace         string        `json:"endpointGrace,omitempty"`
 	TunnelWatch           string        `json:"tunnelWatch"`
 	Profiles              []fileProfile `json:"profiles,omitempty"`
 	SwitchWindow          string        `json:"switchWindow,omitempty"`
 	ReconnectWindow       string        `json:"reconnectWindow,omitempty"`
+	PauseMax              string        `json:"pauseMax,omitempty"`
 	Advanced              *fileAdvanced `json:"advanced,omitempty"`
 }
 
@@ -363,20 +396,22 @@ func Default() Config {
 		ProviderQuorum: false,
 		LogLevel:       "info",
 		// Mirrors the absent-vpn-block defaults in apply(): all on (2026-07-19
-		// defaults review; autodetect/auto-discover added 2026-07-22). Keep the
-		// two in sync.
+		// defaults review; autodetect/auto-discover added 2026-07-22; armAtBoot
+		// added 2026-07-22). Keep the two in sync.
 		VPN: VPN{
 			Autodetect:            true,
 			AutoDiscoverEndpoints: true,
 			AllowPhysicalDNS:      true,
 			AllowLocalNetwork:     true,
 			AutoArm:               true,
+			ArmAtBoot:             true,
 		},
 		Control: Control{
 			Enabled: true,
 			// Socket empty → resolved against the daemon's state dir by main.
 			Group:          defaultControlGroup,
 			AllowSwitchOps: true,
+			AllowPauseOps:  true,
 		},
 	}
 }
@@ -456,6 +491,7 @@ func apply(cfg *Config, fc fileConfig) error {
 			AllowPhysicalDNS:      true, // default on; explicit false below
 			AllowLocalNetwork:     true, // default on; explicit false below
 			AutoArm:               true, // default on; explicit false below
+			ArmAtBoot:             true, // default on; explicit false below
 		}
 		if fc.VPN.Autodetect != nil {
 			v.Autodetect = *fc.VPN.Autodetect
@@ -471,6 +507,9 @@ func apply(cfg *Config, fc fileConfig) error {
 		}
 		if fc.VPN.AutoArm != nil {
 			v.AutoArm = *fc.VPN.AutoArm
+		}
+		if fc.VPN.ArmAtBoot != nil {
+			v.ArmAtBoot = *fc.VPN.ArmAtBoot
 		}
 		if fc.VPN.EndpointRefresh != "" {
 			d, err := time.ParseDuration(fc.VPN.EndpointRefresh)
@@ -529,6 +568,20 @@ func apply(cfg *Config, fc fileConfig) error {
 				v.ReconnectWindow = d
 			}
 		}
+		if fc.VPN.PauseMax != "" {
+			d, err := time.ParseDuration(fc.VPN.PauseMax)
+			if err != nil {
+				return fmt.Errorf("vpn.pauseMax: %w", err)
+			}
+			if d < 0 {
+				return fmt.Errorf("vpn.pauseMax: must not be negative (got %s); use \"0\" to disable", d)
+			}
+			if d == 0 {
+				v.PauseMax = Disabled // explicit opt-out, survives Normalize
+			} else {
+				v.PauseMax = d
+			}
+		}
 		for _, p := range fc.VPN.Profiles {
 			v.Profiles = append(v.Profiles, Profile{
 				Name:      p.Name,
@@ -563,6 +616,9 @@ func apply(cfg *Config, fc fileConfig) error {
 		}
 		if fc.Control.AllowSwitchOps != nil {
 			cfg.Control.AllowSwitchOps = *fc.Control.AllowSwitchOps
+		}
+		if fc.Control.AllowPauseOps != nil {
+			cfg.Control.AllowPauseOps = *fc.Control.AllowPauseOps
 		}
 	}
 	return nil
@@ -636,9 +692,11 @@ func toFileConfig(c *Config) fileConfig {
 	physDNS := c.VPN.AllowPhysicalDNS
 	localNet := c.VPN.AllowLocalNetwork
 	autoArm := c.VPN.AutoArm
+	armAtBoot := c.VPN.ArmAtBoot
 	ctlEnabled := c.Control.Enabled
 	ctlGroup := c.Control.Group
 	ctlSwitchOps := c.Control.AllowSwitchOps
+	ctlPauseOps := c.Control.AllowPauseOps
 	return fileConfig{
 		PollInterval: c.PollInterval.String(),
 		// FailClosed and Allowlist are deliberately omitted (nil): they are
@@ -658,12 +716,14 @@ func toFileConfig(c *Config) fileConfig {
 			AllowPhysicalDNS:      &physDNS,
 			AllowLocalNetwork:     &localNet,
 			AutoArm:               &autoArm,
+			ArmAtBoot:             &armAtBoot,
 			EndpointRefresh:       c.VPN.EndpointRefresh.String(),
 			EndpointGrace:         durString(c.VPN.EndpointGrace),
 			TunnelWatch:           c.VPN.TunnelWatch.String(),
 			Profiles:              toFileProfiles(c.VPN.Profiles),
 			SwitchWindow:          optDurString(c.VPN.SwitchWindow),
 			ReconnectWindow:       optDurString(c.VPN.ReconnectWindow),
+			PauseMax:              optDurString(c.VPN.PauseMax),
 			Advanced:              toFileAdvanced(c.VPN.Advanced),
 		},
 		Control: &fileControl{
@@ -671,6 +731,7 @@ func toFileConfig(c *Config) fileConfig {
 			Socket:         c.Control.Socket,
 			Group:          &ctlGroup,
 			AllowSwitchOps: &ctlSwitchOps,
+			AllowPauseOps:  &ctlPauseOps,
 		},
 	}
 }
@@ -851,6 +912,9 @@ func Normalize(cfg *Config) {
 	if cfg.VPN.ReconnectWindow == 0 {
 		cfg.VPN.ReconnectWindow = defaultReconnectWindow
 	}
+	if cfg.VPN.PauseMax == 0 {
+		cfg.VPN.PauseMax = defaultPauseMax
+	}
 	normalizeAdvanced(&cfg.VPN.Advanced)
 }
 
@@ -911,6 +975,7 @@ const (
 	defaultReconnectWindow    = 30 * time.Second
 	defaultReconnectWindowMax = 10 * time.Minute
 	defaultReconnectMinUptime = 15 * time.Second
+	defaultPauseMax           = 30 * time.Minute
 	defaultEndpointGrace      = 15 * time.Minute
 
 	maxProfileName = 64

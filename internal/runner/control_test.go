@@ -88,8 +88,11 @@ func vpnOpts(be Backend) Options {
 		SwitchWindow:    time.Minute,
 		SwitchWindowMax: 5 * time.Minute,
 		AllowSwitchOps:  true,
-		// A switch window needs a command poller wired; the socket path is what the
-		// test drives, but switchEnabled gates on this being non-nil.
+		PauseMax:        10 * time.Minute,
+		AllowPauseOps:   true,
+		// A switch window (or a pause) needs a command poller wired; the socket
+		// path is what the test drives, but switchEnabled/pauseEnabled gate on
+		// this being non-nil.
 		PollCommand: func() (command.Command, bool) { return command.Command{}, false },
 		CommandPoll: time.Hour,
 	}
@@ -185,6 +188,52 @@ func TestControlSwitchOpenAndCancel(t *testing.T) {
 	want := []string{"apply-guard", "apply-switch", "apply-guard"}
 	if !equal(be.calls, want) {
 		t.Fatalf("calls = %v, want %v", be.calls, want)
+	}
+}
+
+// Pause is a third, independently-gated trigger on the same window machinery:
+// open/resume drive the Backend exactly like a switch window does, and a
+// switch-cancel must refuse to touch an open pause (must use resume instead).
+func TestControlPauseOpenAndResume(t *testing.T) {
+	be := &fakeBackend{}
+	path := startControlled(t, vpnOpts(be))
+
+	resp := do(t, path, control.Request{Op: control.OpPause, Duration: "30s"})
+	if !resp.OK || resp.Posture != "switch-window" {
+		t.Fatalf("pause response = %+v, want an OK switch-window", resp)
+	}
+
+	// A plain switch-cancel must not be able to end a pause.
+	resp = do(t, path, control.Request{Op: control.OpCancelSwitch})
+	if resp.OK {
+		t.Fatalf("switch-cancel unexpectedly ended an open pause: %+v", resp)
+	}
+
+	resp = do(t, path, control.Request{Op: control.OpResume})
+	if !resp.OK || resp.Posture != "guard" {
+		t.Fatalf("resume response = %+v, want an OK revert to guard", resp)
+	}
+	want := []string{"apply-guard", "apply-switch", "apply-guard"}
+	if !equal(be.calls, want) {
+		t.Fatalf("calls = %v, want %v", be.calls, want)
+	}
+}
+
+// The opt-out: with allowPauseOps false, the socket refuses to relax the guard
+// and the operator is pushed back to the root-owned command file — independent
+// of allowSwitchOps, which stays on.
+func TestControlPauseOpsDisabled(t *testing.T) {
+	be := &fakeBackend{}
+	o := vpnOpts(be)
+	o.AllowPauseOps = false
+	path := startControlled(t, o)
+
+	resp := do(t, path, control.Request{Op: control.OpPause, Duration: "30s"})
+	if resp.OK {
+		t.Fatalf("pause succeeded with allowPauseOps=false: %+v", resp)
+	}
+	if !equal(be.calls, []string{"apply-guard"}) {
+		t.Fatalf("calls = %v, want only the startup guard", be.calls)
 	}
 }
 
