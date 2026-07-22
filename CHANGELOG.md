@@ -12,6 +12,8 @@ current as you land changes.
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-07-22
+
 ### Added
 
 - **`vpn.armAtBoot`** (default **true**): arms the guard directly at startup,
@@ -660,7 +662,8 @@ current as you land changes.
 - Cross-platform release build matrix (`task build:all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
-[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.4.0
