@@ -7,10 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Releases are cut with the manually-dispatched `release` workflow, which rewrites
 the `## [Unreleased]` section below into a versioned entry — see
-[docs/releasing.md](docs/releasing.md). Keep `## [Unreleased]` current as you land
-changes.
+[docs/contribute/releasing.md](docs/contribute/releasing.md). Keep `## [Unreleased]`
+current as you land changes.
 
 ## [Unreleased]
+
+### Changed
+
+- **README now leads with the macOS app**, with the CLI presented as the
+  headless option for Linux, servers, and terminal users — it previously
+  mentioned the app only twice, both in passing, despite the app covering
+  every everyday operation. Adds a platform-support table marking Windows
+  **experimental** (no passwordless control path yet) rather than a peer
+  install target.
+- **`docs/` reorganized from a flat 17-file list into `usage/`, `concepts/`,
+  and `contribute/`**, grouped by audience; `docs/adr/` is unchanged.
+  Duplicated explanations of the same concepts (the country-check hold
+  behavior, the two switch/reconnect windows) are consolidated into single
+  canonical homes in `docs/concepts/modes.md`, which also gains two ASCII
+  diagrams (the posture state machine, the window-trigger comparison).
+- Five of seven ADRs were marked `implementation pending` in the decision-log
+  index despite having shipped; statuses now match reality (`docs/adr/README.md`).
+- `CLAUDE.md` corrected against a full verification pass: the dependency count
+  (four third-party modules, not three), the read-only/root command split, the
+  global-flags list, and the subcommand list, plus a new doc-maintenance
+  convention routing config/CLI/behavior changes to their canonical doc.
+
+### Fixed
+
+- Removed `legacy` as an offered `--mode` value from the Taskfile description
+  and all three shell completions (bash/zsh/fish) — `print-rules --mode legacy`
+  has errored by name since ADR-0001, but the completions still suggested it.
+  Also added the `--no-sudo`/`--no-daemon` global flags to all three
+  completions, which were missing entirely.
+- Retired "legacy direct model" language from `internal/firewall` comments
+  (`backend.go`, `policyset.go`, the three per-OS renderers): the code path
+  they describe is live — it's what `block --force` renders — not a leftover
+  of the country-blocklist model ADR-0001 removed. One dead `docs/plans`
+  reference in `backend.go` is also fixed.
 
 ## [0.6.0] - 2026-07-22
 
