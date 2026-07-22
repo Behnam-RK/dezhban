@@ -5,22 +5,22 @@ Detailed docs are grouped by who they're for:
 
 ```
 docs/
-├── use/          end-user + operator — install it, configure it, run it, fix it
+├── usage/          end-user + operator — install it, configure it, run it, fix it
 ├── concepts/     the mental model — how the machine thinks, in one canonical place
 ├── contribute/   contributor + maintainer — build, test, release
 └── adr/          the *why* behind hard-to-reverse decisions
 ```
 
-## use/ — installing, configuring, running
+## usage/ — installing, configuring, running
 
 | Doc | What's in it |
 |---|---|
-| [getting-started.md](use/getting-started.md) | **Start here if you're new.** Install, set up, check it won't lock you out, arm it, read the menubar icon. |
-| [install.md](use/install.md) | Every install path (curl/PowerShell, `.pkg`, `.deb`/`.rpm`, bare binaries), why there's no Apple-signed installer, how to verify a download. |
-| [config.md](use/config.md) | Full JSON config field reference, the `vpn` block, validation rules, sample configs. |
-| [cli.md](use/cli.md) | Every CLI command and flag, safe read-only inspection, running as a service, the macOS app. |
-| [troubleshooting.md](use/troubleshooting.md) | Lockout recovery and the VPN-guard failure runbook. |
-| [upgrade.md](use/upgrade.md) | `dezhban upgrade`: the two-phase apply/activate split, the activation gate, rollback. |
+| [getting-started.md](usage/getting-started.md) | **Start here if you're new.** Install, set up, check it won't lock you out, arm it, read the menubar icon. |
+| [install.md](usage/install.md) | Every install path (curl/PowerShell, `.pkg`, `.deb`/`.rpm`, bare binaries), why there's no Apple-signed installer, how to verify a download. |
+| [config.md](usage/config.md) | Full JSON config field reference, the `vpn` block, validation rules, sample configs. |
+| [cli.md](usage/cli.md) | Every CLI command and flag, safe read-only inspection, running as a service, the macOS app. |
+| [troubleshooting.md](usage/troubleshooting.md) | Lockout recovery and the VPN-guard failure runbook. |
+| [upgrade.md](usage/upgrade.md) | `dezhban upgrade`: the two-phase apply/activate split, the activation gate, rollback. |
 
 ## concepts/ — the mental model
 

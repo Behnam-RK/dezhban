@@ -119,7 +119,7 @@ Gotchas:
   `VERSION_BARE`.)
 - After a **fresh** install there is no config yet: run `sudo dezhban setup`,
   then `sudo dezhban start` (or use the menubar app). See
-  [cli.md](../use/cli.md#create--manage-the-config).
+  [cli.md](../usage/cli.md#create--manage-the-config).
 
 ## Safe dev loop (no root, no firewall effects)
 
@@ -133,7 +133,7 @@ task monitor                                     # build + run the monitor in dr
 task status                                      # current posture (installed CLI or go run)
 ```
 
-Sample configs live in `configs/` (see [config.md](../use/config.md) for what each one
+Sample configs live in `configs/` (see [config.md](../usage/config.md) for what each one
 is for).
 
 ## Service lifecycle from source

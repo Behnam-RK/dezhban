@@ -2,7 +2,7 @@
 
 > This is the reference page: every posture and the exact rules it installs. If
 > you are setting dezhban up for the first time, start with
-> [getting started](../use/getting-started.md) instead.
+> [getting started](../usage/getting-started.md) instead.
 
 dezhban has **one** enforcement model: an always-on **interface guard**. Under a
 full tunnel the firewall on the physical interface sees only encrypted outer
@@ -131,7 +131,7 @@ exit.
 > real thing for *your* config, and applies nothing.
 
 Configure the tunnel interface(s) and VPN endpoint IP(s) — see the `vpn` block in
-[config.md](../use/config.md). Find your tunnel interface with:
+[config.md](../usage/config.md). Find your tunnel interface with:
 
 ```sh
 dezhban detect-vpn          # detected tunnel iface(s) + a paste-ready vpn block
@@ -140,7 +140,7 @@ dezhban detect-vpn          # detected tunnel iface(s) + a paste-ready vpn block
 `detect-vpn` deliberately does **not** autodetect the endpoint — a wrong endpoint
 would leak physical egress — so set `vpn.endpoints` from your VPN client's own
 config (or use `autoDiscoverEndpoints` on macOS). A wrong or tunnel-internal
-endpoint is the #1 lockout cause; [troubleshooting.md](../use/troubleshooting.md) has the
+endpoint is the #1 lockout cause; [troubleshooting.md](../usage/troubleshooting.md) has the
 runbook. `panic` tears down every posture's rules.
 
 ### An unknown country holds; it never escalates
@@ -227,7 +227,7 @@ the physical link, so you never have to infer it from the config.
 The guard passes egress to the **union** of every configured profile's server
 endpoints, so disconnecting one known VPN and connecting another just works —
 each profile's handshake stays reachable on the physical link. Add profiles with
-`dezhban vpn add` / `dezhban vpn import` (see [config.md](../use/config.md)).
+`dezhban vpn add` / `dezhban vpn import` (see [config.md](../usage/config.md)).
 
 ### Switch window — connecting a brand-new VPN
 

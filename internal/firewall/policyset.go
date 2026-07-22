@@ -42,10 +42,10 @@ type PolicyInput struct {
 	// passing all outbound.
 	WindowProtos []string
 	WindowPorts  []int
-	// Allowlist is the legacy direct model's dst-IP allowlist. A VPN posture opens
-	// endpoints rather than a physical allowlist, so every current caller leaves
-	// this empty: the run loop never sets it, and print-rules no longer does
-	// either now that `--mode legacy` is gone.
+	// Allowlist is a dst-IP allowlist. A VPN posture opens endpoints rather than
+	// a physical allowlist, so every current caller leaves this empty: the run
+	// loop never sets it, and print-rules no longer does either now that
+	// `--mode legacy` is gone.
 	//
 	// The field is kept rather than deleted because Policy.Allowlist is still
 	// live — `dezhban block --force` builds a Policy directly with a resolved

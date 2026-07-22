@@ -142,7 +142,7 @@ rolled" step will refuse the dispatch otherwise.
 Each release carries:
 
 - `dezhban-X.Y.Z.pkg` — the macOS installer (unsigned; `scripts/install.sh`
-  is the friction-free path — see [install.md](../use/install.md))
+  is the friction-free path — see [install.md](../usage/install.md))
 - `dezhban-darwin-arm64`, `dezhban-darwin-amd64`
 - `dezhban-linux-amd64`, `dezhban-linux-arm64`
 - `dezhban-windows-amd64.exe`
@@ -233,5 +233,5 @@ drift from what CI does, because it is the same code. It runs standalone
 (`bash scripts/release.sh resolve --bump minor`) with no dev tooling.
 
 See [development.md](development.md) for the build/version-stamping mechanics,
-[install.md](../use/install.md) for how these assets actually get onto a user's
-machine, and [upgrade.md](../use/upgrade.md) for `dezhban upgrade`.
+[install.md](../usage/install.md) for how these assets actually get onto a user's
+machine, and [upgrade.md](../usage/upgrade.md) for `dezhban upgrade`.

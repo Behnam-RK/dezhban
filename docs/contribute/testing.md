@@ -1,7 +1,7 @@
 # Acceptance checks
 
 dezhban is code-complete: every feature described in [modes.md](../concepts/modes.md)
-and [cli.md](../use/cli.md) is implemented and covered by `go test ./...`. What
+and [cli.md](../usage/cli.md) is implemented and covered by `go test ./...`. What
 remains is **privileged, on-host verification** — the checks that need root and
 a real firewall, and therefore cannot run in CI.
 
@@ -12,7 +12,7 @@ macOS worked example giving literal `pf` commands and expected output.
 > **Run these on a host you can afford to lock out of.** Every check below arms a
 > real kill switch. Keep a second terminal open and know the escape hatch:
 > `sudo dezhban panic` removes all rules with no daemon running. See
-> [troubleshooting.md](../use/troubleshooting.md).
+> [troubleshooting.md](../usage/troubleshooting.md).
 
 ## Automated (no root) — run first
 
@@ -304,7 +304,7 @@ Per OS, privileged:
 ## Upgrade
 
 macOS only, privileged (`dezhban upgrade download`/`apply`). See
-[upgrade.md](../use/upgrade.md) for the full design.
+[upgrade.md](../usage/upgrade.md) for the full design.
 
 - [ ] **Tunnel down.** `dezhban upgrade check` with the tunnel down fails
       cleanly and opens nothing — it inherits the guard's tunnel-only routing

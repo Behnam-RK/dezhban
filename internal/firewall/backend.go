@@ -21,14 +21,15 @@ type Allowlist struct {
 type Mode int
 
 const (
-	// ModeFullBlock cuts outbound egress except loopback. On a direct connection
-	// (no tunnel interfaces) it additionally passes the dst-IP Allowlist. Under a
-	// VPN it drops the tunnel-interface pass — so no user traffic egresses to a
-	// forbidden exit — but KEEPS the VPN endpoint passes, so the encrypted
-	// handshake still reaches the server and the tunnel can reconnect (a cut
-	// endpoint would livelock recovery: the tunnel could never re-establish to be
+	// ModeFullBlock cuts outbound egress except loopback. Under a VPN it drops
+	// the tunnel-interface pass — so no user traffic egresses to a forbidden
+	// exit — but KEEPS the VPN endpoint passes, so the encrypted handshake
+	// still reaches the server and the tunnel can reconnect (a cut endpoint
+	// would livelock recovery: the tunnel could never re-establish to be
 	// re-evaluated). It is therefore ModeGuard minus the tunnel-interface pass.
-	// The dst-IP Allowlist stays meaningless under a tunnel and is omitted.
+	// `block --force` uses this Mode with no VPN context at all — no tunnel,
+	// no endpoints — in which case the dst-IP Allowlist (DNS + geo-API IPs) is
+	// what it passes instead, so recovery detection still has a path out.
 	ModeFullBlock Mode = iota
 	// ModeGuard is the always-on VPN guard: pass egress on the tunnel
 	// interface(s) plus the handshake to the VPN endpoint(s), and block all
@@ -39,7 +40,8 @@ const (
 	// it passes ALL outbound (so any VPN's handshake to any server can complete),
 	// relying on the daemon's short timer + early-close for safety rather than a
 	// port filter (a filter that admits the VPNs this project targets — many on
-	// 443 — necessarily admits phone-home leaks too; see docs/modes.md). When
+	// 443 — necessarily admits phone-home leaks too; see
+	// docs/concepts/modes.md). When
 	// WindowProtos/WindowPorts are set it instead passes loopback + tunnel +
 	// endpoints + DNS + the given proto/port set. The daemon reverts to the prior
 	// posture when the window closes.
@@ -48,7 +50,8 @@ const (
 
 // String returns the stable mode identifier used in logs; it matches the
 // print-rules --mode names ("fullblock", "guard", "switch"). Note that a VPN
-// full block and the legacy direct block are both ModeFullBlock.
+// full block (forbidden exit) and a `block --force` (no VPN context) are both
+// ModeFullBlock.
 func (m Mode) String() string {
 	switch m {
 	case ModeFullBlock:
@@ -63,13 +66,13 @@ func (m Mode) String() string {
 }
 
 // Policy describes one enforcement state for a backend to Apply. It generalizes
-// the original dst-IP Block so the same backend can drive both the legacy direct
-// model and the VPN-aware interface guard. See docs/plans VPN mode.
+// the original dst-IP Block so the same backend can drive both `block --force`
+// (no VPN context) and the VPN-aware interface guard.
 type Policy struct {
 	// Mode selects the posture (ModeFullBlock or ModeGuard).
 	Mode Mode
-	// Allowlist is used in legacy ModeFullBlock (no tunnel) and during the
-	// recovery probe; it is the DNS + geo-API egress IPs.
+	// Allowlist is used by `block --force` (ModeFullBlock with no VPN context)
+	// and during the recovery probe; it is the DNS + geo-API egress IPs.
 	Allowlist Allowlist
 	// TunnelIfaces are the VPN tunnel interface names (e.g. "utun4"). Their
 	// presence marks VPN mode even in ModeFullBlock.
@@ -125,10 +128,10 @@ type Policy struct {
 }
 
 // isVPNPolicy reports whether a ModeFullBlock policy is a VPN posture (endpoints
-// open) rather than the legacy direct model (dst-IP allowlist). True when the
-// policy carries tunnel interfaces, endpoints, or the physical-DNS pass — the
-// zero-tunnel standing posture (endpoints, no ifaces) still counts. Shared by
-// the pf and nft renderers.
+// open) rather than a `block --force` override (dst-IP allowlist, no VPN
+// context at all). True when the policy carries tunnel interfaces, endpoints,
+// or the physical-DNS pass — the zero-tunnel standing posture (endpoints, no
+// ifaces) still counts. Shared by the pf and nft renderers.
 func isVPNPolicy(p Policy) bool {
 	return len(p.TunnelIfaces) > 0 || len(p.VPNEndpoints) > 0 || p.AllowPhysicalDNS
 }
@@ -145,7 +148,7 @@ type FirewallBackend interface {
 	// allowlist (plus loopback). Only outbound is filtered, so return traffic is
 	// unaffected.
 	// Re-blocking must not stack duplicate rules. Equivalent to Apply with
-	// ModeFullBlock and no tunnel interfaces (the legacy direct model).
+	// ModeFullBlock and no tunnel interfaces (the `block --force` override).
 	Block(a Allowlist) error
 	// Unblock removes ONLY dezhban's rules and restores prior firewall state.
 	Unblock() error

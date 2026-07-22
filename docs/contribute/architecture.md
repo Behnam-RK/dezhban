@@ -90,7 +90,7 @@ snapshot, and it is the only surface that reports what is actually running. The
 binary on disk is a different fact: `upgrade apply` replaces it while the daemon
 keeps enforcing on its old inode, so disk and process legitimately disagree for
 the whole window between applying an upgrade and activating it (see
-[upgrade.md](../use/upgrade.md)). `upgrade apply` reads this field to tell a
+[upgrade.md](../usage/upgrade.md)). `upgrade apply` reads this field to tell a
 still-pending activation from one that already landed. Omitted by daemons
 predating the field — consumers must treat an absent `version` as unknown, never
 as a version.
