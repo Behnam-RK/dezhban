@@ -75,8 +75,10 @@ if [[ -d "$ASSETS" ]]; then
 			sips -Z 44 "$ASSETS/icon-$state-512.png" \
 				--out "$APP/Contents/Resources/menubar-state-$state.png" >/dev/null
 		fi
-		# Dock tile: the 512px state tiles.
-		if [[ -f "$ASSETS/icon-$state-512.png" ]]; then
+		# Dock tile: the 512px state tiles. Only "on"/"blocked" — PostureUI.dockState
+		# coarsens every state down to one of those two, so "off"/"warning" tiles
+		# would never be read; skip staging PNGs the Dock icon can't request.
+		if [[ "$state" == "on" || "$state" == "blocked" ]] && [[ -f "$ASSETS/icon-$state-512.png" ]]; then
 			cp "$ASSETS/icon-$state-512.png" "$APP/Contents/Resources/dock-state-$state.png"
 		fi
 	done

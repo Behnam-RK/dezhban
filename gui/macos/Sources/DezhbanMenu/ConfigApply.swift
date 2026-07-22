@@ -10,8 +10,11 @@ enum ConfigApply {
     /// on-disk file is the source of truth, never a cached second-schema mirror.
     /// Short-circuits on the first failure so an error string can never be seeded
     /// into a field (and later written back as a value by Apply). Calls back on
-    /// the main queue with the values (in key order) or nil plus the failure text.
-    static func seed(keys: [String], completion: @escaping (_ values: [String]?, _ error: String?) -> Void) {
+    /// the main queue with the resolved path, the values (in key order), or nil
+    /// plus the failure text — the one resolution done here is also the one the
+    /// caller needs for display, so it never has to resolve a second time itself.
+    static func seed(keys: [String],
+                     completion: @escaping (_ path: String, _ values: [String]?, _ error: String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             // Resolved HERE, not on the caller's main thread: resolving shells out,
             // and a shell-out on the main thread spins the run loop (DezhbanCLI.exec).
@@ -20,10 +23,10 @@ enum ConfigApply {
             DispatchQueue.main.async {
                 if let failed = results.first(where: { !$0.result.ok }) {
                     let detail = failed.result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    completion(nil, "Failed to read \(failed.key): \(detail)")
+                    completion(cfgPath, nil, "Failed to read \(failed.key): \(detail)")
                     return
                 }
-                completion(results.map { $0.result.output.trimmingCharacters(in: .whitespacesAndNewlines) }, nil)
+                completion(cfgPath, results.map { $0.result.output.trimmingCharacters(in: .whitespacesAndNewlines) }, nil)
             }
         }
     }

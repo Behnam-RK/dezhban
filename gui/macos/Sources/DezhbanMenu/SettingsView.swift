@@ -297,7 +297,11 @@ struct SettingsView: View {
         switchWindow = ""; reconnectWindow = ""; endpointGrace = ""
         endpointRefresh = ""; tunnelWatch = ""
         state.refreshServiceState()
-        ConfigApply.seed(keys: Self.keys) { values, error in
+        // `path` is the same resolution ConfigApply.seed already did for the
+        // `config get` calls — reusing it here means configPath never needs its
+        // own second background resolve, so there's nothing to race.
+        ConfigApply.seed(keys: Self.keys) { path, values, error in
+            configPath = path
             if let error = error {
                 status = error
                 return
@@ -316,12 +320,8 @@ struct SettingsView: View {
             endpointGrace = v[10]
             endpointRefresh = v[11]
             tunnelWatch = v[12]
-            status = "Seeded from \(configPath)"
+            status = "Seeded from \(path)"
             canApply = true
-        }
-        DispatchQueue.global(qos: .userInitiated).async {
-            let path = DezhbanCLI.resolvedConfigPath()
-            DispatchQueue.main.async { configPath = path }
         }
     }
 
