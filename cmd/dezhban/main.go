@@ -1543,18 +1543,31 @@ func cmdStatus(args []string) int {
 			}
 			fmt.Println("vpn profiles:    ", strings.Join(names, ", "))
 		}
-		fmt.Println("switch window:   ", cfg.VPN.SwitchWindow)
+		if cfg.VPN.SwitchWindow > 0 {
+			fmt.Println("switch window:   ", cfg.VPN.SwitchWindow)
+		} else {
+			// The Disabled sentinel is negative — print "off", never "-1ns".
+			fmt.Println("switch window:    off")
+		}
 		if cfg.VPN.ReconnectWindow > 0 {
 			fmt.Println("reconnect window:", cfg.VPN.ReconnectWindow)
 		} else {
 			fmt.Println("reconnect window: off")
 		}
+		if cfg.VPN.PauseMax > 0 {
+			fmt.Println("pause max:       ", cfg.VPN.PauseMax)
+		} else {
+			fmt.Println("pause max:        off")
+		}
 		// Live switch-window / active-profile state from the daemon's snapshot.
 		if snap, err := state.Read(defaultStatePath()); err == nil {
 			if snap.Switch != nil && snap.Switch.Open {
 				kind := "switch state:    "
-				if snap.Switch.Trigger == state.TriggerAuto {
+				switch snap.Switch.Trigger {
+				case state.TriggerAuto:
 					kind = "reconnect state: " // auto window opened by a tunnel drop
+				case state.TriggerPause:
+					kind = "pause state:     " // operator pause (dezhban pause)
 				}
 				fmt.Printf("%s OPEN until %s\n", kind, snap.Switch.Until.Format(time.Kitchen))
 			}

@@ -334,6 +334,9 @@ control socket by `control.allowPauseOps` (default true), independent of
 `control.allowSwitchOps` — you can turn off passwordless switching without
 losing passwordless pausing, or vice versa. Refused in STANDBY (nothing is
 blocked to pause) and while a switch window is already open (cancel it first).
+The reverse holds too: `switch` is refused while a pause is open (resume it
+first), and `switch --cancel` refuses to touch a pause — the two relaxations
+never take over each other's attribution, caps, or lifecycle.
 
 Because pause shares the switch window's rule shape, it also shares its
 early-close behavior: if a VPN happens to reconnect with a confirmed good exit

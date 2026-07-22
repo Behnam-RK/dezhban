@@ -32,6 +32,14 @@ changes.
   `"0"` disables) and its own control-socket gate (`control.allowPauseOps`,
   default true, independent of `control.allowSwitchOps`).
 
+### Fixed
+
+- **`dezhban config set vpn.switchWindow 0` now disables manual switch windows**
+  instead of being silently coerced back to the 5s default by `Normalize` — the
+  same explicit-opt-out sentinel `vpn.reconnectWindow` already used. `config get`
+  now reports the disabled state as `0s` rather than a negative duration, and
+  `dezhban status` prints `switch window: off` instead of the raw sentinel.
+
 ## [0.6.0] - 2026-07-22
 
 ### Fixed

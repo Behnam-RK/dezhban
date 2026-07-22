@@ -209,6 +209,14 @@ func TestControlPauseOpenAndResume(t *testing.T) {
 		t.Fatalf("switch-cancel unexpectedly ended an open pause: %+v", resp)
 	}
 
+	// Nor may a switch-open hijack one: openWindow's manual-takeover path would
+	// rebrand the pause as a switch window, after which resume no-ops ("already
+	// closed") while egress stays open.
+	resp = do(t, path, control.Request{Op: control.OpOpenSwitch, Duration: "30s"})
+	if resp.OK {
+		t.Fatalf("switch-open unexpectedly took over an open pause: %+v", resp)
+	}
+
 	resp = do(t, path, control.Request{Op: control.OpResume})
 	if !resp.OK || resp.Posture != "guard" {
 		t.Fatalf("resume response = %+v, want an OK revert to guard", resp)

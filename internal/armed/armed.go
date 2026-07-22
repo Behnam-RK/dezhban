@@ -72,8 +72,11 @@ func Load(path string) (*Record, error) {
 func MarkUp(path string, now time.Time) error {
 	r, err := Load(path)
 	if err != nil {
-		// A corrupt file was already logged by Load; proceed with the zero-value
-		// record it returned rather than losing the observation we're here to record.
+		// Corrupt or unreadable record: proceed with a fresh zero-value record
+		// rather than losing the observation we're here to record — the write
+		// below also replaces the bad file. (Load doesn't log; the error is
+		// deliberately swallowed here because recording the fact matters more
+		// than reporting a file we're about to overwrite anyway.)
 		r = &Record{Version: version}
 	}
 	if !r.TunnelEverUp {

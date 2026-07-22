@@ -730,14 +730,25 @@ func (o Options) runGuard(ctx context.Context) error {
 	pauseEnabled := pauseWindowMax > 0 && o.PollCommand != nil
 	var windowMax time.Duration // set at first open; see openWindow
 
+	// windowNoun names the open episode in operator-facing logs by its trigger —
+	// a pause expiring must not read as a "switch window" closing.
+	windowNoun := func() string {
+		if windowTrigger == state.TriggerPause {
+			return "pause"
+		}
+		return "switch window"
+	}
+
 	openWindow := func(now time.Time, dur time.Duration, profile, trigger string) {
 		if windowActive {
 			// A manual command takes over an auto window's attribution (the
 			// operator is now driving); an auto trigger never fires while a window
-			// is open, so the reverse cannot happen. Attribution changes, but the
-			// episode's exposure cap (windowMax, fixed at first open) does not —
-			// taking over does not grant the longer auto budget to a manual window
-			// or vice versa.
+			// is open, so the reverse cannot happen, and a manual open is refused
+			// at every call site while a pause is open (a pause is ended by
+			// resume, never rebranded). Attribution changes, but the episode's
+			// exposure cap (windowMax, fixed at first open) does not — taking
+			// over does not grant the longer auto budget to a manual window or
+			// vice versa.
 			if trigger == state.TriggerManual {
 				windowTrigger = trigger
 			}
@@ -766,7 +777,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			}
 			windowTimer = time.NewTimer(remaining)
 			windowTimerC = windowTimer.C
-			o.Log.Info("switch window extended", "until", windowDeadline, "profile", windowProfile)
+			o.Log.Info(windowNoun()+" extended", "until", windowDeadline, "profile", windowProfile)
 			snapshot()
 			return
 		}
@@ -849,7 +860,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// machine — keep it active and re-arm a short retry so the daemon keeps
 			// trying to enforce the deadline instead of leaving egress relaxed.
 			enfErr = err
-			o.Log.Error("restore posture after switch window failed — holding window open, will retry",
+			o.Log.Error("restore posture after "+windowNoun()+" failed — holding window open, will retry",
 				"reason", reason, "err", err)
 			if windowTimer != nil {
 				windowTimer.Stop()
@@ -863,7 +874,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		windowActive = false
 		blocked = windowPrevBlocked
 		enfErr = nil
-		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(blocked, false, standby))
+		o.Log.Info(windowNoun()+" closed", "reason", reason, "posture", postureName(blocked, false, standby))
 		snapshot()
 	}
 
@@ -962,7 +973,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			o.Learn(windowProfile, firstOr(tunnels), disc)
 			o.Log.Info("learned vpn endpoint(s) from switch window", "profile", windowProfile, "count", len(disc))
 		}
-		o.Log.Info("switch window closed early (exit verified)", "country", r.CountryCode, "tunnels", tunnels)
+		o.Log.Info(windowNoun()+" closed early (exit verified)", "country", r.CountryCode, "tunnels", tunnels)
 		snapshot()
 	}
 
@@ -1093,6 +1104,14 @@ func (o Options) runGuard(ctx context.Context) error {
 			}
 			if !switchEnabled {
 				return reply(false, "switch window unavailable (vpn.switchWindow not configured)")
+			}
+			if windowActive && windowTrigger == state.TriggerPause {
+				// openWindow's manual-takeover path would silently rebrand the
+				// pause as a switch window — after which resume no-ops ("already
+				// closed") while egress stays open. Symmetric with OpPause's
+				// refusal while a switch window is open: the two relaxations
+				// never stomp each other's attribution.
+				return reply(false, "a pause is open — resume it first")
 			}
 			openWindow(time.Now(), o.clampWindow(req.Duration), req.Profile, state.TriggerManual)
 			if !windowActive {
@@ -1277,6 +1296,12 @@ func (o Options) runGuard(ctx context.Context) error {
 						"connect your VPN and the guard arms itself")
 					continue
 				}
+				if windowActive && windowTrigger == state.TriggerPause {
+					// Same rail as the socket path: a manual open must not
+					// rebrand an open pause via openWindow's takeover.
+					o.Log.Warn("ignoring switch-window command — a pause is open (resume it first)")
+					continue
+				}
 				dur := o.clampWindow(cmd.Duration)
 				if dur <= 0 {
 					// Unreachable while the command poll only ticks when
@@ -1287,6 +1312,12 @@ func (o Options) runGuard(ctx context.Context) error {
 				}
 				openWindow(now, dur, cmd.Profile, state.TriggerManual)
 			case command.OpCancelSwitchWindow:
+				if windowActive && windowTrigger == state.TriggerPause {
+					// Mirror the socket path's refusal: a pause is ended by
+					// resume, and the resume command-file op works for root.
+					o.Log.Warn("ignoring switch-cancel command — a pause is open (use resume)")
+					continue
+				}
 				if windowActive {
 					closeWindowRevert("cancelled")
 				}

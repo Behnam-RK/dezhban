@@ -132,6 +132,15 @@ func cmdPause(args []string) int {
 	if fs.NArg() > 0 {
 		dur = fs.Arg(0)
 	}
+	// Validate here rather than letting the daemon's clampPause silently fall
+	// back to its default on a typo — `dezhban pause 15x` must error, not
+	// quietly become a 15m exposure the operator never asked for.
+	if dur != "" {
+		if d, err := time.ParseDuration(dur); err != nil || d <= 0 {
+			fmt.Fprintf(os.Stderr, "pause: invalid duration %q (want e.g. \"15m\")\n", dur)
+			return 2
+		}
+	}
 
 	if cfg, err := loadConfig(*cfgPath); err == nil && cfg.VPN.PauseMax <= 0 {
 		fmt.Fprintln(os.Stderr, "pause: disabled by vpn.pauseMax: \"0\". Set it to a duration (e.g. \"30m\") to enable.")
@@ -238,7 +247,13 @@ func printSwitchStatus(statePath string) int {
 		return 0
 	}
 	if snap.Switch != nil && snap.Switch.Open {
-		fmt.Printf("switch window: OPEN until %s (profile %q)\n", snap.Switch.Until.Format(time.RFC3339), snap.Switch.Profile)
+		if snap.Switch.Trigger == state.TriggerPause {
+			// A pause shares the window machinery but is not a switch window —
+			// report it by name so "OPEN" here doesn't read as a stray switch.
+			fmt.Printf("pause: OPEN until %s (end early with `dezhban resume`)\n", snap.Switch.Until.Format(time.RFC3339))
+		} else {
+			fmt.Printf("switch window: OPEN until %s (profile %q)\n", snap.Switch.Until.Format(time.RFC3339), snap.Switch.Profile)
+		}
 	} else {
 		fmt.Println("switch window: closed")
 	}
