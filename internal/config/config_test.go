@@ -167,17 +167,20 @@ func TestClassifyTarget(t *testing.T) {
 
 func TestValidateErrors(t *testing.T) {
 	cases := map[string]string{
-		"bad interval":           `{"pollInterval": "0s"}`,
-		"bad hyst":               `{"hysteresis": 0}`,
-		"bad country":            `{"blockedCountries": ["USA"]}`,
-		"no providers":           `{"providers": []}`,
-		"vpn bad endpoint":       `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["bad endpoint!"]}}`,
-		"vpn bad refresh":        `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "endpointRefresh": "soon"}}`,
-		"profile dup name":       `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": ["1.2.3.4"]}, {"name": "A", "endpoints": ["5.6.7.8"]}]}}`,
-		"profile no endpoints":   `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": []}]}}`,
-		"profile bad name":       `{"vpn": {"enabled": true, "profiles": [{"name": "a b", "endpoints": ["1.2.3.4"]}]}}`,
-		"profile bad endpoint":   `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": ["bad ep!"]}]}}`,
-		"switch window too low":  `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "switchWindow": "1s"}}`,
+		"bad interval":         `{"pollInterval": "0s"}`,
+		"bad hyst":             `{"hysteresis": 0}`,
+		"bad country":          `{"blockedCountries": ["USA"]}`,
+		"no providers":         `{"providers": []}`,
+		"vpn bad endpoint":     `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["bad endpoint!"]}}`,
+		"vpn bad refresh":      `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "endpointRefresh": "soon"}}`,
+		"profile dup name":     `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": ["1.2.3.4"]}, {"name": "A", "endpoints": ["5.6.7.8"]}]}}`,
+		"profile no endpoints": `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": []}]}}`,
+		"profile bad name":     `{"vpn": {"enabled": true, "profiles": [{"name": "a b", "endpoints": ["1.2.3.4"]}]}}`,
+		"profile bad endpoint": `{"vpn": {"enabled": true, "profiles": [{"name": "a", "endpoints": ["bad ep!"]}]}}`,
+		// No floor any more (2026-07-22 defaults review: "1s" now validates) —
+		// negative is still rejected, just via the explicit apply()-time check
+		// rather than a range floor.
+		"switch window negative": `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "switchWindow": "-1s"}}`,
 		"switch window too high": `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "switchWindow": "10m"}}`,
 		"advanced bad proto":     `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "advanced": {"windowProtocols": ["icmp"]}}}`,
 		"advanced bad port":      `{"vpn": {"enabled": true, "endpoints": ["1.2.3.4"], "advanced": {"windowPorts": [99999]}}}`,
@@ -394,14 +397,15 @@ func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.VPN.SwitchWindow != 15*time.Second {
-		t.Errorf("default switchWindow = %s, want 15s", cfg.VPN.SwitchWindow)
+	if cfg.VPN.SwitchWindow != 5*time.Second {
+		t.Errorf("default switchWindow = %s, want 5s", cfg.VPN.SwitchWindow)
 	}
 	a := cfg.VPN.Advanced
-	if a.SwitchWindowMax != 5*time.Minute || a.CommandFreshness != 30*time.Second ||
+	if a.SwitchWindowMax != 3*time.Minute || a.ReconnectWindowMax != 10*time.Minute ||
+		a.CommandFreshness != 30*time.Second ||
 		a.LearnedMaxPerProfile != 16 || a.PromoteAfterRefreshes != 3 ||
 		a.EndpointWarnThreshold != 256 || a.LearnedEndpointTTL != 720*time.Hour ||
-		a.TunnelPruneAfter != 60*time.Second || a.WindowDiscoveryInterval != 2*time.Second {
+		a.TunnelPruneAfter != 60*time.Second || a.WindowDiscoveryInterval != 1*time.Second {
 		t.Errorf("advanced defaults not applied: %+v", a)
 	}
 
@@ -421,8 +425,11 @@ func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
 		t.Errorf("learnedMaxPerProfile = %d, want 8", cfg2.VPN.Advanced.LearnedMaxPerProfile)
 	}
 	// Untouched knobs keep their defaults.
-	if cfg2.VPN.Advanced.SwitchWindowMax != 5*time.Minute {
-		t.Errorf("switchWindowMax = %s, want default 5m", cfg2.VPN.Advanced.SwitchWindowMax)
+	if cfg2.VPN.Advanced.SwitchWindowMax != 3*time.Minute {
+		t.Errorf("switchWindowMax = %s, want default 3m", cfg2.VPN.Advanced.SwitchWindowMax)
+	}
+	if cfg2.VPN.Advanced.ReconnectWindowMax != 10*time.Minute {
+		t.Errorf("reconnectWindowMax = %s, want default 10m", cfg2.VPN.Advanced.ReconnectWindowMax)
 	}
 }
 
@@ -536,8 +543,9 @@ func TestReconnectWindowDefaultsAndDisable(t *testing.T) {
 		t.Errorf("disabled reconnectWindow did not survive a save/load round-trip: %s", cfg2.VPN.ReconnectWindow)
 	}
 
-	// Out of range: below the 5s floor and above switchWindowMax must fail.
-	for _, bad := range []string{`"3s"`, `"10m"`} {
+	// No floor any more: "3s" now validates. Above reconnectWindowMax (10m
+	// default, separate from switchWindowMax) must still fail.
+	for _, bad := range []string{`"11m"`} {
 		_, err := Load(write("bad.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "reconnectWindow": `+bad+`}}`))
 		if err == nil || !strings.Contains(err.Error(), "reconnectWindow") {
 			t.Errorf("reconnectWindow %s: err = %v, want out-of-range error", bad, err)
@@ -626,6 +634,71 @@ func TestWindowDisableMatrix(t *testing.T) {
 				t.Errorf("reconnectWindow disabled = %v, want %v (got %s)", off, c.wantRecOff, cfg.VPN.ReconnectWindow)
 			}
 		})
+	}
+}
+
+// No floor any more (2026-07-22 defaults review): switchWindow/reconnectWindow
+// values well under the old 10s/5s floors must validate, right up to their
+// (now independent) caps.
+func TestWindowNoFloor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"3s","reconnectWindow":"1s"}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v, want a sub-10s switchWindow and sub-5s reconnectWindow to validate", err)
+	}
+	if cfg.VPN.SwitchWindow != 3*time.Second {
+		t.Errorf("SwitchWindow = %s, want 3s", cfg.VPN.SwitchWindow)
+	}
+	if cfg.VPN.ReconnectWindow != 1*time.Second {
+		t.Errorf("ReconnectWindow = %s, want 1s", cfg.VPN.ReconnectWindow)
+	}
+}
+
+// Absent blockedCountries gets the recommended default; an explicit empty list
+// is a deliberate "block nothing" and must never be overridden. Both must
+// survive a save/load round-trip.
+func TestBlockedCountriesDefaultVsExplicitEmpty(t *testing.T) {
+	dir := t.TempDir()
+
+	absent := filepath.Join(dir, "absent.json")
+	if err := os.WriteFile(absent, []byte(`{}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(absent)
+	if err != nil {
+		t.Fatalf("Load(absent): %v", err)
+	}
+	if want := []string{"IR", "RU", "KP"}; !reflect.DeepEqual(cfg.BlockedCountries, want) {
+		t.Errorf("BlockedCountries (absent key) = %v, want %v", cfg.BlockedCountries, want)
+	}
+
+	explicit := filepath.Join(dir, "explicit-empty.json")
+	if err := os.WriteFile(explicit, []byte(`{"blockedCountries": []}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(explicit)
+	if err != nil {
+		t.Fatalf("Load(explicit empty): %v", err)
+	}
+	if len(cfg2.BlockedCountries) != 0 {
+		t.Errorf("BlockedCountries (explicit []) = %v, want empty — an explicit choice must never be overridden", cfg2.BlockedCountries)
+	}
+
+	// The explicit-empty choice must survive a save/load round-trip too.
+	out := filepath.Join(dir, "explicit-empty-out.json")
+	if err := Save(out, cfg2); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg3, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load(round-trip): %v", err)
+	}
+	if len(cfg3.BlockedCountries) != 0 {
+		t.Errorf("BlockedCountries after round-trip = %v, want still empty", cfg3.BlockedCountries)
 	}
 }
 

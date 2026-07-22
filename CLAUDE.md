@@ -146,10 +146,17 @@ The design depends on these invariants (rationale in
   a tunnel-down edge from *healthy GUARD only* — never from standby, FULL BLOCK,
   an already-open window, or a tunnel never observed up, and gated against
   flapping by `vpn.advanced.reconnectMinUptime`. Both triggers share the same
-  machinery and rails: bounded (capped by `switchWindowMax`, 5m), closes early
-  on a confirmed good exit, auto-reverts to the prior fail-closed posture on
-  cancel/expiry, and one auto window per drop (expiry never re-opens). Never
-  widen the window, never add a trigger, never let it outlive its deadline.
+  machinery and rails — closes early on a confirmed good exit, auto-reverts to
+  the prior fail-closed posture on cancel/expiry, one auto window per drop
+  (expiry never re-opens) — but each has its OWN hard cap, deliberately never
+  shared: the manual trigger is bounded by `switchWindowMax` (default 3m, no
+  floor), the automatic one by `reconnectWindowMax` (default 10m, no floor).
+  Collapsing these into one shared cap would silently truncate whichever
+  trigger has the larger intended budget — the `Options.SwitchWindowMax` /
+  `Options.ReconnectWindowMax` split in `internal/runner` and the per-episode
+  `windowMax` selected by trigger at first open (`Run`'s `openWindow` closure)
+  exist for exactly this reason. Never widen a window past its own cap, never
+  add a trigger, never let either outlive its deadline.
 - **Both windows are independently disableable, and "disabled" must survive
   `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
   `vpn.reconnectWindow: "0"` removes trigger (2); both set to `"0"` is the strict

@@ -701,9 +701,8 @@ func scriptedCommands(cmds ...command.Command) func() (command.Command, bool) {
 }
 
 // A switch window opens on command and, on cancel, reverts to the prior posture
-// (GUARD) immediately. (Expiry uses the same closeWindowRevert path but the
-// minimum window is 10s — too slow to assert in a unit test, so cancel exercises
-// the revert.)
+// (GUARD) immediately. (Expiry uses the same closeWindowRevert path, but a real
+// expiry wait is too slow for a unit test, so cancel exercises the revert.)
 func TestSwitchWindowCancelRevertsToGuard(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
@@ -1035,6 +1034,55 @@ func TestVPNAutoReconnectWindowOpensAndExpires(t *testing.T) {
 	last := be.calls[len(be.calls)-2] // final call is cleanup
 	if last != "apply-guard" {
 		t.Fatalf("posture after expiry = %q, want apply-guard; calls = %v", last, be.calls)
+	}
+}
+
+// A manual command taking over an already-open AUTO window must keep the
+// episode's original (auto) exposure cap, never the manual cap — see
+// Options.ReconnectWindowMax's doc comment and the windowMax fork in Run's
+// openWindow closure. SwitchWindowMax is deliberately set much larger than
+// ReconnectWindowMax here: if the two caps were ever collapsed back into one
+// shared value keyed off SwitchWindowMax (the pre-2026-07-22 shape), the
+// manual takeover's 5s request would sail through un-clamped and the window
+// would still be open when this test's context ends — no revert observed.
+// With the caps correctly kept separate, the auto episode's cap holds and the
+// window reverts (fail-closed) well within the test's deadline regardless of
+// the takeover's requested duration.
+func TestManualTakeoverKeepsAutoWindowExposureCap(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(2),        // drops at ~2ms, opening the AUTO window
+		ReconnectWindow:    15 * time.Millisecond, // auto window's own initial duration
+		ReconnectWindowMax: 30 * time.Millisecond, // the correct cap for this episode
+		SwitchWindow:       time.Second,           // manual switch windows enabled at all
+		SwitchWindowMax:    10 * time.Second,      // deliberately far larger than the auto cap
+		CommandPoll:        10 * time.Millisecond,
+		PollCommand: scriptedCommands(
+			// Arrives ~10ms in, while the auto window (opened ~2ms, due 15ms
+			// later) is still active — a takeover, not a fresh open. clampWindow
+			// only caps it against SwitchWindowMax (10s), so this passes through
+			// requesting a 5s extension.
+			command.Command{Op: command.OpOpenSwitchWindow, Duration: "5s"},
+		),
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(be.calls, "apply-switch") {
+		t.Fatalf("expected apply-switch (auto window open); calls=%v", be.calls)
+	}
+	if !applyGuardAfterSwitch(be.calls) {
+		t.Fatalf("expected the auto episode's cap (ReconnectWindowMax) to force a revert well "+
+			"before this test's deadline, regardless of the takeover's 5s request; calls=%v", be.calls)
 	}
 }
 

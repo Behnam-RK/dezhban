@@ -92,13 +92,20 @@ type Options struct {
 	// startup gates (an empty tunnel/endpoint set is allowed — the standing
 	// posture is a total cut until the first VPN/switch window).
 	Autodetect bool
-	// SwitchWindow is the default duration of a switch window; SwitchWindowMax
-	// caps it. WindowProtos/WindowPorts optionally restrict the window. A switch
-	// window is only available when SwitchWindow > 0 AND PollCommand != nil.
+	// SwitchWindow is the default duration of a MANUAL switch window;
+	// SwitchWindowMax caps it. WindowProtos/WindowPorts optionally restrict the
+	// window. A switch window is only available when SwitchWindow > 0 AND
+	// PollCommand != nil.
 	SwitchWindow    time.Duration
 	SwitchWindowMax time.Duration
 	WindowProtos    []string
 	WindowPorts     []int
+	// ReconnectWindowMax caps the AUTOMATIC reconnect window (see
+	// ReconnectWindow below) and is deliberately independent of
+	// SwitchWindowMax — sharing one cap between the two triggers would
+	// silently truncate whichever trigger has the larger intended budget.
+	// <=0 → 10m.
+	ReconnectWindowMax time.Duration
 	// WindowDiscoveryInterval is how often endpoints are re-resolved while a
 	// switch window is open (fast, to learn the new server quickly). <=0 → 2s.
 	WindowDiscoveryInterval time.Duration
@@ -626,20 +633,31 @@ func (o Options) runGuard(ctx context.Context) error {
 		winDiscC = nil
 	}
 
-	// windowMax is the absolute cap on real-IP exposure. It anchors to the FIRST
-	// open (windowStart), so repeated "open" commands can never extend a single
-	// window past it — each command's duration is clamped, but without this anchor
-	// their deadlines would stack.
-	windowMax := o.SwitchWindowMax
-	if windowMax <= 0 {
-		windowMax = 5 * time.Minute
+	// manualWindowMax / autoWindowMax are the absolute caps on real-IP exposure
+	// for a manual vs. an automatic-reconnect episode, kept separate so one
+	// trigger's budget can never silently truncate the other's (see
+	// Options.ReconnectWindowMax's doc comment). windowMax below is fixed to
+	// whichever applies for the CURRENT episode the instant it first opens (in
+	// openWindow's first-open branch) and anchors to that open (windowStart), so
+	// repeated "open" commands can never extend a single window past it.
+	manualWindowMax := o.SwitchWindowMax
+	if manualWindowMax <= 0 {
+		manualWindowMax = 3 * time.Minute
 	}
+	autoWindowMax := o.ReconnectWindowMax
+	if autoWindowMax <= 0 {
+		autoWindowMax = 10 * time.Minute
+	}
+	var windowMax time.Duration // set at first open; see openWindow
 
 	openWindow := func(now time.Time, dur time.Duration, profile, trigger string) {
 		if windowActive {
 			// A manual command takes over an auto window's attribution (the
 			// operator is now driving); an auto trigger never fires while a window
-			// is open, so the reverse cannot happen.
+			// is open, so the reverse cannot happen. Attribution changes, but the
+			// episode's exposure cap (windowMax, fixed at first open) does not —
+			// taking over does not grant the longer auto budget to a manual window
+			// or vice versa.
 			if trigger == state.TriggerManual {
 				windowTrigger = trigger
 			}
@@ -683,6 +701,11 @@ func (o Options) runGuard(ctx context.Context) error {
 		windowStart = now
 		windowProfile = profile
 		windowTrigger = trigger
+		if trigger == state.TriggerAuto {
+			windowMax = autoWindowMax
+		} else {
+			windowMax = manualWindowMax
+		}
 		windowDeadline = now.Add(dur)
 		windowTimer = time.NewTimer(dur)
 		windowTimerC = windowTimer.C
@@ -1505,9 +1528,9 @@ func (o Options) resolveEndpointsWith(ctx context.Context, tunnels []string) net
 func (o Options) clampWindow(req string) time.Duration {
 	// Refuse outright when manual switch windows are disabled. Both triggers
 	// (socket op, command file) are already gated on switchEnabled, so this is
-	// unreachable today — but the clamp below raises anything under 10s UP to
-	// 10s, so a future caller that skipped the gate would turn "disabled" into
-	// a real 10-second relaxation of the guard. Fail closed instead.
+	// unreachable today — but failing closed here means a future caller that
+	// skipped the gate can never turn "disabled" into a real relaxation of the
+	// guard, whatever value req parses to.
 	if o.SwitchWindow <= 0 {
 		return 0
 	}
@@ -1517,13 +1540,11 @@ func (o Options) clampWindow(req string) time.Duration {
 			dur = d
 		}
 	}
-	const minSwitchWindow = 10 * time.Second
+	// No floor (2026-07-22 defaults review): any positive request is honored,
+	// capped only by SwitchWindowMax.
 	max := o.SwitchWindowMax
 	if max <= 0 {
-		max = 5 * time.Minute
-	}
-	if dur < minSwitchWindow {
-		dur = minSwitchWindow
+		max = 3 * time.Minute
 	}
 	if dur > max {
 		dur = max

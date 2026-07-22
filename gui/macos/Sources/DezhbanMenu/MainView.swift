@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// The main window's root: sidebar navigation over the five sections. The
+/// The main window's root: sidebar navigation over the four sections. The
 /// selection lives in AppState so actions elsewhere (e.g. a window-triggered
 /// panic) can navigate to the Logs pane programmatically.
 struct MainView: View {
@@ -18,7 +18,6 @@ struct MainView: View {
         } detail: {
             switch state.selectedSection ?? .overview {
             case .overview: OverviewView()
-            case .vpnGuard: VPNGuardView()
             case .settings: SettingsView()
             case .logs: LogsView(console: state.console)
             case .about: AboutView()

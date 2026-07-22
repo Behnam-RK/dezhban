@@ -3,14 +3,13 @@ import SwiftUI
 
 /// The main window's sidebar sections.
 enum SidebarSection: String, CaseIterable, Identifiable {
-    case overview, vpnGuard, settings, logs, about
+    case overview, settings, logs, about
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .overview: return "Overview"
-        case .vpnGuard: return "VPN Guard"
         case .settings: return "Settings"
         case .logs: return "Logs & Diagnostics"
         case .about: return "About"
@@ -20,7 +19,6 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .overview: return "shield.lefthalf.filled"
-        case .vpnGuard: return "lock.shield"
         case .settings: return "gearshape"
         case .logs: return "text.alignleft"
         case .about: return "info.circle"
