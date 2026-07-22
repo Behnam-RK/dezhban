@@ -110,7 +110,7 @@ enum AppActions {
     /// was just replaced on disk out from under this running process (`upgrade
     /// apply` installs a new Dezhban.app regardless of whether daemon
     /// activation happened this instant or was deferred by the gate; see
-    /// docs/upgrade.md). `present` gets the full transcript either way, so a
+    /// docs/usage/upgrade.md). `present` gets the full transcript either way, so a
     /// failure — or a deferred activation, which is still `ok` — is always
     /// visible, not silently swallowed by the relaunch.
     static func performUpgrade(present: @escaping (CommandResult) -> Void) {
@@ -142,7 +142,7 @@ enum AppActions {
 
     /// Confirms before an upgrade: it restarts this app unconditionally and
     /// may briefly restart enforcement (only if the daemon is in a safe
-    /// posture — see docs/upgrade.md), so it deserves the same "are you sure"
+    /// posture — see docs/usage/upgrade.md), so it deserves the same "are you sure"
     /// treatment as Panic, not a silent one-click action.
     static func confirmUpgrade(to version: String) -> Bool {
         let alert = NSAlert()

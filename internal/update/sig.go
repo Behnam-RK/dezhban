@@ -1,6 +1,6 @@
 // Package update implements `dezhban upgrade`: checking GitHub for a newer
 // release, downloading and verifying it, and — on macOS only — applying the
-// signed .pkg and restarting into it. See docs/upgrade.md for the full design;
+// signed .pkg and restarting into it. See docs/usage/upgrade.md for the full design;
 // the short version:
 //
 //   - The check runs in the GUI, in user context, never in the root daemon.

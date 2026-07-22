@@ -550,9 +550,9 @@ func switchPollOrNil(enabled bool, poll func() (command.Command, bool)) func() (
 }
 
 // buildWatcher constructs the tunnel watcher, or returns nil when there is
-// nothing to watch. It exists whenever tunnels are configured/autodetected (so
-// VPN-mode observability and the legacy kill switch work) or when a tunnel-drop
-// simulation is requested.
+// nothing to watch. It exists whenever tunnels are configured/autodetected —
+// its up/down samples are what drive the guard's posture decisions — or when a
+// tunnel-drop simulation is requested.
 func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov runOverrides) *netdetect.Watcher {
 	if len(tunnels) == 0 && !cfg.VPN.Autodetect && !ov.tunnelDownSet {
 		return nil
@@ -831,9 +831,10 @@ func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allow
 	// The allowlist pins IPs at block time. If nothing resolved, recovery
 	// detection can never reach a geo-API once egress is cut — the block would
 	// become permanent. Warn loudly rather than silently lock the operator out.
-	// NOTE: the legacy loop only rebuilds this on an Allow→Block transition, so a
-	// provider that rotates CDN IPs mid-block becomes unreachable until the next
-	// transition. Live mid-block refresh is Phase 4 (recovery probe) work.
+	// NOTE: `block --force` resolves this once, at block time, so a provider
+	// that rotates CDN IPs mid-block becomes unreachable until the next block.
+	// (The guard postures don't use this allowlist at all — they pass endpoints,
+	// and refresh geo providers while healthy.)
 	if len(al.Hosts) == 0 {
 		log.Warn("no geo-API egress IPs in allowlist — recovery detection cannot work while blocked")
 	}
@@ -1276,15 +1277,12 @@ func cmdMonitor(args []string) int {
 // cannot drift from what the daemon would actually install.
 func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
 	tunnels := resolveTunnels(cfg, log)
-	// The physical dst-IP allowlist belongs only to the legacy (non-VPN) model.
-	// A VPN posture opens endpoints, not a physical allowlist, so the run loop
-	// leaves it empty. Populate it only for non-VPN configs; otherwise a VPN config
-	// with no static tunnels/endpoints (autoDiscover-only) would fail isVPNPolicy
-	// and render phantom physical egress.
-	// Built lazily because it resolves endpoints, which does DNS. The `legacy`
-	// posture has no endpoints and never renders them, so resolving there would be
-	// pointless network work that also logs resolution failures for addresses the
-	// ruleset does not contain.
+	// Every posture here is a VPN posture, so Policy.Allowlist stays empty — a
+	// posture opens endpoints, not a physical dst-IP allowlist (that field is
+	// live only for `block --force`, which builds its Policy directly). Input
+	// construction is deferred into a closure because resolving endpoints does
+	// DNS: the error branches below must not pay for network work (and log
+	// resolution failures) for a ruleset that will never render.
 	vpnInput := func() firewall.PolicyInput {
 		return firewall.PolicyInput{
 			Tunnels:           tunnels,
@@ -1316,7 +1314,7 @@ func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.
 func cmdPrintRules(args []string) int {
 	fs := flag.NewFlagSet("print-rules", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
-	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, switch, or legacy")
+	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, or switch")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)

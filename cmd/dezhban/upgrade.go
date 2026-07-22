@@ -1,5 +1,5 @@
 // dezhban upgrade: check/download/apply against a GitHub release. See
-// docs/upgrade.md and internal/update for the design; this file is the CLI
+// docs/usage/upgrade.md and internal/update for the design; this file is the CLI
 // orchestration layer — root-gating, staging paths, the installer(8) call,
 // and the stash/activate/health-check/rollback sequence around it. The
 // verification, gate, and file-shuffling logic itself lives in
@@ -42,7 +42,7 @@ upgrade path — this repo does not reimplement apt/dnf/winget). "upgrade check"
 still works everywhere and is what the GUI polls in user context; the root
 daemon itself never makes this call (see CLAUDE.md's invariants).
 
-Applying is two separate steps on purpose (docs/upgrade.md): running the
+Applying is two separate steps on purpose (docs/usage/upgrade.md): running the
 .pkg's installer opens no gap at all — the current daemon keeps enforcing on
 its OLD inode while the new files land. Only ACTIVATING (the restart that
 actually runs the new binary) is the exposure, and it is gated: refused
@@ -111,7 +111,7 @@ func cmdUpgradeCheck(args []string) int {
 	if runtime.GOOS == "darwin" {
 		fmt.Println("  sudo dezhban upgrade download && sudo dezhban upgrade apply")
 	} else {
-		fmt.Println("  self-upgrade isn't available on this OS — see docs/upgrade.md for the update path")
+		fmt.Println("  self-upgrade isn't available on this OS — see docs/usage/upgrade.md for the update path")
 	}
 	return 0
 }
@@ -122,7 +122,7 @@ func cmdUpgradeDownload(args []string) int {
 	_ = fs.Parse(args)
 
 	if runtime.GOOS != "darwin" {
-		fmt.Fprintln(os.Stderr, "upgrade download: self-upgrade is macOS-only — see docs/upgrade.md")
+		fmt.Fprintln(os.Stderr, "upgrade download: self-upgrade is macOS-only — see docs/usage/upgrade.md")
 		return 1
 	}
 	// Root, not just "download": the staging directory lives under
@@ -177,7 +177,7 @@ func cmdUpgradeApply(args []string) int {
 	_ = fs.Parse(args)
 
 	if runtime.GOOS != "darwin" {
-		fmt.Fprintln(os.Stderr, "upgrade apply: self-upgrade is macOS-only — see docs/upgrade.md")
+		fmt.Fprintln(os.Stderr, "upgrade apply: self-upgrade is macOS-only — see docs/usage/upgrade.md")
 		return 1
 	}
 	if !requireRoot("upgrade apply") {
@@ -233,7 +233,7 @@ func cmdUpgradeApply(args []string) int {
 			fmt.Fprintln(os.Stderr, "               of it. finish that upgrade first — activate it with:")
 			fmt.Fprintln(os.Stderr, "                 sudo dezhban restart")
 			fmt.Fprintln(os.Stderr, "               once the new version is running, this command clears the stash for you.")
-			fmt.Fprintln(os.Stderr, "               to abandon it instead, see docs/upgrade.md for restoring from it by hand.")
+			fmt.Fprintln(os.Stderr, "               to abandon it instead, see docs/usage/upgrade.md for restoring from it by hand.")
 			return 1
 		case update.StashUnknown:
 			fmt.Fprintln(os.Stderr, "upgrade apply: a rollback stash from a previous upgrade is present at", stashDir)
@@ -243,7 +243,7 @@ func cmdUpgradeApply(args []string) int {
 			fmt.Fprintln(os.Stderr, "               confirm which version is running ('dezhban status'), and if it is the one you")
 			fmt.Fprintln(os.Stderr, "               want, discard the stash and retry:")
 			fmt.Fprintln(os.Stderr, "                 sudo rm -rf", stashDir)
-			fmt.Fprintln(os.Stderr, "               otherwise see docs/upgrade.md for restoring from it by hand.")
+			fmt.Fprintln(os.Stderr, "               otherwise see docs/usage/upgrade.md for restoring from it by hand.")
 			return 1
 		}
 		fmt.Println("a rollback stash from a previous upgrade is present but obsolete — the running daemon is already")

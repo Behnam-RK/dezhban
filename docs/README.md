@@ -5,7 +5,7 @@ Detailed docs are grouped by who they're for:
 
 ```
 docs/
-├── usage/          end-user + operator — install it, configure it, run it, fix it
+├── usage/        end-user + operator — install it, configure it, run it, fix it
 ├── concepts/     the mental model — how the machine thinks, in one canonical place
 ├── contribute/   contributor + maintainer — build, test, release
 └── adr/          the *why* behind hard-to-reverse decisions

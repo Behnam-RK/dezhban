@@ -64,7 +64,17 @@ current as you land changes.
   (`backend.go`, `policyset.go`, the three per-OS renderers): the code path
   they describe is live — it's what `block --force` renders — not a leftover
   of the country-blocklist model ADR-0001 removed. One dead `docs/plans`
-  reference in `backend.go` is also fixed.
+  reference in `backend.go` is also fixed. The same sweep now covers
+  `cmd/dezhban/main.go`, whose comments still called the watcher's job "the
+  legacy kill switch" and described `print-rules` populating a legacy
+  allowlist it no longer builds.
+- `print-rules --mode` help text still offered `legacy` alongside the live
+  modes; it now lists `guard, fullblock, or switch` — matching what the
+  command actually accepts and what the completions suggest.
+- Every `docs/*.md` path cited from Go/Swift source and shell scripts now
+  points at the reorganized hierarchy — including the user-visible ones:
+  the paths `dezhban upgrade` prints in its guidance and the one shown in
+  the app's **About → Updates** pane.
 - **`dezhban config set vpn.switchWindow 0` now disables manual switch windows**
   instead of being silently coerced back to the 5s default by `Normalize` — the
   same explicit-opt-out sentinel `vpn.reconnectWindow` already used. `config get`

@@ -3,7 +3,7 @@
 # prints the finished formula on stdout. Not run by CI or any task — this repo
 # does not own or push to the tap; a human copies the output into
 # Formula/dezhban.rb in a SEPARATE behnam-rk/homebrew-tap repository (which
-# does not exist yet — see docs/install.md).
+# does not exist yet — see docs/usage/install.md).
 #
 #   bash scripts/gen-homebrew-formula.sh 0.5.0 > dezhban.rb
 set -euo pipefail

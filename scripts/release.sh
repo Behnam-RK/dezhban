@@ -248,7 +248,7 @@ cmd_check_rolled() {
 #
 # The macOS artifacts are unsigned, so a plain double-click is blocked by
 # Gatekeeper. Put the working install line IN the release the user just
-# downloaded rather than only in docs/releasing.md.
+# downloaded rather than only in docs/contribute/releasing.md.
 cmd_notes() {
 	local version="${1:?notes: need a version}" kind="${2:-final}"
 
@@ -278,7 +278,7 @@ cmd_notes() {
 
 		Then configure it: \`sudo dezhban setup\`, and start it: \`sudo dezhban start\`.
 		The installer registers the service but deliberately does **not** arm the
-		kill switch. See [docs/releasing.md](docs/releasing.md).
+		kill switch. See [docs/contribute/releasing.md](docs/contribute/releasing.md).
 	EOF
 }
 
