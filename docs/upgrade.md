@@ -120,14 +120,46 @@ the old one is still running, so the rollback copy is still live and must be
 kept. The documented next step there is `sudo dezhban restart` — which
 activates the new version but knows nothing about the stash and does not
 clear it. So after a deferred upgrade you are expected to find
-`/var/db/dezhban/upgrade-stash/` still present, and the next `upgrade apply`
-will refuse until it is dealt with.
+`/var/db/dezhban/upgrade-stash/` still present.
 
-Either way the resolution is the same, and `upgrade apply` prints it: confirm
-which version is actually running (`dezhban version`). If it is the one you
-want, discard the stash with `sudo rm -rf /var/db/dezhban/upgrade-stash` and
-retry. If it is not — something interrupted an attempt before it could
-resolve either way — finish restoring from the stash by hand first.
+The next `upgrade apply` no longer has to be told what to do about that by
+hand. It asks the evidence directly — `dezhban version` on the stashed
+binary, versus the version the **running daemon** reports — and classifies
+(`update.ClassifyStash`):
+
+- **Stashed version older than the running one**: the daemon is executing
+  something newer than the stash holds, which is only possible if an
+  activation landed since that stash was made. It has served its purpose;
+  `upgrade apply` clears it automatically and continues.
+- **Stashed version equal to the running one**: the daemon is still executing
+  the very version the stash holds, so activation has not happened — the
+  ordinary deferred-upgrade case above. `upgrade apply` refuses and points at
+  `sudo dezhban restart`; once that lands, the rule above clears the stash on
+  the next apply, with no manual step.
+- **Anything else** (either version unparseable, no running daemon to ask, a
+  daemon too old to report a version, or — should never happen — the stash
+  reporting a *newer* version than what runs): refuses rather than guess, for
+  the same reason `decision.Evaluate` never escalates on an undeterminable
+  reading.
+
+> **Why the running version and not the installed one.** These are different
+> facts, and confusing them is a data-loss bug rather than a cosmetic one.
+> Phase 1 writes the new binary to `/usr/local/bin/dezhban` while the daemon
+> keeps enforcing on its old inode — that is the entire reason applying is
+> split in two. So for the whole deferred-activation window, *disk already
+> reads new while the process is still old*. Classified against disk, the
+> live rollback copy looks strictly older and would be deleted as "obsolete",
+> destroying the last known-good build and leaving a never-yet-run version as
+> the rollback target. Only the daemon knows what it is executing, which is
+> why it publishes it as `version` in the state file (`state.Snapshot`), and
+> why an absent one is treated as unknown rather than assumed.
+
+When it does refuse, confirm which version is actually running (`dezhban
+status`, which reads the daemon's own snapshot — not `dezhban version`, which
+reports the binary you just invoked). If it is the one you want, discard the
+stash with `sudo rm -rf /var/db/dezhban/upgrade-stash` and retry. If it is
+not — something interrupted an attempt before it could resolve either way —
+finish restoring from the stash by hand first.
 
 ## Config, preferences, and everything else that must survive
 

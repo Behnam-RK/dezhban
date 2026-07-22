@@ -89,6 +89,71 @@ func HasStash(dir string) bool {
 	return err == nil && len(entries) > 0
 }
 
+// StashVerdict classifies a leftover rollback stash against the version
+// actually RUNNING, so `upgrade apply`'s HasStash guard (cmd/dezhban) can
+// tell "a previous upgrade already activated and this is just unswept disk"
+// from "activation is still deferred and this copy is still needed" — see
+// docs/upgrade.md's "If the restart doesn't come back healthy" section.
+//
+// The comparison is against the running version and not the binary on disk,
+// and that distinction is the whole correctness argument. Applying is two
+// phases (docs/upgrade.md): phase 1 writes the new binary to disk while the
+// daemon keeps enforcing on its old inode. So between a deferred activation
+// and the operator's `sudo dezhban restart`, disk reads NEW while the process
+// is still OLD. Classifying against disk in that window would call the live
+// rollback copy obsolete and delete the last known-good build. Only the
+// daemon can report what it is executing, which is why state.Snapshot carries
+// a Version field at all.
+//
+// Pure and filesystem-free on purpose, matching this file's existing split
+// with cmd/dezhban: the decision belongs here, where it is unit-testable
+// without root or a real service; obtaining stashedVersion (exec the stashed
+// binary) and runningVersion (read the published snapshot) lives in cmd/.
+type StashVerdict int
+
+const (
+	// StashUnknown means the two versions could not be compared with
+	// confidence: a dev build on either side, an unparseable or empty version
+	// string (a stopped daemon, or one predating state.Snapshot.Version), or
+	// the stash reporting a NEWER version than what's running (which should
+	// never happen in practice and is refused rather than guessed at).
+	// Callers must refuse — the same "an undeterminable reading holds, never
+	// escalates" rule CLAUDE.md documents for decision.Evaluate.
+	StashUnknown StashVerdict = iota
+	// StashPending means the stashed version equals what's running: the
+	// payload may be on disk, but the daemon is still executing the very
+	// version this stash holds, so activation hasn't happened yet. The stash
+	// is still the only rollback copy — refuse.
+	StashPending
+	// StashObsolete means the stash is OLDER than what's running: the daemon
+	// is executing a version newer than the one stashed, which can only be
+	// true if an activation landed since this stash was made. It has outlived
+	// its purpose and is safe to clear.
+	StashObsolete
+)
+
+// ClassifyStash compares a stashed binary's version against the version of
+// the daemon currently running. Both arguments are bare version strings as
+// normalizeVersion expects (a leading "v" is fine; callers are responsible
+// for stripping any other prefix — e.g. the "dezhban " that `dezhban
+// version`'s output carries — before calling this). See StashVerdict for
+// what each outcome means and what callers must do with it.
+func ClassifyStash(stashedVersion, runningVersion string) StashVerdict {
+	stashed := normalizeVersion(stashedVersion)
+	running := normalizeVersion(runningVersion)
+	if stashed == "" || running == "" {
+		return StashUnknown
+	}
+	switch {
+	case semverLess(stashed, running):
+		return StashObsolete
+	case stashed == running:
+		return StashPending
+	default: // stashed > running — should never happen; refuse rather than guess
+		return StashUnknown
+	}
+}
+
 func copyFile(src, dst string, mode fs.FileMode) error {
 	in, err := os.Open(src)
 	if err != nil {

@@ -427,6 +427,13 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 	// at debug and never affects enforcement.
 	statePath := defaultStatePath()
 	publish := func(s state.Snapshot) {
+		// Stamp the running version here rather than in runner: this closure is
+		// the single choke point every snapshot passes through (including the
+		// terminal publishStopped one), and the build identity belongs to the
+		// binary, not to the enforcement loop. `upgrade apply` reads it back to
+		// tell a still-pending activation from one that already landed — see
+		// state.Snapshot.Version.
+		s.Version = buildStamp.Version
 		if err := state.Write(statePath, s); err != nil {
 			log.Debug("state publish failed", "path", statePath, "err", err)
 		}

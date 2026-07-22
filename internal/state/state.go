@@ -29,12 +29,23 @@ type Tunnel struct {
 // lowerCamelCase and stable. Time marshals as RFC3339 (Go's default), which the
 // Swift client decodes with an ISO-8601 strategy.
 type Snapshot struct {
-	Time        time.Time `json:"time"`
-	Posture     string    `json:"posture"`      // "guard" | "full-block" | "switch-window" | "standby" | "stopped"
-	Blocked     bool      `json:"blocked"`      // egress currently cut
-	IP          string    `json:"ip,omitempty"` // last observed public IP
-	CountryCode string    `json:"countryCode,omitempty"`
-	Provider    string    `json:"provider,omitempty"` // geo provider of the last reading
+	Time    time.Time `json:"time"`
+	Posture string    `json:"posture"` // "guard" | "full-block" | "switch-window" | "standby" | "stopped"
+	// Version is the build version of the daemon process that wrote this
+	// snapshot ("v0.5.0", or a dev-build string). It answers a question no
+	// other surface can: WHICH version is actually running. The binary on
+	// disk is not that answer — `upgrade apply` replaces /usr/local/bin/dezhban
+	// while the daemon keeps running on its old inode, by design, so disk and
+	// process disagree for the whole deferred-activation window. Written by
+	// whoever supplies runner.Options.Publish (cmd/dezhban stamps it there,
+	// the one choke point every snapshot passes through, including the
+	// terminal publishStopped one). Empty from a daemon older than this field
+	// — consumers must treat "" as unknown, never as a version.
+	Version     string `json:"version,omitempty"`
+	Blocked     bool   `json:"blocked"`      // egress currently cut
+	IP          string `json:"ip,omitempty"` // last observed public IP
+	CountryCode string `json:"countryCode,omitempty"`
+	Provider    string `json:"provider,omitempty"` // geo provider of the last reading
 	// LookupErr is a GENUINE exit-country lookup failure: a tunnel was up, so
 	// there was an exit to measure, and measuring it did not work — the exit may
 	// be censoring the geo providers (an Iranian exit blocking them looks exactly

@@ -123,6 +123,21 @@ func TestChecksumFor(t *testing.T) {
 	}
 }
 
+// TestChecksumForBinaryModeAndSpaces pins the fix for two cases the previous
+// len(fields)==2 approach silently rejected: sha256sum's BINARY-mode line
+// format ("<hash> *<name>", one space and a leading asterisk, vs. text
+// mode's two plain spaces), and a name containing a space (which
+// strings.Fields would have split into 3+ fields, never matching).
+func TestChecksumForBinaryModeAndSpaces(t *testing.T) {
+	sums := []byte("cccc *binary-mode-file\ndddd  a name with spaces.pkg\n")
+	if got, err := checksumFor(sums, "binary-mode-file"); err != nil || got != "cccc" {
+		t.Errorf("checksumFor(binary-mode) = %q, %v, want \"cccc\", nil", got, err)
+	}
+	if got, err := checksumFor(sums, "a name with spaces.pkg"); err != nil || got != "dddd" {
+		t.Errorf("checksumFor(name with spaces) = %q, %v, want \"dddd\", nil", got, err)
+	}
+}
+
 // shaHex is a tiny test helper mirroring sha256File but over an in-memory
 // byte slice, so fixtures don't need to round-trip through a temp file just
 // to compute the digest they're about to serve.
@@ -137,4 +152,31 @@ func shaHex(b []byte) (string, error) {
 		return "", err
 	}
 	return sha256File(f.Name())
+}
+
+// TestChecksumForLeadingAsteriskName pins that exactly ONE byte of separator
+// is consumed, never a character of the name. A name legitimately starting
+// with "*" must survive a text-mode line ("<hash>  *name", two spaces) — a
+// looser TrimLeft/TrimPrefix over the remainder would eat the name's own
+// asterisk and silently fail to match.
+func TestChecksumForLeadingAsteriskName(t *testing.T) {
+	sums := []byte("aaaa  *literal-star.pkg\nbbbb **binary-mode-star.pkg\n")
+	if got, err := checksumFor(sums, "*literal-star.pkg"); err != nil || got != "aaaa" {
+		t.Errorf("checksumFor(text-mode, *-leading name) = %q, %v, want \"aaaa\", nil", got, err)
+	}
+	if got, err := checksumFor(sums, "*binary-mode-star.pkg"); err != nil || got != "bbbb" {
+		t.Errorf("checksumFor(binary-mode, *-leading name) = %q, %v, want \"bbbb\", nil", got, err)
+	}
+}
+
+// TestChecksumForNoMatchErrors is the Go half of the invariant
+// scripts/install.sh's verify() enforces with its own emptiness check: a name
+// with no entry must be a hard ERROR, never a quiet pass. (GNU sha256sum -c
+// exits 0 on empty input, which is how the shell path could have verified
+// nothing and called it success.)
+func TestChecksumForNoMatchErrors(t *testing.T) {
+	sums := []byte("aaaa  something-else.pkg\n")
+	if got, err := checksumFor(sums, "dezhban-v1.2.3.pkg"); err == nil {
+		t.Errorf("checksumFor(absent name) = %q, nil — want an error, not a silent pass", got)
+	}
 }

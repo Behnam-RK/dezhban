@@ -32,6 +32,7 @@ something to describe — they are absent in STANDBY, before any tunnel is known
 {
   "time": "2026-07-01T12:00:00Z",
   "posture": "guard",                   // guard | full-block | switch-window | standby | stopped
+  "version": "v0.5.0",                  // build version of the daemon process that wrote this
   "blocked": false,                     // egress currently cut
   "ip": "203.0.113.45",
   "countryCode": "US",
@@ -65,6 +66,16 @@ where there genuinely was an exit to measure — which may mean the exit itself 
 censoring the geo providers. Observers should render `exitUnknown` as a state and
 `lookupErr` as a problem; showing both alike is what made the providers look
 broken during every window.
+
+`version` is the build version of the daemon **process** that wrote the
+snapshot, and it is the only surface that reports what is actually running.
+The binary at `/usr/local/bin/dezhban` is a different fact: `upgrade apply`
+replaces it while the daemon keeps enforcing on its old inode, so disk and
+process legitimately disagree for the whole window between applying an upgrade
+and activating it (see [upgrade.md](upgrade.md)). `upgrade apply` reads this
+field to tell a still-pending activation from one that already landed. Omitted
+by daemons predating the field — consumers must treat an absent `version` as
+unknown, never as a version.
 
 `enforcementErr` is distinct from both: a geo-lookup failure holds the current
 posture, but a non-empty `enforcementErr` means the daemon **tried to
