@@ -369,7 +369,10 @@ jobs:
           cd dist
           for f in dezhban-darwin-arm64 dezhban-darwin-amd64 dezhban-linux-amd64 dezhban-linux-arm64; do
             os_arch="${f#dezhban-}"
-            stage="dezhban-$os_arch"
+            # NOT "dezhban-$os_arch" — that reconstructs $f exactly, and mkdir on
+            # an existing regular file fails. The staging dir must not collide
+            # with the binary it stages.
+            stage="stage-$os_arch"
             mkdir -p "$stage"
             cp "$f" "$stage/dezhban"
             cp ../LICENSE ../README.md "$stage/"
