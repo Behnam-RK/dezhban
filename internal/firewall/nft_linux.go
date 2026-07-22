@@ -34,7 +34,7 @@ func New() (FirewallBackend, error) {
 	return &nftBackend{}, nil
 }
 
-// Block is the legacy direct-connection entry point: a full block whose only
+// Block is the `block --force` entry point: a full block whose only
 // exceptions are loopback and the dst-IP allowlist. It is Apply with
 // ModeFullBlock and no tunnel interfaces.
 func (b *nftBackend) Block(a Allowlist) error {
@@ -106,8 +106,8 @@ func (b *nftBackend) Cleanup() error {
 //   - ModeGuard: accept egress on the tunnel interface(s) and the handshake to
 //     the VPN endpoint(s); everything else is dropped by the chain's default
 //     policy, so a tunnel drop cuts traffic with no physical leak.
-//   - ModeFullBlock, direct (no tunnel ifaces): accept the dst-IP DNS + geo-API
-//     allowlist — the legacy model, valid only off-VPN.
+//   - ModeFullBlock, no VPN context (no tunnel ifaces): accept the dst-IP DNS +
+//     geo-API allowlist — what `block --force` renders.
 //   - ModeFullBlock, VPN (tunnel ifaces present): drop the tunnel-iface accept
 //     so no user traffic leaks to a forbidden exit, but KEEP the endpoint
 //     accepts open so the encrypted handshake reaches the server and the tunnel
@@ -176,7 +176,7 @@ func renderNftRuleset(p Policy) string {
 			emitTunnelProviders(rule, p)
 			emitAllowPhysicalDNS(rule, p)
 		} else {
-			// Legacy direct model: dst-IP allowlist over udp and tcp port 53.
+			// `block --force` (no VPN context): dst-IP allowlist over udp and tcp port 53.
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "udp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.DNS, "tcp dport 53")
 			emitDaddrAccepts(rule, p.Allowlist.Hosts, "")

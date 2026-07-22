@@ -40,7 +40,7 @@ func cmdCompletion(args []string) int {
 
 // completionCommands is the subcommand list the scripts offer. Kept next to the
 // scripts so it is obvious to update when a command is added.
-const completionCommands = "run block unblock status validate monitor print-rules doctor panic install uninstall start stop restart detect-vpn setup config completion version help"
+const completionCommands = "run block unblock status validate monitor print-rules doctor panic install uninstall start stop restart detect-vpn switch pause resume vpn setup config completion upgrade version help"
 
 const bashCompletion = `# dezhban bash completion
 _dezhban() {
@@ -50,7 +50,7 @@ _dezhban() {
         prev="${COMP_WORDS[COMP_CWORD-1]}"
     }
     case "$prev" in
-        --mode) COMPREPLY=( $(compgen -W "guard fullblock switch legacy" -- "$cur") ); return ;;
+        --mode) COMPREPLY=( $(compgen -W "guard fullblock switch" -- "$cur") ); return ;;
         --config) COMPREPLY=( $(compgen -f -- "$cur") ); return ;;
         completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;
         config) COMPREPLY=( $(compgen -W "path show get set edit" -- "$cur") ); return ;;
@@ -60,7 +60,7 @@ _dezhban() {
         return
     fi
     case "$cur" in
-        -*) COMPREPLY=( $(compgen -W "--config --mode --force --guard --dry-run --once --json --discover --simulate-country --verbose -v" -- "$cur") ) ;;
+        -*) COMPREPLY=( $(compgen -W "--config --mode --force --guard --dry-run --once --json --discover --simulate-country --verbose -v --no-sudo --no-daemon" -- "$cur") ) ;;
     esac
 }
 complete -F _dezhban dezhban
@@ -76,12 +76,12 @@ _dezhban() {
         return
     fi
     case "${words[CURRENT-1]}" in
-        --mode) compadd -- guard fullblock switch legacy; return ;;
+        --mode) compadd -- guard fullblock switch; return ;;
         --config) _files; return ;;
         completion) compadd -- bash zsh fish; return ;;
         config) compadd -- path show get set edit; return ;;
     esac
-    compadd -- --config --mode --force --guard --dry-run --once --json --discover --simulate-country --verbose
+    compadd -- --config --mode --force --guard --dry-run --once --json --discover --simulate-country --verbose --no-sudo --no-daemon
 }
 compdef _dezhban dezhban
 `
@@ -91,7 +91,7 @@ complete -c dezhban -f
 # subcommands (only as the first argument)
 complete -c dezhban -n '__fish_use_subcommand' -a '` + completionCommands + `'
 # flag values
-complete -c dezhban -l mode -x -a 'guard fullblock switch legacy'
+complete -c dezhban -l mode -x -a 'guard fullblock switch'
 complete -c dezhban -l config -r
 complete -c dezhban -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 complete -c dezhban -n '__fish_seen_subcommand_from config' -a 'path show get set edit'
@@ -104,4 +104,6 @@ complete -c dezhban -l json
 complete -c dezhban -l discover
 complete -c dezhban -l simulate-country -x
 complete -c dezhban -s v -l verbose
+complete -c dezhban -l no-sudo
+complete -c dezhban -l no-daemon
 `

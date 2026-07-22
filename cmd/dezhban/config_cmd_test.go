@@ -208,3 +208,27 @@ func TestParseSetPairs(t *testing.T) {
 		}
 	}
 }
+
+// vpn.switchWindow "0" must disable rather than reset to default — the same
+// explicit-opt-out sentinel vpn.reconnectWindow already remaps. Before this
+// fix, `config set vpn.switchWindow 0` was silently coerced back to the 5s
+// default by Normalize, the exact bug class CLAUDE.md calls the worst this
+// tool can have: a security setting accepted, discarded, and never reported.
+func TestConfigSetSwitchWindowZeroDisables(t *testing.T) {
+	for _, key := range []string{"vpn.switchWindow", "vpn.reconnectWindow", "vpn.pauseMax"} {
+		t.Run(key, func(t *testing.T) {
+			cfg := config.Default()
+			field, ok := configFields[key]
+			if !ok {
+				t.Fatalf("no configField for %q", key)
+			}
+			if err := field.set(&cfg, "0"); err != nil {
+				t.Fatalf("set(%q, \"0\") errored: %v", key, err)
+			}
+			config.Normalize(&cfg)
+			if got := field.get(&cfg); got != "0s" {
+				t.Errorf("get(%q) after set 0 + Normalize = %q, want \"0s\" (disabled, not reset to default)", key, got)
+			}
+		})
+	}
+}

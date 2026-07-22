@@ -128,6 +128,19 @@ type Options struct {
 	// so it is a distinct switch from the socket itself: set it false to force switch
 	// ops back to the root-owned command file. Mirrors config control.allowSwitchOps.
 	AllowSwitchOps bool
+	// PauseMax caps a bounded operator pause (`dezhban pause` / the GUI's
+	// "Pause protection"): a deliberate, timed drop to the real ISP IP,
+	// sharing the switch-window machinery as a third trigger
+	// (state.TriggerPause) but with its own cap, never shared with
+	// SwitchWindowMax or ReconnectWindowMax. <=0 → pausing is off entirely
+	// (mirrors config.Disabled on vpn.pauseMax — there is no "fallback
+	// default" here the way ReconnectWindowMax has one, because an absent
+	// vpn.pauseMax is already filled to 30m by config.Normalize).
+	PauseMax time.Duration
+	// AllowPauseOps permits opening and ending a pause over the control socket
+	// (i.e. without root), independently of AllowSwitchOps. Mirrors config
+	// control.allowPauseOps.
+	AllowPauseOps bool
 	// ResolveEndpointsWith recomputes the endpoint set using an explicit live
 	// tunnel set for the tunnel-internal drop filter. nil → ResolveEndpoints /
 	// static fallback (the tunnel set is then ignored).
@@ -157,6 +170,25 @@ type Options struct {
 	// indistinguishable from the leak the kill switch exists for — so only an
 	// explicit unblock with the tunnel down returns to standby.
 	AutoArm bool
+	// ArmAtBoot (vpn.armAtBoot): arm the guard directly at startup even when no
+	// tunnel interface is present yet — provided TunnelEverUp is true and an
+	// endpoint is known — instead of entering the AutoArm standby above. This
+	// is what lets the network stay closed across a reboot rather than opening
+	// while the VPN client (which typically starts later than this daemon)
+	// has not yet brought its interface up. See docs/adr/0008-arm-at-boot.md.
+	ArmAtBoot bool
+	// TunnelEverUp is the persisted "a configured tunnel has been observed up
+	// at least once on this host" fact (internal/armed), loaded once by the
+	// caller before Run. It is the safety rail ArmAtBoot depends on: a fresh
+	// install, or a host whose VPN has never worked, still starts in STANDBY
+	// even with ArmAtBoot on — arming a guard that has never proven it can
+	// pass traffic would turn a misconfiguration into a permanent lockout,
+	// exactly the outcome ADR-0002 rejected as "Alternative 1".
+	TunnelEverUp bool
+	// MarkTunnelUp persists the TunnelEverUp fact (internal/armed) the first
+	// time a tunnel is observed up this run. nil → the fact is never recorded
+	// (tests / legacy callers); ArmAtBoot then has no effect on future boots.
+	MarkTunnelUp func(time.Time)
 	// ReconnectWindow (vpn.reconnectWindow): when >0, a tunnel-down edge from a
 	// healthy GUARD posture (not standby, not FULL BLOCK, no window already
 	// open) automatically opens a switch-window relaxation of this duration so
@@ -212,6 +244,14 @@ func postureName(blocked, window, standby bool) string {
 	default:
 		return "guard"
 	}
+}
+
+// shouldArmAtBoot decides whether vpn.armAtBoot should override an
+// AutoArm-computed standby=true into an armed start. Both conditions must
+// hold, or the ADR-0002 safety rail (a fresh install can never lock itself
+// out) is gone — see the call site in runGuard for the full rationale.
+func shouldArmAtBoot(armAtBoot, tunnelEverUp bool, endpointCount int) bool {
+	return armAtBoot && tunnelEverUp && endpointCount > 0
 }
 
 // anyTunnelUp reports whether at least one tunnel is currently up, i.e. whether
@@ -437,6 +477,24 @@ func (o Options) runGuard(ctx context.Context) error {
 			standby = len(present) == 0
 		}
 	}
+	// vpn.armAtBoot: override the live-probe standby above and arm directly,
+	// even with no tunnel interface present yet. This is the boot race
+	// ArmAtBoot exists for — dezhban is a launchd/systemd daemon and the VPN
+	// client typically starts later, so the live probe above finds nothing on
+	// every normal boot and, left alone, would open the network via the
+	// Backend.Unblock() below. Both conditions must hold or the ADR-0002
+	// safety rail (a fresh install can never lock itself out) is gone:
+	//   1. an endpoint is already known — arming with nothing to dial is a
+	//      permanent lockout, not a kill switch;
+	//   2. TunnelEverUp is true — a tunnel has proven, on this host, that it
+	//      can actually pass traffic. Without this, ArmAtBoot degenerates to
+	//      ADR-0002's rejected "Alternative 1" (fail closed until a VPN
+	//      exists), which turns first-run into a lockout event by design.
+	if standby && shouldArmAtBoot(o.ArmAtBoot, o.TunnelEverUp, len(endpoints)) {
+		standby = false
+		o.Log.Info("arming at boot (vpn.armAtBoot) — tunnel not observed yet, but this host has connected "+
+			"before and an endpoint is known; blocking until it reconnects", "endpoints", len(endpoints))
+	}
 	if len(endpoints) == 0 && !relaxed && !standby {
 		return errors.New("refusing to start: no usable vpn endpoints — set vpn.endpoints (IP or hostname), " +
 			"vpn.profiles, or enable vpn.autoDiscoverEndpoints/vpn.autodetect; a guard with no way to reach the " +
@@ -565,6 +623,20 @@ func (o Options) runGuard(ctx context.Context) error {
 		goodExitThisUp bool
 	)
 
+	// everUpRecorded mirrors o.TunnelEverUp but tracks whether THIS run has
+	// already written it, so a host that armed-at-boot from a prior
+	// observation never re-writes armed.json every run. markTunnelEverUp is
+	// called from every sawTunnelUp=true site below; only the first call per
+	// process actually persists anything.
+	everUpRecorded := o.TunnelEverUp
+	markTunnelEverUp := func(now time.Time) {
+		if everUpRecorded || o.MarkTunnelUp == nil {
+			return
+		}
+		everUpRecorded = true
+		o.MarkTunnelUp(now)
+	}
+
 	winInterval := o.WindowDiscoveryInterval
 	if winInterval <= 0 {
 		winInterval = 2 * time.Second
@@ -648,16 +720,35 @@ func (o Options) runGuard(ctx context.Context) error {
 	if autoWindowMax <= 0 {
 		autoWindowMax = 10 * time.Minute
 	}
+	// pauseWindowMax caps a THIRD, independently-gated relaxation (see
+	// Options.PauseMax's doc comment): a deliberate operator pause, sharing
+	// this same bounded-timer machinery but never sharing a cap with the
+	// other two triggers. pauseEnabled gates both control-socket ops and the
+	// command-poll cases below — a Disabled (<=0) PauseMax means pausing is
+	// off entirely, not "use some fallback duration".
+	pauseWindowMax := o.PauseMax
+	pauseEnabled := pauseWindowMax > 0 && o.PollCommand != nil
 	var windowMax time.Duration // set at first open; see openWindow
+
+	// windowNoun names the open episode in operator-facing logs by its trigger —
+	// a pause expiring must not read as a "switch window" closing.
+	windowNoun := func() string {
+		if windowTrigger == state.TriggerPause {
+			return "pause"
+		}
+		return "switch window"
+	}
 
 	openWindow := func(now time.Time, dur time.Duration, profile, trigger string) {
 		if windowActive {
 			// A manual command takes over an auto window's attribution (the
 			// operator is now driving); an auto trigger never fires while a window
-			// is open, so the reverse cannot happen. Attribution changes, but the
-			// episode's exposure cap (windowMax, fixed at first open) does not —
-			// taking over does not grant the longer auto budget to a manual window
-			// or vice versa.
+			// is open, so the reverse cannot happen, and a manual open is refused
+			// at every call site while a pause is open (a pause is ended by
+			// resume, never rebranded). Attribution changes, but the episode's
+			// exposure cap (windowMax, fixed at first open) does not — taking
+			// over does not grant the longer auto budget to a manual window or
+			// vice versa.
 			if trigger == state.TriggerManual {
 				windowTrigger = trigger
 			}
@@ -686,7 +777,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			}
 			windowTimer = time.NewTimer(remaining)
 			windowTimerC = windowTimer.C
-			o.Log.Info("switch window extended", "until", windowDeadline, "profile", windowProfile)
+			o.Log.Info(windowNoun()+" extended", "until", windowDeadline, "profile", windowProfile)
 			snapshot()
 			return
 		}
@@ -701,9 +792,12 @@ func (o Options) runGuard(ctx context.Context) error {
 		windowStart = now
 		windowProfile = profile
 		windowTrigger = trigger
-		if trigger == state.TriggerAuto {
+		switch trigger {
+		case state.TriggerAuto:
 			windowMax = autoWindowMax
-		} else {
+		case state.TriggerPause:
+			windowMax = pauseWindowMax
+		default:
 			windowMax = manualWindowMax
 		}
 		windowDeadline = now.Add(dur)
@@ -716,10 +810,14 @@ func (o Options) runGuard(ctx context.Context) error {
 		if o.windowRestricted() {
 			relaxation = "egress relaxed to configured protocols/ports"
 		}
-		if trigger == state.TriggerAuto {
+		switch trigger {
+		case state.TriggerAuto:
 			o.Log.Warn("RECONNECT WINDOW OPEN — "+relaxation+"; tunnel dropped, redial any VPN now (real IP may be exposed until it closes)",
 				"until", windowDeadline)
-		} else {
+		case state.TriggerPause:
+			o.Log.Warn("PAUSED — "+relaxation+"; protection resumes automatically at the deadline (real IP is exposed until then)",
+				"until", windowDeadline)
+		default:
 			o.Log.Warn("SWITCH WINDOW OPEN — "+relaxation+"; connect your VPN now (real IP may be exposed until it closes)",
 				"until", windowDeadline, "profile", profile)
 		}
@@ -762,7 +860,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// machine — keep it active and re-arm a short retry so the daemon keeps
 			// trying to enforce the deadline instead of leaving egress relaxed.
 			enfErr = err
-			o.Log.Error("restore posture after switch window failed — holding window open, will retry",
+			o.Log.Error("restore posture after "+windowNoun()+" failed — holding window open, will retry",
 				"reason", reason, "err", err)
 			if windowTimer != nil {
 				windowTimer.Stop()
@@ -776,7 +874,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		windowActive = false
 		blocked = windowPrevBlocked
 		enfErr = nil
-		o.Log.Info("switch window closed", "reason", reason, "posture", postureName(blocked, false, standby))
+		o.Log.Info(windowNoun()+" closed", "reason", reason, "posture", postureName(blocked, false, standby))
 		snapshot()
 	}
 
@@ -875,7 +973,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			o.Learn(windowProfile, firstOr(tunnels), disc)
 			o.Log.Info("learned vpn endpoint(s) from switch window", "profile", windowProfile, "count", len(disc))
 		}
-		o.Log.Info("switch window closed early (exit verified)", "country", r.CountryCode, "tunnels", tunnels)
+		o.Log.Info(windowNoun()+" closed early (exit verified)", "country", r.CountryCode, "tunnels", tunnels)
 		snapshot()
 	}
 
@@ -1007,6 +1105,14 @@ func (o Options) runGuard(ctx context.Context) error {
 			if !switchEnabled {
 				return reply(false, "switch window unavailable (vpn.switchWindow not configured)")
 			}
+			if windowActive && windowTrigger == state.TriggerPause {
+				// openWindow's manual-takeover path would silently rebrand the
+				// pause as a switch window — after which resume no-ops ("already
+				// closed") while egress stays open. Symmetric with OpPause's
+				// refusal while a switch window is open: the two relaxations
+				// never stomp each other's attribution.
+				return reply(false, "a pause is open — resume it first")
+			}
 			openWindow(time.Now(), o.clampWindow(req.Duration), req.Profile, state.TriggerManual)
 			if !windowActive {
 				return reply(false, "open switch window failed")
@@ -1024,9 +1130,49 @@ func (o Options) runGuard(ctx context.Context) error {
 			if !windowActive {
 				return reply(true, "") // already closed — the caller's intent already holds
 			}
+			if windowTrigger == state.TriggerPause {
+				return reply(false, "a pause is open, not a switch window — use resume instead")
+			}
 			closeWindowRevert("cancelled (control socket)")
 			if windowActive {
 				return reply(false, "cancel failed — window held open, revert is being retried")
+			}
+			return reply(true, "")
+
+		case control.OpPause:
+			if standby {
+				// Nothing to relax: standby already has no rules, so there is
+				// nothing to pause.
+				return reply(false, "standby — egress is already open; nothing to pause")
+			}
+			if !o.AllowPauseOps {
+				return reply(false, "pause ops over the control socket are disabled (control.allowPauseOps)")
+			}
+			if !pauseEnabled {
+				return reply(false, "pause unavailable (vpn.pauseMax: \"0\" — disabled)")
+			}
+			if windowActive && windowTrigger != state.TriggerPause {
+				return reply(false, "a switch window is open — cancel it first")
+			}
+			openWindow(time.Now(), o.clampPause(req.Duration), "", state.TriggerPause)
+			if !windowActive {
+				return reply(false, "open pause failed")
+			}
+			// Mirrors OpOpenSwitch: an operator pausing is taking over from any
+			// manual block, and the window's own revert restores the posture.
+			manualBlock = false
+			return reply(true, "")
+
+		case control.OpResume:
+			if !o.AllowPauseOps {
+				return reply(false, "pause ops over the control socket are disabled (control.allowPauseOps)")
+			}
+			if !windowActive || windowTrigger != state.TriggerPause {
+				return reply(true, "") // already closed — the caller's intent already holds
+			}
+			closeWindowRevert("resumed (control socket)")
+			if windowActive {
+				return reply(false, "resume failed — pause held open, revert is being retried")
 			}
 			return reply(true, "")
 		}
@@ -1053,7 +1199,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	defer geoTick.Stop()
 
 	var cmdC <-chan time.Time
-	if switchEnabled {
+	if switchEnabled || pauseEnabled {
 		cmdInterval := o.CommandPoll
 		if cmdInterval <= 0 {
 			cmdInterval = time.Second
@@ -1079,6 +1225,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// never opens for a tunnel it never observed up.
 			if o.Watcher == nil {
 				sawTunnelUp = true
+				markTunnelEverUp(time.Now())
 			}
 		}
 	}
@@ -1105,6 +1252,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			tunnelUp = st.Up
 			if st.Up {
 				sawTunnelUp = true
+				markTunnelEverUp(time.Now())
 				if !wasUp {
 					tunnelUpSince = time.Now()
 					goodExitThisUp = false
@@ -1148,6 +1296,12 @@ func (o Options) runGuard(ctx context.Context) error {
 						"connect your VPN and the guard arms itself")
 					continue
 				}
+				if windowActive && windowTrigger == state.TriggerPause {
+					// Same rail as the socket path: a manual open must not
+					// rebrand an open pause via openWindow's takeover.
+					o.Log.Warn("ignoring switch-window command — a pause is open (resume it first)")
+					continue
+				}
 				dur := o.clampWindow(cmd.Duration)
 				if dur <= 0 {
 					// Unreachable while the command poll only ticks when
@@ -1158,8 +1312,36 @@ func (o Options) runGuard(ctx context.Context) error {
 				}
 				openWindow(now, dur, cmd.Profile, state.TriggerManual)
 			case command.OpCancelSwitchWindow:
+				if windowActive && windowTrigger == state.TriggerPause {
+					// Mirror the socket path's refusal: a pause is ended by
+					// resume, and the resume command-file op works for root.
+					o.Log.Warn("ignoring switch-cancel command — a pause is open (use resume)")
+					continue
+				}
 				if windowActive {
 					closeWindowRevert("cancelled")
+				}
+			case command.OpPause:
+				if standby {
+					o.Log.Info("ignoring pause command in standby — egress is already open; nothing to pause")
+					continue
+				}
+				if windowActive && windowTrigger != state.TriggerPause {
+					o.Log.Warn("ignoring pause command — a switch window is already open (cancel it first)")
+					continue
+				}
+				dur := o.clampPause(cmd.Duration)
+				if dur <= 0 {
+					// Unreachable while the command poll only ticks when pauseEnabled,
+					// but never open a pause the operator disabled.
+					o.Log.Warn("ignoring pause command — pausing is disabled (vpn.pauseMax: \"0\")")
+					continue
+				}
+				openWindow(now, dur, "", state.TriggerPause)
+				manualBlock = false
+			case command.OpResume:
+				if windowActive && windowTrigger == state.TriggerPause {
+					closeWindowRevert("resumed")
 				}
 			default:
 				o.Log.Debug("ignoring unsupported command", "op", cmd.Op)
@@ -1252,6 +1434,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
 			if lastRes.Err == nil && !blocked {
 				goodExitThisUp, sawTunnelUp = true, true // confirmed exit through the tunnel
+				markTunnelEverUp(time.Now())
 			}
 			snapshot()
 		}
@@ -1548,6 +1731,34 @@ func (o Options) clampWindow(req string) time.Duration {
 	}
 	if dur > max {
 		dur = max
+	}
+	return dur
+}
+
+// defaultPauseDuration is the fallback length of a pause request that names no
+// duration. Unlike the switch window, pausing has no separate config default —
+// vpn.pauseMax is the cap and the disable-gate; the requested duration always
+// comes from the caller (CLI flag / GUI preset).
+const defaultPauseDuration = 15 * time.Minute
+
+// clampPause parses a requested pause duration and caps it at PauseMax (no
+// floor). An empty/invalid request falls back to defaultPauseDuration. Returns
+// 0 when pausing is disabled (PauseMax <= 0) — callers (control-socket ops,
+// command-poll cases) are already gated on pauseEnabled, but failing closed
+// here means a future caller that skipped the gate can never turn "disabled"
+// into a real relaxation of the guard, whatever value req parses to.
+func (o Options) clampPause(req string) time.Duration {
+	if o.PauseMax <= 0 {
+		return 0
+	}
+	dur := defaultPauseDuration
+	if req != "" {
+		if d, err := time.ParseDuration(req); err == nil && d > 0 {
+			dur = d
+		}
+	}
+	if dur > o.PauseMax {
+		dur = o.PauseMax
 	}
 	return dur
 }

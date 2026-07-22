@@ -2,7 +2,7 @@
 
 Decisions whose **rationale** is expensive to reconstruct from the code.
 
-[architecture.md](../architecture.md) has a "Design decisions" table — that is the
+[architecture.md](../contribute/architecture.md) has a "Design decisions" table — that is the
 index of *what* was chosen. These records hold the *why*, the alternatives that were
 examined, and the specific reason each was rejected. Read them before reversing
 anything they describe: several record decisions that look wrong until you know the
@@ -12,13 +12,14 @@ New records use [template.md](template.md) and take the next free number.
 
 | # | Decision | Status |
 |---|---|---|
-| [0001](0001-single-guard-mode.md) | Collapse the two enforcement modes into one guard-only product | accepted, implementation pending |
-| [0002](0002-standby-no-tunnel-posture.md) | Standby is the resting posture when no tunnel exists | accepted, implementation pending |
+| [0001](0001-single-guard-mode.md) | Collapse the two enforcement modes into one guard-only product | accepted, implemented |
+| [0002](0002-standby-no-tunnel-posture.md) | Standby is the resting posture when no tunnel exists | accepted, implemented |
 | [0003](0003-biometric-token-over-existing-daemon.md) | Biometric-gated token over the existing daemon, not an SMAppService helper | accepted, implementation pending |
-| [0004](0004-switch-window-fully-disableable.md) | The switch window must be fully disableable | accepted, implementation pending |
-| [0005](0005-allow-local-network-by-default.md) | Local network access is allowed by default | accepted, implementation pending |
-| [0006](0006-geo-providers-tunnel-scoped.md) | Geo-provider passes are tunnel-scoped, never physical | accepted, implementation pending |
+| [0004](0004-switch-window-fully-disableable.md) | The switch window must be fully disableable | accepted, implemented |
+| [0005](0005-allow-local-network-by-default.md) | Local network access is allowed by default | accepted, implemented |
+| [0006](0006-geo-providers-tunnel-scoped.md) | Geo-provider passes are tunnel-scoped, never physical | accepted, implemented |
 | [0007](0007-upgrade-disclosed-window-not-holding-block.md) | `dezhban upgrade` discloses the activation window instead of holding a block through it | accepted, implemented |
+| [0008](0008-arm-at-boot.md) | Arm at boot from a persisted observation, plus a bounded pause | accepted, implemented |
 
 > **0006 is the one to read first if you are touching the geo lookup.** It records why
 > the obvious implementation silently defeats the exit-country check, and it exists
@@ -29,3 +30,9 @@ New records use [template.md](template.md) and take the next free number.
 > window — it records why that gap is disclosed rather than covered, and why
 > collapsing the two phases would quietly reopen the FULL BLOCK problem this
 > design exists to prevent.
+>
+> **0008 is the one to read before adding a fourth relaxation trigger** (or
+> before treating "the switch window is the only sanctioned relaxation" as
+> still literally true) — it records why pause was added as a *third*, and
+> why arming at boot needed the `TunnelEverUp` persistence rather than a
+> plain unconditional fail-closed start.

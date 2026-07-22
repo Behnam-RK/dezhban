@@ -4,112 +4,107 @@
 
 ![dezhban — system-wide network kill switch](gui/assets/png/banner-1280x640.png)
 
-A standalone, system-wide and cross-platform **network kill switch** written in Go, built for
-running behind full-tunnel VPNs. It enforces with an **always-on interface
-guard**: it lets traffic out only through the VPN tunnel, so the instant the
-tunnel drops it cuts egress **instantly**, and it full-blocks when the VPN exit
-switches to a forbidden country. On a drop it then opens a bounded, self-closing
-[reconnect window](docs/modes.md#automatic-reconnect-window) (default 30s) so
-your VPN can redial any server with zero interaction — set
-`vpn.reconnectWindow: "0"` for the strict zero-leak-window behavior instead.
+**dezhban makes sure your traffic can only leave this machine through your VPN.**
+If the VPN drops, your connection is cut instantly instead of silently falling
+back to your real IP. If the VPN reconnects somewhere you've told it to refuse,
+everything stops. On macOS it's a menubar app you click; everywhere else, and
+for anyone who prefers it, it's a CLI and background service.
 
-Before any tunnel has been seen — a fresh install, or a host whose VPN was
-removed — it rests in **standby**: no rules at all, the network fully open, and
-the UI saying plainly that it is not protecting. It arms itself the moment a VPN
-connects. The postures and what each one means are in
-[docs/modes.md](docs/modes.md); for the full story of what happens from launch to
-teardown, read [docs/how-it-works.md](docs/how-it-works.md).
+```
+  [ your machine ] --- VPN tunnel up ---> [ the internet ]
+
+      VPN drops: nothing to react to, the standing rule
+      already blocks every non-tunnel path
+              |
+              v
+  [ egress cut, instantly ]   (a plain kill switch would leak right here)
+```
 
 > [!WARNING]
-> dezhban deliberately cuts network access. A bad allowlist, a wrong VPN endpoint,
-> a crash before teardown, or running it over a remote session can **lock you out
-> of your own machine**. Read [docs/safety.md](docs/safety.md) before running
-> `block` for real. The escape hatch is `sudo dezhban panic`.
+> dezhban deliberately cuts network access. A wrong VPN endpoint, a crash before
+> teardown, or running it over a remote session can **lock you out of your own
+> machine**. The escape hatch is the menubar app's **Panic** button, or
+> `sudo dezhban panic` from a terminal — either works with no daemon running.
+> Read [docs/usage/getting-started.md](docs/usage/getting-started.md) before arming
+> it for real.
 
-## Install
+## Platform support
 
-### macOS and Linux — one line (recommended)
+| | macOS | Linux | Windows |
+|---|---|---|---|
+| App | Menubar + window | — | — |
+| CLI | ✅ | ✅ | ✅ (experimental) |
+| Enforcement backend | `pfctl` | `nft` | WFP |
+
+Windows is an early target: `go vet` gates it in CI, but the control socket's
+whole authorization model is unix permissions, which Windows has no equivalent
+of yet, so there's no passwordless path there today. Use the CLI, and expect
+rough edges.
+
+## Install (macOS)
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
 ```
 
-This installs the CLI (`/usr/local/bin/dezhban`), the menubar app on macOS
-(`/Applications/Dezhban.app`), and registers the background service —
-**asking for your password exactly once**, and verifying the download's
-checksum before installing anything. It works with **zero Gatekeeper
-friction** on macOS: `curl` deliberately doesn't set `com.apple.quarantine` on
-what it downloads (that's documented Apple behavior, not a workaround — see
-[docs/install.md](docs/install.md) for why there's no signed `.pkg` instead).
+Then open **Dezhban** from Applications (or Spotlight). That's the only
+terminal step, ever — not because the app can't be double-clicked, but because
+there's no Apple Developer certificate to sign it with yet, so Gatekeeper would
+otherwise block it. `curl` genuinely doesn't trip that check (it's documented
+Apple behavior, not a workaround), so this line installs the app with **zero
+Gatekeeper friction** and asks for your password exactly once. Details, the
+`.pkg` alternative, and Linux/Windows installers:
+[docs/usage/install.md](docs/usage/install.md).
 
-After that, the everyday operations (**block**, **unblock**, **switching VPNs**)
-never ask again: the background service performs them for you over a local control
-socket. See [docs/config.md](docs/config.md#control-block) for the security model
-and how to tighten it.
+## Using the app
 
-The installer does **not** start enforcement — a kill switch configured by guesswork
-is how you get locked out of your own machine. Two steps to finish:
+Open the app and everything else happens by clicking:
 
-```sh
-sudo dezhban setup     # choose your settings
-sudo dezhban start     # arm it
-```
+- **Menubar dropdown** — the safety core. One glance tells you the posture
+  (e.g. "Guard — NL via Mullvad"); **Block now** / **Unblock**, the VPN switch
+  window with a live countdown, and **Panic**. These never require the main
+  window to be open.
+- **Overview** — live status, the daily controls, and guided recovery: if the
+  service isn't installed or is stopped, there's an inline button for exactly
+  that, not an error message.
+- **Settings** — a full config editor: VPN tunnel/endpoints, autodetection,
+  blocked countries, both windows' durations, local-network access, start at
+  boot, launch at login. One confirmation per batch of changes, not one per
+  field.
+- **Logs & Diagnostics** — read-only `doctor`, recent logs, a live log stream.
+- Privileged actions (install, start/stop, panic) prompt with **Touch ID** where
+  available; routine block/unblock/switch need no prompt at all.
 
-To remove everything: `sudo sh /usr/local/share/dezhban/uninstall.sh`.
+A GUI user never needs a terminal again — including for upgrades, which the app
+checks for and applies in place.
 
-### Windows
+## Headless / CLI
 
-```powershell
-irm https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.ps1 | iex
-```
-
-Run from an elevated (Administrator) PowerShell. Same checksum verification,
-same "registers but doesn't start enforcement" behavior.
-
-### Other ways to install
-
-All of these, plus checksum/signature verification details, are covered in
-[docs/install.md](docs/install.md):
-
-- **The `.pkg`** — download from the [Releases page](https://github.com/Behnam-RK/dezhban/releases)
-  and `sudo installer -pkg dezhban-<version>.pkg -target /` (it's unsigned, so a
-  double-click is blocked by Gatekeeper — see docs/install.md for why).
-- **`.deb`/`.rpm`** — also on the Releases page, for a package-manager-tracked
-  install (`dpkg -i` / `rpm -i`).
-- **Bare binaries** — `dezhban-<os>-<arch>` on the Releases page, for anyone
-  scripting their own install.
-
-Once installed, keep it current with `sudo dezhban upgrade check` (macOS also
-gets `upgrade download`/`upgrade apply` — see [docs/upgrade.md](docs/upgrade.md)).
-
-See [docs/releasing.md](docs/releasing.md) for how releases are cut.
-
-## Quick start
-
-Requires Go 1.26+.
+Linux, servers, and anyone who prefers a terminal on any OS:
 
 ```sh
-task build                        # host build → ./dezhban (go-task; or: go build ./cmd/dezhban)
-
 sudo dezhban setup                # interactive wizard — build the config, no JSON by hand
-dezhban validate                  # confirm it (--config is optional; see docs/config.md)
+dezhban validate                  # confirm it (--config is optional)
 dezhban monitor                   # live IP/country/tunnel/verdict, no firewall touched
 
 sudo dezhban run                  # run the daemon (root; drives the firewall)
 sudo dezhban panic                # always-available teardown, no daemon needed
 ```
 
-Want the guided version, with the "will this lock me out?" checks explained?
-See [docs/quick-start.md](docs/quick-start.md).
-
-`--config` is optional — dezhban resolves it from `$DEZHBAN_CONFIG` or the system
-path (`dezhban config path`). Tab-completion: `source <(dezhban completion zsh)`.
-The binary can also install itself as a boot-persistent service and ships an
-optional macOS app (menubar + main window). Full command reference: [docs/usage.md](docs/usage.md).
+Full walkthrough: [docs/usage/getting-started.md](docs/usage/getting-started.md).
+Complete command reference: [docs/usage/cli.md](docs/usage/cli.md). Tab-completion:
+`source <(dezhban completion zsh)`.
 
 ## Postures at a glance
 
-There is one enforcement model — the guard. What changes is the posture:
+One enforcement model — the guard. What changes is the posture:
+
+```
+  STANDBY  --arm-->  GUARD  <==>  FULL BLOCK   (blocked / allowed country)
+                        |
+                        +--switch or reconnect-->  SWITCH WINDOW
+                                                    (bounded, self-closing)
+```
 
 - **STANDBY** — no rules, network fully open, **not protecting.** The resting
   state before any tunnel has been observed. Arms itself when a VPN connects.
@@ -123,30 +118,19 @@ There is one enforcement model — the guard. What changes is the posture:
   from exactly two triggers: an explicit operator command, or the automatic
   reconnect window.
 
-Details and rulesets: [docs/modes.md](docs/modes.md).
+Full state machine and exact rulesets: [docs/concepts/modes.md](docs/concepts/modes.md).
 
 ## Configuration
 
 JSON, with durations as strings (e.g. `"30s"`). Sample configs live in `configs/`
 (`dezhban.example.json` is fully automatic; `dezhban.vpn-guard.json` pins the
-tunnel interface and endpoints explicitly). Full field reference, the `vpn` block,
-and validation rules: [docs/config.md](docs/config.md).
+tunnel interface and endpoints explicitly). Full field reference:
+[docs/usage/config.md](docs/usage/config.md).
 
 ## Documentation
 
-| Doc | What's in it |
-|---|---|
-| [docs/quick-start.md](docs/quick-start.md) | **New here?** Install → set up → verify → arm, and how to read the menubar icon. |
-| [docs/modes.md](docs/modes.md) | Every posture and the exact ruleset it installs. |
-| [docs/config.md](docs/config.md) | Config field reference and sample configs. |
-| [docs/usage.md](docs/usage.md) | CLI commands, flags, service install, the macOS app. |
-| [docs/architecture.md](docs/architecture.md) | Three-layer design and the invariants it rests on. |
-| [docs/safety.md](docs/safety.md) | Kill-switch safety principles and teardown mechanics. |
-| [docs/troubleshooting.md](docs/troubleshooting.md) | Lockout recovery and VPN-guard failure runbook. |
-| [docs/development.md](docs/development.md) | Build, cross-compile, dev loop, CI, hooks. |
-| [docs/releasing.md](docs/releasing.md) | Cutting a release, CHANGELOG discipline, unsigned macOS GUI. |
-| [docs/state.md](docs/state.md) | The `state.json` posture file. |
-| [docs/acceptance.md](docs/acceptance.md) | The on-host verification checklist CI can't run. |
+See [docs/README.md](docs/README.md) for the full set, grouped by audience —
+using it, the mental model, and contributing.
 
 ## License
 

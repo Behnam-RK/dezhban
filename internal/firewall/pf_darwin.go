@@ -61,7 +61,7 @@ type savedState struct {
 	PrevEnabled bool `json:"prevEnabled"`
 }
 
-// Block is the legacy direct-connection entry point: a full block whose only
+// Block is the `block --force` entry point: a full block whose only
 // exceptions are loopback and the dst-IP allowlist. It is Apply with
 // ModeFullBlock and no tunnel interfaces.
 func (b *pfBackend) Block(a Allowlist) error {
@@ -196,8 +196,8 @@ func (b *pfBackend) Cleanup() error {
 //   - ModeGuard: pass egress on the tunnel interface(s) and the handshake to the
 //     VPN endpoint(s). Everything else is dropped, so if the tunnel disappears,
 //     traffic falling back to the physical interface is cut with no leak.
-//   - ModeFullBlock, direct (no tunnel ifaces): pass the dst-IP DNS + geo-API
-//     allowlist — the legacy model, valid only off-VPN.
+//   - ModeFullBlock, no VPN context (no tunnel ifaces): pass the dst-IP DNS +
+//     geo-API allowlist — what `block --force` renders.
 //   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface pass, so no
 //     user traffic leaks to a forbidden exit — but keep the endpoint pass so the
 //     encrypted handshake reaches the server and the tunnel can reconnect.
@@ -277,7 +277,7 @@ func renderRuleset(p Policy) string {
 				b.WriteString(allowPhysicalDNSRule)
 			}
 		} else {
-			// Legacy direct model: dst-IP allowlist.
+			// `block --force` (no VPN context): dst-IP allowlist.
 			if len(p.Allowlist.DNS) > 0 {
 				fmt.Fprintf(&b, "pass out quick proto { udp tcp } to { %s } port 53 no state\n", joinAddrs(p.Allowlist.DNS))
 			}

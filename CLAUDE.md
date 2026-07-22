@@ -10,7 +10,11 @@ enforcement model: an **always-on interface guard**. Egress is allowed only
 through the tunnel, so a tunnel drop is cut instantly — by default a bounded
 reconnect window then follows so the VPN can redial (set
 `vpn.reconnectWindow: "0"` for a strict zero-leak cut) — and it full-blocks when
-the VPN exit lands in a forbidden country. See [docs/modes.md](docs/modes.md).
+the VPN exit lands in a forbidden country. On a host that has connected
+successfully before, `vpn.armAtBoot` (default true) arms the guard at startup
+too, so a reboot stays blocked until the VPN redials rather than opening for
+however long that takes ([docs/adr/0008](docs/adr/0008-arm-at-boot.md)). See
+[docs/concepts/modes.md](docs/concepts/modes.md).
 
 There used to be a second, `vpn.enabled: false` **country-blocklist fallback**
 that cut traffic by destination IP. It is **gone**
@@ -32,9 +36,10 @@ believing a discarded security setting took effect.
 
 The feature set is complete and the phase plans it was built from are retired (they
 live in git history). What survives them is the verification they specified:
-[docs/acceptance.md](docs/acceptance.md) is the standing checklist of privileged,
-on-host checks that CI cannot run, and the design rationale is recorded under
-"Design decisions" in [docs/architecture.md](docs/architecture.md).
+[docs/contribute/testing.md](docs/contribute/testing.md) is the standing checklist
+of privileged, on-host checks that CI cannot run, and the design rationale is
+recorded under "Design decisions" in
+[docs/contribute/architecture.md](docs/contribute/architecture.md).
 
 ## Commands
 
@@ -61,19 +66,31 @@ dev tooling only, never the daemon path); non-TTY prints the grouped menu
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
-`switch`, `vpn`, `setup`, `config`, `completion`, `upgrade`, `version`, plus a global
-`-v`/`--verbose`. `validate`, `print-rules`, `doctor`, `monitor`, and `upgrade check`
-are read-only (no root, no firewall effects); the rest of the privileged set
-requires root/admin, including `upgrade download`/`upgrade apply` (macOS only —
-`download`'s staging directory is root-owned so a local user can't swap the
-verified `.pkg` before `apply` installs it). Full reference:
-[docs/usage.md](docs/usage.md); the upgrade design in full:
-[docs/upgrade.md](docs/upgrade.md).
+`switch`, `pause`, `resume`, `vpn`, `setup`, `config`, `completion`, `upgrade`,
+`version`, `help` (also `--help`/`-h`; `--version` aliases `version`), plus three
+globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation), `--no-daemon` (skip
+the control socket, act on the firewall directly).
+
+The **privileged set** — requires root/admin — is exactly: `run`, `block`,
+`unblock`, `panic`, `install`, `uninstall`, `start`, `stop`, `restart`, `switch`,
+`pause`, `resume`, `vpn add`/`remove`/`promote`/`forget`/`import` (but not
+`vpn list`/`show`), `setup`, `config set`/`edit`, and `upgrade download`/`upgrade
+apply` (macOS only — `download`'s staging directory is root-owned so a local user
+can't swap the verified `.pkg` before `apply` installs it). `switch`, `pause`,
+and `resume` are usually passwordless in practice: they ask the running daemon
+over its control socket first (gated by `control.allowSwitchOps`/
+`control.allowPauseOps` respectively) and only fall back to the root-owned
+command file when no daemon answers. Everything else — `status`, `detect-vpn`,
+`validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
+`config show`/`path`, `completion`, `upgrade check`, `version`, `help` — is
+read-only: no root, no firewall effects. Full reference:
+[docs/usage/cli.md](docs/usage/cli.md); the upgrade design in full:
+[docs/usage/upgrade.md](docs/usage/upgrade.md).
 
 ## Rules that must not be broken
 
 The design depends on these invariants (rationale in
-[docs/architecture.md](docs/architecture.md)):
+[docs/contribute/architecture.md](docs/contribute/architecture.md)):
 
 - **Never call `pfctl`/`nft`/WFP directly from `run` or `cmd/`** — go through the
   `FirewallBackend` interface (`internal/firewall/backend.go`). That seam keeps
@@ -122,7 +139,7 @@ The design depends on these invariants (rationale in
   exists to prevent, caused by the updater). The upgrade path also never
   invokes `uninstall.sh` — that removes `/etc/dezhban` unless `KEEP_CONFIG=1`,
   and an upgrade must never touch config or learned state. See
-  [docs/upgrade.md](docs/upgrade.md).
+  [docs/usage/upgrade.md](docs/usage/upgrade.md).
 - **`vpn.allowLocalNetwork` passes destinations, never interfaces**, and only
   locally-scoped ones — an interface-scoped pass would carry internet traffic and
   silently disable the kill switch, and globally-routable multicast (`232/8`,
@@ -136,8 +153,8 @@ The design depends on these invariants (rationale in
   now errors by name rather than silently rendering something else. `Snapshot.Mode`
   and `status --json`'s `vpnEnabled` are gone too — a field with one possible
   value is noise, not compatibility.
-- **The bounded switch window is the ONLY sanctioned relaxation of the guard,
-  and it has exactly TWO sanctioned triggers** — nothing else may ever relax it:
+- **The bounded switch window is the sanctioned relaxation of the guard, and it
+  has exactly THREE sanctioned triggers** — nothing else may ever relax it:
   (1) an explicit operator command, via the **root-owned command file**
   (`internal/command`, always available, root-only) or the **control socket**
   (`internal/control`, admin-group, gated by `control.allowSwitchOps`, default
@@ -145,27 +162,38 @@ The design depends on these invariants (rationale in
   (`vpn.reconnectWindow`, default 30s, `"0"` disables — an explicit opt-out):
   a tunnel-down edge from *healthy GUARD only* — never from standby, FULL BLOCK,
   an already-open window, or a tunnel never observed up, and gated against
-  flapping by `vpn.advanced.reconnectMinUptime`. Both triggers share the same
-  machinery and rails — closes early on a confirmed good exit, auto-reverts to
-  the prior fail-closed posture on cancel/expiry, one auto window per drop
-  (expiry never re-opens) — but each has its OWN hard cap, deliberately never
-  shared: the manual trigger is bounded by `switchWindowMax` (default 3m, no
-  floor), the automatic one by `reconnectWindowMax` (default 10m, no floor).
-  Collapsing these into one shared cap would silently truncate whichever
-  trigger has the larger intended budget — the `Options.SwitchWindowMax` /
-  `Options.ReconnectWindowMax` split in `internal/runner` and the per-episode
-  `windowMax` selected by trigger at first open (`Run`'s `openWindow` closure)
-  exist for exactly this reason. Never widen a window past its own cap, never
-  add a trigger, never let either outlive its deadline.
-- **Both windows are independently disableable, and "disabled" must survive
-  `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
-  `vpn.reconnectWindow: "0"` removes trigger (2); both set to `"0"` is the strict
-  zero-leak posture in which *nothing* can relax the guard. Each parses to the
+  flapping by `vpn.advanced.reconnectMinUptime`; (3) an explicit operator
+  **pause** (`dezhban pause`/`resume`, `state.TriggerPause`), via the same
+  command file or the control socket (gated separately by
+  `control.allowPauseOps`, default true, independent of `allowSwitchOps`) —
+  added by [docs/adr/0008](docs/adr/0008-arm-at-boot.md) for deliberately using
+  the real ISP IP (e.g. a domestic-only service the VPN's exit can't reach),
+  not for connecting a VPN. All three triggers share the same machinery and
+  rails — closes early on a confirmed good exit, auto-reverts to the prior
+  fail-closed posture on cancel/expiry, one auto window per drop (expiry never
+  re-opens) — but each has its OWN hard cap, deliberately never shared: the
+  manual trigger is bounded by `switchWindowMax` (default 3m, no floor), the
+  automatic one by `reconnectWindowMax` (default 10m, no floor), pause by
+  `vpn.pauseMax` (default 30m, no floor). Collapsing these into one shared cap
+  would silently truncate whichever trigger has the larger intended budget —
+  the `Options.SwitchWindowMax` / `Options.ReconnectWindowMax` / `Options.PauseMax`
+  split in `internal/runner` and the per-episode `windowMax` selected by
+  trigger at first open (`Run`'s `openWindow` closure) exist for exactly this
+  reason. Never widen a window past its own cap, never add a FOURTH trigger
+  without a new ADR, never let any of the three outlive its deadline.
+- **All three windows are independently disableable, and "disabled" must
+  survive `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
+  `vpn.reconnectWindow: "0"` removes trigger (2); `vpn.pauseMax: "0"` removes
+  trigger (3); all three set to `"0"` is the strict zero-leak posture in which
+  *nothing* can relax the guard. Each parses to the
   negative `config.Disabled` sentinel, because `Normalize` coerces a plain `0`
   back to the default — accepting a security setting and silently discarding it
   is the worst bug this tool can have. Disabling one must never disable the
-  other: the manual path gates on `switchEnabled`, the automatic path gates only
-  on `ReconnectWindow > 0`. `TestWindowDisableMatrix` pins all four permutations.
+  others: the manual path gates on `switchEnabled`, the automatic path gates
+  only on `ReconnectWindow > 0`, pause gates only on `PauseMax > 0`.
+  `TestWindowDisableMatrix` pins all four permutations of the first two;
+  pause's own default/disable round-trip is pinned separately
+  (`TestPauseMaxDefaultAndDisableSentinel`, `TestConfigSetSwitchWindowZeroDisables`).
 - The daemon owns all `Backend.Apply` calls from the **single run-loop goroutine** —
   keep it that way. Window timer, command poll, watcher, geo ticks, **and
   control-socket requests** are all select cases in that one loop; the socket's
@@ -179,27 +207,71 @@ The design depends on these invariants (rationale in
   **explicit `vpn.tunnelInterfaces` are pinned and never auto-pruned**, and the
   set never narrows to empty. Learned endpoints live in a daemon-owned
   `learned.json`, never written into the user's config.
+- **`vpn.armAtBoot` (default true) may only override STANDBY's live-probe
+  decision when BOTH an endpoint is known AND `TunnelEverUp` is true** — the
+  fact, persisted in a daemon-owned `armed.json` (`internal/armed`, same
+  atomic-write convention as `learned.json`), that a configured tunnel has
+  been observed up at least once on this host. Never arm at boot
+  unconditionally: that collapses back into ADR-0002's rejected "Alternative
+  1" (fail closed until a VPN exists), which turns first-run into a lockout
+  event by design. See [docs/adr/0008](docs/adr/0008-arm-at-boot.md).
 
 ## Conventions
 
-- **Dependencies are deliberate.** Stdlib for everything except three third-party
-  modules: `kardianos/service` (cross-platform service manager), `charmbracelet/huh`
-  (the interactive `setup` wizard only), and `charmbracelet/x/term` (TTY detection so
-  auto-sudo elevation is skipped on non-interactive stdin). The huh-driven wizard code
-  stays out of the daemon/enforcement path; `x/term` is touched only by the
-  elevation-guard TTY check. Linux/Windows backends shell out to `nft` /
-  `netsh`/PowerShell rather than linking libraries. Don't add `cobra`/`viper`/etc. —
-  the deliverable is still a dependency-light standalone binary; weigh any new dep
-  against that.
+- **Dependencies are deliberate.** Stdlib for everything except four third-party
+  modules: `kardianos/service` (cross-platform service manager — the one real
+  daemon-path dependency, for install/start/stop), `charmbracelet/huh` (the
+  interactive `setup` wizard and the `tools/taskmenu` dev picker),
+  `charmbracelet/x/term` (TTY detection — both the sudo auto-elevation guard
+  and the wizard's own interactive check), and `charmbracelet/bubbles` (also
+  `tools/taskmenu` — dev tooling only, never installed). The three charm
+  modules stay off the enforcement loop itself. Linux/Windows backends shell
+  out to `nft` / `netsh`/PowerShell rather than linking libraries. Don't add
+  `cobra`/`viper`/etc. — the deliverable is still a dependency-light
+  standalone binary; weigh any new dep against that.
 - Config is JSON with string durations; on-disk shape is the `fileConfig` DTO in
   `internal/config`, converted to a validated `Config`. Field reference:
-  [docs/config.md](docs/config.md).
-- Architecture & invariants: [docs/architecture.md](docs/architecture.md).
-  Lockout recovery / VPN-guard runbook: [docs/troubleshooting.md](docs/troubleshooting.md).
+  [docs/usage/config.md](docs/usage/config.md).
+- Architecture & invariants: [docs/contribute/architecture.md](docs/contribute/architecture.md).
+  Lockout recovery / VPN-guard runbook: [docs/usage/troubleshooting.md](docs/usage/troubleshooting.md).
 - Module path `github.com/behnam-rk/dezhban` (adjust if the repo moves).
+- **Config path resolution** (`resolveConfigPath`): `--config` flag → `$DEZHBAN_CONFIG`
+  → the canonical system path (if it exists) → built-in defaults. `$DEZHBAN_CONFIG`
+  is preserved across the sudo re-exec, so a non-default config still applies after
+  auto-elevation. This is the first thing to check for "why did it read the wrong
+  config".
+- **`setup`/`config set` has a second elevation path**, deliberately different from
+  the whole-command sudo re-exec: `writeConfig` elevates just the *write*, so the
+  interactive wizard doesn't restart itself and lose its own in-memory result.
+- `defaultSwitchWindow` is **5s** (the manual trigger's default duration, distinct
+  from its `switchWindowMax` cap of 3m). `vpn.advanced.reconnectMinUptime` (the
+  anti-flap gate on the automatic trigger) honors the same `config.Disabled`
+  sentinel as the two windows: `"0"` is an explicit, persisted opt-out, not a
+  default that `Normalize` silently restores.
+- **Docs are updated in the same PR as the behavior**, same rule as the CHANGELOG
+  bullet below. One canonical home per topic — update *that* file, don't restate
+  it elsewhere:
+
+  | Change | Doc |
+  |---|---|
+  | config key added/changed | [docs/usage/config.md](docs/usage/config.md) |
+  | subcommand or flag | [docs/usage/cli.md](docs/usage/cli.md) |
+  | what the guard actually enforces | [docs/concepts/modes.md](docs/concepts/modes.md) |
+  | a new term, posture, or window | [docs/concepts/glossary.md](docs/concepts/glossary.md) (**the** authority) |
+  | new failure mode or recovery step | [docs/usage/troubleshooting.md](docs/usage/troubleshooting.md) |
+  | hard-to-reverse decision | a new ADR — never edit a shipped one, supersede it |
+  | new privileged on-host check | [docs/contribute/testing.md](docs/contribute/testing.md) |
+
+  If a change makes you want to edit two docs, one of them is restating the
+  other — link instead. When an ADR ships, flip its status in
+  [docs/adr/README.md](docs/adr/README.md) in the same PR — a decision log that
+  lies about its own status is worse than none. A doc path cited from Go/Swift
+  source (`grep -rn "docs/" --include="*.go" --include="*.swift"`) is load-bearing:
+  moving or merging a doc means fixing every such reference, not just the ones in
+  other docs.
 - **Every PR that changes user-visible behavior updates [CHANGELOG.md](CHANGELOG.md)'s
   `## [Unreleased]` section, in the same PR** — not as a follow-up. `[Unreleased]`
-  *is* the next release's notes (see [docs/releasing.md](docs/releasing.md)); a PR
+  *is* the next release's notes (see [docs/contribute/releasing.md](docs/contribute/releasing.md)); a PR
   merged without an entry leaves it silently thin, and `task release:check` only
   catches the case where it's fully empty, not a partially-undocumented release.
   Use the existing `### Added` / `### Changed` / `### Fixed` / `### Removed`

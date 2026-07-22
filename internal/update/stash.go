@@ -1,5 +1,5 @@
 // Rollback support for `dezhban upgrade --apply`. The design (see
-// docs/upgrade.md): stash the current binary (and, on macOS, the app bundle)
+// docs/usage/upgrade.md): stash the current binary (and, on macOS, the app bundle)
 // before applying a new .pkg, restart into the new version, and wait for a
 // live snapshot. Healthy — delete the stash; it only ever exists during the
 // activation risk window, so it is a transaction log, not residue. Not
@@ -93,11 +93,11 @@ func HasStash(dir string) bool {
 // actually RUNNING, so `upgrade apply`'s HasStash guard (cmd/dezhban) can
 // tell "a previous upgrade already activated and this is just unswept disk"
 // from "activation is still deferred and this copy is still needed" — see
-// docs/upgrade.md's "If the restart doesn't come back healthy" section.
+// docs/usage/upgrade.md's "If the restart doesn't come back healthy" section.
 //
 // The comparison is against the running version and not the binary on disk,
 // and that distinction is the whole correctness argument. Applying is two
-// phases (docs/upgrade.md): phase 1 writes the new binary to disk while the
+// phases (docs/usage/upgrade.md): phase 1 writes the new binary to disk while the
 // daemon keeps enforcing on its old inode. So between a deferred activation
 // and the operator's `sudo dezhban restart`, disk reads NEW while the process
 // is still OLD. Classifying against disk in that window would call the live

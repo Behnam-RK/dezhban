@@ -31,6 +31,11 @@ const (
 	OpOpenSwitchWindow   Op = "open-switch-window"
 	OpCancelSwitchWindow Op = "cancel-switch-window"
 	OpForgetLearned      Op = "forget-learned"
+	// OpPause opens a bounded pause (root-owned command-file path); OpResume
+	// ends one early. Mirror control.OpPause/OpResume — see runner.Options's
+	// PauseMax/AllowPauseOps doc comments.
+	OpPause  Op = "pause"
+	OpResume Op = "resume"
 )
 
 // Command is one control message. Duration/Profile/Name are op-specific.

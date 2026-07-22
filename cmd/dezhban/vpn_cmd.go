@@ -119,6 +119,83 @@ func cmdSwitch(args []string) int {
 	return waitForSwitch(statePath)
 }
 
+// cmdPause opens a bounded pause on the running daemon: egress is fully opened
+// for the given duration (capped by vpn.pauseMax), then the guard re-arms
+// itself with no further action. For deliberately, temporarily using the real
+// ISP IP — e.g. a sanctioned-country-only service the VPN's exit can't reach —
+// without leaving protection off by mistake afterward.
+func cmdPause(args []string) int {
+	fs := flag.NewFlagSet("pause", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	_ = fs.Parse(args)
+	dur := ""
+	if fs.NArg() > 0 {
+		dur = fs.Arg(0)
+	}
+	// Validate here rather than letting the daemon's clampPause silently fall
+	// back to its default on a typo — `dezhban pause 15x` must error, not
+	// quietly become a 15m exposure the operator never asked for.
+	if dur != "" {
+		if d, err := time.ParseDuration(dur); err != nil || d <= 0 {
+			fmt.Fprintf(os.Stderr, "pause: invalid duration %q (want e.g. \"15m\")\n", dur)
+			return 2
+		}
+	}
+
+	if cfg, err := loadConfig(*cfgPath); err == nil && cfg.VPN.PauseMax <= 0 {
+		fmt.Fprintln(os.Stderr, "pause: disabled by vpn.pauseMax: \"0\". Set it to a duration (e.g. \"30m\") to enable.")
+		return 1
+	}
+
+	// Passwordless path first: the daemon opens the pause itself when
+	// control.allowPauseOps is on (the default). Falls through to the
+	// root-owned command file when no daemon is listening.
+	if !noDaemon() {
+		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpPause, Duration: dur}); handled {
+			if code == 0 {
+				fmt.Println("paused — protection resumes automatically at the deadline. `dezhban status` shows the countdown.")
+			}
+			return code
+		}
+	}
+
+	if !requireRoot("pause") {
+		return 1
+	}
+	if err := command.Write(defaultCommandPath(), newCommand(command.OpPause, dur, "")); err != nil {
+		fmt.Fprintln(os.Stderr, "pause:", err)
+		return 1
+	}
+	fmt.Println("pause requested — protection resumes automatically at the deadline.")
+	return 0
+}
+
+// cmdResume ends an open pause early, re-arming immediately.
+func cmdResume(args []string) int {
+	fs := flag.NewFlagSet("resume", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	_ = fs.Parse(args)
+
+	if !noDaemon() {
+		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpResume}); handled {
+			if code == 0 {
+				fmt.Println("resumed — protection is active again")
+			}
+			return code
+		}
+	}
+
+	if !requireRoot("resume") {
+		return 1
+	}
+	if err := command.Write(defaultCommandPath(), newCommand(command.OpResume, "", "")); err != nil {
+		fmt.Fprintln(os.Stderr, "resume:", err)
+		return 1
+	}
+	fmt.Println("resume requested")
+	return 0
+}
+
 // newCommand builds a control command stamped now with a fresh nonce.
 func newCommand(op command.Op, dur, profile string) command.Command {
 	return command.Command{Op: op, Duration: dur, Profile: profile, IssuedAt: time.Now(), Nonce: nonce()}
@@ -170,7 +247,13 @@ func printSwitchStatus(statePath string) int {
 		return 0
 	}
 	if snap.Switch != nil && snap.Switch.Open {
-		fmt.Printf("switch window: OPEN until %s (profile %q)\n", snap.Switch.Until.Format(time.RFC3339), snap.Switch.Profile)
+		if snap.Switch.Trigger == state.TriggerPause {
+			// A pause shares the window machinery but is not a switch window —
+			// report it by name so "OPEN" here doesn't read as a stray switch.
+			fmt.Printf("pause: OPEN until %s (end early with `dezhban resume`)\n", snap.Switch.Until.Format(time.RFC3339))
+		} else {
+			fmt.Printf("switch window: OPEN until %s (profile %q)\n", snap.Switch.Until.Format(time.RFC3339), snap.Switch.Profile)
+		}
 	} else {
 		fmt.Println("switch window: closed")
 	}

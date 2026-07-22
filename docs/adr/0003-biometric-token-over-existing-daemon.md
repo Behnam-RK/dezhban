@@ -106,3 +106,13 @@ miss falls back to sudo's own askpass instead of defecting to a system password 
 Also: `AboutView` currently advertises "Authorization Services (Touch ID capable)". By
 this project's own findings that is false, and it must be replaced with the true
 enrollment state.
+
+## Progress
+
+Alternative 1 (the sudo-retry complement, not a substitute for the Decision above) has
+shipped: `Elevation` now prefers `sudo` + `pam_tid` and falls back to Authorization
+Services, then the legacy AppleScript dialog. **The Decision itself — the keychain token,
+the `config-write`/`reload` control-socket ops, `control.allowConfigOps` — has not.**
+`AboutView` still reports "Authorization Services (Touch ID capable)", the exact string
+this ADR calls out as false; it has not yet been replaced with the true enrollment state.
+Status stays `implementation pending` until the token path lands.

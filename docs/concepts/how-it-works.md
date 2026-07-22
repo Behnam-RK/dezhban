@@ -3,7 +3,7 @@
 A narrative walkthrough of what actually happens from launch to teardown — for
 operators who want to understand the machine, not just drive it. The developer
 view (packages, interfaces, invariants) is in
-[architecture.md](architecture.md); the ruleset reference is in
+[architecture.md](../contribute/architecture.md); the ruleset reference is in
 [modes.md](modes.md).
 
 ## The one idea everything hangs off
@@ -78,7 +78,7 @@ protecting. It arms itself the moment a VPN connects.
 
 dezhban used to ship a second mode for hosts without a tunnel — a
 country-blocklist that polled your public IP and cut egress by destination. It is
-gone ([ADR-0001](adr/0001-single-guard-mode.md)): it applied no rules at rest, so
+gone ([ADR-0001](../adr/0001-single-guard-mode.md)): it applied no rules at rest, so
 it could only block *after* a poll noticed, and it was only meaningful when the
 country you blocked was your real physical location. The guard already contains
 the country check.
@@ -86,11 +86,9 @@ the country check.
 ### What the country check does here
 
 The daemon polls geo-IP providers every `pollInterval` and asks what country the
-VPN's **exit** is in. A blocked country escalates GUARD → FULL BLOCK, with
-hysteresis so one bad reading can't flap the network. An *undeterminable* country
-holds the current posture rather than escalating — the standing guard is already
-the fail-closed block for physical leaks, and cutting tunnel egress on an unknown
-would livelock the reconnect that could fix the lookup.
+VPN's **exit** is in, with hysteresis so one bad reading can't flap the network.
+The three possible outcomes — allowed, blocked, undeterminable — are covered
+below in [Exit-country policing](#exit-country-policing).
 
 ## Life of a VPN drop
 
@@ -135,25 +133,16 @@ machine (hysteresis again). Three outcomes:
   else still cut. Once the exit reads allowed again, GUARD is restored
   automatically. Only if no provider address can be resolved does it fall back to
   the older lift-and-probe — briefly lifting the guard for one bounded lookup and
-  re-cutting. See [ADR-0006](adr/0006-geo-providers-tunnel-scoped.md).
+  re-cutting. See [ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md).
 
 ## The switch window — the only sanctioned relaxation
 
 Everything above never *widens* access on its own authority except through one
-mechanism: the bounded switch window. Two triggers exist, by design exactly two:
-
-- **Operator command** — `dezhban switch` (root command file, or passwordless
-  for admins over the control socket unless `control.allowSwitchOps: false`),
-  for arming a brand-new VPN whose server dezhban has never seen.
-- **Automatic reconnect** — the tunnel-drop flow above (opt-out).
-
-Both share the same machinery — early close on a verified good exit, endpoint
-learning, automatic revert to the prior fail-closed posture on cancel or expiry —
-but each has its own hard cap, deliberately not shared: the operator command is
-capped by `advanced.switchWindowMax` (3m), the automatic reconnect by
-`advanced.reconnectWindowMax` (10m), so a longer budget on one trigger can never
-silently truncate the other's. `status` shows which trigger opened the current
-window.
+mechanism: the bounded switch window, opened by exactly two triggers — an
+operator command (`dezhban switch`, for arming a brand-new VPN) or the
+automatic reconnect flow above. Full mechanics, the independent per-trigger
+caps, and the safety rails: [modes.md § Switching between
+VPNs](modes.md#switching-between-vpns).
 
 ## Recovery and escape hatches
 

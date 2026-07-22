@@ -64,7 +64,7 @@ type Snapshot struct {
 	// during an active leak). Observers should surface it prominently regardless of posture.
 	// On a terminal posture:"stopped" snapshot it additionally carries WHY the daemon
 	// went down when the exit was not a clean shutdown — a startup refusal or a run-loop
-	// failure (see runner.publishStopped and docs/state.md); a clean, operator-requested
+	// failure (see runner.publishStopped and docs/contribute/architecture.md); a clean, operator-requested
 	// stop leaves it empty. Either way the contract holds: the intended posture (enforcing)
 	// was not achieved.
 	EnforcementErr string   `json:"enforcementErr,omitempty"`
@@ -100,6 +100,13 @@ type SwitchState struct {
 const (
 	TriggerManual = "manual"
 	TriggerAuto   = "auto"
+	// TriggerPause is an operator-requested bounded pause (`dezhban pause` /
+	// the GUI's "Pause protection"): a deliberate, timed drop to the real ISP
+	// IP (e.g. to reach a sanctioned-country-only service), sharing the
+	// switch-window machinery and rule shape but with its own cap
+	// (vpn.pauseMax) and its own control-socket gate (control.allowPauseOps).
+	// See docs/adr/0008-arm-at-boot.md.
+	TriggerPause = "pause"
 )
 
 // DirMode is the mode of the daemon's state directory. It MUST stay traversable

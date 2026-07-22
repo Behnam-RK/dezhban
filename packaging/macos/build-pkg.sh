@@ -4,7 +4,7 @@
 # The .pkg installs everything dezhban needs in one double-click, with exactly one
 # admin prompt — the Installer's own. Afterwards, routine operations (block,
 # unblock, switch) need no password at all: they go to the daemon over its control
-# socket. See docs/architecture.md.
+# socket. See docs/contribute/architecture.md.
 #
 # Payload:
 #   /usr/local/bin/dezhban                       universal CLI (arm64 + x86_64)

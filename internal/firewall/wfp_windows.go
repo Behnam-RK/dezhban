@@ -62,7 +62,7 @@ type savedState struct {
 	OutboundAction map[string]string `json:"outboundAction"`
 }
 
-// Block is the legacy direct-connection entry point: a full block whose only
+// Block is the `block --force` entry point: a full block whose only
 // exceptions are loopback and the dst-IP allowlist. It is Apply with
 // ModeFullBlock and no tunnel interfaces.
 func (b *wfpBackend) Block(a Allowlist) error {
@@ -156,8 +156,8 @@ func (b *wfpBackend) Cleanup() error {
 //   - ModeGuard: allow egress on the tunnel interface(s) and the handshake to
 //     the VPN endpoint(s); the Block default cuts everything else, so a tunnel
 //     drop has no physical leak.
-//   - ModeFullBlock, direct (no tunnel ifaces): allow the dst-IP DNS + geo-API
-//     allowlist — the legacy model, valid only off-VPN.
+//   - ModeFullBlock, no VPN context (no tunnel ifaces): allow the dst-IP DNS +
+//     geo-API allowlist — what `block --force` renders.
 //   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface allow, so no
 //     user traffic leaks to a forbidden exit — but keep the endpoint allow so the
 //     encrypted handshake reaches the server and the tunnel can reconnect.
@@ -225,7 +225,7 @@ func renderBlockScript(p Policy) string {
 			emitTunnelProviderRules(rule, p)
 			emitAllowPhysicalDNSRules(rule, p)
 		} else {
-			// Legacy direct model: dst-IP allowlist.
+			// `block --force` (no VPN context): dst-IP allowlist.
 			if dns := psAddrList(p.Allowlist.DNS); dns != "" {
 				rule("dns-udp", "-Protocol UDP -RemotePort 53 -RemoteAddress "+dns)
 				rule("dns-tcp", "-Protocol TCP -RemotePort 53 -RemoteAddress "+dns)

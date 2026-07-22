@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Installs dezhban from a GitHub release. This is the primary distribution
-# channel (see docs/install.md for why): curl deliberately does NOT set
+# channel (see docs/usage/install.md for why): curl deliberately does NOT set
 # com.apple.quarantine on what it downloads — Apple's own documented behaviour,
 # not a workaround — so this is the one macOS install path with zero Gatekeeper
 # friction. That property is now ENFORCED rather than assumed: the install steps

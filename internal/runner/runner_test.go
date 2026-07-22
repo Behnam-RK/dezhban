@@ -142,6 +142,33 @@ func TestPostureName(t *testing.T) {
 	}
 }
 
+// TestShouldArmAtBoot pins the four-way permutation the arm-at-boot decision
+// depends on. Only (armAtBoot=true, tunnelEverUp=true, endpoint known) may
+// override an AutoArm-computed standby — every other combination must leave
+// standby alone, preserving ADR-0002's "a fresh install can never lock itself
+// out" guarantee.
+func TestShouldArmAtBoot(t *testing.T) {
+	cases := []struct {
+		armAtBoot, tunnelEverUp bool
+		endpointCount           int
+		want                    bool
+	}{
+		{false, false, 0, false},
+		{false, true, 1, false}, // armAtBoot off: today's behavior, unchanged
+		{true, false, 1, false}, // never observed up: the ADR-0002 rail holds
+		{true, true, 0, false},  // no endpoint known: arming would be a lockout
+		{true, true, 1, true},   // both conditions hold: arm
+		{true, true, 3, true},   // endpoint count otherwise irrelevant once >0
+	}
+	for _, c := range cases {
+		got := shouldArmAtBoot(c.armAtBoot, c.tunnelEverUp, c.endpointCount)
+		if got != c.want {
+			t.Errorf("shouldArmAtBoot(armAtBoot=%v, tunnelEverUp=%v, endpoints=%d) = %v, want %v",
+				c.armAtBoot, c.tunnelEverUp, c.endpointCount, got, c.want)
+		}
+	}
+}
+
 // TestLegacyPublishesPostureTransitions asserts a snapshot fires on every poll
 // with the correct posture as the daemon crosses allow→block→allow, then a
 // terminal "stopped" snapshot on shutdown so observers flip immediately.

@@ -7,10 +7,79 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Releases are cut with the manually-dispatched `release` workflow, which rewrites
 the `## [Unreleased]` section below into a versioned entry — see
-[docs/releasing.md](docs/releasing.md). Keep `## [Unreleased]` current as you land
-changes.
+[docs/contribute/releasing.md](docs/contribute/releasing.md). Keep `## [Unreleased]`
+current as you land changes.
 
 ## [Unreleased]
+
+### Added
+
+- **`vpn.armAtBoot`** (default **true**): arms the guard directly at startup,
+  even before the VPN's tunnel interface exists, on any host that has
+  connected successfully at least once and has a known endpoint. Closes a real
+  gap — `internal/runner` decided STANDBY from a live interface probe taken
+  fresh on every start, so a normal boot (this daemon starts before the VPN
+  client) opened the network for however long the VPN took to reconnect, on
+  every reboot, even on hosts that had run the guard for months. A fresh
+  install, or a host whose VPN has never come up, still starts in STANDBY —
+  this cannot turn a misconfiguration into a lockout. See
+  [ADR-0008](docs/adr/0008-arm-at-boot.md).
+- **`dezhban pause [duration]` / `dezhban resume`**: a bounded, deliberate drop
+  to the real ISP IP (e.g. to reach a domestic-only service a VPN exit can't
+  reach), auto-reverting at the deadline with no further action. A third
+  sanctioned relaxation of the guard alongside the switch window and the
+  automatic reconnect window, with its own cap (`vpn.pauseMax`, default 30m,
+  `"0"` disables) and its own control-socket gate (`control.allowPauseOps`,
+  default true, independent of `control.allowSwitchOps`).
+
+### Changed
+
+- **README now leads with the macOS app**, with the CLI presented as the
+  headless option for Linux, servers, and terminal users — it previously
+  mentioned the app only twice, both in passing, despite the app covering
+  every everyday operation. Adds a platform-support table marking Windows
+  **experimental** (no passwordless control path yet) rather than a peer
+  install target.
+- **`docs/` reorganized from a flat 17-file list into `usage/`, `concepts/`,
+  and `contribute/`**, grouped by audience; `docs/adr/` is unchanged.
+  Duplicated explanations of the same concepts (the country-check hold
+  behavior, the switch/reconnect/pause windows) are consolidated into single
+  canonical homes in `docs/concepts/modes.md`, which also gains two ASCII
+  diagrams (the posture state machine, the window-trigger comparison).
+- Five of seven ADRs were marked `implementation pending` in the decision-log
+  index despite having shipped; statuses now match reality (`docs/adr/README.md`).
+- `CLAUDE.md` corrected against a full verification pass: the dependency count
+  (four third-party modules, not three), the read-only/root command split, the
+  global-flags list, and the subcommand list, plus a new doc-maintenance
+  convention routing config/CLI/behavior changes to their canonical doc.
+
+### Fixed
+
+- Removed `legacy` as an offered `--mode` value from the Taskfile description
+  and all three shell completions (bash/zsh/fish) — `print-rules --mode legacy`
+  has errored by name since ADR-0001, but the completions still suggested it.
+  Also added the `--no-sudo`/`--no-daemon` global flags to all three
+  completions, which were missing entirely.
+- Retired "legacy direct model" language from `internal/firewall` comments
+  (`backend.go`, `policyset.go`, the three per-OS renderers): the code path
+  they describe is live — it's what `block --force` renders — not a leftover
+  of the country-blocklist model ADR-0001 removed. One dead `docs/plans`
+  reference in `backend.go` is also fixed. The same sweep now covers
+  `cmd/dezhban/main.go`, whose comments still called the watcher's job "the
+  legacy kill switch" and described `print-rules` populating a legacy
+  allowlist it no longer builds.
+- `print-rules --mode` help text still offered `legacy` alongside the live
+  modes; it now lists `guard, fullblock, or switch` — matching what the
+  command actually accepts and what the completions suggest.
+- Every `docs/*.md` path cited from Go/Swift source and shell scripts now
+  points at the reorganized hierarchy — including the user-visible ones:
+  the paths `dezhban upgrade` prints in its guidance and the one shown in
+  the app's **About → Updates** pane.
+- **`dezhban config set vpn.switchWindow 0` now disables manual switch windows**
+  instead of being silently coerced back to the 5s default by `Normalize` — the
+  same explicit-opt-out sentinel `vpn.reconnectWindow` already used. `config get`
+  now reports the disabled state as `0s` rather than a negative duration, and
+  `dezhban status` prints `switch window: off` instead of the raw sentinel.
 
 ## [0.6.0] - 2026-07-22
 
@@ -49,7 +118,7 @@ changes.
   `internal/update.CanActivate` (healthy `guard`/`standby` only, re-checked at
   the instant of restart). The menubar app surfaces the same flow under
   **About → Updates**, with one confirmation and a self-relaunch. See
-  [docs/upgrade.md](docs/upgrade.md) and
+  [docs/upgrade.md](docs/usage/upgrade.md) and
   [ADR-0007](docs/adr/0007-upgrade-disclosed-window-not-holding-block.md).
 - curl/PowerShell installers plus `.deb`/`.rpm` packaging, wired into CI
   alongside the existing macOS `.pkg`.
@@ -161,7 +230,7 @@ changes.
   reason — by `dezhban validate` and once at daemon start. They are never
   written back when dezhban saves your config.
 - **Architecture decision records** under [`docs/adr/`](docs/adr/), plus a
-  [glossary](docs/glossary.md) fixing the "guard"/"protection"/"kill switch"
+  [glossary](docs/concepts/glossary.md) fixing the "guard"/"protection"/"kill switch"
   vocabulary drift. GUARD is the canonical term.
 
 ### Fixed
@@ -487,7 +556,7 @@ changes.
   offers "Touch ID or password" — and caches the authorization, so a second privileged
   action a moment later is usually silent. The old `osascript` dialog was password-only
   and always had been; it remains as a fallback. For the CLI, enable Touch ID for
-  `sudo` (`pam_tid`) — see [docs/usage.md](docs/usage.md#touch-id).
+  `sudo` (`pam_tid`) — see [docs/usage.md](docs/usage/cli.md#touch-id).
 
 ### Changed
 
@@ -497,7 +566,7 @@ changes.
   and `task pkg:cycle` (full: cross-compile, build the `.pkg`, install it, open the
   app), with `pkg:fresh`/`pkg:install`/`pkg:uninstall` piecewise variants. The
   `scripts/*.sh` escape hatches still run standalone without `task`. See
-  [docs/development.md](docs/development.md).
+  [docs/development.md](docs/contribute/development.md).
 
 ### Fixed
 

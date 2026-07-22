@@ -20,14 +20,19 @@ Commands:
   restart      Restart the installed service — apply a config change (root)
   detect-vpn   Print detected VPN tunnel interfaces for config
   switch       Open a bounded window to connect a brand-new VPN    (root)
+  pause        Open a bounded pause: real ISP IP for a while, then re-arms   (root)
+  resume       End an open pause early                             (root)
   vpn          Manage VPN profiles and learned endpoints (list/add/remove/import/promote/forget)
   setup        Interactive wizard to create or update the config
   config       Inspect or change the config without hand-editing JSON
   completion   Print a shell completion script (bash|zsh|fish)
   upgrade      Check/download/apply a newer release (check: no root; download/apply: root, macOS)
   version      Print the version
+  help         Print usage (also: --help, -h)
 
 Global: -v / --verbose   override the configured log level to debug
+        --no-sudo        opt out of auto-elevation (or DEZHBAN_NO_SUDO=1)
+        --no-daemon      skip the control socket, act on the firewall directly (or DEZHBAN_NO_DAEMON=1)
 ```
 
 `--config` is **optional**: when omitted, dezhban resolves the config from
@@ -42,7 +47,7 @@ daemon** over its control socket and need no password at all:
 
 | Command | Needs a password? |
 |---|---|
-| `block`, `unblock`, `switch` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back to acting on the firewall directly, which needs root. |
+| `block`, `unblock`, `switch`, `pause`, `resume` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back — `block`/`unblock` act on the firewall directly; `switch`/`pause`/`resume` write the root-owned command file, which itself needs a running daemon to consume it. Either way, root. |
 | `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn` | **No** — read-only, no root, no firewall effects. |
 | `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
@@ -106,7 +111,7 @@ sudo dezhban panic                                # standalone teardown, no daem
 ## Key flags
 
 - `run --dry-run` — poll and print the country without touching the firewall.
-- `block --guard` — install the VPN interface guard (see [modes.md](modes.md)).
+- `block --guard` — install the VPN interface guard (see [modes.md](../concepts/modes.md)).
 - `block --force` — unconditional hard block of all egress (loopback + allowlist
   only), bypassing the VPN guard. The override when detection is wrong.
 - `unblock --force` — accepted for symmetry (`unblock` is already unconditional).
@@ -164,7 +169,7 @@ the system path need root (hence `sudo`); a permission error prints a `sudo` hin
 
 After a one-time `setup`, run dezhban (or install the service) and connect any
 VPN. Known VPNs need no ceremony, and a drop or server rotation is covered by the
-[automatic reconnect window](modes.md#automatic-reconnect-window) with no
+[automatic reconnect window](../concepts/modes.md#automatic-reconnect-window) with no
 interaction; the manual switch window below is the fallback — e.g. for arming a
 brand-new VPN while the guard is already holding the line.
 
@@ -175,7 +180,7 @@ dezhban vpn import ~/wg0.conf          # WireGuard .conf / OpenVPN .ovpn / V2Ray
 dezhban vpn list                        # profiles + learned endpoints + active state
 
 # A brand-new VPN whose server dezhban has never seen:
-sudo dezhban switch                     # open a window (15s default); connect it in its app now
+sudo dezhban switch                     # open a window (5s default); connect it in its app now
 sudo dezhban switch --for 90s --name windscribe   # custom duration + attribution
 sudo dezhban switch --cancel            # close the window early
 dezhban switch --status                 # is a window open?
@@ -184,8 +189,23 @@ sudo dezhban vpn forget <name>          # drop a learned endpoint
 ```
 
 `switch` writes a root-owned control file the daemon consumes, then narrates the
-window from the state file until it closes. See [modes.md](modes.md#switch-window--connecting-a-brand-new-vpn)
+window from the state file until it closes. See [modes.md](../concepts/modes.md#switch-window--connecting-a-brand-new-vpn)
 for the posture and the real-IP-exposure trade-off.
+
+## Pause protection temporarily
+
+For the times the *correct* traffic is the one the guard blocks — a domestic-only
+service that refuses a foreign VPN exit:
+
+```sh
+sudo dezhban pause 15m     # real IP for 15 minutes, capped by vpn.pauseMax
+sudo dezhban resume        # end it early
+```
+
+Unlike `switch`, this doesn't wait for a VPN — it just opens egress for the given
+duration and re-arms the guard by itself at the deadline, so there's nothing to
+remember to turn back on. See
+[modes.md](../concepts/modes.md#pause--deliberately-using-your-real-ip).
 
 ## Shell completion
 
@@ -199,7 +219,7 @@ subcommands, and file paths for `--config`.
 
 ## Run as a service
 
-On macOS the [installer](../README.md#install) (`dezhban-<version>.pkg`) does all of
+On macOS the [installer](../../README.md#install-macos) (`dezhban-<version>.pkg`) does all of
 this for you — it installs the CLI + app and registers the service in one step, with
 one password prompt. It deliberately leaves enforcement stopped; run
 `sudo dezhban setup` then `sudo dezhban start`. Everything below is the manual
@@ -246,7 +266,7 @@ it's split this way, the activation gate, rollback, and the menubar app's
 On macOS an optional native app (`Dezhban.app`) shows the daemon's live posture
 and offers click-to-control. It's a separate Swift target (AppKit shell, SwiftUI
 main window), so the Go binary keeps its zero-dependency, `CGO_ENABLED=0`
-promise. Build it with `task gui:build` (see [development.md](development.md)).
+promise. Build it with `task gui:build` (see [development.md](../contribute/development.md)).
 
 Two surfaces, split by urgency:
 
@@ -292,6 +312,10 @@ over its control socket and raise **no prompt at all**. Only the service lifecyc
 neither can be daemon-mediated. Tooltips say which it will be before you click.
 
 The app runs no IP/country poller of its own — it reads the daemon's state file
-(see [state.md](state.md)), the single source of truth for what the daemon decided.
-It is unsigned for local use (right-click → Open past Gatekeeper). The app's own
-verification checklist lives in [acceptance.md](acceptance.md#macos-app).
+(see [architecture.md](../contribute/architecture.md#state-export--statejson)),
+the single source of truth for what the daemon decided. It is unsigned; `curl`-installed
+via `install.sh` it needs no Gatekeeper workaround at all (see [install.md](install.md)),
+but a standalone double-click of the app bundle hits Gatekeeper — see
+[releasing.md](../contribute/releasing.md#unsigned-artifacts-signed-checksums) for the
+bypass. The app's own verification checklist lives in
+[testing.md](../contribute/testing.md#macos-app).

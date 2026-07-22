@@ -76,7 +76,7 @@ tasks:
           safe loop (no root, no firewall effects)
             monitor    build + run the monitor in dry-run, Ctrl-C to stop (CONFIG=…)
             validate   parse + validate CONFIG
-            rules      print the ruleset for MODE (guard|fullblock|legacy), don't apply
+            rules      print the ruleset for MODE (guard|fullblock|switch), don't apply
             doctor     diagnose VPN-guard config (flags after --: task doctor -- --discover)
             status     current posture
 
@@ -128,7 +128,7 @@ tasks:
       - go run {{.PKG}} validate --config {{.CONFIG}}
 
   rules:
-    desc: Print the ruleset for MODE (guard|fullblock|legacy) without applying
+    desc: Print the ruleset for MODE (guard|fullblock|switch) without applying
     cmds:
       - go run {{.PKG}} print-rules --mode {{.MODE}} --config {{.CONFIG}}
 

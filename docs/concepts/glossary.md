@@ -63,7 +63,7 @@ then explains it in a sentence**, rather than replacing the name with a euphemis
 **STANDBY** — no rules installed, network fully open, the guard is **off**. The resting
 state before a tunnel has ever been observed. User-facing: "Guard off — standby. Nothing
 is being blocked." Icon is **grey** — nothing is being cut, so nothing is red. See
-[ADR-0002](adr/0002-standby-no-tunnel-posture.md).
+[ADR-0002](../adr/0002-standby-no-tunnel-posture.md).
 
 **GUARD** — the healthy enforcing state. Only the tunnel may carry traffic off this
 machine; everything else on the physical interface is blocked. User-facing: "Guard
@@ -78,20 +78,28 @@ tunnel can survive and recover. User-facing: "Full block", with the reason. Icon
 ## Windows
 
 **Switch window** — the bounded period during which the guard is relaxed so a VPN
-handshake can complete. **The only sanctioned relaxation of the guard**, with exactly two
-triggers. Always bounded, always capped, always auto-reverting to the prior fail-closed
-posture.
+handshake can complete, or (see Pause below) so the operator can deliberately use
+the real IP. **The sanctioned relaxation of the guard**, with exactly three
+triggers, each with its own cap. Always bounded, always auto-reverting to the
+prior fail-closed posture.
 
 **Manual switch** — a switch window opened by an explicit operator command
-(`dezhban switch`, or the app). Trigger one.
+(`dezhban switch`, or the app), to connect a brand-new VPN. Trigger one, capped
+by `advanced.switchWindowMax`.
 
 **Reconnect window** — a switch window opened *automatically* when the tunnel drops from
-healthy GUARD, so the VPN can redial. Trigger two. Same machinery, same rails; only the
-trigger differs. User-facing: "Your VPN dropped — reconnecting".
+healthy GUARD, so the VPN can redial. Trigger two, capped by
+`advanced.reconnectWindowMax`. Same machinery, same rails; only the trigger and
+the cap differ. User-facing: "Your VPN dropped — reconnecting".
 
-**Pause** — the user-facing presentation of a manual switch window used to suspend
-the guard briefly. Not a distinct mechanism: it is trigger one wearing different copy,
-and it inherits every rail including the cap.
+**Pause** — a switch window opened by an explicit operator command
+(`dezhban pause`, or the app) to deliberately use the real ISP IP for a domestic-
+only service, not to connect a VPN. Trigger three, capped by its own
+`vpn.pauseMax` — never `switchWindowMax`. A genuinely distinct trigger, not
+just different copy on trigger one: its own config key, its own control-socket
+gate (`control.allowPauseOps`), and `switch --cancel` refuses to touch it (use
+`resume`). See [ADR-0008](../adr/0008-arm-at-boot.md). User-facing: "Paused —
+protection resumes automatically at «time»."
 
 ## Network concepts
 
@@ -122,7 +130,7 @@ through. User-facing: "Countries your VPN must not exit through". A blocked exit
 FULL BLOCK, not a warning.
 
 **Geo provider** — a public API dezhban queries to learn the exit country. Passes to
-providers are **tunnel-scoped only** — see [ADR-0006](adr/0006-geo-providers-tunnel-scoped.md),
+providers are **tunnel-scoped only** — see [ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md),
 which explains why the alternative silently breaks the check.
 
 ## Mechanism
@@ -160,7 +168,7 @@ hatch must never depend on the thing it is escaping from.
 
 | Don't say | Say | Why |
 |---|---|---|
-| "Legacy mode", "country-blocklist mode", "VPN guard mode" | *(nothing)* | There is one mode. See [ADR-0001](adr/0001-single-guard-mode.md). |
+| "Legacy mode", "country-blocklist mode", "VPN guard mode" | *(nothing)* | There is one mode. See [ADR-0001](../adr/0001-single-guard-mode.md). |
 | "Protection" / "protected" / "secured" | "the guard" / "guard active" | One word for one concept. The drift this page ends. |
 | "Stop kill switch" | "Turn off the guard" | Name the action, not the machinery. |
 | "The daemon isn't running" (in the app) | "The guard is off" | Users do not have daemons. They have a guard. |

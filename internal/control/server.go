@@ -205,7 +205,7 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	}
 
 	switch req.Op {
-	case OpStatus, OpBlock, OpUnblock, OpOpenSwitch, OpCancelSwitch:
+	case OpStatus, OpBlock, OpUnblock, OpOpenSwitch, OpCancelSwitch, OpPause, OpResume:
 	default:
 		s.reply(conn, errResponse(fmt.Sprintf("unknown op %q", req.Op)))
 		return

@@ -37,7 +37,7 @@ type ghRelease struct {
 // rc that way — so this never offers an rc.
 //
 // This is the ONLY network call anywhere in the upgrade path that the daemon
-// itself must never make (see docs/upgrade.md and CLAUDE.md): Check is called
+// itself must never make (see docs/usage/upgrade.md and CLAUDE.md): Check is called
 // from the GUI, in user context, or from the CLI on demand — never from the
 // always-on root daemon, whose egress stays geo-providers-only. If the tunnel
 // is down when this runs, it fails; it does not get its own firewall pass.
