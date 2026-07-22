@@ -12,6 +12,8 @@ changes.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-22
+
 ### Added
 
 - **`dezhban upgrade check|download|apply`** — self-update for macOS. `check`
@@ -566,7 +568,8 @@ changes.
 - Cross-platform release build matrix (`task build:all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
-[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.5.0
 [0.4.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.4.0
 [0.3.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.3.0
 [0.2.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.2.0
