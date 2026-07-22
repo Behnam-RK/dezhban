@@ -86,6 +86,29 @@ try {
 	New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 	$binPath = Join-Path $installDir "dezhban.exe"
 
+	# Read the OUTGOING version before anything is overwritten, so the run can
+	# report what changed and the footer never tells an existing user to run
+	# `setup` — that would walk them through replacing a config they already
+	# have. A binary too old or too broken to answer still counts as an existing
+	# install: the safe classification of an unreadable prior install is
+	# "upgrade", never "fresh".
+	$mode = "fresh"
+	$prevVersion = ""
+	if (Test-Path $binPath) {
+		$prevVersion = (& $binPath version 2>$null | Select-Object -First 1) -split '\s+' | Select-Object -Index 1
+		if (-not $prevVersion) { $prevVersion = "unknown" }
+		$prevVersion = $prevVersion -replace '^v', ''
+		if ($prevVersion -eq $version) {
+			$mode = "reinstall"
+			Note "dezhban $version is already installed — reinstalling the same version"
+		} else {
+			$mode = "upgrade"
+			Note "existing installation found: $prevVersion -> $version"
+		}
+	} else {
+		Note "no existing installation found — this is a first-time install"
+	}
+
 	$wasRunning = $false
 	if (Test-Path $binPath) {
 		try {
@@ -125,11 +148,29 @@ try {
 	}
 
 	Write-Host ""
-	Write-Host "dezhban $version installed."
-	Write-Host ""
-	Write-Host "next steps (open a NEW elevated PowerShell so PATH picks up dezhban.exe):"
-	Write-Host "  dezhban setup   # configure: VPN, tunnel interfaces, blocked countries"
-	Write-Host "  dezhban start   # arm the kill switch"
+	if ($mode -eq "fresh") {
+		Write-Host "dezhban $version installed."
+		Write-Host ""
+		Write-Host "next steps (open a NEW elevated PowerShell so PATH picks up dezhban.exe):"
+		Write-Host "  dezhban setup   # configure: VPN, tunnel interfaces, blocked countries"
+		Write-Host "  dezhban start   # arm the kill switch"
+	} else {
+		if ($mode -eq "upgrade") {
+			Write-Host "dezhban upgraded: $prevVersion -> $version."
+		} else {
+			Write-Host "dezhban $version reinstalled."
+		}
+		Write-Host "Your config in $configDir and any learned VPN state were left untouched."
+		Write-Host ""
+		# Deliberately no `setup` here: an existing user has a config already.
+		if ($wasRunning) {
+			Write-Host "The service was running and has been restarted on the new build."
+			Write-Host "  dezhban status   # confirm the posture came back as expected"
+		} else {
+			Write-Host "The service was not running, so it was left stopped."
+			Write-Host "  dezhban start    # arm the kill switch"
+		}
+	}
 } finally {
 	Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
 }

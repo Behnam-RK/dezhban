@@ -1,24 +1,49 @@
 import AppKit
 import SwiftUI
 
-/// The Settings pane — SwiftUI port of the retired SettingsPanel. Two kinds of
-/// controls, two behaviors, stated in the UI:
+/// The Settings pane — SwiftUI port of the retired SettingsPanel, merged with the
+/// former VPN Guard pane (VPNGuardView, retired 2026-07-22: the two sections split
+/// VPN keys along an arbitrary seam — switchWindow/endpointGrace lived here while
+/// endpointRefresh/tunnelWatch lived there). Two kinds of controls, two behaviors,
+/// stated in the UI:
 ///   - Startup toggles act IMMEDIATELY (they are service/login-item actions, not
 ///     config values — there is nothing to batch or restart).
-///   - Protection fields are staged and written by Apply through one batched
-///     `config set` (single validation, write, and admin prompt).
+///   - Every other field is staged and written by Apply through one batched
+///     `config set` (single validation, write, and admin prompt), and awaits the
+///     restarted daemon's posture before reporting success — this pane now carries
+///     guard-affecting keys, same as VPNGuardView did.
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
 
-    // Dotted keys from configFields (cmd/dezhban/config_cmd.go).
-    private static let keys = ["blockedCountries", "vpn.switchWindow", "vpn.endpointGrace"]
+    // Dotted keys from configFields (cmd/dezhban/config_cmd.go). Order matches the
+    // seed() destructuring below.
+    private static let keys = [
+        "vpn.tunnelInterfaces", "vpn.endpoints",
+        "vpn.autodetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
+        "vpn.allowLocalNetwork",
+        "blockedCountries", "pollInterval",
+        "vpn.switchWindow", "vpn.reconnectWindow", "vpn.endpointGrace",
+        "vpn.endpointRefresh", "vpn.tunnelWatch",
+    ]
 
     @State private var loginEnabled = false
     @State private var notifyEnabled = true
     @State private var checkUpdatesEnabled = true
+
+    @State private var tunnelInterfaces = ""
+    @State private var endpoints = ""
+    @State private var autodetect = false
+    @State private var autoDiscover = false
+    @State private var autoArm = false
+    @State private var allowLocalNetwork = true
     @State private var blockedCountries = ""
+    @State private var pollInterval = ""
     @State private var switchWindow = ""
+    @State private var reconnectWindow = ""
     @State private var endpointGrace = ""
+    @State private var endpointRefresh = ""
+    @State private var tunnelWatch = ""
+
     @State private var status = ""
     @State private var canApply = false
     @State private var bootBusy = false
@@ -45,16 +70,57 @@ struct SettingsView: View {
                             + "host contacting GitHub about updates entirely; \"Check Now\" in About still "
                             + "works either way.")
                 }
+                Section("VPN guard") {
+                    TextField("Tunnel interfaces (comma-sep)", text: $tunnelInterfaces)
+                        .disabled(!canApply)
+                    TextField("Endpoints (comma-sep)", text: $endpoints)
+                        .disabled(!canApply)
+                }
+                Section("Autodetection") {
+                    Toggle("Autodetect tunnel interface (vpn.autodetect)", isOn: $autodetect)
+                        .disabled(!canApply)
+                    Toggle("Auto-discover endpoints (vpn.autoDiscoverEndpoints)", isOn: $autoDiscover)
+                        .disabled(!canApply)
+                    Toggle("Auto-arm when a VPN connects (vpn.autoArm)", isOn: $autoArm)
+                        .disabled(!canApply)
+                        .help("With no VPN connected the daemon idles in standby (nothing blocked) and arms "
+                            + "the guard the moment a tunnel appears. It never disarms on a drop — that's the "
+                            + "kill switch — only an explicit Unblock with the VPN off returns to standby.")
+                }
+                Section("Local network") {
+                    Toggle("Keep local devices reachable", isOn: $allowLocalNetwork)
+                        .disabled(!canApply)
+                        .help("Printers, NAS, your router's admin page, AirPlay and Chromecast, and local "
+                            + "dev servers keep working while the guard is armed. This is not a hole in the "
+                            + "kill switch: it allows local destinations only, so anything on the internet "
+                            + "stays blocked. The one cost is on untrusted Wi-Fi (a café, a hotel), where it "
+                            + "also lets other devices on that network reach you.")
+                }
                 Section("Protection") {
-                    TextField("Blocked countries (comma-sep, e.g. IR,CN)", text: $blockedCountries)
+                    TextField("Blocked countries (comma-sep, e.g. IR,RU,KP)", text: $blockedCountries)
                         .disabled(!canApply)
-                    TextField("Switch window (e.g. 2m)", text: $switchWindow)
+                    TextField("Geo IP lookup interval (e.g. 15s)", text: $pollInterval)
                         .disabled(!canApply)
-                        .help("Default duration of a VPN switch window. Clamped to the configured maximum.")
+                        .help("How often the current VPN exit's country is checked.")
+                }
+                Section("Windows") {
+                    TextField("Switch window (e.g. 5s)", text: $switchWindow)
+                        .disabled(!canApply)
+                        .help("Manual switch window (`dezhban switch`): 0 disables it, otherwise up to 3m.")
+                    TextField("Reconnect window (e.g. 30s)", text: $reconnectWindow)
+                        .disabled(!canApply)
+                        .help("Automatic window opened when a healthy tunnel drops, so the VPN client can "
+                            + "redial: 0 disables it, otherwise up to 10m.")
                     TextField("Endpoint grace (e.g. 15m)", text: $endpointGrace)
                         .disabled(!canApply)
                         .help("How long a discovered VPN server stays reachable after its connection "
                             + "disappears, so a dropped VPN can redial the same server.")
+                }
+                Section("Timing") {
+                    TextField("Endpoint refresh (e.g. 30s)", text: $endpointRefresh)
+                        .disabled(!canApply)
+                    TextField("Tunnel watch (e.g. 5s)", text: $tunnelWatch)
+                        .disabled(!canApply)
                 }
                 Section {
                     LabeledContent("Config file") {
@@ -89,12 +155,53 @@ struct SettingsView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
+            Button("Reset to Defaults…", action: resetToDefaults)
+                .disabled(!canApply)
             Button("Reload", action: seed)
             Button("Apply…", action: apply)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canApply)
         }
         .padding(12)
+    }
+
+    // MARK: - reset to defaults
+
+    /// Restores every tunable to its shipped default via `config reset --all`,
+    /// then re-seeds so the form shows what actually landed rather than what was
+    /// requested. Confirmed first: this discards staged edits AND rewrites the
+    /// on-disk config. What it deliberately does NOT touch is identity —
+    /// blockedCountries, tunnel interfaces, endpoints, profiles — so a reset can
+    /// never silently unblock a country or forget the user's VPN; that carve-out
+    /// lives in `configReset` (Go), and the wording below must keep matching it.
+    private func resetToDefaults() {
+        let alert = NSAlert()
+        alert.messageText = "Reset settings to defaults?"
+        alert.informativeText = """
+            Every tunable on this pane returns to its shipped default, and any \
+            unapplied edits here are discarded.
+
+            Your blocked countries, tunnel interfaces, endpoints, and saved VPN \
+            profiles are kept.
+            """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let restart = ConfigApply.confirmRestart()
+        canApply = false
+        status = restart ? "Resetting and restarting…" : "Resetting…"
+        ConfigApply.resetAll(restart: restart, awaitPosture: true, title: "Reset to defaults") { outcome in
+            canApply = true
+            status = outcome.status
+            if let title = outcome.transcriptTitle, let text = outcome.transcript {
+                state.showInLogs(title: title, text: text)
+            }
+            // Re-seed on success so the fields show the defaults that actually
+            // landed on disk, not the values the user was looking at.
+            if outcome.ok { seed() }
+        }
     }
 
     // MARK: - startup toggles (immediate)
@@ -176,7 +283,11 @@ struct SettingsView: View {
         loginEnabled = LoginItem.isEnabled
         notifyEnabled = NotificationManager.isEnabled
         checkUpdatesEnabled = UpdateChecker.isEnabled
-        blockedCountries = ""; switchWindow = ""; endpointGrace = ""
+        tunnelInterfaces = ""; endpoints = ""
+        autodetect = false; autoDiscover = false; autoArm = false; allowLocalNetwork = true
+        blockedCountries = ""; pollInterval = ""
+        switchWindow = ""; reconnectWindow = ""; endpointGrace = ""
+        endpointRefresh = ""; tunnelWatch = ""
         state.refreshServiceState()
         ConfigApply.seed(keys: Self.keys) { values, error in
             if let error = error {
@@ -184,21 +295,41 @@ struct SettingsView: View {
                 return
             }
             guard let v = values else { return }
-            blockedCountries = v[0]
-            switchWindow = v[1]
-            endpointGrace = v[2]
+            tunnelInterfaces = v[0]
+            endpoints = v[1]
+            autodetect = (v[2] == "true")
+            autoDiscover = (v[3] == "true")
+            autoArm = (v[4] == "true")
+            allowLocalNetwork = (v[5] == "true")
+            blockedCountries = v[6]
+            pollInterval = v[7]
+            switchWindow = v[8]
+            reconnectWindow = v[9]
+            endpointGrace = v[10]
+            endpointRefresh = v[11]
+            tunnelWatch = v[12]
             status = "Seeded from \(DezhbanCLI.resolvedConfigPath())"
             canApply = true
         }
     }
 
-    // MARK: - apply (staged protection fields)
+    // MARK: - apply (staged fields)
 
     private func apply() {
-        let blocked = blockedCountries.trimmingCharacters(in: .whitespaces)
+        let poll = pollInterval.trimmingCharacters(in: .whitespaces)
         let window = switchWindow.trimmingCharacters(in: .whitespaces)
+        let reconnect = reconnectWindow.trimmingCharacters(in: .whitespaces)
         let grace = endpointGrace.trimmingCharacters(in: .whitespaces)
-        for (label, value) in [("Switch window", window), ("Endpoint grace", grace)] {
+        let refresh = endpointRefresh.trimmingCharacters(in: .whitespaces)
+        let watch = tunnelWatch.trimmingCharacters(in: .whitespaces)
+        for (label, value) in [
+            ("Geo IP lookup interval", poll),
+            ("Switch window", window),
+            ("Reconnect window", reconnect),
+            ("Endpoint grace", grace),
+            ("Endpoint refresh", refresh),
+            ("Tunnel watch", watch),
+        ] {
             guard ConfigApply.looksLikeGoDuration(value) else {
                 ConfigApply.invalidDurationAlert(label, value)
                 return
@@ -206,14 +337,27 @@ struct SettingsView: View {
         }
 
         let pairs = [
-            "blockedCountries=\(blocked)",
+            "vpn.tunnelInterfaces=\(tunnelInterfaces)",
+            "vpn.endpoints=\(endpoints)",
+            "vpn.autodetect=\(autodetect)",
+            "vpn.autoDiscoverEndpoints=\(autoDiscover)",
+            "vpn.autoArm=\(autoArm)",
+            "vpn.allowLocalNetwork=\(allowLocalNetwork)",
+            "blockedCountries=\(blockedCountries.trimmingCharacters(in: .whitespaces))",
+            "pollInterval=\(poll)",
             "vpn.switchWindow=\(window)",
+            "vpn.reconnectWindow=\(reconnect)",
             "vpn.endpointGrace=\(grace)",
+            "vpn.endpointRefresh=\(refresh)",
+            "vpn.tunnelWatch=\(watch)",
         ]
         let restart = ConfigApply.confirmRestart()
         canApply = false
         status = restart ? "Applying and restarting…" : "Applying…"
-        ConfigApply.apply(pairs: pairs, restart: restart, awaitPosture: false,
+        // awaitPosture: true — this pane now carries guard-affecting keys (it used
+        // to be false here, back when Settings held only switchWindow/endpointGrace
+        // and VPNGuardView, which always awaited posture, held the rest).
+        ConfigApply.apply(pairs: pairs, restart: restart, awaitPosture: true,
                           title: "Settings") { outcome in
             canApply = true
             status = outcome.status

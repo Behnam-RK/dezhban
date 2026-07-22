@@ -221,15 +221,18 @@ whatever you talk to. A port filter would *not* fix this: the self-hosted VPNs
 this project targets deliberately run on 443 (to blend with HTTPS), and app
 phone-home is overwhelmingly 443/QUIC too — any filter that admits the VPN admits
 the leak. So the safety comes from the window being (a) explicitly triggered,
-(b) short (default 15s, capped 5m; `--for` extends a one-off), (c) closed early
+(b) short (default 5s, capped 3m; `--for` extends a one-off), (c) closed early
 the instant a good exit is confirmed, and (d) auto-reverting to the prior
 fail-closed posture. For a household where every VPN uses a fixed port (e.g.
 WireGuard on 51820) you can restrict it with
 `vpn.advanced.windowProtocols`/`windowPorts`. The bounded window is the only
 sanctioned relaxation of the guard, and it has exactly two sanctioned triggers:
 an explicit operator command, and — unless you opt out — the automatic reconnect
-window below. Everything else about the window (clamp, cap, auto-revert,
-fail-closed expiry) is identical for both.
+window below. Everything else about the window (auto-revert, fail-closed expiry)
+is identical for both — except the hard cap, which is deliberately **not**
+shared: the manual trigger is capped by `advanced.switchWindowMax` (default 3m),
+the automatic one by `advanced.reconnectWindowMax` (default 10m), so a longer
+budget on one trigger can never silently truncate the other's.
 
 If a window expires before the VPN comes up, dezhban reverts to GUARD but keeps
 any endpoint it learned mid-flight open — so a handshake still in progress can
@@ -275,9 +278,10 @@ Safety rails, all non-negotiable:
   broken VPN cannot turn the guard into a sieve.
 - One window per drop: expiry does not re-open; the next window needs the
   tunnel to come back up first.
-- The `advanced.switchWindowMax` hard cap and the
-  `windowProtocols`/`windowPorts` restriction apply exactly as they do to a
-  manual window.
+- Capped by its own `advanced.reconnectWindowMax` (default 10m) — not
+  `switchWindowMax`, so a longer automatic budget is never truncated to the
+  manual trigger's cap. The `windowProtocols`/`windowPorts` restriction applies
+  exactly as it does to a manual window.
 
 `status` shows an open auto window as `reconnect state: OPEN until …`
 (`status --json`: `switch.trigger: "auto"`), and the menubar app announces

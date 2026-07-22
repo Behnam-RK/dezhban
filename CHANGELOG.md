@@ -12,6 +12,76 @@ changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`dezhban upgrade check|download|apply`** — self-update for macOS. `check`
+  is the only network call anywhere in the upgrade path and never runs in the
+  root daemon (GUI on launch/~24h, or CLI on demand); `download` fetches and
+  verifies the `.pkg` into a root-owned staging directory so a local user can't
+  swap it before `apply` installs it. Installing opens no enforcement gap (the
+  running daemon keeps enforcing on its old inode while the files land) —
+  only *activating* (the restart) is the exposure, and it's gated on
+  `internal/update.CanActivate` (healthy `guard`/`standby` only, re-checked at
+  the instant of restart). The menubar app surfaces the same flow under
+  **About → Updates**, with one confirmation and a self-relaunch. See
+  [docs/upgrade.md](docs/upgrade.md) and
+  [ADR-0007](docs/adr/0007-upgrade-disclosed-window-not-holding-block.md).
+- curl/PowerShell installers plus `.deb`/`.rpm` packaging, wired into CI
+  alongside the existing macOS `.pkg`.
+- `vpn.advanced.reconnectWindowMax` (default `10m`) — an independent hard cap
+  for the automatic reconnect window, kept separate from
+  `vpn.advanced.switchWindowMax` (see Changed below).
+- The macOS app's Settings pane now also exposes `pollInterval` and
+  `vpn.reconnectWindow`, previously config-file-only.
+- **Reset to Defaults** in the macOS app's Settings pane. Runs
+  `dezhban config reset --all` rather than carrying a second copy of the
+  defaults in Swift, so `config.Default()` stays the only place they live, and
+  inherits that command's identity carve-out: blocked countries, tunnel
+  interfaces, endpoints, and saved profiles are preserved, so a reset can never
+  silently unblock a country or forget your VPN.
+
+### Changed
+
+- **The curl/PowerShell installers now tell a first-time install from an
+  upgrade.** Both read the outgoing version before anything is overwritten and
+  branch their closing guidance on it: a fresh install still gets the
+  `setup` + `start` walkthrough, while an upgrade or same-version reinstall
+  drops `setup` entirely — it would have walked an existing user through
+  replacing a config they already had — and instead reports `old -> new`,
+  states that config and learned state were left untouched, and says whether
+  the service was restarted or left stopped. A prior binary too old or broken
+  to report its version classifies as an upgrade, never as fresh.
+
+- **The VPN Guard and Settings sections of the macOS app are merged into one
+  Settings pane.** The two sections split VPN keys along a seam that didn't
+  match how they relate (`switchWindow`/`endpointGrace` lived in Settings,
+  `endpointRefresh`/`tunnelWatch` in VPN Guard); merging removes it. The
+  combined pane now awaits the restarted daemon's posture on Apply (as VPN
+  Guard always did), since it carries guard-affecting keys.
+- **Defaults retuned for a safer, less configuration-dependent out-of-box
+  posture** (2026-07-22 defaults review):
+  - `vpn.autodetect` and `vpn.autoDiscoverEndpoints` now default `true`
+    (previously `false`, with `autodetect` only implied when no
+    `tunnelInterfaces` were pinned). Explicit `tunnelInterfaces` still win;
+    set either to `false` explicitly to opt out.
+  - `blockedCountries` now defaults to `IR,RU,KP` **when the key is absent**.
+    An explicit `blockedCountries: []` is a deliberate "block nothing" and is
+    never overridden.
+  - `vpn.switchWindow` default drops `15s` → `5s`, and its floor (`10s`) is
+    removed entirely — any positive duration up to the cap now validates.
+    `vpn.advanced.switchWindowMax` drops `5m` → `3m`.
+  - `vpn.reconnectWindow`'s floor (`5s`) is also removed. It now has its own
+    independent cap, `vpn.advanced.reconnectWindowMax` (default `10m`), no
+    longer sharing `switchWindowMax` — sharing one cap between the two
+    triggers would have silently truncated whichever trigger has the larger
+    intended budget.
+  - `vpn.advanced.windowDiscoveryInterval` drops `2s` → `1s`, so the new
+    shorter `switchWindow` default still gets several discovery ticks.
+- Upgrade stash lifecycle hardening: the upgrade stash is now classified
+  against the *running* version rather than the one on disk, closing a gap
+  where a stash could be misjudged after a partial or interrupted upgrade.
+  Checksum/verify hardening and a CI seal check were added alongside it.
+
 ## [0.4.0] - 2026-07-21
 
 ### Removed

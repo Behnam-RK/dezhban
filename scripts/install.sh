@@ -68,6 +68,33 @@ else
 fi
 tag="v$version"
 
+# --- 2b. classify: fresh install vs upgrade ------------------------------------
+# Read the OUTGOING version before anything is overwritten, so the run can tell
+# the user what actually changed and — more importantly — so the "next steps"
+# footer never tells an existing user to run `setup`, which would walk them
+# through re-answering a config they already have.
+#
+# `dezhban version` prints "dezhban <version>". A binary too old or too broken
+# to answer still counts as an existing install: the safe classification of an
+# unreadable prior install is "upgrade", never "fresh".
+
+mode=fresh
+prev_version=""
+if [ -x /usr/local/bin/dezhban ]; then
+	prev_version="$(/usr/local/bin/dezhban version 2>/dev/null | awk 'NR==1 {print $2}')"
+	[ -n "$prev_version" ] || prev_version="unknown"
+	prev_version="${prev_version#v}"
+	if [ "$prev_version" = "$version" ]; then
+		mode=reinstall
+		note "dezhban $version is already installed — reinstalling the same version"
+	else
+		mode=upgrade
+		note "existing installation found: $prev_version → $version"
+	fi
+else
+	note "no existing installation found — this is a first-time install"
+fi
+
 # --- 3. download + verify ------------------------------------------------------
 # Checksum verification is mandatory and aborts on mismatch. This is deliberately
 # NOT an ed25519 signature check: a bare macOS system's /usr/bin/openssl is
@@ -233,10 +260,29 @@ else
 fi
 
 echo
-echo "dezhban $version installed."
-echo
-echo "next steps:"
-echo "  sudo dezhban setup   # configure: VPN, tunnel interfaces, blocked countries"
-echo "  sudo dezhban start   # arm the kill switch"
+if [ "$mode" = fresh ]; then
+	echo "dezhban $version installed."
+	echo
+	echo "next steps:"
+	echo "  sudo dezhban setup   # configure: VPN, tunnel interfaces, blocked countries"
+	echo "  sudo dezhban start   # arm the kill switch"
+else
+	if [ "$mode" = upgrade ]; then
+		echo "dezhban upgraded: $prev_version -> $version."
+	else
+		echo "dezhban $version reinstalled."
+	fi
+	echo "Your config in $CONFIG_DIR and any learned VPN state were left untouched."
+	echo
+	# Deliberately no `setup` here: an existing user has a config already, and
+	# re-running the wizard would walk them through replacing it.
+	if [ "$was_running" = 1 ]; then
+		echo "The service was running and has been restarted on the new build."
+		echo "  sudo dezhban status   # confirm the posture came back as expected"
+	else
+		echo "The service was not running, so it was left stopped."
+		echo "  sudo dezhban start    # arm the kill switch"
+	fi
+fi
 echo
 echo "uninstall any time with:  sudo sh $SHARE_DIR/uninstall.sh"

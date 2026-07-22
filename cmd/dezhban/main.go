@@ -493,6 +493,7 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		SwitchWindow:            cfg.VPN.SwitchWindow,
 		SwitchWindowMax:         adv.SwitchWindowMax,
 		ReconnectWindow:         cfg.VPN.ReconnectWindow,
+		ReconnectWindowMax:      adv.ReconnectWindowMax,
 		ReconnectMinUptime:      adv.ReconnectMinUptime,
 		Learn:                   learnHook,
 		PollCommand:             switchPollOrNil(switchEnabled, pollCommand),

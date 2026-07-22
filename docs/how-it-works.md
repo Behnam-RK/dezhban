@@ -147,10 +147,13 @@ mechanism: the bounded switch window. Two triggers exist, by design exactly two:
   for arming a brand-new VPN whose server dezhban has never seen.
 - **Automatic reconnect** — the tunnel-drop flow above (opt-out).
 
-Both share the same machinery: hard-capped duration
-(`advanced.switchWindowMax`, 5m), early close on a verified good exit, endpoint
-learning, and automatic revert to the prior fail-closed posture on cancel or
-expiry. `status` shows which trigger opened the current window.
+Both share the same machinery — early close on a verified good exit, endpoint
+learning, automatic revert to the prior fail-closed posture on cancel or expiry —
+but each has its own hard cap, deliberately not shared: the operator command is
+capped by `advanced.switchWindowMax` (3m), the automatic reconnect by
+`advanced.reconnectWindowMax` (10m), so a longer budget on one trigger can never
+silently truncate the other's. `status` shows which trigger opened the current
+window.
 
 ## Recovery and escape hatches
 
