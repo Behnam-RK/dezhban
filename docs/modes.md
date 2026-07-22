@@ -18,7 +18,7 @@ right now:
 | [**STANDBY**](#standby) | none — network fully open | No tunnel has been observed yet. dezhban is **not protecting.** |
 | [**GUARD**](#guard) | tunnel + endpoint pass, everything else blocked | The healthy resting state. A drop is cut instantly. |
 | [**FULL BLOCK**](#full-block) | endpoint pass only | The VPN's exit landed in a blocked country. All user traffic is cut. |
-| [**SWITCH WINDOW**](#switch-window--connecting-a-brand-new-vpn) | all outbound, bounded by a timer | The one sanctioned relaxation, from one of exactly two triggers. |
+| [**SWITCH WINDOW**](#switch-window--connecting-a-brand-new-vpn) | all outbound, bounded by a timer | The sanctioned relaxation, from one of exactly three triggers. |
 
 > **There used to be a second mode.** A `vpn.enabled: false` country-blocklist
 > fallback watched your public IP and cut egress by destination. It is gone —
@@ -44,6 +44,29 @@ Standby is the one posture where the UI must be loud: nothing is blocked, so the
 menubar icon is **grey**, never red, and the Overview says so in words. A kill
 switch that looks armed while installing no rules is worse than one that is
 honestly off.
+
+### Arming at boot
+
+dezhban is a launchd/systemd daemon; the VPN client typically starts later, as a
+user-session service. On an ordinary boot the tunnel does not exist yet when the
+daemon starts, so a live presence check alone would land in STANDBY on *every*
+reboot — opening the network for however long the VPN takes to connect, even on
+a host that has run this guard successfully for months.
+
+`vpn.armAtBoot` (**on by default**) closes that gap: dezhban persists the fact
+that a configured tunnel has been observed up at least once on this host
+(`internal/armed`), and at startup, if that fact is true **and** an endpoint is
+already known, it arms directly instead of waiting for the live probe — no new
+rule shape, since the guard with no tunnel present already renders as the FULL
+BLOCK shape (endpoint + DNS + local-network passes, tunnel-egress pass absent).
+The tunnel then simply dials in under an already-armed guard.
+
+Both conditions are required, and neither is optional: a fresh install, or any
+host whose VPN has never come up, still starts in STANDBY — arming a guard that
+has never proven it can pass traffic would turn a misconfiguration into a
+permanent lockout. See [ADR-0008](adr/0008-arm-at-boot.md).
+
+`vpn.armAtBoot: false` restores the live-probe-only behavior.
 
 ## GUARD
 
@@ -225,14 +248,18 @@ the leak. So the safety comes from the window being (a) explicitly triggered,
 the instant a good exit is confirmed, and (d) auto-reverting to the prior
 fail-closed posture. For a household where every VPN uses a fixed port (e.g.
 WireGuard on 51820) you can restrict it with
-`vpn.advanced.windowProtocols`/`windowPorts`. The bounded window is the only
-sanctioned relaxation of the guard, and it has exactly two sanctioned triggers:
-an explicit operator command, and — unless you opt out — the automatic reconnect
-window below. Everything else about the window (auto-revert, fail-closed expiry)
-is identical for both — except the hard cap, which is deliberately **not**
-shared: the manual trigger is capped by `advanced.switchWindowMax` (default 3m),
-the automatic one by `advanced.reconnectWindowMax` (default 10m), so a longer
-budget on one trigger can never silently truncate the other's.
+`vpn.advanced.windowProtocols`/`windowPorts`. The bounded window is the
+sanctioned relaxation of the guard, and it has exactly three sanctioned
+triggers: an explicit operator command, the automatic reconnect window below
+(unless you opt out), and an explicit operator [pause](#pause--deliberately-using-your-real-ip).
+Everything about the window (auto-revert, fail-closed expiry) is identical
+across triggers — except the hard cap, which is deliberately **not** shared
+between any of them: the manual trigger is capped by `advanced.switchWindowMax`
+(default 3m), the automatic one by `advanced.reconnectWindowMax` (default 10m),
+and pause by its own `vpn.pauseMax` (default 30m) — so a longer budget on one
+trigger can never silently truncate another's. See
+[ADR-0008](adr/0008-arm-at-boot.md) for why pause is a third trigger rather
+than a parallel mechanism.
 
 If a window expires before the VPN comes up, dezhban reverts to GUARD but keeps
 any endpoint it learned mid-flight open — so a handshake still in progress can
@@ -287,7 +314,35 @@ Safety rails, all non-negotiable:
 (`status --json`: `switch.trigger: "auto"`), and the menubar app announces
 "VPN dropped — reconnect window open".
 
-### The two windows are independent
+### Pause — deliberately using your real IP
+
+Sometimes the correct traffic is the one the guard blocks: a domestic-only
+service (a local bank, a government site) that refuses connections from a
+foreign VPN exit. `dezhban pause [duration]` opens the same bounded window as
+`switch`, but for a different purpose and a different cap — it does not wait
+for a VPN, it simply gives you the real ISP-assigned IP for a while, then
+re-arms itself with no further action:
+
+```sh
+dezhban pause 15m     # real IP for 15 minutes, capped by vpn.pauseMax
+dezhban resume        # end it early
+```
+
+Capped by `vpn.pauseMax` (default **30m**; `"0"` disables pausing entirely),
+never shared with `switchWindowMax` or `reconnectWindowMax`. Gated over the
+control socket by `control.allowPauseOps` (default true), independent of
+`control.allowSwitchOps` — you can turn off passwordless switching without
+losing passwordless pausing, or vice versa. Refused in STANDBY (nothing is
+blocked to pause) and while a switch window is already open (cancel it first).
+
+Because pause shares the switch window's rule shape, it also shares its
+early-close behavior: if a VPN happens to reconnect with a confirmed good exit
+while a pause is open, the guard may re-arm before your requested duration
+elapses. That is a tightening (protection resuming early), never a leak, so it
+is accepted rather than engineered around — see
+[ADR-0008](adr/0008-arm-at-boot.md).
+
+### The three windows are independent
 
 Each disables on its own, and they answer different questions:
 
@@ -295,8 +350,9 @@ Each disables on its own, and they answer different questions:
 |---|---|
 | `vpn.switchWindow: "0"` | No manual `dezhban switch`. A brand-new VPN's server must be configured by hand. |
 | `vpn.reconnectWindow: "0"` | A drop is cut with zero leak; the VPN cannot redial to an unknown server. |
+| `vpn.pauseMax: "0"` | No `dezhban pause`. The real IP is never deliberately exposed. |
 
-Both `"0"` is the strict zero-leak posture: nothing can relax the guard.
+All three `"0"` is the strict zero-leak posture: nothing can relax the guard.
 
 ## Preview any ruleset without applying it
 

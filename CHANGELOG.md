@@ -12,6 +12,26 @@ changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`vpn.armAtBoot`** (default **true**): arms the guard directly at startup,
+  even before the VPN's tunnel interface exists, on any host that has
+  connected successfully at least once and has a known endpoint. Closes a real
+  gap — `internal/runner` decided STANDBY from a live interface probe taken
+  fresh on every start, so a normal boot (this daemon starts before the VPN
+  client) opened the network for however long the VPN took to reconnect, on
+  every reboot, even on hosts that had run the guard for months. A fresh
+  install, or a host whose VPN has never come up, still starts in STANDBY —
+  this cannot turn a misconfiguration into a lockout. See
+  [ADR-0008](docs/adr/0008-arm-at-boot.md).
+- **`dezhban pause [duration]` / `dezhban resume`**: a bounded, deliberate drop
+  to the real ISP IP (e.g. to reach a domestic-only service a VPN exit can't
+  reach), auto-reverting at the deadline with no further action. A third
+  sanctioned relaxation of the guard alongside the switch window and the
+  automatic reconnect window, with its own cap (`vpn.pauseMax`, default 30m,
+  `"0"` disables) and its own control-socket gate (`control.allowPauseOps`,
+  default true, independent of `control.allowSwitchOps`).
+
 ## [0.6.0] - 2026-07-22
 
 ### Fixed
