@@ -84,8 +84,9 @@ any process running as a member of `control.group` can issue these commands with
 a password. On macOS `admin` is the group every administrator account is already in
 — the same humans macOS would have prompted for a password anyway. What they can do
 is bounded: `block`/`unblock` only move between the daemon's own fail-closed
-postures, and `switch` is bounded by the same 5-minute cap as ever. `panic` is not
-on the socket at all, so the lockout escape hatch never depends on a live daemon.
+postures, and `switch` is bounded by `switchWindowMax` (default 3m) same as ever.
+`panic` is not on the socket at all, so the lockout escape hatch never depends on
+a live daemon.
 
 Tighten it if you want to: `control.group: ""` (root-only), or
 `control.allowSwitchOps: false` (keep passwordless block/unblock, but make relaxing

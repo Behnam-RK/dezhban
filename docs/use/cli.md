@@ -175,7 +175,7 @@ dezhban vpn import ~/wg0.conf          # WireGuard .conf / OpenVPN .ovpn / V2Ray
 dezhban vpn list                        # profiles + learned endpoints + active state
 
 # A brand-new VPN whose server dezhban has never seen:
-sudo dezhban switch                     # open a window (15s default); connect it in its app now
+sudo dezhban switch                     # open a window (5s default); connect it in its app now
 sudo dezhban switch --for 90s --name windscribe   # custom duration + attribution
 sudo dezhban switch --cancel            # close the window early
 dezhban switch --status                 # is a window open?

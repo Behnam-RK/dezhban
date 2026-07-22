@@ -55,9 +55,10 @@ bounded by what the ops can actually do:
 - `block` / `unblock` only move between postures the daemon's own state machine
   already sanctions (GUARD ↔ FULL BLOCK). They can never open egress *past* the
   guard, so the worst an unwanted caller achieves is cutting their own network.
-- `switch-open` **can** relax the guard, bounded by the same clamp and 5-minute cap
-  as always. It is the one genuinely-privileged op on the socket, which is why it
-  has its own flag: `control.allowSwitchOps: false` forces it back to root-only.
+- `switch-open` **can** relax the guard, bounded by its trigger's own hard cap —
+  3m for a manual switch, 10m for the automatic reconnect window, deliberately
+  never shared. It is the one genuinely-privileged op on the socket, which is why
+  it has its own flag: `control.allowSwitchOps: false` forces it back to root-only.
 - `panic` is deliberately **absent**. The lockout escape hatch must not depend on a
   daemon being alive, so it stays a direct, root-only firewall teardown.
 - Service lifecycle (`install`/`uninstall`/`start`/`stop`) is absent for a simpler
