@@ -33,8 +33,24 @@ changes.
   `vpn.advanced.switchWindowMax` (see Changed below).
 - The macOS app's Settings pane now also exposes `pollInterval` and
   `vpn.reconnectWindow`, previously config-file-only.
+- **Reset to Defaults** in the macOS app's Settings pane. Runs
+  `dezhban config reset --all` rather than carrying a second copy of the
+  defaults in Swift, so `config.Default()` stays the only place they live, and
+  inherits that command's identity carve-out: blocked countries, tunnel
+  interfaces, endpoints, and saved profiles are preserved, so a reset can never
+  silently unblock a country or forget your VPN.
 
 ### Changed
+
+- **The curl/PowerShell installers now tell a first-time install from an
+  upgrade.** Both read the outgoing version before anything is overwritten and
+  branch their closing guidance on it: a fresh install still gets the
+  `setup` + `start` walkthrough, while an upgrade or same-version reinstall
+  drops `setup` entirely — it would have walked an existing user through
+  replacing a config they already had — and instead reports `old -> new`,
+  states that config and learned state were left untouched, and says whether
+  the service was restarted or left stopped. A prior binary too old or broken
+  to report its version classifies as an upgrade, never as fresh.
 
 - **The VPN Guard and Settings sections of the macOS app are merged into one
   Settings pane.** The two sections split VPN keys along a seam that didn't
