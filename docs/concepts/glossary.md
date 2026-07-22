@@ -63,7 +63,7 @@ then explains it in a sentence**, rather than replacing the name with a euphemis
 **STANDBY** — no rules installed, network fully open, the guard is **off**. The resting
 state before a tunnel has ever been observed. User-facing: "Guard off — standby. Nothing
 is being blocked." Icon is **grey** — nothing is being cut, so nothing is red. See
-[ADR-0002](adr/0002-standby-no-tunnel-posture.md).
+[ADR-0002](../adr/0002-standby-no-tunnel-posture.md).
 
 **GUARD** — the healthy enforcing state. Only the tunnel may carry traffic off this
 machine; everything else on the physical interface is blocked. User-facing: "Guard
@@ -122,7 +122,7 @@ through. User-facing: "Countries your VPN must not exit through". A blocked exit
 FULL BLOCK, not a warning.
 
 **Geo provider** — a public API dezhban queries to learn the exit country. Passes to
-providers are **tunnel-scoped only** — see [ADR-0006](adr/0006-geo-providers-tunnel-scoped.md),
+providers are **tunnel-scoped only** — see [ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md),
 which explains why the alternative silently breaks the check.
 
 ## Mechanism
@@ -160,7 +160,7 @@ hatch must never depend on the thing it is escaping from.
 
 | Don't say | Say | Why |
 |---|---|---|
-| "Legacy mode", "country-blocklist mode", "VPN guard mode" | *(nothing)* | There is one mode. See [ADR-0001](adr/0001-single-guard-mode.md). |
+| "Legacy mode", "country-blocklist mode", "VPN guard mode" | *(nothing)* | There is one mode. See [ADR-0001](../adr/0001-single-guard-mode.md). |
 | "Protection" / "protected" / "secured" | "the guard" / "guard active" | One word for one concept. The drift this page ends. |
 | "Stop kill switch" | "Turn off the guard" | Name the action, not the machinery. |
 | "The daemon isn't running" (in the app) | "The guard is off" | Users do not have daemons. They have a guard. |

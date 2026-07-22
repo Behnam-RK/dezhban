@@ -64,7 +64,7 @@ type Snapshot struct {
 	// during an active leak). Observers should surface it prominently regardless of posture.
 	// On a terminal posture:"stopped" snapshot it additionally carries WHY the daemon
 	// went down when the exit was not a clean shutdown — a startup refusal or a run-loop
-	// failure (see runner.publishStopped and docs/state.md); a clean, operator-requested
+	// failure (see runner.publishStopped and docs/contribute/architecture.md); a clean, operator-requested
 	// stop leaves it empty. Either way the contract holds: the intended posture (enforcing)
 	// was not achieved.
 	EnforcementErr string   `json:"enforcementErr,omitempty"`

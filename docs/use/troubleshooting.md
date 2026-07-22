@@ -15,6 +15,24 @@ dezhban status
 sublayer), so it is always safe and a no-op on a clean system. After it runs,
 connectivity is restored. Then fix the cause below before re-enabling the guard.
 
+**No `dezhban` binary at all (e.g. a dev build gone missing).** Tear the
+platform rules down directly:
+
+```sh
+# macOS
+sudo pfctl -a dezhban -F all                 # flush our anchor → network back
+sudo cp /etc/pf.conf.dezhban.bak /etc/pf.conf # restore the saved ruleset, if present
+sudo pfctl -f /etc/pf.conf                    # reload it
+sudo pfctl -d                                 # last resort: disable pf entirely
+sudo rm -f /var/db/dezhban/pf.state           # clear the stale state marker
+
+# Linux
+sudo nft delete table inet dezhban            # or: nft delete table ip dezhban
+
+# Windows (PowerShell, as Administrator)
+Remove-NetFirewallRule -Group dezhban
+```
+
 ## VPN guard: tunnel dies, DNS fails ("no such host"), country lookups time out
 
 Symptom (from the daemon log):
@@ -79,7 +97,8 @@ own egress and prevented the very reconnect it was waiting for (a livelock).
 **Fix (current behavior).** An **undeterminable** country now
 *holds* the current posture instead of escalating — only a *successful* reading
 of a blocked country produces FULL BLOCK. See
-[modes.md](modes.md) ("Fail-closed in guard mode"). If your endpoints are
+[modes.md](../concepts/modes.md#an-unknown-country-holds-it-never-escalates).
+If your endpoints are
 hostnames, keep `vpn.allowPhysicalDNS` on (the default) so the client can re-resolve its
 server on the physical link while the tunnel is down. The residual leak is
 DNS-query metadata only; your traffic stays blocked.
@@ -97,7 +116,7 @@ address dezhban has never seen and is dropped — `endpointGrace` only covers
 redials to the *same* server.
 
 **Fix (current behavior).** The [automatic reconnect
-window](modes.md#automatic-reconnect-window) (`vpn.reconnectWindow`, default
+window](../concepts/modes.md#automatic-reconnect-window) (`vpn.reconnectWindow`, default
 `30s`) opens on the drop so the client can redial anywhere; the new server is
 learned and the guard snaps back on a confirmed good exit. If you disabled it
 (`"0"`), reconnects to fresh servers need `dezhban switch` — that is the
@@ -184,14 +203,9 @@ The open directory leaks nothing: the sensitive files inside it (`command.json`,
 
 ## Preview rules before applying them
 
-Never find out what a block does by getting locked out. Render the exact ruleset
-first, no root, no side effects:
-
-```sh
-dezhban print-rules --mode guard --config <config>     # or: task rules MODE=guard
-dezhban print-rules --mode fullblock --config <config>
-dezhban print-rules --mode switch --config <config>
-```
+Never find out what a block does by getting locked out — render the exact
+ruleset first, no root, no side effects:
+[modes.md § Preview any ruleset](../concepts/modes.md#preview-any-ruleset-without-applying-it).
 
 ## Config won't load
 

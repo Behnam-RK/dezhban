@@ -234,7 +234,7 @@ key in `internal/update/sig.go`) *and* the `.pkg`'s own checksum, before
 anything is ever staged for `apply`. This is not optional and there's no
 flag to skip it: an update replaces a root-owned system service, so
 "whatever the CDN served" is not an acceptable trust model here — see
-[docs/releasing.md](releasing.md#unsigned-artifacts-signed-checksums) for
+[releasing.md](../contribute/releasing.md#unsigned-artifacts-signed-checksums) for
 why this is ed25519 rather than cosign/sigstore, and
-[docs/install.md](install.md) for the (deliberately weaker, checksum-only)
+[install.md](install.md) for the (deliberately weaker, checksum-only)
 guarantee the *first* install gets instead.

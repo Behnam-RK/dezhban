@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../gui/assets/png/banner-1280x640.png" alt="Dezhban — system-wide network kill switch" width="640">
+  <img src="../../gui/assets/png/banner-1280x640.png" alt="Dezhban — system-wide network kill switch" width="640">
 </p>
 
 # Quick start
@@ -30,7 +30,7 @@ You'll be asked for your password once.
 Installing does **not** start enforcement. A kill switch configured by guesswork
 is how you get locked out of your own machine, so arming is always a separate,
 deliberate step. Full options, including the Gatekeeper workaround for the
-unsigned macOS build: [Install](../README.md#install).
+unsigned macOS build: [Install](install.md).
 
 Check it's there:
 
@@ -112,10 +112,10 @@ On macOS the menubar tells you the posture at a glance. There are four looks:
 
 | | Posture | What it means |
 |---|---|---|
-| <img src="../gui/assets/png/menubar-on-color-88px.png" alt="Guard armed" height="22"> | **GUARD** | The healthy state. The tunnel is up and it is the only way out of this machine. |
-| <img src="../gui/assets/png/menubar-off-color-88px.png" alt="Standby" height="22"> | **STANDBY** | **Not protecting.** No rules are installed and your network is fully open. This is the resting state before a VPN has ever connected — it arms itself the moment one does. |
-| <img src="../gui/assets/png/menubar-blocked-color-88px.png" alt="Egress blocked" height="22"> | **FULL BLOCK** | Traffic is cut. Either the VPN's exit landed in a country you refused, or the guard is holding a dropped tunnel closed. Your VPN can still reconnect. |
-| <img src="../gui/assets/png/menubar-warning-color-88px.png" alt="Warning" height="22"> | **SWITCH WINDOW** | A bounded relaxation is open and **your real IP may be exposed** until it closes on its own. Also shown if a firewall action failed. |
+| <img src="../../gui/assets/png/menubar-on-color-88px.png" alt="Guard armed" height="22"> | **GUARD** | The healthy state. The tunnel is up and it is the only way out of this machine. |
+| <img src="../../gui/assets/png/menubar-off-color-88px.png" alt="Standby" height="22"> | **STANDBY** | **Not protecting.** No rules are installed and your network is fully open. This is the resting state before a VPN has ever connected — it arms itself the moment one does. |
+| <img src="../../gui/assets/png/menubar-blocked-color-88px.png" alt="Egress blocked" height="22"> | **FULL BLOCK** | Traffic is cut. Either the VPN's exit landed in a country you refused, or the guard is holding a dropped tunnel closed. Your VPN can still reconnect. |
+| <img src="../../gui/assets/png/menubar-warning-color-88px.png" alt="Warning" height="22"> | **SWITCH WINDOW** | A bounded relaxation is open and **your real IP may be exposed** until it closes on its own. Also shown if a firewall action failed. |
 
 Two things worth knowing, because they surprise people:
 
@@ -189,9 +189,9 @@ you need it — the full runbook is in
 
 | If you want to… | Read |
 |---|---|
-| Understand how the machine actually works | [how-it-works.md](how-it-works.md) |
-| See every posture and its exact ruleset | [modes.md](modes.md) |
+| Understand how the machine actually works | [how-it-works.md](../concepts/how-it-works.md) |
+| See every posture and its exact ruleset | [modes.md](../concepts/modes.md) |
 | Look up a config field | [config.md](config.md) |
-| Find a command or flag | [usage.md](usage.md) |
+| Find a command or flag | [cli.md](cli.md) |
 | Recover from a lockout | [troubleshooting.md](troubleshooting.md) |
-| Know why it's built this way | [architecture.md](architecture.md) · [adr/](adr/README.md) |
+| Know why it's built this way | [architecture.md](../contribute/architecture.md) · [adr/](../adr/README.md) |

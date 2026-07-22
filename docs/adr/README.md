@@ -2,7 +2,7 @@
 
 Decisions whose **rationale** is expensive to reconstruct from the code.
 
-[architecture.md](../architecture.md) has a "Design decisions" table — that is the
+[architecture.md](../contribute/architecture.md) has a "Design decisions" table — that is the
 index of *what* was chosen. These records hold the *why*, the alternatives that were
 examined, and the specific reason each was rejected. Read them before reversing
 anything they describe: several record decisions that look wrong until you know the

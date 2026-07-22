@@ -58,21 +58,13 @@ it — the kill switch would simply never come up.
 
 ### Why isn't there a signed `.pkg` instead?
 
-Because a signed, notarized `.pkg` requires enrolling in the **Apple
-Developer Program — $99/year** — and there is no free tier or workaround.
-dezhban is a hobby project with no revenue to justify that recurring cost for
-what curl-pipe-bash already solves for free. If you're the kind of user who
-specifically wants Apple's own chain of trust (some VPN-kill-switch users
-are, and reasonably so), the honest answer is: not yet. The seam is there —
-`packaging/macos/build-pkg.sh`'s `INSTALLER_SIGN_IDENTITY`/`NOTARIZE_PROFILE`
-— so if that ever changes, it's a two-variable config change, not a rewrite
-(see [docs/releasing.md](releasing.md#adding-apple-signing-later)).
-
-What dezhban does instead, and does today: **checksums, always**, and an
-**ed25519 signature** over every release's checksums — see
-[docs/releasing.md](releasing.md#unsigned-artifacts-signed-checksums)
-for the full story, and why that signature is checked by `dezhban upgrade`
-but deliberately not by the install scripts.
+There is no Apple Developer certificate ($99/yr; a hobby project with no
+revenue), and curl-pipe-bash already solves the friction that signing would
+for free. What dezhban does instead: **checksums, always**, plus an
+**ed25519 signature** over every release. Full story, why the install
+scripts check the checksum but not the signature, and how to add real Apple
+signing later: [releasing.md § Unsigned artifacts, signed
+checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
 
 ## What each installer does, precisely
 
@@ -111,7 +103,7 @@ sudo installer -pkg dezhban-<version>.pkg -target /
 ```
 
 Unsigned, so a double-click hits Gatekeeper — see
-[docs/releasing.md](releasing.md#unsigned-artifacts-signed-checksums)
+[releasing.md](../contribute/releasing.md#unsigned-artifacts-signed-checksums)
 for the terminal-only workaround, or use `install.sh` instead, which doesn't
 have this problem at all.
 
@@ -158,7 +150,7 @@ sudo bash scripts/install-local.sh
 ```
 
 Different from everything above: this compiles locally rather than
-downloading a release. See [docs/development.md](development.md).
+downloading a release. See [development.md](../contribute/development.md).
 
 ## Verifying a download by hand
 
@@ -171,13 +163,12 @@ shasum -a 256 -c SHA256SUMS --ignore-missing
 ```
 
 `SHA256SUMS.sig` is the ed25519 signature `dezhban upgrade` verifies
-internally (`internal/update.VerifySignature`); there's no convenient CLI
-verifier for it outside the Go binary itself today (see
-[docs/releasing.md](releasing.md#unsigned-artifacts-signed-checksums)
-for why the install scripts don't check it directly).
+internally; there's no convenient CLI verifier for it outside the Go binary
+itself today. Why: [releasing.md § Unsigned artifacts, signed
+checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
 
 ## Staying current
 
-Once installed, [docs/upgrade.md](upgrade.md) covers `dezhban upgrade` — the
+Once installed, [upgrade.md](upgrade.md) covers `dezhban upgrade` — the
 in-place update path (macOS: fully self-serve; Linux/Windows: checks and
 tells you, but leaves the actual update to your package manager).

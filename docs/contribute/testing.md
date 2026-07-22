@@ -1,19 +1,18 @@
 # Acceptance checks
 
-dezhban is code-complete: every feature described in [modes.md](modes.md) and
-[usage.md](usage.md) is implemented and covered by `go test ./...`. What remains
-is **privileged, on-host verification** — the checks that need root and a real
-firewall, and therefore cannot run in CI.
+dezhban is code-complete: every feature described in [modes.md](../concepts/modes.md)
+and [cli.md](../use/cli.md) is implemented and covered by `go test ./...`. What
+remains is **privileged, on-host verification** — the checks that need root and
+a real firewall, and therefore cannot run in CI.
 
 This file is the standing checklist. Work through the section for the OS you are
-on; check the boxes as you go. The macOS block/guard walkthrough is long enough to
-live on its own — see [testing-macos-block.md](testing-macos-block.md) for the
-step-by-step version with expected output at each step.
+on; check the boxes as you go. The "VPN interface guard" section ends with a
+macOS worked example giving literal `pf` commands and expected output.
 
 > **Run these on a host you can afford to lock out of.** Every check below arms a
 > real kill switch. Keep a second terminal open and know the escape hatch:
 > `sudo dezhban panic` removes all rules with no daemon running. See
-> [troubleshooting.md](troubleshooting.md).
+> [troubleshooting.md](../use/troubleshooting.md).
 
 ## Automated (no root) — run first
 
@@ -195,6 +194,36 @@ The guard is where a misconfiguration locks the host out. Run
       livelock the reconnect.
 - [ ] **Unblock restores everything.**
 
+### macOS worked example (pf)
+
+Run on the local console, not over SSH/VPN/remote — a bad config or a crash
+mid-block can lock you out. Keep a second terminal open with the escape hatch
+(`sudo pfctl -a dezhban -F all`) before you start. Fill in the `vpn` block
+first (tunnel interface via `route -n get default | grep interface`; the VPN
+endpoint from your client's own config/logs — `lsof -nP -iUDP -a -p $(pgrep -f
+your-vpn-process)` finds it for UDP VPNs).
+
+```sh
+# Teardown works before you trust block:
+sudo dezhban block --config <config>; sudo dezhban unblock
+sudo pfctl -a dezhban -s rules              # expect: empty anchor
+
+# Guard up, tunnel traffic flows:
+sudo dezhban block --config <config>
+sudo pfctl -a dezhban -s rules              # expect: pass on { utunN }, pass to { endpoint }, block drop out all
+curl -m5 https://example.com                # expect: succeeds (rides the tunnel)
+
+# Tunnel drop cuts egress, no fall-through to the physical interface:
+sudo ifconfig utunN down
+curl -m5 https://example.com                # expect: hangs/fails — reconnect the VPN to restore
+
+# Forbidden country cuts the tunnel too (FULL BLOCK) — run in the foreground to force it:
+sudo dezhban run --config <config> --simulate-country IR &
+sudo pfctl -a dezhban -s rules               # expect: only `pass quick on lo0 all` + `block drop out all`
+
+sudo dezhban unblock                         # expect: connectivity back, anchor empty
+```
+
 ### Profiles, switching, and learned endpoints
 
 - [ ] **Config compatibility.** A pre-profiles config still loads, validates, and
@@ -275,7 +304,7 @@ Per OS, privileged:
 ## Upgrade
 
 macOS only, privileged (`dezhban upgrade download`/`apply`). See
-[docs/upgrade.md](upgrade.md) for the full design.
+[upgrade.md](../use/upgrade.md) for the full design.
 
 - [ ] **Tunnel down.** `dezhban upgrade check` with the tunnel down fails
       cleanly and opens nothing — it inherits the guard's tunnel-only routing

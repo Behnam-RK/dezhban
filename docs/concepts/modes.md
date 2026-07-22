@@ -1,8 +1,8 @@
 # Postures
 
 > This is the reference page: every posture and the exact rules it installs. If
-> you are setting dezhban up for the first time, start with the
-> [quick start](quick-start.md) instead.
+> you are setting dezhban up for the first time, start with
+> [getting started](../use/getting-started.md) instead.
 
 dezhban has **one** enforcement model: an always-on **interface guard**. Under a
 full tunnel the firewall on the physical interface sees only encrypted outer
@@ -20,9 +20,39 @@ right now:
 | [**FULL BLOCK**](#full-block) | endpoint pass only | The VPN's exit landed in a blocked country. All user traffic is cut. |
 | [**SWITCH WINDOW**](#switch-window--connecting-a-brand-new-vpn) | all outbound, bounded by a timer | The one sanctioned relaxation, from one of exactly two triggers. |
 
+The whole state machine, in one picture. Escalation and restore fire only on a
+*successful* country reading — an undeterminable one (lookup failed) holds
+whatever posture is current, so it never appears below as a transition:
+
+```
+  [ STANDBY ]  no rules, network fully open
+      |
+      | tunnel configured AND observed up
+      v
+  [ GUARD ]  tunnel + endpoint pass, everything else blocked -- the healthy resting state
+      |  \
+      |   \__ operator `switch`, or a tunnel drop from healthy GUARD
+      |        \
+      |         v
+      |     [ SWITCH WINDOW ]  all outbound, bounded timer
+      |         |
+      |         |__ closes early on a verified good exit,
+      |             or expires back to GUARD (fail-closed)
+      |
+      | blocked country (read succeeds)
+      v
+  [ FULL BLOCK ]  endpoint pass only, all user traffic cut
+      |
+      | allowed country (read succeeds) -- restores GUARD
+      v
+  [ GUARD ]
+
+  `unblock` (with autoArm) returns GUARD to STANDBY.
+```
+
 > **There used to be a second mode.** A `vpn.enabled: false` country-blocklist
 > fallback watched your public IP and cut egress by destination. It is gone —
-> see [ADR-0001](adr/0001-single-guard-mode.md). It was never a peer of the
+> see [ADR-0001](../adr/0001-single-guard-mode.md). It was never a peer of the
 > guard: it applied no rules at rest, so it was "best-effort, not a zero-leak
 > guarantee" by its own documentation, and it was only meaningful when the
 > country you blocked was your *real physical location*. The guard already
@@ -38,7 +68,7 @@ This is deliberate, and it is the job `vpn.enabled: false` used to do. An
 always-on guard with no tunnel to pass traffic through is not "secure", it is a
 host with no connectivity — so dezhban waits until it has something to guard.
 It arms the moment a tunnel is both **configured and observed up**. See
-[ADR-0002](adr/0002-standby-no-tunnel-posture.md).
+[ADR-0002](../adr/0002-standby-no-tunnel-posture.md).
 
 Standby is the one posture where the UI must be loud: nothing is blocked, so the
 menubar icon is **grey**, never red, and the Overview says so in words. A kill
@@ -70,7 +100,7 @@ The double scoping is the point. With the tunnel down the lookup simply fails an
 the posture holds — correct, because there is no VPN exit to measure. A pass on
 the *physical* link would instead succeed and report your ISP's country (a normal,
 allowed one), so FULL BLOCK would never fire. See
-[ADR-0006](adr/0006-geo-providers-tunnel-scoped.md).
+[ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md).
 
 The pass carries **no DNS rule**. A tunnel-scoped but destination-unscoped port-53
 rule would send *every* application's DNS through the tunnel to the forbidden
@@ -101,7 +131,7 @@ exit.
 > real thing for *your* config, and applies nothing.
 
 Configure the tunnel interface(s) and VPN endpoint IP(s) — see the `vpn` block in
-[config.md](config.md). Find your tunnel interface with:
+[config.md](../use/config.md). Find your tunnel interface with:
 
 ```sh
 dezhban detect-vpn          # detected tunnel iface(s) + a paste-ready vpn block
@@ -110,7 +140,7 @@ dezhban detect-vpn          # detected tunnel iface(s) + a paste-ready vpn block
 `detect-vpn` deliberately does **not** autodetect the endpoint — a wrong endpoint
 would leak physical egress — so set `vpn.endpoints` from your VPN client's own
 config (or use `autoDiscoverEndpoints` on macOS). A wrong or tunnel-internal
-endpoint is the #1 lockout cause; [troubleshooting.md](troubleshooting.md) has the
+endpoint is the #1 lockout cause; [troubleshooting.md](../use/troubleshooting.md) has the
 runbook. `panic` tears down every posture's rules.
 
 ### An unknown country holds; it never escalates
@@ -197,7 +227,7 @@ the physical link, so you never have to infer it from the config.
 The guard passes egress to the **union** of every configured profile's server
 endpoints, so disconnecting one known VPN and connecting another just works —
 each profile's handshake stays reachable on the physical link. Add profiles with
-`dezhban vpn add` / `dezhban vpn import` (see [config.md](config.md)).
+`dezhban vpn add` / `dezhban vpn import` (see [config.md](../use/config.md)).
 
 ### Switch window — connecting a brand-new VPN
 
@@ -245,9 +275,10 @@ relax the guard. The cost is that a brand-new VPN's server must be added to
 could be observed. `dezhban switch` then refuses by name rather than failing
 obscurely.
 
-### Automatic reconnect window — surviving a drop with zero interaction
+### Automatic reconnect window
 
-Rotating-pool and anti-censorship VPNs pick a **fresh server on almost every
+Surviving a drop with zero interaction: rotating-pool and anti-censorship
+VPNs pick a **fresh server on almost every
 connect** (often Cloudflare-fronted on 443), so "keep the known endpoints open"
 can never cover a reconnect — the redial target is an IP dezhban has never seen,
 and every reconnect would need a manual `switch`. The **automatic reconnect
@@ -286,6 +317,20 @@ Safety rails, all non-negotiable:
 `status` shows an open auto window as `reconnect state: OPEN until …`
 (`status --json`: `switch.trigger: "auto"`), and the menubar app announces
 "VPN dropped — reconnect window open".
+
+Same machinery, two triggers, two caps that are never shared:
+
+```
+                     opened by             default    hard cap
+                     ─────────────────     ───────    ───────────────────
+  manual switch      `dezhban switch`      5s         switchWindowMax     (3m)
+  auto reconnect      tunnel drop from      30s        reconnectWindowMax  (10m)
+                       healthy GUARD
+
+  Either window: closes early on a verified good exit,
+                 or expires back to the prior fail-closed posture.
+  A longer budget on one trigger can never silently truncate the other's.
+```
 
 ### The two windows are independent
 
