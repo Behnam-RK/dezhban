@@ -25,6 +25,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationManager.requestAuthorizationIfNeeded()
+        // Resolve the config path once, off the main thread, before any pane asks for
+        // it — every later read is then a memoized lookup rather than a shell-out on
+        // whatever thread the caller happened to be on. See DezhbanCLI.exec.
+        DezhbanCLI.warmConfigPath()
         AppActions.refresh = { [weak self] in self?.refresh() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         menu.delegate = self
@@ -90,9 +94,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         button.contentTintColor = nil
         button.toolTip = "dezhban — \(help)"
-        // The Dock tile mirrors the same state; nil falls back to the bundle's
-        // static AppIcon (e.g. outside the assembled .app bundle).
-        NSApp.applicationIconImage = PostureUI.dockIcon(state)
+        // The Dock tile shows a COARSER state than the menu bar: only "blocked" is
+        // ever distinct there (see PostureUI.dockState) — "off"/"warning" show the
+        // default guard look instead. nil falls back to the bundle's static AppIcon
+        // (e.g. outside the assembled .app bundle).
+        NSApp.applicationIconImage = PostureUI.dockIcon(PostureUI.dockState(for: state))
 
         // Essential-transition notifications. The FIRST classification after
         // launch is recorded silently — notifying the user about the state the

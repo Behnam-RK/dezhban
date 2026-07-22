@@ -12,6 +12,27 @@ changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **GUI main-thread crash on launch/settings.** `DezhbanCLI.exec` spawned a
+  `Process` and blocked on `waitUntilExit`, which spins the calling thread's
+  run loop instead of simply blocking; on the main thread this re-entered
+  AppKit's display cycle mid-SwiftUI-body-evaluation and corrupted state,
+  crashing on a null PC. The CLI's config-path resolution is now memoized
+  behind a lock and split into a non-blocking `displayConfigPath` (safe in a
+  `body`) and a blocking, background-only `resolvedConfigPath()`; every
+  remaining main-thread call site was moved off-main or reads the memoized
+  value, and `exec` now asserts `!Thread.isMainThread` so a regression fails
+  loudly in development.
+- Sidebar toggle misalignment/relocation-on-click in the macOS app: the
+  window hosted its SwiftUI root via a bare `NSHostingView` instead of an
+  `NSHostingController`, so `NavigationSplitView`'s toolbar-based sidebar
+  toggle couldn't install into the titlebar and SwiftUI drew its own inline
+  toggle instead.
+- Dock icon states now match what `PostureUI.dockState` actually reports
+  (`on`/`blocked`); the unused intermediate asset states were removed rather
+  than left to silently bit-rot.
+
 ## [0.5.0] - 2026-07-22
 
 ### Added

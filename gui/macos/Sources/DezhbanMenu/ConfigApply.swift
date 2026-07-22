@@ -10,18 +10,23 @@ enum ConfigApply {
     /// on-disk file is the source of truth, never a cached second-schema mirror.
     /// Short-circuits on the first failure so an error string can never be seeded
     /// into a field (and later written back as a value by Apply). Calls back on
-    /// the main queue with the values (in key order) or nil plus the failure text.
-    static func seed(keys: [String], completion: @escaping (_ values: [String]?, _ error: String?) -> Void) {
-        let cfgPath = DezhbanCLI.resolvedConfigPath()
+    /// the main queue with the resolved path, the values (in key order), or nil
+    /// plus the failure text — the one resolution done here is also the one the
+    /// caller needs for display, so it never has to resolve a second time itself.
+    static func seed(keys: [String],
+                     completion: @escaping (_ path: String, _ values: [String]?, _ error: String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
+            // Resolved HERE, not on the caller's main thread: resolving shells out,
+            // and a shell-out on the main thread spins the run loop (DezhbanCLI.exec).
+            let cfgPath = DezhbanCLI.resolvedConfigPath()
             let results = keys.map { (key: $0, result: DezhbanCLI.run(["config", "get", $0, "--config", cfgPath])) }
             DispatchQueue.main.async {
                 if let failed = results.first(where: { !$0.result.ok }) {
                     let detail = failed.result.output.trimmingCharacters(in: .whitespacesAndNewlines)
-                    completion(nil, "Failed to read \(failed.key): \(detail)")
+                    completion(cfgPath, nil, "Failed to read \(failed.key): \(detail)")
                     return
                 }
-                completion(results.map { $0.result.output.trimmingCharacters(in: .whitespacesAndNewlines) }, nil)
+                completion(cfgPath, results.map { $0.result.output.trimmingCharacters(in: .whitespacesAndNewlines) }, nil)
             }
         }
     }
@@ -43,10 +48,7 @@ enum ConfigApply {
     /// to publish a posture rather than assuming the restart worked.
     static func apply(pairs: [String], restart: Bool, awaitPosture: Bool, title: String,
                       completion: @escaping (Outcome) -> Void) {
-        // Resolve the target path once and pass --config explicitly, so the write and
-        // the daemon provably act on the same file rather than each re-resolving it.
-        let cfgPath = DezhbanCLI.resolvedConfigPath()
-        runBatch(["config", "set"] + pairs + ["--config", cfgPath],
+        runBatch(["config", "set"] + pairs,
                  restart: restart, awaitPosture: awaitPosture, title: title, completion: completion)
     }
 
@@ -58,24 +60,30 @@ enum ConfigApply {
     /// never carries a second copy of the schema.
     static func resetAll(restart: Bool, awaitPosture: Bool, title: String,
                          completion: @escaping (Outcome) -> Void) {
-        let cfgPath = DezhbanCLI.resolvedConfigPath()
-        runBatch(["config", "reset", "--all", "--config", cfgPath],
+        runBatch(["config", "reset", "--all"],
                  restart: restart, awaitPosture: awaitPosture, title: title, completion: completion)
     }
 
+    /// `write` arrives WITHOUT `--config`; this appends it from the resolved path.
+    /// The resolution happens on the background queue below rather than in `apply` /
+    /// `resetAll`, which are called from button actions on the main thread — see
+    /// DezhbanCLI.exec on why a main-thread shell-out is unsafe, not just slow.
     private static func runBatch(_ write: [String], restart: Bool, awaitPosture: Bool, title: String,
                                  completion: @escaping (Outcome) -> Void) {
-        var commands: [[String]] = [write]
-        if restart {
-            // `restart`, not stop-then-start: the CLI owns the in-between state. No
-            // --config — it acts on the already-installed service unit, whose config
-            // path was baked in at install time.
-            commands.append(["restart"])
-        }
         // Marked BEFORE the restart: only a snapshot published after this instant can
         // have come from the new daemon.
         let mark = Date()
         DispatchQueue.global(qos: .userInitiated).async {
+            // Resolve the target path once and pass --config explicitly, so the write
+            // and the daemon provably act on the same file rather than each
+            // re-resolving it.
+            var commands: [[String]] = [write + ["--config", DezhbanCLI.resolvedConfigPath()]]
+            if restart {
+                // `restart`, not stop-then-start: the CLI owns the in-between state. No
+                // --config — it acts on the already-installed service unit, whose config
+                // path was baked in at install time.
+                commands.append(["restart"])
+            }
             let result = DezhbanCLI.runPrivileged(batch: commands)
             guard result.ok else {
                 DispatchQueue.main.async {

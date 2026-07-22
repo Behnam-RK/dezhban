@@ -251,10 +251,53 @@ enum DezhbanCLI {
         return posture
     }
 
+    /// Memoization for `resolvedConfigPath()`. The resolved value is stable for the
+    /// process's lifetime: it depends on `--config`/$DEZHBAN_CONFIG (fixed at launch)
+    /// and otherwise on the built-in system path — the same string whether or not the
+    /// file exists yet, since the "not present" form only annotates the default path.
+    ///
+    /// This is memoized because every resolution is a `Process` + `waitUntilExit`, and
+    /// on the main thread that is not merely slow — it is unsafe. See `exec`.
+    private static let configPathLock = NSLock()
+    private static var memoizedConfigPath: String?
+
+    /// The resolved config path if it is already known, else the fallback — WITHOUT
+    /// ever shelling out. This is the only variant safe to read from a SwiftUI `body`
+    /// or any other main-thread/layout context; see `exec` for why a body getter must
+    /// never spawn a process.
+    static var displayConfigPath: String {
+        configPathLock.lock()
+        defer { configPathLock.unlock() }
+        return memoizedConfigPath ?? configPath
+    }
+
+    /// Resolves the config path off the main thread so `displayConfigPath` and the
+    /// action paths find it already memoized. Called once at launch (AppDelegate).
+    static func warmConfigPath() {
+        DispatchQueue.global(qos: .utility).async { _ = resolvedConfigPath() }
+    }
+
     /// The config path the daemon actually uses, asked from the CLI so the GUI
     /// agrees with the `--config` → $DEZHBAN_CONFIG → system-path resolution order
     /// instead of hardcoding one location. Falls back to `configPath`.
+    ///
+    /// BLOCKING — call it off the main thread (it goes through `exec`). Main-thread
+    /// readers want `displayConfigPath`. Memoized, so the shell-out happens once per
+    /// launch; a race between two first callers just resolves twice to the same value.
     static func resolvedConfigPath() -> String {
+        configPathLock.lock()
+        let cached = memoizedConfigPath
+        configPathLock.unlock()
+        if let cached = cached { return cached }
+
+        let resolved = resolveConfigPathUncached()
+        configPathLock.lock()
+        memoizedConfigPath = resolved
+        configPathLock.unlock()
+        return resolved
+    }
+
+    private static func resolveConfigPathUncached() -> String {
         guard let bin = binaryPath() else { return configPath }
         let r = exec(bin, ["config", "path"])
         // `config path` prints a single line: the winning path, or (when no file
@@ -295,7 +338,21 @@ enum DezhbanCLI {
     /// Promoted from `private` so read-only call sites elsewhere in the app
     /// (log show/stream, status JSON parsing) can reuse this one capture path
     /// instead of each writing a second `Process` wrapper.
+    ///
+    /// MUST NOT run on the main thread. `waitUntilExit` does not simply block there —
+    /// `NSConcreteTask` SPINS THE CURRENT RUN LOOP while it waits, which re-enters
+    /// AppKit's display cycle, which re-evaluates SwiftUI bodies. If any body then
+    /// execs too, a second run loop nests inside the first inside a display-cycle
+    /// observer callback, and the process dies jumping to a null PC. That is exactly
+    /// the v0.5.0 crash (2026-07-22): `SettingsView.seed`'s completion resolved the
+    /// config path on the main queue, the spun run loop laid out the Settings form,
+    /// and `Text(DezhbanCLI.resolvedConfigPath())` in the body execed again.
+    ///
+    /// So: no CLI call from a `body` getter (use `displayConfigPath`), and every
+    /// other call site hops to a background queue first. The assert makes a
+    /// regression fail loudly in development instead of crashing a user's app.
     static func exec(_ launchPath: String, _ args: [String], env: [String: String] = [:]) -> (status: Int32, out: String, err: String) {
+        assert(!Thread.isMainThread, "DezhbanCLI.exec on the main thread spins the run loop — dispatch to a background queue")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
         p.arguments = args

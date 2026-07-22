@@ -23,7 +23,19 @@ final class MainWindow: NSObject, NSWindowDelegate {
         win.minSize = NSSize(width: 640, height: 440)
         win.center()
         win.setFrameAutosaveName("DezhbanMainWindow")
-        win.contentView = NSHostingView(rootView: MainView().environmentObject(AppState.shared))
+        // NSHostingController as contentViewController — NOT `contentView =
+        // NSHostingView(...)`. That was the actual cause of the sidebar toggle bug:
+        // NavigationSplitView's collapse/expand button is a real NSToolbar item, and
+        // SwiftUI can only install a toolbar into the window's titlebar through the
+        // NSHostingController/contentViewController hookup. A bare NSHostingView as
+        // `contentView` has no such hookup, so SwiftUI fell back to drawing its own
+        // inline toggle button as part of the content layout instead of a fixed
+        // titlebar item — hence the misalignment and the button visibly relocating
+        // into the window on every click (it was reflowing with content, never
+        // actually docked in the titlebar).
+        win.toolbarStyle = .unified
+        win.contentViewController = NSHostingController(
+            rootView: MainView().environmentObject(AppState.shared))
         window = win
     }
 

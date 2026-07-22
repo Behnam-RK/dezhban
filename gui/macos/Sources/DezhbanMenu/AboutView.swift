@@ -106,11 +106,17 @@ struct AboutView: View {
     /// Only `version` needs a fresh CLI call — posture and service state are
     /// already live in AppState for the rest of the window.
     private func load() {
-        configPath = DezhbanCLI.resolvedConfigPath()
+        // Show the memoized path immediately; the authoritative resolution happens
+        // below, off the main thread (DezhbanCLI.exec explains why that matters).
+        configPath = DezhbanCLI.displayConfigPath
         binaryPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
         DispatchQueue.global(qos: .userInitiated).async {
+            let path = DezhbanCLI.resolvedConfigPath()
             let v = DezhbanCLI.run(["version"]).output.trimmingCharacters(in: .whitespacesAndNewlines)
-            DispatchQueue.main.async { version = v }
+            DispatchQueue.main.async {
+                configPath = path
+                version = v
+            }
         }
     }
 }

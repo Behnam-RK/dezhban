@@ -197,3 +197,11 @@ The design depends on these invariants (rationale in
 - Architecture & invariants: [docs/architecture.md](docs/architecture.md).
   Lockout recovery / VPN-guard runbook: [docs/troubleshooting.md](docs/troubleshooting.md).
 - Module path `github.com/behnam-rk/dezhban` (adjust if the repo moves).
+- **Every PR that changes user-visible behavior updates [CHANGELOG.md](CHANGELOG.md)'s
+  `## [Unreleased]` section, in the same PR** — not as a follow-up. `[Unreleased]`
+  *is* the next release's notes (see [docs/releasing.md](docs/releasing.md)); a PR
+  merged without an entry leaves it silently thin, and `task release:check` only
+  catches the case where it's fully empty, not a partially-undocumented release.
+  Use the existing `### Added` / `### Changed` / `### Fixed` / `### Removed`
+  subsections (Keep a Changelog); skip only for changes with no user-facing effect
+  (pure refactors, test-only changes, CI/tooling).
