@@ -109,7 +109,10 @@ func fetch(client *http.Client, url, dst string) error {
 }
 
 // checksumFor finds name's expected hex digest in a SHA256SUMS-format byte
-// slice (lines of "<hex>  <name>").
+// slice (lines of "<hex>  <name>"). Kept in lockstep with scripts/install.sh's
+// verify(): both parse the same published SHA256SUMS, and a name one accepts
+// and the other doesn't is a release that verifies through one install path
+// and mysteriously fails the other.
 func checksumFor(sums []byte, name string) (string, error) {
 	for line := range strings.SplitSeq(string(sums), "\n") {
 		line = strings.TrimRight(line, "\r")
@@ -119,12 +122,21 @@ func checksumFor(sums []byte, name string) (string, error) {
 		}
 		// sha256sum-format lines separate the hash from the name with either
 		// two spaces (text mode: "<hash>  <name>", what `shasum -a 256` in
-		// release.yml actually emits) or one space plus a leading "*"
-		// (binary mode: "<hash> *<name>"). strings.Fields(line) with a
-		// len(fields)==2 check — the previous approach — silently rejected
-		// binary-mode lines and any name containing a space; matching on the
-		// remainder after the first separator handles both.
-		rest = strings.TrimPrefix(strings.TrimLeft(rest, " "), "*")
+		// release.yml actually emits) or one space plus a leading "*" (binary
+		// mode: "<hash> *<name>"). strings.Fields(line) with a len(fields)==2
+		// check — the previous approach — silently rejected binary-mode lines
+		// and any name containing a space; taking the whole remainder after
+		// the separator handles both.
+		//
+		// The mode is decided by the ONE byte after the first space, and
+		// exactly one byte is consumed either way. Trimming the "*" any more
+		// loosely (TrimLeft/TrimPrefix over the remainder) would eat a real
+		// leading "*" off a text-mode name — the same class of not-quite-exact
+		// match that made the old grep in install.sh wrong.
+		switch {
+		case strings.HasPrefix(rest, " "), strings.HasPrefix(rest, "*"):
+			rest = rest[1:]
+		}
 		if rest == name {
 			return hash, nil
 		}

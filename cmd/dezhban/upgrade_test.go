@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/state"
+	"github.com/behnam-rk/dezhban/internal/update"
 )
 
 // TestWaitForHealthySnapshotStalePreRestartSnapshot pins the rule
@@ -110,5 +111,60 @@ func TestWaitForHealthySnapshotEnforcementErr(t *testing.T) {
 	_, healthy := waitForHealthySnapshot(path, restartedAt, 200*time.Millisecond)
 	if healthy {
 		t.Fatal("waitForHealthySnapshot reported healthy despite a set EnforcementErr")
+	}
+}
+
+// TestRunningVersionFromSnapshot pins where `upgrade apply` learns what is
+// actually running: the snapshot the daemon publishes, not the binary on
+// disk. See update.ClassifyStash's doc comment for why the distinction is
+// load-bearing.
+func TestRunningVersionFromSnapshot(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	if err := state.Write(path, state.Snapshot{
+		Time:    time.Now(),
+		Posture: "guard",
+		Version: "v0.4.0",
+	}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+
+	snap, err := state.Read(path)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if snap.Version != "v0.4.0" {
+		t.Errorf("snap.Version = %q, want %q — Version must survive the JSON round trip", snap.Version, "v0.4.0")
+	}
+}
+
+// TestRunningVersionUnknownRefuses covers the two ways the running version is
+// undeterminable — no state file at all, and a snapshot from a daemon
+// predating state.Snapshot.Version. Both must produce "", which
+// update.ClassifyStash maps to StashUnknown, which makes `upgrade apply`
+// refuse rather than guess. Silently reading "" as a version would classify
+// every stash as unknown-but-comparable and is exactly the failure mode the
+// "an undeterminable reading holds" rule exists to prevent.
+func TestRunningVersionUnknownRefuses(t *testing.T) {
+	dir := t.TempDir()
+
+	// A daemon too old to publish a version.
+	oldDaemon := filepath.Join(dir, "old.json")
+	if err := state.Write(oldDaemon, state.Snapshot{Time: time.Now(), Posture: "guard"}); err != nil {
+		t.Fatalf("state.Write: %v", err)
+	}
+	snap, err := state.Read(oldDaemon)
+	if err != nil {
+		t.Fatalf("state.Read: %v", err)
+	}
+	if snap.Version != "" {
+		t.Errorf("snap.Version = %q, want empty for a versionless snapshot", snap.Version)
+	}
+	if got := update.ClassifyStash("v0.4.0", snap.Version); got != update.StashUnknown {
+		t.Errorf("ClassifyStash with a versionless running snapshot = %v, want StashUnknown", got)
+	}
+
+	// No state file at all.
+	if _, err := state.Read(filepath.Join(dir, "absent.json")); err == nil {
+		t.Error("state.Read on a missing file returned nil error — runningVersion relies on this failing")
 	}
 }

@@ -283,12 +283,25 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
 - [ ] **Deferred activation during FULL BLOCK.** With the guard in FULL
       BLOCK, `dezhban upgrade apply` installs the payload, refuses to
       activate, and leaves the old daemon enforcing normally.
-- [ ] **The deferred stash resolves itself.** From the state above: `sudo
-      dezhban restart` to activate, confirm the new version is running with
-      `dezhban version`, then run `upgrade apply` again for a DIFFERENT
+- [ ] **A deferred stash is NOT cleared before activation.** From the state
+      above (payload applied, activation refused, stash present), run
+      `upgrade apply` again WITHOUT restarting first. It must refuse with the
+      "applied but NOT yet activated" message and leave the stash intact —
+      the daemon is still running the stashed version, so that stash is the
+      only copy of it. Classifying against the on-disk binary here (which
+      already reads as the new version) would delete it; this step is the
+      on-host check for that.
+- [ ] **The deferred stash then resolves itself.** Now `sudo dezhban restart`
+      to activate, confirm the new version is running with `dezhban status`
+      (the daemon's own snapshot — *not* `dezhban version`, which reports the
+      binary you invoked), then run `upgrade apply` again for a DIFFERENT
       release — it should clear the now-obsolete stash automatically instead
       of refusing (see docs/upgrade.md, "If the restart doesn't come back
       healthy").
+- [ ] **An unreachable daemon refuses rather than guesses.** With a stash
+      present and the daemon stopped (`sudo dezhban stop`), `upgrade apply`
+      refuses with the "could not be compared against the running version"
+      message rather than clearing anything.
 - [ ] **Rollback.** Force the new version to never publish a healthy
       snapshot (e.g. stop the daemon right after the restart) → `upgrade
       apply` restores the previous binary/app and restarts back into it

@@ -8,6 +8,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -202,32 +203,51 @@ func cmdUpgradeApply(args []string) int {
 	// lands here too.
 	//
 	// So before refusing outright, ask the evidence rather than assume the
-	// scary case: exec the stashed binary and the one currently on disk for
-	// their own version strings (the same move `validate` gets below — ask
-	// the binary, not this process's possibly-stale idea of the world) and
-	// classify. If the stash is OLDER than what's running, some activation
-	// already landed and came back healthy since it was made — it has served
-	// its purpose and clearing it is safe. Anything else (equal — activation
-	// is still pending; unreadable or newer — should never happen) still
-	// refuses: guessing wrong here would discard the one rollback copy a
-	// genuinely interrupted upgrade still depends on.
+	// scary case: compare the stashed binary's version against the version
+	// actually RUNNING, and classify. If the stash is older than what's
+	// running, some activation already landed since it was made — it has
+	// served its purpose and clearing it is safe. Anything else (equal —
+	// activation is still pending; unreadable or newer) still refuses:
+	// guessing wrong here would discard the one rollback copy a genuinely
+	// interrupted upgrade still depends on.
+	//
+	// "Running" is deliberately NOT the version of /usr/local/bin/dezhban.
+	// That file is the version most recently INSTALLED, which is a different
+	// fact and the exact one this comparison must not confuse: phase 1 lands
+	// the new binary on disk while the daemon keeps enforcing on its old
+	// inode. So after every deferred activation, disk already reads NEW while
+	// the running daemon is still OLD — asking disk would classify the very
+	// stash this guard exists to protect as obsolete and delete the last
+	// known-good copy. Only the daemon knows what it is executing, and it
+	// publishes it: state.Snapshot.Version (see runningVersion).
 	if update.HasStash(stashDir) {
 		verdict := update.ClassifyStash(
 			execVersion(filepath.Join(stashDir, "dezhban")),
-			execVersion("/usr/local/bin/dezhban"),
+			runningVersion(),
 		)
-		if verdict != update.StashObsolete {
-			fmt.Fprintln(os.Stderr, "upgrade apply: a rollback stash from a previous upgrade is still present at", stashDir)
-			fmt.Fprintln(os.Stderr, "               that is expected if the last apply deferred activation (--no-activate, or")
-			fmt.Fprintln(os.Stderr, "               the gate refusing while FULL BLOCK / a switch window was up) and you have")
-			fmt.Fprintln(os.Stderr, "               since activated it with 'sudo dezhban restart'.")
-			fmt.Fprintln(os.Stderr, "               if the running version is the one you want, discard it and retry:")
+		switch verdict {
+		case update.StashPending:
+			fmt.Fprintln(os.Stderr, "upgrade apply: a previous upgrade is applied but NOT yet activated — its rollback stash is")
+			fmt.Fprintln(os.Stderr, "               still live at", stashDir)
+			fmt.Fprintln(os.Stderr, "               the running daemon is still the stashed version, so that stash is the only copy")
+			fmt.Fprintln(os.Stderr, "               of it. finish that upgrade first — activate it with:")
+			fmt.Fprintln(os.Stderr, "                 sudo dezhban restart")
+			fmt.Fprintln(os.Stderr, "               once the new version is running, this command clears the stash for you.")
+			fmt.Fprintln(os.Stderr, "               to abandon it instead, see docs/upgrade.md for restoring from it by hand.")
+			return 1
+		case update.StashUnknown:
+			fmt.Fprintln(os.Stderr, "upgrade apply: a rollback stash from a previous upgrade is present at", stashDir)
+			fmt.Fprintln(os.Stderr, "               refusing, because it could not be compared against the running version — the")
+			fmt.Fprintln(os.Stderr, "               daemon may be stopped, too old to report one, or either side may be a dev build.")
+			fmt.Fprintln(os.Stderr, "               start the daemon ('sudo dezhban start') and retry, or resolve it by hand:")
+			fmt.Fprintln(os.Stderr, "               confirm which version is running ('dezhban status'), and if it is the one you")
+			fmt.Fprintln(os.Stderr, "               want, discard the stash and retry:")
 			fmt.Fprintln(os.Stderr, "                 sudo rm -rf", stashDir)
 			fmt.Fprintln(os.Stderr, "               otherwise see docs/upgrade.md for restoring from it by hand.")
 			return 1
 		}
-		fmt.Println("a rollback stash from a previous upgrade is present but obsolete — a newer version is already")
-		fmt.Println("running than what it holds, so that upgrade already activated. clearing it before continuing.")
+		fmt.Println("a rollback stash from a previous upgrade is present but obsolete — the running daemon is already")
+		fmt.Println("newer than what it holds, so that upgrade activated. clearing it before continuing.")
 		if err := update.ClearStash(stashDir); err != nil {
 			fmt.Fprintln(os.Stderr, "upgrade apply: could not clear the obsolete stash:", err)
 			return 1
@@ -306,18 +326,49 @@ func stagedPkg(dir string) (string, error) {
 	return "", fmt.Errorf("no .pkg found in %s", dir)
 }
 
+// execVersionTimeout bounds the `<bin> version` call below. Generous for what
+// is a print-and-exit path, but it must exist: the binary being asked is a
+// STASHED copy left behind by an upgrade that may itself have been
+// interrupted, so "corrupt enough to hang" is squarely in range — and this
+// runs on the recovery path, where blocking forever is the one outcome an
+// operator already dealing with a wedged install cannot debug.
+const execVersionTimeout = 5 * time.Second
+
 // execVersion runs `<bin> version` and returns the bare version string —
 // buildStamp.line()'s "dezhban " prefix stripped, so the result is directly
 // comparable via update.ClassifyStash. Returns "" on any failure (bin
-// missing, not executable, unexpected output): ClassifyStash already treats
-// an empty/unparseable version as its safe StashUnknown verdict, so a failed
-// exec here degrades to "refuse" rather than needing its own special case.
+// missing, not executable, hung past execVersionTimeout, unexpected output):
+// ClassifyStash already treats an empty/unparseable version as its safe
+// StashUnknown verdict, so a failed exec here degrades to "refuse" rather
+// than needing its own special case.
 func execVersion(bin string) string {
-	out, err := exec.Command(bin, "version").Output()
+	ctx, cancel := context.WithTimeout(context.Background(), execVersionTimeout)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, bin, "version").Output()
 	if err != nil {
 		return ""
 	}
 	return strings.TrimPrefix(strings.TrimSpace(string(out)), "dezhban ")
+}
+
+// runningVersion reports the version of the daemon process that is actually
+// executing, read from the snapshot it publishes. Returns "" when that cannot
+// be established — no state file, an unreadable one, or a daemon predating
+// state.Snapshot.Version — which ClassifyStash maps to its safe StashUnknown
+// verdict, so the caller refuses rather than guesses.
+//
+// Note there is deliberately no freshness check here. The question is "did
+// version X ever run on this host", and a snapshot is proof that the process
+// which wrote it was executing X at the time — that stays true no matter how
+// old the snapshot is, or whether the daemon is still up now. A terminal
+// "stopped" snapshot is equally good evidence: it means that version ran and
+// then exited, which is still an activation that happened.
+func runningVersion() string {
+	snap, err := state.Read(defaultStatePath())
+	if err != nil {
+		return ""
+	}
+	return snap.Version
 }
 
 // slogCloser pairs a logger with the file handle backing it, so callers can
@@ -396,9 +447,12 @@ func activate(stashDir, version string) int {
 	}
 
 	if err := update.ClearStash(stashDir); err != nil {
-		// Non-fatal: the upgrade succeeded, the stash is just left-over disk
-		// that a future upgrade will refuse to run over (HasStash's own
-		// check) until it's cleared by hand — surfaced, not silently ignored.
+		// Non-fatal: the upgrade succeeded, and the stash is now just
+		// left-over disk. A future `upgrade apply` resolves it on its own —
+		// the activation that just landed is exactly what makes it classify
+		// StashObsolete — so this needs no manual step. Surfaced anyway
+		// rather than silently ignored: failing to delete a path we own
+		// usually means something else is wrong with the state directory.
 		fmt.Fprintln(os.Stderr, "warning: upgrade succeeded but could not clear the rollback stash:", err)
 	}
 	fmt.Printf("upgrade complete — now running v%s (posture: %s)\n", version, snap.Posture)
@@ -428,11 +482,16 @@ func rollback(stashDir string) int {
 	}
 
 	// The stash's only job was rollback insurance for THIS restart, and it just
-	// did its job — clear it, or the next `upgrade apply` refuses at the
-	// HasStash guard over a rollback that actually succeeded (the same wedge
-	// deferred activation causes, just via a different door). Only when the
-	// app half also restored: if it didn't, the stash is still the one intact
-	// copy of the working app bundle, and manual recovery may still need it.
+	// did its job — clear it, or the next `upgrade apply` refuses over a
+	// rollback that actually succeeded. Clearing HERE is load-bearing and not
+	// merely tidy: a successful rollback restarts back INTO the stashed
+	// version, so the running version now equals the stashed one and
+	// ClassifyStash reads StashPending — indistinguishable, from the outside,
+	// from an upgrade still waiting to activate. The classification cannot
+	// resolve this case on a later run; only this code path knows the stash
+	// was consumed. Done only when the app half also restored: if it didn't,
+	// the stash is still the one intact copy of the working app bundle, and
+	// manual recovery may still need it.
 	if appRestored {
 		if err := update.ClearStash(stashDir); err != nil {
 			fmt.Fprintln(os.Stderr, "warning: rollback succeeded but could not clear the stash:", err)
@@ -444,11 +503,6 @@ func rollback(stashDir string) int {
 	return 1 // the upgrade itself still failed; report non-zero even though rollback succeeded
 }
 
-// waitForHealthySnapshot polls the state file for a snapshot published AFTER
-// `after` (so a stale pre-restart snapshot can never read as proof the NEW
-// process is healthy) that is neither the terminal "stopped" posture nor
-// carrying an EnforcementErr — the same "a set EnforcementErr means posture
-// was not actually achieved" rule state.Snapshot's own doc comment states.
 // postureStopped mirrors the literal posture string runner.go publishes into
 // state.Snapshot.Posture (internal/runner/runner.go's final-snapshot-before-
 // teardown write) when the daemon is shutting down. Named here rather than
@@ -459,6 +513,11 @@ func rollback(stashDir string) int {
 // for strings internal/runner already owns.
 const postureStopped = "stopped"
 
+// waitForHealthySnapshot polls the state file for a snapshot published AFTER
+// `after` (so a stale pre-restart snapshot can never read as proof the NEW
+// process is healthy) that is neither the terminal "stopped" posture nor
+// carrying an EnforcementErr — the same "a set EnforcementErr means posture
+// was not actually achieved" rule state.Snapshot's own doc comment states.
 func waitForHealthySnapshot(path string, after time.Time, budget time.Duration) (state.Snapshot, bool) {
 	deadline := time.Now().Add(budget)
 	var last state.Snapshot

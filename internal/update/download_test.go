@@ -153,3 +153,30 @@ func shaHex(b []byte) (string, error) {
 	}
 	return sha256File(f.Name())
 }
+
+// TestChecksumForLeadingAsteriskName pins that exactly ONE byte of separator
+// is consumed, never a character of the name. A name legitimately starting
+// with "*" must survive a text-mode line ("<hash>  *name", two spaces) — a
+// looser TrimLeft/TrimPrefix over the remainder would eat the name's own
+// asterisk and silently fail to match.
+func TestChecksumForLeadingAsteriskName(t *testing.T) {
+	sums := []byte("aaaa  *literal-star.pkg\nbbbb **binary-mode-star.pkg\n")
+	if got, err := checksumFor(sums, "*literal-star.pkg"); err != nil || got != "aaaa" {
+		t.Errorf("checksumFor(text-mode, *-leading name) = %q, %v, want \"aaaa\", nil", got, err)
+	}
+	if got, err := checksumFor(sums, "*binary-mode-star.pkg"); err != nil || got != "bbbb" {
+		t.Errorf("checksumFor(binary-mode, *-leading name) = %q, %v, want \"bbbb\", nil", got, err)
+	}
+}
+
+// TestChecksumForNoMatchErrors is the Go half of the invariant
+// scripts/install.sh's verify() enforces with its own emptiness check: a name
+// with no entry must be a hard ERROR, never a quiet pass. (GNU sha256sum -c
+// exits 0 on empty input, which is how the shell path could have verified
+// nothing and called it success.)
+func TestChecksumForNoMatchErrors(t *testing.T) {
+	sums := []byte("aaaa  something-else.pkg\n")
+	if got, err := checksumFor(sums, "dezhban-v1.2.3.pkg"); err == nil {
+		t.Errorf("checksumFor(absent name) = %q, nil — want an error, not a silent pass", got)
+	}
+}

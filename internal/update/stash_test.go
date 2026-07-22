@@ -118,25 +118,70 @@ func TestHasStashEmpty(t *testing.T) {
 
 func TestClassifyStash(t *testing.T) {
 	cases := []struct {
-		name            string
-		stashed, onDisk string
-		want            StashVerdict
+		name             string
+		stashed, running string
+		want             StashVerdict
 	}{
 		{"stashed older, plain vX.Y.Z", "v0.4.0", "v0.5.0", StashObsolete},
 		{"stashed older, no leading v either side", "0.4.0", "0.5.0", StashObsolete},
-		{"stashed equals on-disk — still pending activation", "v0.5.0", "v0.5.0", StashPending},
-		{"stashed newer than on-disk — should never happen, refuse", "v0.6.0", "v0.5.0", StashUnknown},
+		{"stashed equals running — still pending activation", "v0.5.0", "v0.5.0", StashPending},
+		{"stashed newer than running — should never happen, refuse", "v0.6.0", "v0.5.0", StashUnknown},
 		{"stashed is a dev build", "v0.4.0-3-gabc123-dirty", "v0.5.0", StashUnknown},
-		{"on-disk is a dev build", "v0.4.0", "v0.5.0-3-gabc123-dirty", StashUnknown},
-		{"both empty (unparseable exec output)", "", "", StashUnknown},
+		{"running is a dev build", "v0.4.0", "v0.5.0-3-gabc123-dirty", StashUnknown},
+		{"both empty (no snapshot and unreadable stash)", "", "", StashUnknown},
 		{"stashed empty only", "", "v0.5.0", StashUnknown},
+		// A daemon predating state.Snapshot.Version publishes no version at
+		// all. That must refuse, not sail through on a zero value.
+		{"running empty — daemon stopped or too old to report a version", "v0.4.0", "", StashUnknown},
 		{"an rc compares by its base core, same as normalizeVersion", "v0.4.0-rc.1", "v0.5.0", StashObsolete},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := ClassifyStash(c.stashed, c.onDisk); got != c.want {
-				t.Errorf("ClassifyStash(%q, %q) = %v, want %v", c.stashed, c.onDisk, got, c.want)
+			if got := ClassifyStash(c.stashed, c.running); got != c.want {
+				t.Errorf("ClassifyStash(%q, %q) = %v, want %v", c.stashed, c.running, got, c.want)
 			}
 		})
+	}
+}
+
+// TestClassifyStashDeferredActivationIsPending is the regression guard for the
+// bug this comparison originally shipped with: classifying against the version
+// on DISK instead of the version RUNNING.
+//
+// Replay the deferred-activation sequence. `upgrade apply` stashes the running
+// v0.4.0, the installer writes v0.5.0 to /usr/local/bin/dezhban, and then
+// activation is deferred (--no-activate, or the gate refusing during FULL
+// BLOCK). At that instant disk says v0.5.0 while the daemon is still executing
+// v0.4.0 on its old inode — that divergence is the whole point of the two-phase
+// design, not an edge case.
+//
+// Compared against disk, the stash looks strictly older and gets classified
+// StashObsolete — so the next `upgrade apply` would DELETE the only copy of
+// v0.4.0, the last version known to have run, and then stash the never-yet-run
+// v0.5.0 as its "rollback" target. Compared against the running version, it is
+// correctly StashPending: refuse, and tell the operator to finish activating.
+func TestClassifyStashDeferredActivationIsPending(t *testing.T) {
+	const (
+		stashed   = "v0.4.0" // what the daemon is still executing
+		onDisk    = "v0.5.0" // what the installer just wrote — NOT running yet
+		running   = stashed
+		activated = onDisk // what runs after `sudo dezhban restart`
+	)
+
+	if got := ClassifyStash(stashed, running); got != StashPending {
+		t.Errorf("deferred activation: ClassifyStash(%q, running=%q) = %v, want StashPending — "+
+			"the stash is the only copy of the running version and must not be cleared", stashed, running, got)
+	}
+	if got := ClassifyStash(stashed, onDisk); got == StashPending {
+		t.Fatalf("test is not exercising the bug: comparing against the on-disk version %q "+
+			"should differ from comparing against the running one", onDisk)
+	}
+
+	// Once the operator actually activates, the same stash IS obsolete: the
+	// daemon now reports the newer version, which is only possible if the
+	// activation landed. That is the wedge this whole classification exists
+	// to clear automatically.
+	if got := ClassifyStash(stashed, activated); got != StashObsolete {
+		t.Errorf("after activation: ClassifyStash(%q, running=%q) = %v, want StashObsolete", stashed, activated, got)
 	}
 }

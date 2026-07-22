@@ -104,9 +104,40 @@ verify() {
 	# an asset name containing a "." (every name this script passes does —
 	# "Dezhban-macos.app.zip") matches any character instead of a literal dot.
 	# Not exploitable today (both call sites pass names this script itself
-	# builds), but it is not an exact match either, and awk's $2 == n costs
-	# nothing to get right.
-	awk -v n="$1" '$2 == n' "$tmp/SHA256SUMS" | ( cd "$tmp" && sha256_check ) >/dev/null \
+	# builds), but it is not an exact match either, and awk's field compare
+	# costs nothing to get right.
+	#
+	# Everything after the FIRST separator is the name — not awk's $2, so that
+	# a name containing a space still matches. The subs then normalise the two
+	# formats sha256sum emits: text mode ("<hash>  <name>", two spaces — what
+	# release.yml's `shasum -a 256` actually produces) and binary mode
+	# ("<hash> *<name>", one space and a leading asterisk). This is a
+	# deliberate line-for-line mirror of internal/update's checksumFor: both
+	# parsers read the same SHA256SUMS file, and they must not disagree about
+	# which lines exist in it.
+	# The mode is decided by the ONE byte after the first space, and exactly one
+	# byte is consumed either way — so a name legitimately starting with "*"
+	# survives a text-mode line intact.
+	line="$(awk -v n="$1" '
+		{
+			sub(/\r$/, "")
+			i = index($0, " ")
+			if (i == 0) next
+			name = substr($0, i + 1)
+			if (substr(name, 1, 1) == " " || substr(name, 1, 1) == "*") name = substr(name, 2)
+			if (name == n) print
+		}
+	' "$tmp/SHA256SUMS")"
+
+	# Assert the entry EXISTS before verifying it. Without this, a name that
+	# matches nothing feeds empty stdin to sha256_check — and GNU `sha256sum -c -`
+	# exits 0 on empty input (BSD `shasum -c -` exits 1), so on Linux a missing
+	# or renamed SHA256SUMS entry would "verify" the download by never checking
+	# it. A checksum step that passes when it found nothing to check is worse
+	# than no checksum step, because it is trusted.
+	[ -n "$line" ] || die "no checksum entry for $1 in SHA256SUMS — refusing to install unverified. This may mean a bad mirror or a tampered release; do not retry blindly."
+
+	printf '%s\n' "$line" | ( cd "$tmp" && sha256_check ) >/dev/null \
 		|| die "checksum mismatch for $1 — aborting install. This may mean a bad mirror or a tampered download; do not retry blindly."
 }
 
