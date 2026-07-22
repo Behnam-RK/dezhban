@@ -1,10 +1,10 @@
 import AppKit
 
-/// Shared machinery for the two config-editing panes (Settings, VPN Guard):
-/// raw-file seeding via `config get`, batched writes via one `config set`, the
-/// explicit restart decision, and the post-restart posture check. Extracted from
-/// the retired SettingsPanel/VPNConfigPanel so both panes keep identical
-/// semantics; `config.Validate` (Go) stays the single validation authority.
+/// Shared machinery for the Settings pane: raw-file seeding via `config get`,
+/// batched writes via one `config set`, reset-to-defaults via `config reset
+/// --all`, the explicit restart decision, and the post-restart posture check.
+/// `config.Validate` (Go) stays the single validation authority, and the shipped
+/// defaults live only in `config.Default()` — never mirrored in Swift.
 enum ConfigApply {
     /// One `config get <key>` per field against the resolved config path — the raw
     /// on-disk file is the source of truth, never a cached second-schema mirror.
@@ -46,7 +46,26 @@ enum ConfigApply {
         // Resolve the target path once and pass --config explicitly, so the write and
         // the daemon provably act on the same file rather than each re-resolving it.
         let cfgPath = DezhbanCLI.resolvedConfigPath()
-        var commands: [[String]] = [["config", "set"] + pairs + ["--config", cfgPath]]
+        runBatch(["config", "set"] + pairs + ["--config", cfgPath],
+                 restart: restart, awaitPosture: awaitPosture, title: title, completion: completion)
+    }
+
+    /// Restores every tunable to its shipped default through `config reset --all`,
+    /// which deliberately PRESERVES identity — blockedCountries, tunnel
+    /// interfaces, endpoints, and profiles — so a reset never silently unblocks a
+    /// country or forgets the user's VPN. Same restart/posture plumbing as `apply`;
+    /// the defaults themselves come from `config.Default()` in Go, so this pane
+    /// never carries a second copy of the schema.
+    static func resetAll(restart: Bool, awaitPosture: Bool, title: String,
+                         completion: @escaping (Outcome) -> Void) {
+        let cfgPath = DezhbanCLI.resolvedConfigPath()
+        runBatch(["config", "reset", "--all", "--config", cfgPath],
+                 restart: restart, awaitPosture: awaitPosture, title: title, completion: completion)
+    }
+
+    private static func runBatch(_ write: [String], restart: Bool, awaitPosture: Bool, title: String,
+                                 completion: @escaping (Outcome) -> Void) {
+        var commands: [[String]] = [write]
         if restart {
             // `restart`, not stop-then-start: the CLI owns the in-between state. No
             // --config — it acts on the already-installed service unit, whose config

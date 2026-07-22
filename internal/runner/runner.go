@@ -1522,8 +1522,8 @@ func (o Options) resolveEndpointsWith(ctx context.Context, tunnels []string) net
 	return o.resolveEndpoints(ctx)
 }
 
-// clampWindow parses a requested switch-window duration and clamps it to
-// [minSwitchWindow, SwitchWindowMax]. An empty/invalid request falls back to the
+// clampWindow parses a requested switch-window duration and caps it at
+// SwitchWindowMax (no floor). An empty/invalid request falls back to the
 // configured default SwitchWindow.
 func (o Options) clampWindow(req string) time.Duration {
 	// Refuse outright when manual switch windows are disabled. Both triggers

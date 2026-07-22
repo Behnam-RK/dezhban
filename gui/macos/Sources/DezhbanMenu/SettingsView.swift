@@ -155,12 +155,53 @@ struct SettingsView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
+            Button("Reset to Defaults…", action: resetToDefaults)
+                .disabled(!canApply)
             Button("Reload", action: seed)
             Button("Apply…", action: apply)
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canApply)
         }
         .padding(12)
+    }
+
+    // MARK: - reset to defaults
+
+    /// Restores every tunable to its shipped default via `config reset --all`,
+    /// then re-seeds so the form shows what actually landed rather than what was
+    /// requested. Confirmed first: this discards staged edits AND rewrites the
+    /// on-disk config. What it deliberately does NOT touch is identity —
+    /// blockedCountries, tunnel interfaces, endpoints, profiles — so a reset can
+    /// never silently unblock a country or forget the user's VPN; that carve-out
+    /// lives in `configReset` (Go), and the wording below must keep matching it.
+    private func resetToDefaults() {
+        let alert = NSAlert()
+        alert.messageText = "Reset settings to defaults?"
+        alert.informativeText = """
+            Every tunable on this pane returns to its shipped default, and any \
+            unapplied edits here are discarded.
+
+            Your blocked countries, tunnel interfaces, endpoints, and saved VPN \
+            profiles are kept.
+            """
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Reset")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let restart = ConfigApply.confirmRestart()
+        canApply = false
+        status = restart ? "Resetting and restarting…" : "Resetting…"
+        ConfigApply.resetAll(restart: restart, awaitPosture: true, title: "Reset to defaults") { outcome in
+            canApply = true
+            status = outcome.status
+            if let title = outcome.transcriptTitle, let text = outcome.transcript {
+                state.showInLogs(title: title, text: text)
+            }
+            // Re-seed on success so the fields show the defaults that actually
+            // landed on disk, not the values the user was looking at.
+            if outcome.ok { seed() }
+        }
     }
 
     // MARK: - startup toggles (immediate)
