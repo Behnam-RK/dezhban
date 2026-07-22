@@ -66,9 +66,15 @@ enum AppActions {
     /// (and reporting) the first failure rather than plowing ahead once something's
     /// gone wrong. Elevating per command would make a three-step uninstall ask for
     /// the password three times. Resyncs the service-installed cache afterwards.
-    static func capturedSequence(_ commands: [[String]], present: @escaping (CommandResult) -> Void) {
+    ///
+    /// `commands` is an autoclosure so that building it — `installCommands` resolves
+    /// the config path, which shells out — happens on the background queue instead of
+    /// on the caller's main thread. See DezhbanCLI.exec on why that distinction is a
+    /// correctness one, not a responsiveness one.
+    static func capturedSequence(_ commands: @escaping @autoclosure () -> [[String]],
+                                 present: @escaping (CommandResult) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            let result = DezhbanCLI.runPrivileged(batch: commands)
+            let result = DezhbanCLI.runPrivileged(batch: commands())
             DispatchQueue.main.async {
                 present(result)
                 refresh()
@@ -80,6 +86,10 @@ enum AppActions {
     /// Mirrors `install-local.sh`'s ordering for uninstall: rules teardown
     /// (`panic`) and `stop` before `uninstall`, since a launchd unload can leave
     /// stale rules behind if they aren't torn down first.
+    ///
+    /// Evaluate this OFF the main thread — it resolves the config path, which shells
+    /// out. `capturedSequence` takes its commands as an autoclosure for exactly this
+    /// reason, so call sites can pass it without forcing it early.
     static var installCommands: [[String]] {
         [["install", "--config", DezhbanCLI.resolvedConfigPath()], ["start"]]
     }

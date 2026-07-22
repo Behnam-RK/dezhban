@@ -30,6 +30,11 @@ struct SettingsView: View {
     @State private var notifyEnabled = true
     @State private var checkUpdatesEnabled = true
 
+    /// Displayed in the Config file row and used by "Open Config File…". Seeded from
+    /// the memoized value (warmed at launch) and refreshed off the main thread by
+    /// `seed()`, so neither the body nor a button action ever shells out.
+    @State private var configPath = DezhbanCLI.displayConfigPath
+
     @State private var tunnelInterfaces = ""
     @State private var endpoints = ""
     @State private var autodetect = false
@@ -124,14 +129,16 @@ struct SettingsView: View {
                 }
                 Section {
                     LabeledContent("Config file") {
-                        Text(DezhbanCLI.resolvedConfigPath())
+                        // `configPath`, never DezhbanCLI.resolvedConfigPath(): a body
+                        // getter must not spawn a process. See DezhbanCLI.exec.
+                        Text(configPath)
                             .textSelection(.enabled)
                             .foregroundStyle(.secondary)
                             .truncationMode(.middle)
                             .lineLimit(1)
                     }
                     Button("Open Config File…") {
-                        NSWorkspace.shared.open(URL(fileURLWithPath: DezhbanCLI.resolvedConfigPath()))
+                        NSWorkspace.shared.open(URL(fileURLWithPath: configPath))
                     }
                 } footer: {
                     Text("Some advanced options (control socket, geo providers, allowlist) live only in the config file.")
@@ -228,9 +235,10 @@ struct SettingsView: View {
         }
         bootBusy = true
         status = wantInstalled ? "Installing service…" : "Uninstalling service…"
-        let commands = wantInstalled ? AppActions.installCommands : AppActions.uninstallCommands
         let title = wantInstalled ? "dezhban — install service" : "dezhban — uninstall service"
-        AppActions.capturedSequence(commands) { result in
+        // Passed unevaluated (autoclosure): installCommands resolves the config path.
+        AppActions.capturedSequence(wantInstalled ? AppActions.installCommands
+                                                  : AppActions.uninstallCommands) { result in
             bootBusy = false
             status = ""
             if !result.ok {
@@ -308,8 +316,12 @@ struct SettingsView: View {
             endpointGrace = v[10]
             endpointRefresh = v[11]
             tunnelWatch = v[12]
-            status = "Seeded from \(DezhbanCLI.resolvedConfigPath())"
+            status = "Seeded from \(configPath)"
             canApply = true
+        }
+        DispatchQueue.global(qos: .userInitiated).async {
+            let path = DezhbanCLI.resolvedConfigPath()
+            DispatchQueue.main.async { configPath = path }
         }
     }
 

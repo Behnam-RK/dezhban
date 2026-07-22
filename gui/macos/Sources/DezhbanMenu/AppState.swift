@@ -130,6 +130,17 @@ enum PostureUI {
         }
     }
 
+    /// Coarsens a menu-bar state down to what the Dock tile is allowed to show.
+    /// The Dock icon answers one question — "is dezhban actively cutting my
+    /// traffic right now?" — so only "blocked" may stand out; "off" (stopped /
+    /// standby) and "warning" (switch-window / enforcement error) collapse to the
+    /// calm default "on" (guard) look instead of their own Dock badge. This is a
+    /// Dock-only narrowing: the menu bar icon keeps showing all four states via
+    /// `iconFor` untouched, since that's where the real-time nuance belongs.
+    static func dockState(for state: String) -> String {
+        state == "blocked" ? "blocked" : "on"
+    }
+
     /// Dock-size brand state images from the app bundle's Resources (put there by
     /// build-app.sh from gui/assets/png), cached per state. Empty outside the bundle,
     /// where callers fall back to SF Symbols. Shared by the Dock tile and the
