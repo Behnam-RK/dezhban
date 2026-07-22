@@ -17,6 +17,11 @@
 //   - switch-open / switch-cancel CAN relax the guard (bounded, ≤ SwitchWindowMax).
 //     They ride the socket only when config `control.allowSwitchOps` is true
 //     (the default); set it to false to force switch ops back to root-only.
+//   - pause / resume CAN also relax the guard (bounded, ≤ vpn.pauseMax) — a
+//     third, independently-gated relaxation (`control.allowPauseOps`, default
+//     true) alongside the switch window, sharing its bounded-timer machinery
+//     but serving a different purpose: a deliberate, timed drop to the real
+//     ISP IP rather than connecting a new VPN. See docs/adr/0008-arm-at-boot.md.
 //   - panic is deliberately NOT an op here: the lockout escape hatch must work
 //     with no daemon running.
 package control
@@ -42,6 +47,16 @@ const (
 	OpOpenSwitch Op = "switch-open"
 	// OpCancelSwitch closes an open switch window early. Gated by allowSwitchOps.
 	OpCancelSwitch Op = "switch-cancel"
+	// OpPause opens a bounded pause: egress is fully opened for Duration (capped
+	// by vpn.pauseMax), then the guard re-arms itself with no operator action.
+	// Gated by allowPauseOps. Unlike switch-open/switch-cancel it is available
+	// in every posture, including standby (nothing to pause) and FULL BLOCK
+	// (an operator dropping to the real ISP IP on purpose, e.g. to reach a
+	// sanctioned-country-only service, is exactly what this op is for).
+	OpPause Op = "pause"
+	// OpResume ends an open pause early, re-arming immediately instead of
+	// waiting out the deadline. Gated by allowPauseOps.
+	OpResume Op = "resume"
 )
 
 // Version is the wire protocol version. A request carrying a different version is

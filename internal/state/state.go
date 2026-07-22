@@ -100,6 +100,13 @@ type SwitchState struct {
 const (
 	TriggerManual = "manual"
 	TriggerAuto   = "auto"
+	// TriggerPause is an operator-requested bounded pause (`dezhban pause` /
+	// the GUI's "Pause protection"): a deliberate, timed drop to the real ISP
+	// IP (e.g. to reach a sanctioned-country-only service), sharing the
+	// switch-window machinery and rule shape but with its own cap
+	// (vpn.pauseMax) and its own control-socket gate (control.allowPauseOps).
+	// See docs/adr/0008-arm-at-boot.md.
+	TriggerPause = "pause"
 )
 
 // DirMode is the mode of the daemon's state directory. It MUST stay traversable

@@ -23,6 +23,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/armed"
 	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/control"
@@ -71,6 +72,8 @@ Commands:
   restart     Restart the installed service (apply a config change)
   detect-vpn  Print detected VPN tunnel interfaces to help fill the vpn config
   switch      Open a bounded window to connect a brand-new VPN (learns its server)
+  pause       Open a bounded pause: real ISP IP for a while, then re-arms itself
+  resume      End an open pause early
   vpn         Manage VPN profiles and learned endpoints (list/add/remove/import/…)
   setup       Interactive wizard to create or update the config
   config      Inspect or change the config without hand-editing JSON
@@ -83,9 +86,11 @@ Global flags:
   --no-sudo       Don't auto-elevate; print the root error instead
   --no-daemon     Don't use the daemon's control socket; act on the firewall directly
 
-block, unblock and switch ask the running daemon over its control socket, which
-needs no password (see the "daemon control" line in dezhban status). With no
-daemon listening they fall back to acting on the firewall directly, needing root.
+block, unblock, switch, pause and resume ask the running daemon over its control
+socket, which needs no password (see the "daemon control" line in dezhban
+status). With no daemon listening, block/unblock fall back to acting on the
+firewall directly; switch/pause/resume fall back to the root-owned command file,
+which needs a running daemon to consume it — either way, needing root.
 
 Privileged commands re-run themselves under sudo automatically when not root
 (unix, interactive terminal). Use --no-sudo (or DEZHBAN_NO_SUDO=1) to opt out.
@@ -134,6 +139,10 @@ func run(args []string) int {
 		return cmdDetectVPN(rest)
 	case "switch":
 		return cmdSwitch(rest)
+	case "pause":
+		return cmdPause(rest)
+	case "resume":
+		return cmdResume(rest)
 	case "vpn":
 		return cmdVPN(rest)
 	case "setup":
@@ -404,11 +413,35 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		}
 	}
 
+	// Arm-at-boot record: whether a configured tunnel has ever been observed up
+	// on this host (internal/armed). Loaded once — unlike learned.json this is
+	// consulted only at startup, and re-loading on every access would just
+	// re-read the same latched fact. armAtBoot is forced off on Windows: the
+	// WFP renderer's -InterfaceAlias rules are not verified to accept an
+	// interface name that does not exist yet, so arming a rule set naming a
+	// not-yet-present tunnel there is unproven — see docs/adr/0008-arm-at-boot.md.
+	armedPath := defaultArmedPath()
+	armAtBoot := cfg.VPN.ArmAtBoot
+	if armAtBoot && runtime.GOOS == "windows" {
+		armAtBoot = false
+		log.Warn("vpn.armAtBoot has no effect on Windows yet — staying in standby until the tunnel appears")
+	}
+	armedRec, aerr := armed.Load(armedPath)
+	if aerr != nil {
+		log.Warn("armed record unreadable; treating this host as never having seen a tunnel", "err", aerr)
+	}
+	markTunnelUp := func(t time.Time) {
+		if merr := armed.MarkUp(armedPath, t); merr != nil {
+			log.Debug("armed record write failed", "err", merr)
+		}
+	}
+
 	// Switch-window control: poll the root-owned command file. Only active when
 	// the guard is on and a switch window is configured.
 	switchEnabled := cfg.VPN.SwitchWindow > 0
+	pauseEnabled := cfg.VPN.PauseMax > 0
 	commandPath := defaultCommandPath()
-	if switchEnabled {
+	if switchEnabled || pauseEnabled {
 		if derr := command.Discard(commandPath); derr != nil {
 			log.Debug("discard stale command file failed", "err", derr)
 		}
@@ -469,6 +502,8 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		Interval:          cfg.PollInterval,
 		Control:           ctl,
 		AllowSwitchOps:    cfg.Control.AllowSwitchOps,
+		PauseMax:          cfg.VPN.PauseMax,
+		AllowPauseOps:     cfg.Control.AllowPauseOps,
 		Tunnels:           tunnels,
 		Autodetect:        cfg.VPN.Autodetect,
 		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
@@ -486,6 +521,9 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
 		EndpointGrace:           cfg.VPN.EndpointGrace,
 		AutoArm:                 cfg.VPN.AutoArm,
+		ArmAtBoot:               armAtBoot,
+		TunnelEverUp:            armedRec.TunnelEverUp,
+		MarkTunnelUp:            markTunnelUp,
 		Watcher:                 watcher,
 		WindowProtos:            adv.WindowProtocols,
 		WindowPorts:             adv.WindowPorts,
@@ -496,7 +534,7 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		ReconnectWindowMax:      adv.ReconnectWindowMax,
 		ReconnectMinUptime:      adv.ReconnectMinUptime,
 		Learn:                   learnHook,
-		PollCommand:             switchPollOrNil(switchEnabled, pollCommand),
+		PollCommand:             switchPollOrNil(switchEnabled || pauseEnabled, pollCommand),
 		Publish:                 publish,
 		BlockedCountries:        cfg.BlockedCountries,
 	}, nil
@@ -1027,6 +1065,11 @@ func defaultCommandPath() string { return filepath.Join(stateDir(), "command.jso
 // windows / live discovery.
 func defaultLearnedPath() string { return filepath.Join(stateDir(), "learned.json") }
 
+// defaultArmedPath is the daemon-owned record of whether a configured tunnel
+// has ever been observed up on this host — the persisted fact vpn.armAtBoot
+// arms from. See internal/armed and docs/adr/0008-arm-at-boot.md.
+func defaultArmedPath() string { return filepath.Join(stateDir(), "armed.json") }
+
 // defaultLogPath is the daemon's persistent, size-rotated log file (0644, like
 // state.json — readable history for the GUI and unprivileged operators).
 func defaultLogPath() string { return filepath.Join(stateDir(), "logs", "dezhban.log") }
@@ -1500,18 +1543,31 @@ func cmdStatus(args []string) int {
 			}
 			fmt.Println("vpn profiles:    ", strings.Join(names, ", "))
 		}
-		fmt.Println("switch window:   ", cfg.VPN.SwitchWindow)
+		if cfg.VPN.SwitchWindow > 0 {
+			fmt.Println("switch window:   ", cfg.VPN.SwitchWindow)
+		} else {
+			// The Disabled sentinel is negative — print "off", never "-1ns".
+			fmt.Println("switch window:    off")
+		}
 		if cfg.VPN.ReconnectWindow > 0 {
 			fmt.Println("reconnect window:", cfg.VPN.ReconnectWindow)
 		} else {
 			fmt.Println("reconnect window: off")
 		}
+		if cfg.VPN.PauseMax > 0 {
+			fmt.Println("pause max:       ", cfg.VPN.PauseMax)
+		} else {
+			fmt.Println("pause max:        off")
+		}
 		// Live switch-window / active-profile state from the daemon's snapshot.
 		if snap, err := state.Read(defaultStatePath()); err == nil {
 			if snap.Switch != nil && snap.Switch.Open {
 				kind := "switch state:    "
-				if snap.Switch.Trigger == state.TriggerAuto {
+				switch snap.Switch.Trigger {
+				case state.TriggerAuto:
 					kind = "reconnect state: " // auto window opened by a tunnel drop
+				case state.TriggerPause:
+					kind = "pause state:     " // operator pause (dezhban pause)
 				}
 				fmt.Printf("%s OPEN until %s\n", kind, snap.Switch.Until.Format(time.Kitchen))
 			}

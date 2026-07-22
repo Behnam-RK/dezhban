@@ -151,7 +151,7 @@ password prompt from the operations you perform every day.
 | Path | `/var/db/dezhban/command.json` | `/var/db/dezhban/control.sock` |
 | Who may write | root only (0600, root-owned dir) | the `control.group` (macOS: `admin`), via mode 0660 root:group |
 | Shape | consume-once file, polled on a tick | unix socket, one JSON request per connection |
-| Carries | switch open/cancel, forget-learned | ping, status, block, unblock, switch open/cancel |
+| Carries | switch open/cancel, pause/resume, forget-learned | ping, status, block, unblock, switch open/cancel, pause/resume |
 | Works with no daemon | n/a (daemon consumes it) | no — the CLI falls back to acting on the firewall directly |
 
 **The socket's trust boundary is filesystem permissions, and nothing else.**
@@ -164,8 +164,14 @@ bounded by what the ops can actually do:
   guard, so the worst an unwanted caller achieves is cutting their own network.
 - `switch-open` **can** relax the guard, bounded by its trigger's own hard cap —
   3m for a manual switch, 10m for the automatic reconnect window, deliberately
-  never shared. It is the one genuinely-privileged op on the socket, which is why
-  it has its own flag: `control.allowSwitchOps: false` forces it back to root-only.
+  never shared. It is one of two genuinely-privileged ops on the socket, which is
+  why it has its own flag: `control.allowSwitchOps: false` forces it back to root-only.
+- `pause` **can** also relax the guard — a third, independently-capped trigger
+  (`vpn.pauseMax`, default 30m) alongside the switch window, for deliberately
+  using the real ISP IP rather than connecting a VPN. Its own flag,
+  `control.allowPauseOps`, is independent of `allowSwitchOps`: turning off
+  passwordless switching does not turn off passwordless pausing, or vice
+  versa. See [ADR-0008](../adr/0008-arm-at-boot.md).
 - `panic` is deliberately **absent**. The lockout escape hatch must not depend on a
   daemon being alive, so it stays a direct, root-only firewall teardown.
 - Service lifecycle (`install`/`uninstall`/`start`/`stop`) is absent for a simpler
@@ -175,16 +181,17 @@ bounded by what the ops can actually do:
 `sudo` demands a password; the socket does not. So the group is not really "the
 humans who administer this machine" — it is *every process running as one of them*.
 A malicious binary the admin user runs, with no elevation and no prompt, can now
-open a switch window and relax the guard for up to `switchWindowMax` (default 3m).
-Before the socket, that required a password the malware did not have.
+open a switch window (or a pause) and relax the guard for up to their respective
+caps. Before the socket, that required a password the malware did not have.
 
-We ship it on anyway, because the window is bounded (clamped, auto-reverting to
-the prior fail-closed posture) and because the alternative — a password prompt on
+We ship it on anyway, because every relaxation is bounded (clamped, auto-reverting
+to the prior fail-closed posture) and because the alternative — a password prompt on
 every routine block/unblock — is the kind of friction that gets a kill switch turned
-off entirely. But an operator who does not want that trade has three ways out, in
-increasing order of severity: `control.allowSwitchOps: false` (keeps passwordless
-block/unblock, forces the guard-relaxing op back to root), `control.group: ""`
-(root-only socket), `control.enabled: false` (no socket at all).
+off entirely. But an operator who does not want that trade has four ways out, in
+increasing order of severity: `control.allowSwitchOps: false` / `control.allowPauseOps: false`
+(keeps passwordless block/unblock, forces the corresponding guard-relaxing op
+back to root — independently of each other), `control.group: ""` (root-only
+socket), `control.enabled: false` (no socket at all).
 
 If the socket can't be created with the intended ownership, the daemon **fails
 closed on the feature** — it logs a warning, runs without it, and routine ops go
@@ -308,3 +315,15 @@ since the reasoning is not obvious from the code:
   per-app allows (not expressible across pf/nft/WFP), and provider IP feeds
   (Cloudflare-fronted means allowlisting a whole CDN). Zero-leak purists set
   `"0"` and lose nothing.
+- **STANDBY's own arming rail went unimplemented, and the switch window gained
+  a third trigger** (2026-07-22): ADR-0002 required the "tunnel observed up at
+  least once" fact to persist across restarts; it never did, so every boot
+  where this daemon started before the VPN client's interface existed silently
+  opened the network. `vpn.armAtBoot` (default true) closes that with a small
+  persisted record (`internal/armed`) and arms at boot from it — never for a
+  host that has never proven its VPN works, preserving ADR-0002's actual
+  guarantee. Separately, `dezhban pause`/`resume` add a **third** sanctioned
+  relaxation, `state.TriggerPause`, sharing the switch-window machinery but
+  with its own cap (`vpn.pauseMax`) and its own control-socket gate
+  (`control.allowPauseOps`) — for deliberately using the real ISP IP, not
+  connecting a VPN. See [ADR-0008](../adr/0008-arm-at-boot.md).

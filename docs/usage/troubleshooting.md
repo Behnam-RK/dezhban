@@ -33,6 +33,31 @@ sudo nft delete table inet dezhban            # or: nft delete table ip dezhban
 Remove-NetFirewallRule -Group dezhban
 ```
 
+## I rebooted and my VPN never came up — no network at all
+
+This is `vpn.armAtBoot` (on by default) working as designed, not a bug: it arms
+the guard at startup on a host that has connected successfully before, so the
+network stays blocked from boot until the VPN dials — but if the VPN never
+manages to connect (a changed server, a client that failed to start, an
+endpoint that moved), the guard just holds, the same way it would after any
+tunnel drop. `panic` clears it with no daemon involved:
+
+```sh
+sudo dezhban panic
+dezhban status                     # confirm: tunnel down, no rules
+```
+
+Then fix whatever kept the VPN from connecting (see the endpoint-routing checks
+below), or temporarily disable arm-at-boot while you sort it out:
+
+```sh
+sudo dezhban config set vpn.armAtBoot=false
+```
+
+If you need the real ISP IP for a domestic-only site rather than turning
+anything off, use a bounded [`pause`](cli.md#pause-protection-temporarily)
+instead — it re-arms itself, so there's nothing to remember to undo.
+
 ## VPN guard: tunnel dies, DNS fails ("no such host"), country lookups time out
 
 Symptom (from the daemon log):

@@ -10,7 +10,10 @@ enforcement model: an **always-on interface guard**. Egress is allowed only
 through the tunnel, so a tunnel drop is cut instantly — by default a bounded
 reconnect window then follows so the VPN can redial (set
 `vpn.reconnectWindow: "0"` for a strict zero-leak cut) — and it full-blocks when
-the VPN exit lands in a forbidden country. See
+the VPN exit lands in a forbidden country. On a host that has connected
+successfully before, `vpn.armAtBoot` (default true) arms the guard at startup
+too, so a reboot stays blocked until the VPN redials rather than opening for
+however long that takes ([docs/adr/0008](docs/adr/0008-arm-at-boot.md)). See
 [docs/concepts/modes.md](docs/concepts/modes.md).
 
 There used to be a second, `vpn.enabled: false` **country-blocklist fallback**
@@ -63,18 +66,22 @@ dev tooling only, never the daemon path); non-TTY prints the grouped menu
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
-`switch`, `vpn`, `setup`, `config`, `completion`, `upgrade`, `version`, `help`
-(also `--help`/`-h`; `--version` aliases `version`), plus three globals:
-`-v`/`--verbose`, `--no-sudo` (skip auto-elevation), `--no-daemon` (skip the
-control socket, act on the firewall directly).
+`switch`, `pause`, `resume`, `vpn`, `setup`, `config`, `completion`, `upgrade`,
+`version`, `help` (also `--help`/`-h`; `--version` aliases `version`), plus three
+globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation), `--no-daemon` (skip
+the control socket, act on the firewall directly).
 
 The **privileged set** — requires root/admin — is exactly: `run`, `block`,
 `unblock`, `panic`, `install`, `uninstall`, `start`, `stop`, `restart`, `switch`,
-`vpn add`/`remove`/`promote`/`forget`/`import` (but not `vpn list`/`show`),
-`setup`, `config set`/`edit`, and `upgrade download`/`upgrade apply` (macOS
-only — `download`'s staging directory is root-owned so a local user can't swap
-the verified `.pkg` before `apply` installs it). Everything else — `status`,
-`detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
+`pause`, `resume`, `vpn add`/`remove`/`promote`/`forget`/`import` (but not
+`vpn list`/`show`), `setup`, `config set`/`edit`, and `upgrade download`/`upgrade
+apply` (macOS only — `download`'s staging directory is root-owned so a local user
+can't swap the verified `.pkg` before `apply` installs it). `switch`, `pause`,
+and `resume` are usually passwordless in practice: they ask the running daemon
+over its control socket first (gated by `control.allowSwitchOps`/
+`control.allowPauseOps` respectively) and only fall back to the root-owned
+command file when no daemon answers. Everything else — `status`, `detect-vpn`,
+`validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
 `config show`/`path`, `completion`, `upgrade check`, `version`, `help` — is
 read-only: no root, no firewall effects. Full reference:
 [docs/usage/cli.md](docs/usage/cli.md); the upgrade design in full:
@@ -146,8 +153,8 @@ The design depends on these invariants (rationale in
   now errors by name rather than silently rendering something else. `Snapshot.Mode`
   and `status --json`'s `vpnEnabled` are gone too — a field with one possible
   value is noise, not compatibility.
-- **The bounded switch window is the ONLY sanctioned relaxation of the guard,
-  and it has exactly TWO sanctioned triggers** — nothing else may ever relax it:
+- **The bounded switch window is the sanctioned relaxation of the guard, and it
+  has exactly THREE sanctioned triggers** — nothing else may ever relax it:
   (1) an explicit operator command, via the **root-owned command file**
   (`internal/command`, always available, root-only) or the **control socket**
   (`internal/control`, admin-group, gated by `control.allowSwitchOps`, default
@@ -155,27 +162,38 @@ The design depends on these invariants (rationale in
   (`vpn.reconnectWindow`, default 30s, `"0"` disables — an explicit opt-out):
   a tunnel-down edge from *healthy GUARD only* — never from standby, FULL BLOCK,
   an already-open window, or a tunnel never observed up, and gated against
-  flapping by `vpn.advanced.reconnectMinUptime`. Both triggers share the same
-  machinery and rails — closes early on a confirmed good exit, auto-reverts to
-  the prior fail-closed posture on cancel/expiry, one auto window per drop
-  (expiry never re-opens) — but each has its OWN hard cap, deliberately never
-  shared: the manual trigger is bounded by `switchWindowMax` (default 3m, no
-  floor), the automatic one by `reconnectWindowMax` (default 10m, no floor).
-  Collapsing these into one shared cap would silently truncate whichever
-  trigger has the larger intended budget — the `Options.SwitchWindowMax` /
-  `Options.ReconnectWindowMax` split in `internal/runner` and the per-episode
-  `windowMax` selected by trigger at first open (`Run`'s `openWindow` closure)
-  exist for exactly this reason. Never widen a window past its own cap, never
-  add a trigger, never let either outlive its deadline.
-- **Both windows are independently disableable, and "disabled" must survive
-  `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
-  `vpn.reconnectWindow: "0"` removes trigger (2); both set to `"0"` is the strict
-  zero-leak posture in which *nothing* can relax the guard. Each parses to the
+  flapping by `vpn.advanced.reconnectMinUptime`; (3) an explicit operator
+  **pause** (`dezhban pause`/`resume`, `state.TriggerPause`), via the same
+  command file or the control socket (gated separately by
+  `control.allowPauseOps`, default true, independent of `allowSwitchOps`) —
+  added by [docs/adr/0008](docs/adr/0008-arm-at-boot.md) for deliberately using
+  the real ISP IP (e.g. a domestic-only service the VPN's exit can't reach),
+  not for connecting a VPN. All three triggers share the same machinery and
+  rails — closes early on a confirmed good exit, auto-reverts to the prior
+  fail-closed posture on cancel/expiry, one auto window per drop (expiry never
+  re-opens) — but each has its OWN hard cap, deliberately never shared: the
+  manual trigger is bounded by `switchWindowMax` (default 3m, no floor), the
+  automatic one by `reconnectWindowMax` (default 10m, no floor), pause by
+  `vpn.pauseMax` (default 30m, no floor). Collapsing these into one shared cap
+  would silently truncate whichever trigger has the larger intended budget —
+  the `Options.SwitchWindowMax` / `Options.ReconnectWindowMax` / `Options.PauseMax`
+  split in `internal/runner` and the per-episode `windowMax` selected by
+  trigger at first open (`Run`'s `openWindow` closure) exist for exactly this
+  reason. Never widen a window past its own cap, never add a FOURTH trigger
+  without a new ADR, never let any of the three outlive its deadline.
+- **All three windows are independently disableable, and "disabled" must
+  survive `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
+  `vpn.reconnectWindow: "0"` removes trigger (2); `vpn.pauseMax: "0"` removes
+  trigger (3); all three set to `"0"` is the strict zero-leak posture in which
+  *nothing* can relax the guard. Each parses to the
   negative `config.Disabled` sentinel, because `Normalize` coerces a plain `0`
   back to the default — accepting a security setting and silently discarding it
   is the worst bug this tool can have. Disabling one must never disable the
-  other: the manual path gates on `switchEnabled`, the automatic path gates only
-  on `ReconnectWindow > 0`. `TestWindowDisableMatrix` pins all four permutations.
+  others: the manual path gates on `switchEnabled`, the automatic path gates
+  only on `ReconnectWindow > 0`, pause gates only on `PauseMax > 0`.
+  `TestWindowDisableMatrix` pins all four permutations of the first two;
+  pause's own default/disable round-trip is pinned separately
+  (`TestPauseMaxDefaultAndDisableSentinel`, `TestConfigSetSwitchWindowZeroDisables`).
 - The daemon owns all `Backend.Apply` calls from the **single run-loop goroutine** —
   keep it that way. Window timer, command poll, watcher, geo ticks, **and
   control-socket requests** are all select cases in that one loop; the socket's
@@ -189,6 +207,14 @@ The design depends on these invariants (rationale in
   **explicit `vpn.tunnelInterfaces` are pinned and never auto-pruned**, and the
   set never narrows to empty. Learned endpoints live in a daemon-owned
   `learned.json`, never written into the user's config.
+- **`vpn.armAtBoot` (default true) may only override STANDBY's live-probe
+  decision when BOTH an endpoint is known AND `TunnelEverUp` is true** — the
+  fact, persisted in a daemon-owned `armed.json` (`internal/armed`, same
+  atomic-write convention as `learned.json`), that a configured tunnel has
+  been observed up at least once on this host. Never arm at boot
+  unconditionally: that collapses back into ADR-0002's rejected "Alternative
+  1" (fail closed until a VPN exists), which turns first-run into a lockout
+  event by design. See [docs/adr/0008](docs/adr/0008-arm-at-boot.md).
 
 ## Conventions
 

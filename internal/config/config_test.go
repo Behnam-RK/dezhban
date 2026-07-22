@@ -581,6 +581,96 @@ func TestSavePreservesEndpointGraceAndAutoArm(t *testing.T) {
 	}
 }
 
+// vpn.pauseMax defaults to 30m when absent, and "0" must survive as the
+// Disabled sentinel through Normalize and a save/load round-trip — the same
+// class of bug CLAUDE.md calls out for switchWindow/reconnectWindow: a "0"
+// silently coerced back to a default is a security setting accepted, discarded,
+// and never reported.
+func TestPauseMaxDefaultAndDisableSentinel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn": {"tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.VPN.PauseMax != 30*time.Minute {
+		t.Errorf("PauseMax = %s with the key absent, want the 30m default", cfg.VPN.PauseMax)
+	}
+
+	path2 := filepath.Join(t.TempDir(), "cfg2.json")
+	body2 := `{"vpn": {"tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "pauseMax": "0"}}`
+	if err := os.WriteFile(path2, []byte(body2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(path2)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg2.VPN.PauseMax >= 0 {
+		t.Errorf("PauseMax = %s after \"0\", want the negative Disabled sentinel", cfg2.VPN.PauseMax)
+	}
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg2); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg3, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load(saved): %v", err)
+	}
+	if cfg3.VPN.PauseMax >= 0 {
+		t.Errorf("PauseMax = %s after round-trip, want the disabled sentinel to survive", cfg3.VPN.PauseMax)
+	}
+}
+
+// armAtBoot defaults to true when absent (Default() and an absent vpn.armAtBoot
+// key must agree — see docs/adr/0008-arm-at-boot.md), and an explicit false
+// must survive a save/load round-trip rather than being silently reset.
+func TestArmAtBootDefaultTrueAndRoundTrips(t *testing.T) {
+	if !Default().VPN.ArmAtBoot {
+		t.Error("Default().VPN.ArmAtBoot = false, want true")
+	}
+
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn": {"tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.VPN.ArmAtBoot {
+		t.Error("ArmAtBoot = false with the key absent, want true (default)")
+	}
+
+	path2 := filepath.Join(t.TempDir(), "cfg2.json")
+	body2 := `{"vpn": {"tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "armAtBoot": false}}`
+	if err := os.WriteFile(path2, []byte(body2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(path2)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg2.VPN.ArmAtBoot {
+		t.Error("ArmAtBoot = true with an explicit false in the file, want false")
+	}
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg2); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg3, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load(saved): %v", err)
+	}
+	if cfg3.VPN.ArmAtBoot {
+		t.Error("ArmAtBoot = true after round-trip, want the explicit false to survive")
+	}
+}
+
 // An absent endpointGrace now normalizes to the effective 15m default so
 // observers (GUI, config show) see the real value instead of 0.
 func TestEndpointGraceDefaultVisible(t *testing.T) {

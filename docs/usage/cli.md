@@ -20,6 +20,8 @@ Commands:
   restart      Restart the installed service — apply a config change (root)
   detect-vpn   Print detected VPN tunnel interfaces for config
   switch       Open a bounded window to connect a brand-new VPN    (root)
+  pause        Open a bounded pause: real ISP IP for a while, then re-arms   (root)
+  resume       End an open pause early                             (root)
   vpn          Manage VPN profiles and learned endpoints (list/add/remove/import/promote/forget)
   setup        Interactive wizard to create or update the config
   config       Inspect or change the config without hand-editing JSON
@@ -45,7 +47,7 @@ daemon** over its control socket and need no password at all:
 
 | Command | Needs a password? |
 |---|---|
-| `block`, `unblock`, `switch` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back to acting on the firewall directly, which needs root. |
+| `block`, `unblock`, `switch`, `pause`, `resume` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back — `block`/`unblock` act on the firewall directly; `switch`/`pause`/`resume` write the root-owned command file, which itself needs a running daemon to consume it. Either way, root. |
 | `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn` | **No** — read-only, no root, no firewall effects. |
 | `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
@@ -189,6 +191,21 @@ sudo dezhban vpn forget <name>          # drop a learned endpoint
 `switch` writes a root-owned control file the daemon consumes, then narrates the
 window from the state file until it closes. See [modes.md](../concepts/modes.md#switch-window--connecting-a-brand-new-vpn)
 for the posture and the real-IP-exposure trade-off.
+
+## Pause protection temporarily
+
+For the times the *correct* traffic is the one the guard blocks — a domestic-only
+service that refuses a foreign VPN exit:
+
+```sh
+sudo dezhban pause 15m     # real IP for 15 minutes, capped by vpn.pauseMax
+sudo dezhban resume        # end it early
+```
+
+Unlike `switch`, this doesn't wait for a VPN — it just opens egress for the given
+duration and re-arms the guard by itself at the deadline, so there's nothing to
+remember to turn back on. See
+[modes.md](../concepts/modes.md#pause--deliberately-using-your-real-ip).
 
 ## Shell completion
 
