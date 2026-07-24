@@ -2,8 +2,14 @@ import SwiftUI
 
 /// Real-data About pane: version, resolved config path, binary path, the
 /// enforcement posture (from the shared snapshot), whether the OS service is
-/// installed, and which elevation path privileged actions will take — surfaced
-/// so "why did I get a password dialog?" is diagnosable from the app itself.
+/// installed, and how each of the two authorisation paths will actually
+/// authenticate — surfaced so "why did I get a password dialog?" is diagnosable
+/// from the app itself.
+///
+/// The two paths are genuinely different and must not be collapsed into one row:
+/// settings changes go through the daemon, authorised by the keychain token, and
+/// cost a Touch ID tap; lifecycle actions cannot go through a daemon they are
+/// installing or stopping, so they still elevate.
 struct AboutView: View {
     @EnvironmentObject var state: AppState
 
@@ -12,6 +18,13 @@ struct AboutView: View {
     @State private var binaryPath = ""
     @State private var isCheckingUpdate = false
     @State private var isUpgrading = false
+
+    /// Evaluated once per pane appearance rather than in `body`: neither answer can
+    /// change while the pane is open except through the Settings toggle, which
+    /// reopens this view. Both read state only — no biometric prompt is triggered
+    /// by looking.
+    @State private var settingsAuth = ""
+    @State private var privilegedAuth = ""
 
     var body: some View {
         Form {
@@ -25,10 +38,8 @@ struct AboutView: View {
                                value: state.isLive ? PostureUI.humanPosture(state.snapshot!) : "stopped")
                 LabeledContent("Service",
                                value: state.serviceIsInstalled ? "installed" : "not installed")
-                LabeledContent("Elevation",
-                               value: Elevation.isAvailable
-                                   ? "Authorization Services (Touch ID capable)"
-                                   : "AppleScript fallback (password only)")
+                LabeledContent("Settings changes", value: settingsAuth)
+                LabeledContent("Privileged actions", value: privilegedAuth)
             }
             updateSection
         }
@@ -105,7 +116,37 @@ struct AboutView: View {
 
     /// Only `version` needs a fresh CLI call — posture and service state are
     /// already live in AppState for the rest of the window.
+    /// What a settings change will actually cost the user right now. It used to
+    /// read "Authorization Services (Touch ID capable)" unconditionally, which was
+    /// false in every case that mattered: that dialog is password-only in
+    /// practice, which is the finding that produced the control token.
+    private static func describeSettingsAuth() -> String {
+        if ControlToken.isStored {
+            return "Touch ID (control token enrolled)"
+        }
+        if ControlToken.biometryAvailable {
+            return "Password — turn on Touch ID in Settings"
+        }
+        return "Password — this Mac has no Touch ID"
+    }
+
+    /// Lifecycle actions (install/start/stop/panic) cannot go through the daemon,
+    /// so they still elevate. Which prompt appears depends on `pam_tid`, and that
+    /// is precisely the "why did I get a password dialog?" question this pane
+    /// exists to answer.
+    private static func describePrivilegedAuth() -> String {
+        if Elevation.sudoTouchIDConfigured {
+            return "Touch ID via sudo (pam_tid)"
+        }
+        if Elevation.isAvailable {
+            return "Password — Authorization Services (no pam_tid)"
+        }
+        return "Password — AppleScript fallback"
+    }
+
     private func load() {
+        settingsAuth = Self.describeSettingsAuth()
+        privilegedAuth = Self.describePrivilegedAuth()
         // Show the memoized path immediately; the authoritative resolution happens
         // below, off the main thread (DezhbanCLI.exec explains why that matters).
         configPath = DezhbanCLI.displayConfigPath
