@@ -12,6 +12,27 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **The menubar app no longer reads the daemon's state file on the main thread.**
+  The 1-second poll stat'd and decoded `state.json` inline, so any stall in that
+  filesystem call froze the whole UI — clicks included. The read now runs on a
+  background queue and publishes its result back on the main thread, and a tick
+  is skipped while a previous read is still outstanding so slow reads cannot
+  stack up. This is the leading suspect for the reported random beachballs; it
+  is a hazard worth removing either way.
+
+### Added
+
+- **Main-thread stall detection in the menubar app.** A background watchdog pings
+  the main queue twice a second and records any stall past one second, plus how
+  long it lasted, to unified logging under the `sh.dezhban.menu` subsystem
+  (`log show --last 1h --predicate 'subsystem == "sh.dezhban.menu"'`). The
+  beachballs have no cause visible in the source — every subprocess and
+  elevation call is already dispatched off-main — so they have to be caught in
+  the act. Diagnostic only: it observes the main thread and never blocks it, and
+  it touches neither the daemon nor the firewall.
+
 ## [0.7.0] - 2026-07-22
 
 ### Added
