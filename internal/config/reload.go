@@ -63,6 +63,7 @@ func KeyValues(c *Config) map[string]string {
 		"control.group":          c.Control.Group,
 		"control.allowSwitchOps": strconv.FormatBool(c.Control.AllowSwitchOps),
 		"control.allowPauseOps":  strconv.FormatBool(c.Control.AllowPauseOps),
+		"control.allowConfigOps": strconv.FormatBool(c.Control.AllowConfigOps),
 
 		"vpn.advanced.switchWindowMax":         dur(adv.SwitchWindowMax),
 		"vpn.advanced.redialWindowMax":         dur(adv.RedialWindowMax),
@@ -129,6 +130,7 @@ var liveKeys = map[string]bool{
 
 	"control.allowSwitchOps": true,
 	"control.allowPauseOps":  true,
+	"control.allowConfigOps": true,
 
 	"vpn.advanced.switchWindowMax":         true,
 	"vpn.advanced.redialWindowMax":         true,
@@ -212,6 +214,8 @@ func MergeLive(base, cur *Config) *Config {
 
 	out.Control.AllowSwitchOps = cur.Control.AllowSwitchOps
 	out.Control.AllowPauseOps = cur.Control.AllowPauseOps
+	out.Control.AllowConfigOps = cur.Control.AllowConfigOps
+	out.Control.AllowConfigOps = cur.Control.AllowConfigOps
 
 	out.VPN.Advanced.SwitchWindowMax = cur.VPN.Advanced.SwitchWindowMax
 	out.VPN.Advanced.RedialWindowMax = cur.VPN.Advanced.RedialWindowMax

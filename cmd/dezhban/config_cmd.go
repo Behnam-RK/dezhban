@@ -36,7 +36,7 @@ Keys (dotted; list values are comma-separated):
   vpn.autoArm vpn.armAtBoot vpn.switchWindow
   vpn.redialWindow vpn.pauseMax vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
-  control.allowPauseOps
+  control.allowPauseOps control.allowConfigOps
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
 
 // configField is a get/set pair for one dotted config key.
@@ -195,6 +195,10 @@ var configFields = map[string]configField{
 	"control.allowSwitchOps": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.AllowSwitchOps) },
 		set: func(c *config.Config, v string) error { return setBool(&c.Control.AllowSwitchOps, v) },
+	},
+	"control.allowConfigOps": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.AllowConfigOps) },
+		set: func(c *config.Config, v string) error { return setBool(&c.Control.AllowConfigOps, v) },
 	},
 	"control.allowPauseOps": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.AllowPauseOps) },

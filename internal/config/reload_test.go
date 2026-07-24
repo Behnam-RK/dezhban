@@ -190,6 +190,7 @@ func TestMergeLiveCoversExactlyTheLiveKeys(t *testing.T) {
 	cur.VPN.EndpointGrace = base.VPN.EndpointGrace + time.Second
 	cur.Control.AllowSwitchOps = !base.Control.AllowSwitchOps
 	cur.Control.AllowPauseOps = !base.Control.AllowPauseOps
+	cur.Control.AllowConfigOps = !base.Control.AllowConfigOps
 	cur.VPN.Advanced.SwitchWindowMax = base.VPN.Advanced.SwitchWindowMax + time.Second
 	cur.VPN.Advanced.RedialWindowMax = base.VPN.Advanced.RedialWindowMax + time.Second
 	cur.VPN.Advanced.RedialMinUptime = base.VPN.Advanced.RedialMinUptime + time.Second

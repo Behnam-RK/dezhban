@@ -47,6 +47,7 @@ var roundTripCases = map[string]roundTripCase{
 	"control.enabled":        {set: "false", want: "false"},
 	"control.allowSwitchOps": {set: "false", want: "false"},
 	"control.allowPauseOps":  {set: "false", want: "false"},
+	"control.allowConfigOps": {set: "false", want: "false"},
 	"control.group":          {set: "wheel", want: "wheel"},
 	"control.socket":         {set: "/var/run/dezhban-test.sock", want: "/var/run/dezhban-test.sock"},
 }

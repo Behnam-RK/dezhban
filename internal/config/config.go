@@ -285,6 +285,12 @@ type Control struct {
 	// back to the root-owned command file (`sudo dezhban pause`) without
 	// touching switch-window availability.
 	AllowPauseOps bool
+	// AllowConfigOps permits writing configuration over the socket. Default
+	// true. Unlike the two above, this op is additionally gated on the enrolled
+	// control token (internal/token), so the socket's group membership alone
+	// never authorises it; this flag exists for operators who want config
+	// changes to require real root regardless of enrollment.
+	AllowConfigOps bool
 }
 
 // fileConfig is the on-disk JSON shape. Durations are strings (e.g. "30s")
@@ -318,6 +324,7 @@ type fileControl struct {
 	Group          *string `json:"group,omitempty"`
 	AllowSwitchOps *bool   `json:"allowSwitchOps,omitempty"`
 	AllowPauseOps  *bool   `json:"allowPauseOps,omitempty"`
+	AllowConfigOps *bool   `json:"allowConfigOps,omitempty"`
 }
 
 // fileVPN is the on-disk shape of the VPN block. A pointer in fileConfig lets an
@@ -412,6 +419,7 @@ func Default() Config {
 			Group:          defaultControlGroup,
 			AllowSwitchOps: true,
 			AllowPauseOps:  true,
+			AllowConfigOps: true,
 		},
 	}
 }
@@ -622,6 +630,9 @@ func apply(cfg *Config, fc fileConfig) error {
 		if fc.Control.AllowSwitchOps != nil {
 			cfg.Control.AllowSwitchOps = *fc.Control.AllowSwitchOps
 		}
+		if fc.Control.AllowConfigOps != nil {
+			cfg.Control.AllowConfigOps = *fc.Control.AllowConfigOps
+		}
 		if fc.Control.AllowPauseOps != nil {
 			cfg.Control.AllowPauseOps = *fc.Control.AllowPauseOps
 		}
@@ -702,6 +713,7 @@ func toFileConfig(c *Config) fileConfig {
 	ctlGroup := c.Control.Group
 	ctlSwitchOps := c.Control.AllowSwitchOps
 	ctlPauseOps := c.Control.AllowPauseOps
+	ctlConfigOps := c.Control.AllowConfigOps
 	return fileConfig{
 		PollInterval: c.PollInterval.String(),
 		// FailClosed and Allowlist are deliberately omitted (nil): they are
@@ -737,6 +749,7 @@ func toFileConfig(c *Config) fileConfig {
 			Group:          &ctlGroup,
 			AllowSwitchOps: &ctlSwitchOps,
 			AllowPauseOps:  &ctlPauseOps,
+			AllowConfigOps: &ctlConfigOps,
 		},
 	}
 }
