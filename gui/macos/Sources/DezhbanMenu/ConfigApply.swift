@@ -42,14 +42,14 @@ enum ConfigApply {
     }
 
     /// Writes `pairs` through ONE batched `config set` (single validation, single
-    /// write, single admin prompt), optionally followed by `restart` in the same
-    /// batch — `set -e` semantics mean a rejected config never restarts anything.
-    /// With `restart` and `awaitPosture`, waits (bounded) for the RESTARTED daemon
-    /// to publish a posture rather than assuming the restart worked.
-    static func apply(pairs: [String], restart: Bool, awaitPosture: Bool, title: String,
+    /// write, single admin prompt). The write itself now applies the change: the
+    /// CLI asks the running daemon to reload, so the restart that used to be
+    /// mandatory is only offered for the handful of keys the daemon cannot adopt
+    /// live, and only when it actually reports them.
+    static func apply(pairs: [String], awaitPosture: Bool, title: String,
                       completion: @escaping (Outcome) -> Void) {
         runBatch(["config", "set"] + pairs,
-                 restart: restart, awaitPosture: awaitPosture, title: title, completion: completion)
+                 awaitPosture: awaitPosture, title: title, completion: completion)
     }
 
     /// Restores every tunable to its shipped default through `config reset --all`,
@@ -58,32 +58,40 @@ enum ConfigApply {
     /// country or forgets the user's VPN. Same restart/posture plumbing as `apply`;
     /// the defaults themselves come from `config.Default()` in Go, so this pane
     /// never carries a second copy of the schema.
-    static func resetAll(restart: Bool, awaitPosture: Bool, title: String,
+    static func resetAll(awaitPosture: Bool, title: String,
                          completion: @escaping (Outcome) -> Void) {
         runBatch(["config", "reset", "--all"],
-                 restart: restart, awaitPosture: awaitPosture, title: title, completion: completion)
+                 awaitPosture: awaitPosture, title: title, completion: completion)
+    }
+
+    /// The keys the daemon could not adopt live, read from `config set`'s own
+    /// report. Reading the CLI's answer rather than re-deriving it keeps the
+    /// live/restart classification in exactly one place — the daemon, which is
+    /// the only thing that knows what it actually built at startup. A GUI-side
+    /// copy would be a second source of truth, and the one guaranteed to drift.
+    static func pendingRestartKeys(in output: String) -> [String] {
+        let marker = "Restart dezhban to apply:"
+        for line in output.split(separator: "\n") {
+            guard let r = line.range(of: marker) else { continue }
+            return line[r.upperBound...]
+                .split(separator: ",")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+        }
+        return []
     }
 
     /// `write` arrives WITHOUT `--config`; this appends it from the resolved path.
     /// The resolution happens on the background queue below rather than in `apply` /
     /// `resetAll`, which are called from button actions on the main thread — see
     /// DezhbanCLI.exec on why a main-thread shell-out is unsafe, not just slow.
-    private static func runBatch(_ write: [String], restart: Bool, awaitPosture: Bool, title: String,
+    private static func runBatch(_ write: [String], awaitPosture: Bool, title: String,
                                  completion: @escaping (Outcome) -> Void) {
-        // Marked BEFORE the restart: only a snapshot published after this instant can
-        // have come from the new daemon.
-        let mark = Date()
         DispatchQueue.global(qos: .userInitiated).async {
             // Resolve the target path once and pass --config explicitly, so the write
             // and the daemon provably act on the same file rather than each
             // re-resolving it.
-            var commands: [[String]] = [write + ["--config", DezhbanCLI.resolvedConfigPath()]]
-            if restart {
-                // `restart`, not stop-then-start: the CLI owns the in-between state. No
-                // --config — it acts on the already-installed service unit, whose config
-                // path was baked in at install time.
-                commands.append(["restart"])
-            }
+            let commands: [[String]] = [write + ["--config", DezhbanCLI.resolvedConfigPath()]]
             let result = DezhbanCLI.runPrivileged(batch: commands)
             guard result.ok else {
                 DispatchQueue.main.async {
@@ -92,10 +100,48 @@ enum ConfigApply {
                 }
                 return
             }
-            guard restart else {
+            // The write already asked the daemon to reload, so the common case ends
+            // here with the change in force and nothing interrupted.
+            let pending = pendingRestartKeys(in: result.output)
+            guard !pending.isEmpty else {
                 DispatchQueue.main.async {
-                    completion(Outcome(ok: true, status: "Config saved; restart later to apply.",
+                    completion(Outcome(ok: true, status: "Saved and applied.",
                                        transcriptTitle: nil, transcript: nil))
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                guard confirmRestart(for: pending) else {
+                    // Declining is a real choice and must be reported truthfully:
+                    // the file holds the new value, the daemon is still enforcing
+                    // the old one, and the user needs to know which keys those are.
+                    completion(Outcome(ok: true,
+                                       status: "Saved. Still on the old value until restart: \(pending.joined(separator: ", ")).",
+                                       transcriptTitle: nil, transcript: nil))
+                    return
+                }
+                restartNow(awaitPosture: awaitPosture, title: title, completion: completion)
+            }
+        }
+    }
+
+    /// Restarts the service so restart-required keys take effect. Split out of the
+    /// write because it is now a separate, opt-in step rather than something
+    /// bundled into every config change.
+    private static func restartNow(awaitPosture: Bool, title: String,
+                                   completion: @escaping (Outcome) -> Void) {
+        // Marked BEFORE the restart: only a snapshot published after this instant
+        // can have come from the new daemon.
+        let mark = Date()
+        DispatchQueue.global(qos: .userInitiated).async {
+            // `restart`, not stop-then-start: the CLI owns the in-between state. No
+            // --config — it acts on the already-installed service unit, whose config
+            // path was baked in at install time.
+            let result = DezhbanCLI.runPrivileged(batch: [["restart"]])
+            guard result.ok else {
+                DispatchQueue.main.async {
+                    completion(Outcome(ok: false, status: "Saved, but the restart failed — see output.",
+                                       transcriptTitle: "\(title) — restart failed", transcript: result.output))
                 }
                 return
             }
@@ -153,18 +199,26 @@ enum ConfigApply {
         }
     }
 
-    /// The restart-window decision made explicit: no atomic reload exists
-    /// (kardianos/service has no SIGHUP-style reconfigure, and Cleanup/panic
-    /// deliberately shares the same rules-come-down path as `stop`), so this
-    /// is disclosed plainly rather than papered over as seamless. Asked BEFORE
-    /// elevating so the write and the restart go up as one batch under one prompt.
-    static func confirmRestart() -> Bool {
+    /// Asked only when the daemon has reported keys it could not adopt live, and
+    /// it names them: a restart briefly stops enforcing, so it is worth agreeing
+    /// to for a setting that is genuinely stuck, and not worth it otherwise. The
+    /// change is already saved and the rest of it already applied by the time this
+    /// appears, so declining costs nothing but leaves those keys pending.
+    static func confirmRestart(for keys: [String]) -> Bool {
         let alert = NSAlert()
         alert.alertStyle = .warning
-        alert.messageText = "Restart dezhban to apply this change?"
-        alert.informativeText = "A config change only takes effect when dezhban restarts. Network filtering is briefly disabled while it does (usually under a few seconds). Choosing “Save only” writes the config now and leaves the running daemon on its old settings."
-        alert.addButton(withTitle: "Save and Restart")
-        alert.addButton(withTitle: "Save Only")
+        alert.messageText = "Restart dezhban to finish applying?"
+        alert.informativeText = """
+            Saved, and everything that could be applied already has been. \
+            These settings need a restart before they take effect: \
+            \(keys.joined(separator: ", ")).
+
+            Restarting briefly stops network filtering, usually for under a few \
+            seconds. Choosing “Later” keeps the daemon on the old values for \
+            those settings until you restart it.
+            """
+        alert.addButton(withTitle: "Restart Now")
+        alert.addButton(withTitle: "Later")
         return alert.runModal() == .alertFirstButtonReturn
     }
 

@@ -9,9 +9,10 @@ import SwiftUI
 ///   - Startup toggles act IMMEDIATELY (they are service/login-item actions, not
 ///     config values — there is nothing to batch or restart).
 ///   - Every other field is staged and written by Apply through one batched
-///     `config set` (single validation, write, and admin prompt), and awaits the
-///     restarted daemon's posture before reporting success — this pane now carries
-///     guard-affecting keys, same as VPNGuardView did.
+///     `config set` (single validation, write, and admin prompt). The write also
+///     applies the change: the CLI asks the running daemon to reload, so a
+///     restart is offered only for the few keys the daemon reports it could not
+///     adopt live, and only when it says so.
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
 
@@ -48,6 +49,26 @@ struct SettingsView: View {
     @State private var endpointGrace = ""
     @State private var endpointRefresh = ""
     @State private var tunnelWatch = ""
+
+    /// The values this pane was last seeded with, in `keys` order. Comparing the
+    /// live fields against these is how an unsaved edit is told from a pane that
+    /// is merely displaying what is on disk — which decides whether it is safe to
+    /// re-read the file underneath the user.
+    @State private var seededValues: [String] = []
+
+    /// Field values in `keys` order, for the dirtiness check above.
+    private var currentValues: [String] {
+        [tunnelInterfaces, endpoints,
+         String(autodetect), String(autoDiscover), String(autoArm),
+         String(allowLocalNetwork),
+         blockedCountries, pollInterval,
+         switchWindow, reconnectWindow, endpointGrace,
+         endpointRefresh, tunnelWatch]
+    }
+
+    private var hasUnsavedEdits: Bool {
+        !seededValues.isEmpty && currentValues != seededValues
+    }
 
     @State private var status = ""
     @State private var canApply = false
@@ -152,6 +173,16 @@ struct SettingsView: View {
         }
         .navigationTitle("Settings")
         .onAppear(perform: seed)
+        // The config file is not owned by this pane: `dezhban config set` in a
+        // terminal, another admin, or a hand edit can all change it while the
+        // window sits open, and the pane would go on showing values the daemon
+        // stopped using. Re-read whenever the user comes back to the app — unless
+        // they have typed something, since re-reading would then throw their work
+        // away to fix a much smaller problem.
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            guard !hasUnsavedEdits else { return }
+            seed()
+        }
     }
 
     private var footer: some View {
@@ -196,10 +227,9 @@ struct SettingsView: View {
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }
 
-        let restart = ConfigApply.confirmRestart()
         canApply = false
-        status = restart ? "Resetting and restarting…" : "Resetting…"
-        ConfigApply.resetAll(restart: restart, awaitPosture: true, title: "Reset to defaults") { outcome in
+        status = "Resetting…"
+        ConfigApply.resetAll(awaitPosture: true, title: "Reset to defaults") { outcome in
             canApply = true
             status = outcome.status
             if let title = outcome.transcriptTitle, let text = outcome.transcript {
@@ -320,6 +350,10 @@ struct SettingsView: View {
             endpointGrace = v[10]
             endpointRefresh = v[11]
             tunnelWatch = v[12]
+            // Recorded AFTER the fields are populated, so `currentValues` and the
+            // seeded snapshot are the same thing at this instant and the pane
+            // starts out clean.
+            seededValues = currentValues
             status = "Seeded from \(path)"
             canApply = true
         }
@@ -363,19 +397,22 @@ struct SettingsView: View {
             "vpn.endpointRefresh=\(refresh)",
             "vpn.tunnelWatch=\(watch)",
         ]
-        let restart = ConfigApply.confirmRestart()
         canApply = false
-        status = restart ? "Applying and restarting…" : "Applying…"
+        status = "Applying…"
         // awaitPosture: true — this pane now carries guard-affecting keys (it used
         // to be false here, back when Settings held only switchWindow/endpointGrace
-        // and VPNGuardView, which always awaited posture, held the rest).
-        ConfigApply.apply(pairs: pairs, restart: restart, awaitPosture: true,
+        // and VPNGuardView, which always awaited posture, held the rest). It only
+        // comes into play if the user agrees to a restart for a key that needs one.
+        ConfigApply.apply(pairs: pairs, awaitPosture: true,
                           title: "Settings") { outcome in
             canApply = true
             status = outcome.status
             if let title = outcome.transcriptTitle, let text = outcome.transcript {
                 state.showInLogs(title: title, text: text)
             }
+            // Re-seed from disk so the fields show what actually landed, including
+            // any value the daemon normalised on the way in.
+            if outcome.ok { seed() }
         }
     }
 }

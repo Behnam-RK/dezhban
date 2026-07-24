@@ -38,6 +38,15 @@ current as you land changes.
 
 ### Changed
 
+- **The macOS app no longer restarts the daemon to apply settings.** Saving now
+  applies the change outright, and the restart prompt appears only when the
+  daemon reports keys it could not adopt live — naming them, so the choice is
+  informed rather than a blanket warning on every edit. Declining says exactly
+  which settings are still on their old values instead of the previous vague
+  "restart later to apply". The pane also re-reads the config file whenever you
+  return to the app, so an edit made in a terminal no longer leaves it showing
+  values the daemon has stopped using; unsaved edits suppress the re-read rather
+  than being discarded.
 - **`gui/assets/` is now `gui/artifacts/`**, refreshed with a new brand set that
   adds the paused state across every size and variant. Documentation, the app
   build script, and source comments follow the new path; historical changelog
