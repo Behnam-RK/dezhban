@@ -35,6 +35,20 @@ current as you land changes.
   about the behaviour changes: the automatic window, its cap, and its anti-flap
   gate work exactly as before under the new names.
 
+### Fixed
+
+- **A failed Touch ID no longer strands you on a password-only prompt.** The app
+  ran `sudo` with stdin on `/dev/null`, so the moment a biometric read missed —
+  a closed lid, a wet finger, a couple of bad reads — PAM's password fallback hit
+  EOF, failed instantly, and the whole attempt dropped to an Authorization
+  Services dialog that cannot offer Touch ID at all. There was no retry, which is
+  why `pam_tid` looked broken when it was configured correctly all along. The app
+  now runs `sudo -A` with a bundled `SUDO_ASKPASS` helper, so a miss becomes the
+  ordinary "enter your password" continuation that macOS's own biometric prompts
+  offer. The helper lives inside the code-signed bundle — sudo executes whatever
+  `SUDO_ASKPASS` names, so it must never be a path a local process can rewrite.
+  Machines without `pam_tid` are unaffected and still use the system dialog.
+
 ### Added
 
 - **Unrecognised config keys are now reported instead of ignored.** Go's JSON

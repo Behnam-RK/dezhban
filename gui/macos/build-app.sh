@@ -58,6 +58,9 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/DezhbanMenu"
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
+# SUDO_ASKPASS helper. Lives in the (code-signed, read-only) bundle so sudo is
+# never pointed at a path a local process could swap out from under it.
+install -m 0755 "$HERE/askpass.sh" "$APP/Contents/Resources/askpass.sh"
 # Brand artifacts (gui/artifacts/png): full-color menubar + Dock state
 # icons. Optional — a checkout without gui/artifacts/ still builds, and AppDelegate
 # falls back to SF Symbols / the static app icon when the PNGs are absent.

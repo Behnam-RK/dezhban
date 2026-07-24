@@ -398,6 +398,34 @@ task gui:build && open dist/Dezhban.app
 - [ ] **Failures are visible, not silent.** Move the CLI binary aside (or invalidate
       the config), then trigger Start/Stop → the alert shows real stderr.
 
+### Elevation & Touch ID
+
+These need a Mac with Touch ID and `pam_tid` enabled in `/etc/pam.d/sudo_local`.
+CI cannot run any of them — a biometric prompt has no headless form — and the
+failure they guard against is precisely the one that made every Touch ID user
+end up typing a password.
+
+- [ ] **A Touch ID miss offers a password, not a dead end.** Trigger a privileged
+      action (Start/Stop), then deliberately fail the biometric read three times
+      (a non-enrolled finger works). Expect the bundled askpass dialog asking for
+      the administrator password, and the action completing after a correct one.
+      **Before the `SUDO_ASKPASS` fix, the first miss dropped straight to a
+      password-only Authorization Services dialog.**
+- [ ] **Cancelling means cancelled.** Dismiss the Touch ID prompt, then dismiss
+      the password dialog. The action must report failure and change nothing — not
+      silently retry, and not leave a half-applied state.
+- [ ] **Clamshell / no sensor.** With the lid closed on an external display, a
+      privileged action still reaches a usable password prompt.
+- [ ] **The timestamp cache still works.** Two privileged actions in quick
+      succession prompt once, not twice.
+- [ ] **No `pam_tid`, no regression.** Comment out `pam_tid` in
+      `/etc/pam.d/sudo_local` → privileged actions fall back to the system
+      Authorization Services dialog exactly as before, not to the askpass dialog.
+- [ ] **The askpass helper is where it should be.** `ls -l
+      /Applications/Dezhban.app/Contents/Resources/askpass.sh` is present, mode
+      `0755`, and inside the bundle — never a user-writable path, since sudo
+      executes whatever `SUDO_ASKPASS` names.
+
 ### Overview degraded states
 
 - [ ] CLI binary moved aside → Overview explains "dezhban CLI not found" (and the
