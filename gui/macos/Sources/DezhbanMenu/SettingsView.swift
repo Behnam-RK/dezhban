@@ -73,6 +73,11 @@ struct SettingsView: View {
     @State private var status = ""
     @State private var canApply = false
     @State private var bootBusy = false
+    @State private var tokenBusy = false
+    @State private var tokenEnrolled = ControlToken.isStored
+    /// Evaluated once rather than in `body`: whether this Mac has biometry cannot
+    /// change while the pane is open, and a body getter should stay cheap.
+    private let biometryAvailable = ControlToken.biometryAvailable
 
     var body: some View {
         VStack(spacing: 0) {
@@ -147,6 +152,20 @@ struct SettingsView: View {
                         .disabled(!canApply)
                     TextField("Tunnel watch (e.g. 5s)", text: $tunnelWatch)
                         .disabled(!canApply)
+                }
+                Section("Authorization") {
+                    Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
+                        .disabled(tokenBusy || !biometryAvailable)
+                        .help("Applying a change asks the running daemon to make it, authorised by a "
+                            + "secret kept in your login keychain behind Touch ID — so saving costs a "
+                            + "fingerprint instead of your password. Turning this on stores that secret "
+                            + "(one password prompt, now); turning it off removes it from both the "
+                            + "keychain and the daemon. Nothing else about what dezhban enforces changes.")
+                    if !biometryAvailable {
+                        Text("This Mac has no Touch ID, so settings changes ask for your password.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                 }
                 Section {
                     LabeledContent("Config file") {
@@ -286,6 +305,34 @@ struct SettingsView: View {
                     ? "App will open at login."
                     : "App will not open at login."
             })
+    }
+
+    /// Turning this on enrolls a control token; turning it off removes it from
+    /// both the keychain and the daemon. The displayed state comes from whether
+    /// the keychain item EXISTS, which is checked without reading it — so merely
+    /// opening this pane never triggers a biometric prompt.
+    private var tokenBinding: Binding<Bool> {
+        Binding(
+            get: { tokenEnrolled },
+            set: { want in tokenToggled(want) })
+    }
+
+    private func tokenToggled(_ wantEnrolled: Bool) {
+        tokenBusy = true
+        status = wantEnrolled ? "Setting up Touch ID…" : "Removing the stored secret…"
+        let done: (ConfigApply.Outcome) -> Void = { outcome in
+            tokenBusy = false
+            tokenEnrolled = ControlToken.isStored
+            status = outcome.status
+            if let title = outcome.transcriptTitle, let text = outcome.transcript {
+                state.showInLogs(title: title, text: text)
+            }
+        }
+        if wantEnrolled {
+            ConfigApply.enrollToken(completion: done)
+        } else {
+            ConfigApply.forgetToken(completion: done)
+        }
     }
 
     private var notifyBinding: Binding<Bool> {

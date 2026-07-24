@@ -91,8 +91,8 @@ enum ConfigApply {
             // Resolve the target path once and pass --config explicitly, so the write
             // and the daemon provably act on the same file rather than each
             // re-resolving it.
-            let commands: [[String]] = [write + ["--config", DezhbanCLI.resolvedConfigPath()]]
-            let result = DezhbanCLI.runPrivileged(batch: commands)
+            let args = write + ["--config", DezhbanCLI.resolvedConfigPath()]
+            let result = writeConfig(args)
             guard result.ok else {
                 DispatchQueue.main.async {
                     completion(Outcome(ok: false, status: "Rejected — see output.",
@@ -121,6 +121,108 @@ enum ConfigApply {
                     return
                 }
                 restartNow(awaitPosture: awaitPosture, title: title, completion: completion)
+            }
+        }
+    }
+
+    /// Performs the write, preferring the token path and falling back to the
+    /// password path. MUST run off the main thread (it may block on a biometric
+    /// prompt and then on a subprocess).
+    ///
+    /// Order matters: the token is tried FIRST, because falling back the other way
+    /// round would mean asking for a password before discovering none was needed.
+    ///
+    /// A daemon REFUSAL is returned as-is and never retried with elevation. The
+    /// daemon's gating — `control.allowConfigOps`, an unenrolled or wrong token —
+    /// is a decision, and re-running the same write as root would turn every gate
+    /// into a suggestion. Only "no token available" and "no daemon answered" reach
+    /// the privileged path.
+    private static func writeConfig(_ args: [String]) -> CommandResult {
+        // `config reset --all` is not offered over the socket: it resets keys the
+        // op cannot express, so serving it there would reset less than it claims.
+        // Skipping the token here avoids a Touch ID prompt that could only fail.
+        if !args.contains("--all"), ControlToken.isStored, let token = ControlToken.load() {
+            let result = DezhbanCLI.runWithToken(args + ["--token-stdin"], token: token)
+            if result.ok || result.refused {
+                return result
+            }
+            // Anything else means the passwordless path was unavailable rather
+            // than declined (daemon stopped, socket disabled) — the CLI already
+            // fell back to a privileged write internally and failed for lack of a
+            // TTY, so retry through the app's own admin prompt.
+        }
+        return DezhbanCLI.runPrivileged(batch: [args])
+    }
+
+    /// Sets up password-free settings changes: the daemon mints a token (one
+    /// privileged step), and the app stores it behind Touch ID.
+    ///
+    /// The token is read from the CLI's stdout and never written anywhere else —
+    /// `token enroll` prints it exactly once by design, so the only lasting copies
+    /// are the keychain item here and the root-owned hash the daemon keeps.
+    /// Enrolling again simply replaces both, which is also how a token that has
+    /// leaked is revoked.
+    static func enrollToken(completion: @escaping (Outcome) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            guard ControlToken.biometryAvailable else {
+                DispatchQueue.main.async {
+                    completion(Outcome(ok: false,
+                                       status: "This Mac has no Touch ID, so settings changes keep using your password.",
+                                       transcriptTitle: nil, transcript: nil))
+                }
+                return
+            }
+            let result = DezhbanCLI.runPrivileged(batch: [["token", "enroll"]])
+            // stdout carries the token alone; everything explanatory goes to stderr,
+            // so the first non-empty line is what we want.
+            let token = result.output
+                .split(separator: "\n")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .first(where: { $0.count >= 32 && $0.allSatisfy(\.isHexDigit) })
+            guard result.ok, let token = token else {
+                DispatchQueue.main.async {
+                    completion(Outcome(ok: false, status: "Could not enroll — see output.",
+                                       transcriptTitle: "Enroll control token — failed",
+                                       transcript: result.output))
+                }
+                return
+            }
+            if let err = ControlToken.store(token) {
+                // The daemon now holds a hash for a token nobody has. Say so plainly
+                // and name the recovery, rather than leaving a host that silently
+                // refuses every config write.
+                DispatchQueue.main.async {
+                    completion(Outcome(ok: false,
+                                       status: "The daemon enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
+                                       transcriptTitle: "Enroll control token — keychain failed",
+                                       transcript: err))
+                }
+                return
+            }
+            DispatchQueue.main.async {
+                completion(Outcome(ok: true, status: "Enabled — settings changes now use Touch ID.",
+                                   transcriptTitle: nil, transcript: nil))
+            }
+        }
+    }
+
+    /// Turns password-free changes back off, removing BOTH copies: the app's
+    /// keychain item and the daemon's hash. Removing only one would leave either a
+    /// token that authorises nothing or an enrollment no client can satisfy.
+    static func forgetToken(completion: @escaping (Outcome) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            ControlToken.remove()
+            let result = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
+            DispatchQueue.main.async {
+                guard result.ok else {
+                    completion(Outcome(ok: false,
+                                       status: "Removed the app's copy, but the daemon still has an enrollment — see output.",
+                                       transcriptTitle: "Forget control token — failed",
+                                       transcript: result.output))
+                    return
+                }
+                completion(Outcome(ok: true, status: "Disabled — settings changes ask for your password again.",
+                                   transcriptTitle: nil, transcript: nil))
             }
         }
     }

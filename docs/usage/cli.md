@@ -208,10 +208,30 @@ sudo dezhban token forget          # un-enroll; config writes fall back to sudo
 Only the **hash** is stored, root-owned in the daemon's state directory. `enroll`
 prints the token itself exactly once, on stdout — it is never recoverable
 afterwards, and enrolling again replaces the previous one, which is how you revoke
-a token that has leaked. The macOS app enrolls on your behalf and keeps its copy in
-the login keychain behind Touch ID, so *reading* the token is the biometric prompt;
-enroll by hand only when scripting a client of your own. Rationale:
+a token that has leaked. Rationale:
 [ADR 0003](../adr/0003-biometric-token-over-existing-daemon.md).
+
+To use a token from a script, give `config set` the `--token-stdin` flag and pipe
+the token in. It never goes in an argument or an environment variable, both of
+which other processes can read:
+
+```sh
+printf '%s' "$DEZHBAN_TOKEN" | dezhban config set --token-stdin pollInterval=20s
+```
+
+If no daemon answers, the write falls back to the ordinary privileged path. If the
+daemon **refuses**, that is reported and never routed around — a refusal is a
+decision, and re-running it as root would make the gate advisory.
+
+In the macOS app this is the **"Use Touch ID for settings changes"** toggle in
+Settings. Turning it on enrolls a token (one password prompt, once) and stores it
+in the login keychain under `.biometryCurrentSet`, so *reading* the token is the
+Touch ID prompt — there is no separate "is this allowed?" question for a tampered
+app to answer for itself. Because the item is bound to the fingerprints enrolled
+at the time, changing your fingerprints invalidates it; re-enrolling from the same
+toggle restores it. Turning the toggle off removes **both** copies, the keychain
+item and the daemon's hash. Macs without Touch ID keep using the password path,
+which is exactly what they had before.
 
 ## Connect & switch VPNs
 
@@ -339,8 +359,9 @@ Two surfaces, split by urgency:
     system service so enforcement survives reboots; "Open this app at login" via
     `SMAppService`; essential-event notifications), protection (blocked
     countries, switch-window duration, endpoint grace) applied through one
-    validated `config set` batch, and the raw config file escape hatch (some
-    advanced options are JSON-only).
+    validated `config set` batch, **"Use Touch ID for settings changes"** (see
+    below), and the raw config file escape hatch (some advanced options are
+    JSON-only).
   - **Logs & Diagnostics** — read-only `doctor`, a scoped `log show --last 1h`,
     a live `log stream` with Stop (also opens Console.app), and the transcripts
     of window-triggered panic/install/uninstall/apply runs.

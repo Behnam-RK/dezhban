@@ -74,6 +74,21 @@ current as you land changes.
   (new, default `true`) must permit it. Setting that key `false` refuses config
   writes even from a client holding a valid token.
 
+- **The macOS app can change settings with a Touch ID tap instead of a password.**
+  A new "Use Touch ID for settings changes" toggle in Settings enrolls a control
+  token and keeps it in the login keychain under `.biometryCurrentSet`, so
+  *reading* the token is the biometric prompt — there is no separate "is this
+  allowed?" question for a tampered app to answer for itself. Changing your
+  fingerprints invalidates the stored token by design; re-enrolling from the same
+  toggle restores it, and turning the toggle off removes both the keychain item
+  and the daemon's hash. Macs without Touch ID keep the password path unchanged.
+  A cancelled prompt or a stopped daemon falls back to the password path; a
+  daemon *refusal* is reported and never retried with elevation.
+
+- **`dezhban config set --token-stdin`** does the same thing from a script: the
+  token is read from stdin — never an argument or an environment variable, both
+  of which other local processes can read — and the daemon performs the write.
+
 - **`dezhban token`** manages that enrollment: `token status` (no root — whether
   the feature is set up is not itself a secret), `sudo dezhban token enroll`
   (mints a token, records only its hash root-only, prints the token once), and

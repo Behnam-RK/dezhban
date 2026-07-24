@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/control"
 )
 
 const configUsage = `usage: dezhban config <subcommand>
@@ -28,6 +30,13 @@ Subcommands:
                     (blockedCountries, vpn.tunnelInterfaces/endpoints/profiles).
                     Delete the config file for a true wipe.
   edit              Open the config in $EDITOR (created from defaults if missing)
+
+Flags:
+  --token-stdin     Read the control token from stdin and have the running
+                    daemon perform the write — no root, applied immediately.
+                    Falls back to a privileged write if no daemon answers; a
+                    daemon that REFUSES is reported, never routed around.
+                    See 'dezhban token'.
 
 Keys (dotted; list values are comma-separated):
   pollInterval blockedCountries hysteresis providers providerQuorum logLevel
@@ -211,6 +220,7 @@ func cmdConfig(args []string) int {
 	// --config flag can appear anywhere; pull it out before dispatch and thread the
 	// resolved path through, otherwise an explicit --config is silently ignored.
 	cfgPath, args := stripConfigFlag(args)
+	args, useToken := stripTokenStdin(args)
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, configUsage)
 		return 2
@@ -224,9 +234,9 @@ func cmdConfig(args []string) int {
 	case "get":
 		return configGet(cfgPath, rest)
 	case "set":
-		return configSet(cfgPath, rest)
+		return configSet(cfgPath, rest, useToken)
 	case "reset":
-		return configReset(cfgPath, rest)
+		return configReset(cfgPath, rest, useToken)
 	case "edit":
 		return configEdit(cfgPath)
 	case "-h", "--help", "help":
@@ -262,6 +272,93 @@ func stripConfigFlag(args []string) (string, []string) {
 		}
 	}
 	return path, out
+}
+
+// stripTokenStdin extracts the --token-stdin flag from anywhere in args, the same
+// whole-list scan stripConfigFlag uses.
+//
+// The token arrives on stdin, never as an argument or an environment variable:
+// argv and the environment of a running process are readable by other processes
+// on some platforms and land in shell history on all of them, and this is a
+// credential, not a setting.
+func stripTokenStdin(args []string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	found := false
+	for _, a := range args {
+		if a == "--token-stdin" || a == "-token-stdin" {
+			found = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, found
+}
+
+// readTokenStdin reads the control token from stdin, trimming the trailing
+// newline a pipe or heredoc adds.
+func readTokenStdin() (string, error) {
+	data, err := io.ReadAll(io.LimitReader(os.Stdin, 4096))
+	if err != nil {
+		return "", fmt.Errorf("read token from stdin: %w", err)
+	}
+	tok := strings.TrimSpace(string(data))
+	if tok == "" {
+		return "", errors.New("--token-stdin: no token on stdin")
+	}
+	return tok, nil
+}
+
+// tryConfigWrite attempts the passwordless config-write path: the daemon
+// validates, writes, and adopts the change in one request, so the caller needs
+// neither root nor a separate reload.
+//
+// handled=true means the daemon answered. A refusal is an answer: it is NOT
+// retried by falling back to the elevated write, because the daemon's gating
+// (control.allowConfigOps, an unenrolled or wrong token) is a decision, and
+// routing around it with a password prompt would make the gate advisory. Only an
+// unreachable or transiently-busy daemon returns handled=false, which is what
+// keeps `config set` working with the daemon stopped.
+func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code int, handled bool) {
+	cfg, err := loadConfig(cfgPath)
+	if err != nil || !cfg.Control.Enabled {
+		return 0, false
+	}
+	resp, err := control.Do(controlSocketPath(cfg), control.Request{
+		Op:     control.OpConfigWrite,
+		Token:  token,
+		Config: pairs,
+	})
+	if err != nil {
+		verbosef("control socket: %v — falling back to a privileged write", err)
+		return 0, false
+	}
+	if !resp.OK {
+		if resp.Transient {
+			verbosef("control socket: %s — falling back to a privileged write", resp.Error)
+			return 0, false
+		}
+		fmt.Fprintln(os.Stderr, "daemon refused:", resp.Error)
+		return ExitDaemonRefused, true
+	}
+	reportWriteOutcome(resp.Applied, resp.NeedsRestart)
+	return 0, true
+}
+
+// reportWriteOutcome prints the same two-line summary notifyReload does, so a
+// config change reads identically whether it went over the socket or through a
+// privileged write plus a reload.
+func reportWriteOutcome(applied, needsRestart []string) {
+	switch {
+	case len(applied) == 0 && len(needsRestart) == 0:
+		fmt.Println("Saved. No change to what the daemon is enforcing.")
+	case len(needsRestart) == 0:
+		fmt.Printf("Saved and applied: %s\n", strings.Join(applied, ", "))
+	case len(applied) == 0:
+		fmt.Printf("Saved. Restart dezhban to apply: %s\n", strings.Join(needsRestart, ", "))
+	default:
+		fmt.Printf("Saved and applied: %s\n", strings.Join(applied, ", "))
+		fmt.Printf("Restart dezhban to apply: %s\n", strings.Join(needsRestart, ", "))
+	}
 }
 
 // writeTargetPath is where config set/edit persist to: the resolved path (honoring
@@ -364,13 +461,31 @@ func configGet(flagVal string, args []string) int {
 // the whole file. Applying every pair to one in-memory config and validating once
 // makes both problems disappear: one prompt, one atomic write, no intermediate state
 // that has to be legal.
-func configSet(flagVal string, args []string) int {
+func configSet(flagVal string, args []string, useToken bool) int {
 	pairs, err := parseSetPairs(args)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		fmt.Fprintln(os.Stderr, "usage: dezhban config set <key> <value>")
 		fmt.Fprintln(os.Stderr, "       dezhban config set <key>=<value> [<key>=<value> ...]")
 		return 2
+	}
+	// The passwordless path, when the caller holds the control token: the daemon
+	// validates, writes, and adopts in one request. Tried FIRST, because falling
+	// back the other way round would mean prompting for a password before
+	// discovering it was never needed.
+	if useToken {
+		tok, terr := readTokenStdin()
+		if terr != nil {
+			fmt.Fprintln(os.Stderr, terr)
+			return 2
+		}
+		m := make(map[string]string, len(pairs))
+		for _, p := range pairs {
+			m[p.key] = p.val
+		}
+		if code, handled := tryConfigWrite(flagVal, m, tok); handled {
+			return code
+		}
 	}
 	cfg, err := loadConfig(flagVal)
 	if err != nil {
@@ -408,10 +523,15 @@ func configSet(flagVal string, args []string) int {
 // the GUI's per-field ↺. `--all` resets every tunable but preserves identity
 // data (what the user protects and how to reach their VPNs); resetting those to
 // empty would not be "defaults", it would be data loss.
-func configReset(flagVal string, args []string) int {
+func configReset(flagVal string, args []string, useToken bool) int {
 	if len(args) == 0 {
 		fmt.Fprintln(os.Stderr, "usage: dezhban config reset <key> [key ...] | --all")
 		return 2
+	}
+	if useToken {
+		if code, handled := resetViaToken(flagVal, args); handled {
+			return code
+		}
 	}
 	cfg, err := loadConfig(flagVal)
 	if err != nil {
@@ -463,6 +583,43 @@ func configReset(flagVal string, args []string) int {
 	// just as much a change the daemon has to be told about.
 	notifyReload(flagVal)
 	return 0
+}
+
+// resetViaToken sends a reset as an ordinary config-write of the shipped default
+// values — a reset is a write like any other, and routing it through the same op
+// keeps one validated path instead of two.
+//
+// `--all` is deliberately NOT offered here. The local `--all` resets everything
+// including the keys `config set` cannot yet reach (vpn.advanced.*), so serving
+// it over an op that can only express settable keys would silently reset less
+// than it claims. Refusing sends the caller to the privileged path, which does
+// the whole job.
+func resetViaToken(flagVal string, args []string) (code int, handled bool) {
+	if len(args) == 1 && args[0] == "--all" {
+		fmt.Fprintln(os.Stderr, "config reset --all cannot go over the control socket (it resets keys the socket op cannot express)")
+		fmt.Fprintln(os.Stderr, "run it with root instead: sudo dezhban config reset --all")
+		return 2, true
+	}
+	def := config.Default()
+	config.Normalize(&def)
+
+	pairs := make(map[string]string, len(args))
+	for _, k := range args {
+		field, ok := configFields[k]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "unknown key %q\nvalid keys: %s\n", k, knownKeys())
+			return 2, true
+		}
+		// The shipped default rendered through the same accessor `set` uses, so a
+		// key resets to exactly what setting it to that value would produce.
+		pairs[k] = field.get(&def)
+	}
+	tok, err := readTokenStdin()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 2, true
+	}
+	return tryConfigWrite(flagVal, pairs, tok)
 }
 
 type setPair struct{ key, val string }

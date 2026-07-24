@@ -493,6 +493,29 @@ end up typing a password.
       restart-warning choice; "Save only" writes without restarting.
 - [ ] **Open Config File…** opens the resolved config path.
 
+#### Use Touch ID for settings changes
+
+- [ ] **Opening the pane never prompts.** The toggle shows the right state
+      without a biometric prompt — enrollment is checked without reading the
+      token, and reading it is the only thing that should ever prompt.
+- [ ] **Turning it on** asks for a password once, then reports success. `dezhban
+      token status` in a terminal agrees that a token is enrolled.
+- [ ] **Applying a change then costs a Touch ID tap, not a password**, and the
+      change is in force when the pane says "Saved and applied".
+- [ ] **Cancelling the Touch ID prompt falls back to the password path** rather
+      than failing the save — a cancelled biometric is not a refusal.
+- [ ] **A daemon refusal is not escalated.** Set `control.allowConfigOps: false`
+      and restart; a save reports the refusal and must NOT then show an admin
+      password prompt that would perform it anyway.
+- [ ] **Turning it off removes both copies.** The toggle goes off, `dezhban token
+      status` reports "not enrolled", and saves ask for a password again.
+- [ ] **Changing your fingerprints invalidates the stored token** (this is the
+      point of `.biometryCurrentSet`): add or remove a fingerprint, then save →
+      it falls back to the password path, and re-enrolling from the toggle
+      restores Touch ID.
+- [ ] **On a Mac without Touch ID** the toggle is disabled and explains why;
+      settings changes keep working through the password path.
+
 ### VPN Guard pane
 
 - [ ] Opening the pane with the service stopped seeds values matching
