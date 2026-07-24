@@ -284,6 +284,53 @@ Run all four permutations; each setting must disable **only** its own trigger.
 closes → `vpn promote` → redial to B with **no** window → `--simulate-country
 IR` still escalates to FULL BLOCK → `sudo dezhban panic` restores.
 
+## Live reload
+
+Against a **running** daemon. The bug this replaced was silent: the file changed
+and the daemon kept enforcing the old value, so every check here is about the
+daemon's *behaviour* afterwards, never about what the file says.
+
+- [ ] **A live key takes effect with no restart.** `dezhban config set
+      pollInterval 5s` → the output says `Saved and applied: pollInterval`, and
+      the daemon's log shows geo polls at the new cadence within seconds.
+- [ ] **A restart-required key says so instead of lying.** `dezhban config set
+      logLevel debug` → `Restart dezhban to apply: logLevel`, and the log level
+      is genuinely unchanged until `dezhban restart`.
+- [ ] **A malformed edit does not disturb enforcement.** Hand-edit the config to
+      invalid JSON, then trigger a reload → the reload is refused with a parse
+      error and the guard keeps enforcing the last good configuration.
+- [ ] **A lowered cap binds the very next window.** With a pause open-able, set
+      `vpn.pauseMax` to `1m`, then `dezhban pause 9m` → the pause ends
+      after 1m. (A reload that reported the cap applied while still clamping to
+      the old, larger value was a real bug.)
+- [ ] **Disabling a trigger live actually disables it.** `dezhban config set
+      vpn.switchWindow 0` → `dezhban switch` refuses immediately, without a
+      restart, and the *other* two triggers still work.
+- [ ] **No daemon running.** The write still succeeds and says so; the values are
+      picked up at the next start.
+
+## The control token
+
+Privileged for enroll/forget, macOS-relevant but not macOS-only.
+
+- [ ] **Not enrolled is a refusal, not a bypass.** With no token enrolled, a
+      `config-write` over the socket is refused. Confirm `dezhban token status`
+      reports "not enrolled".
+- [ ] **Enroll, then write without a password.** `sudo dezhban token enroll` →
+      a token on stdout; a client presenting it can change a setting over the
+      socket with no elevation, and the daemon adopts it in the same request.
+- [ ] **A wrong or absent token is refused** even from an account in the socket's
+      admin group — group membership alone must not authorise a config write.
+- [ ] **The hash file is root-only.** `ls -l /var/db/dezhban/control.token` →
+      mode `0600`, owned by root. Anything that can read it can forge the proof.
+- [ ] **The policy switch overrides a valid token.** Set
+      `control.allowConfigOps: false` → a client holding the correct token is
+      still refused, and the message names the setting.
+- [ ] **Re-enrolling revokes.** Enroll a second time → the first token no longer
+      works. This is the revocation path for a leaked token.
+- [ ] **`token forget` recovers a stranded host.** After forgetting, config
+      changes fall back to `sudo` rather than being impossible.
+
 ## Service lifecycle
 
 Per OS, privileged:
@@ -298,8 +345,8 @@ Per OS, privileged:
 - [ ] **Uninstall.** `dezhban uninstall` → fully removed.
 - [ ] **Crash recovery.** Kill the service process while blocked →
       restart-on-failure brings it back and it re-enforces.
-- [ ] **`restart` applies a config change** (there is no live reload), and `start`
-      and `stop` are idempotent.
+- [ ] **`restart` applies the restart-required keys** (most keys apply live — see
+      the section below), and `start` and `stop` are idempotent.
 
 ## Upgrade
 

@@ -66,24 +66,24 @@ dev tooling only, never the daemon path); non-TTY prints the grouped menu
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
-`switch`, `pause`, `resume`, `vpn`, `setup`, `config`, `completion`, `upgrade`,
-`version`, `help` (also `--help`/`-h`; `--version` aliases `version`), plus three
-globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation), `--no-daemon` (skip
-the control socket, act on the firewall directly).
+`switch`, `pause`, `resume`, `vpn`, `setup`, `config`, `token`, `completion`,
+`upgrade`, `version`, `help` (also `--help`/`-h`; `--version` aliases `version`),
+plus three globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation),
+`--no-daemon` (skip the control socket, act on the firewall directly).
 
 The **privileged set** — requires root/admin — is exactly: `run`, `block`,
 `unblock`, `panic`, `install`, `uninstall`, `start`, `stop`, `restart`, `switch`,
 `pause`, `resume`, `vpn add`/`remove`/`promote`/`forget`/`import` (but not
-`vpn list`/`show`), `setup`, `config set`/`edit`, and `upgrade download`/`upgrade
-apply` (macOS only — `download`'s staging directory is root-owned so a local user
+`vpn list`/`show`), `setup`, `config set`/`edit`, `token enroll`/`forget` (but not
+`token status`), and `upgrade download`/`upgrade apply` (macOS only — `download`'s staging directory is root-owned so a local user
 can't swap the verified `.pkg` before `apply` installs it). `switch`, `pause`,
 and `resume` are usually passwordless in practice: they ask the running daemon
 over its control socket first (gated by `control.allowSwitchOps`/
 `control.allowPauseOps` respectively) and only fall back to the root-owned
 command file when no daemon answers. Everything else — `status`, `detect-vpn`,
 `validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
-`config show`/`path`, `completion`, `upgrade check`, `version`, `help` — is
-read-only: no root, no firewall effects. Full reference:
+`config show`/`path`, `token status`, `completion`, `upgrade check`, `version`,
+`help` — is read-only: no root, no firewall effects. Full reference:
 [docs/usage/cli.md](docs/usage/cli.md); the upgrade design in full:
 [docs/usage/upgrade.md](docs/usage/upgrade.md).
 

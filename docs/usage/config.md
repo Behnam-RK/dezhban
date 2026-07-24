@@ -109,12 +109,14 @@ two you are in.
 | `control.group` | string | `"admin"` on macOS, `""` elsewhere | The unix group allowed to drive the daemon. The socket is root-owned, mode `0660`, group-owned by this group. `""` means root-only (`0600`) — the passwordless path is off. |
 | `control.allowSwitchOps` | bool | `true` | Whether opening/cancelling a **switch window** may go over the socket. This is the one op that *relaxes* the guard, so it has its own switch: set it `false` to force `switch` back to root-only (`sudo dezhban switch`). |
 | `control.allowPauseOps` | bool | `true` | Whether opening/ending a **pause** may go over the socket, independently of `allowSwitchOps` — turning off passwordless switching does not turn off passwordless pausing, or vice versa. Set `false` to force `pause`/`resume` back to root-only. |
+| `control.allowConfigOps` | bool | `true` | Whether **config changes** may go over the socket. Unlike every other op this changes state that outlives the daemon, so group membership is not enough on its own: the client must additionally prove it holds the enrolled **control token** (`dezhban token`). Both gates must pass — setting this `false` refuses config writes even from a client holding a valid token, forcing settings changes back to `sudo dezhban config set`. |
 
 **What the trade actually is, and how to tighten it:**
 [architecture.md § Control channels](../contribute/architecture.md#control-channels).
 Short version: `control.group: ""` goes root-only, `control.allowSwitchOps: false`
 keeps passwordless block/unblock but forces the guard-relaxing op back to root,
-and `control.enabled: false` requires a password for everything.
+`control.allowConfigOps: false` forces settings changes back to root, and
+`control.enabled: false` requires a password for everything.
 
 Off macOS the group defaults to empty — `wheel`, `sudo` and `adm` mean different
 things across distros, and guessing wrong would hand the socket to the wrong people.

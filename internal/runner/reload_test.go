@@ -159,6 +159,7 @@ func TestLiveCapturesEveryLiveSetting(t *testing.T) {
 		EndpointGrace:           15 * time.Minute,
 		AllowSwitchOps:          true,
 		AllowPauseOps:           true,
+		AllowConfigOps:          true,
 	}
 
 	got := reflect.ValueOf(o.Live())

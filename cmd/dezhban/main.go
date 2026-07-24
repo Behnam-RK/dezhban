@@ -37,6 +37,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/runner"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/svc"
+	"github.com/behnam-rk/dezhban/internal/token"
 )
 
 // The build stamps (version/commit/date) and their ReadBuildInfo fallback live
@@ -77,6 +78,7 @@ Commands:
   vpn         Manage VPN profiles and learned endpoints (list/add/remove/import/…)
   setup       Interactive wizard to create or update the config
   config      Inspect or change the config without hand-editing JSON
+  token       Enroll/remove the control token that authorises password-free config changes
   completion  Print a shell completion script (bash|zsh|fish)
   upgrade     Check/download/apply a newer release (check: no root; apply: macOS, root)
   version     Print the version
@@ -149,6 +151,8 @@ func run(args []string) int {
 		return cmdSetup(rest)
 	case "config":
 		return cmdConfig(rest)
+	case "token":
+		return cmdToken(rest)
 	case "completion":
 		return cmdCompletion(rest)
 	case "upgrade":
@@ -215,8 +219,6 @@ func requireRoot(cmd string) bool {
 	return false
 }
 
-// loadConfig is a small helper shared by the commands that take --config. It
-// resolves the path (so --config can be omitted) before loading.
 // reportRetired warns once per inert key found in the config file: keys that
 // were retired, keys that were renamed, and keys the schema simply does not
 // recognise. All three share one property — the operator wrote a setting and it
@@ -228,6 +230,8 @@ func reportRetired(cfg *config.Config, log *slog.Logger) {
 	}
 }
 
+// loadConfig is a small helper shared by the commands that take --config. It
+// resolves the path (so --config can be omitted) before loading.
 func loadConfig(path string) (*config.Config, error) {
 	return config.Load(resolveConfigPath(path))
 }
@@ -526,7 +530,40 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		if err != nil {
 			log.Warn("control socket unavailable — routine ops will ask for a password", "err", err)
 		} else {
-			log.Info("control socket listening", "path", ctl.Path(), "group", cfg.Control.Group, "switch_ops", cfg.Control.AllowSwitchOps)
+			// The token verifier is wired whenever the socket exists, never
+			// conditionally on control.allowConfigOps: that key is live-reloadable,
+			// so a verifier installed only when it happened to be true at startup
+			// would leave the op permanently refused after someone turned it on.
+			// Policy is enforced in the run loop, where the current value lives.
+			tokenPath := defaultTokenPath()
+			ctl.VerifyToken = func(presented string) bool {
+				ok, err := token.Verify(tokenPath, presented)
+				if err != nil {
+					// Including ErrNotEnrolled: no enrollment means the feature is
+					// unavailable, not that anything goes.
+					log.Debug("control: token verification refused", "err", err)
+					return false
+				}
+				return ok
+			}
+			log.Info("control socket listening",
+				"path", ctl.Path(),
+				"group", cfg.Control.Group,
+				"switch_ops", cfg.Control.AllowSwitchOps,
+				"config_ops", cfg.Control.AllowConfigOps,
+				"token_enrolled", token.Enrolled(tokenPath),
+			)
+		}
+	}
+
+	// Config writes over the socket need somewhere to write. With no config file
+	// resolved the daemon is running on built-in defaults, and inventing a file
+	// for it to persist into would change which config a later start reads —
+	// so the op is simply unavailable, and says so by name.
+	var writeConfigKeysAt func(map[string]string) error
+	if cfgPath != "" {
+		writeConfigKeysAt = func(pairs map[string]string) error {
+			return writeConfigKeys(cfgPath, pairs)
 		}
 	}
 
@@ -574,6 +611,8 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		Publish:                 publish,
 		BlockedCountries:        cfg.BlockedCountries,
 		ReloadConfig:            reload,
+		WriteConfig:             writeConfigKeysAt,
+		AllowConfigOps:          cfg.Control.AllowConfigOps,
 	}, nil
 }
 
@@ -614,6 +653,7 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 		EndpointGrace:           cfg.VPN.EndpointGrace,
 		AllowSwitchOps:          cfg.Control.AllowSwitchOps,
 		AllowPauseOps:           cfg.Control.AllowPauseOps,
+		AllowConfigOps:          cfg.Control.AllowConfigOps,
 	}
 }
 
@@ -1147,6 +1187,12 @@ func defaultLearnedPath() string { return filepath.Join(stateDir(), "learned.jso
 // has ever been observed up on this host — the persisted fact vpn.armAtBoot
 // arms from. See internal/armed and docs/adr/0008-arm-at-boot.md.
 func defaultArmedPath() string { return filepath.Join(stateDir(), "armed.json") }
+
+// defaultTokenPath is the root-owned hash of the enrolled control token. It sits
+// in the daemon's state dir with the other root-owned records, and deliberately
+// NOT beside the world-readable state.json content: anything that could read it
+// could forge the proof it exists to check. See internal/token.
+func defaultTokenPath() string { return filepath.Join(stateDir(), "control.token") }
 
 // defaultLogPath is the daemon's persistent, size-rotated log file (0644, like
 // state.json — readable history for the GUI and unprivileged operators).

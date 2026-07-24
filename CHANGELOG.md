@@ -37,6 +37,19 @@ current as you land changes.
 
 ### Fixed
 
+- **Lowering a window cap now binds the very next window.** A reload adopted the
+  new `vpn.pauseMax` for the "is pausing available at all" check but left the
+  clamp reading the value the daemon started with, so `vpn.pauseMax` reduced from
+  30m to 1m was reported as applied while a 9-minute pause was still granted —
+  a security setting accepted and silently discarded, which is the failure this
+  project treats as the worst one it can have.
+
+- **The config file is now written atomically.** It was written in place, so a
+  save interrupted partway could leave a truncated file. That is not merely a
+  lost setting: this config is what arms the guard at boot, so an unparseable one
+  would leave the host unprotected at the next start. It is now staged and
+  renamed, the same convention the daemon's other on-disk records already use.
+
 - **A failed Touch ID no longer strands you on a password-only prompt.** The app
   ran `sudo` with stdin on `/dev/null`, so the moment a biometric read missed —
   a closed lid, a wet finger, a couple of bad reads — PAM's password fallback hit
@@ -50,6 +63,23 @@ current as you land changes.
   Machines without `pam_tid` are unaffected and still use the system dialog.
 
 ### Added
+
+- **Settings can now be changed without a password, and the daemon adopts them
+  immediately.** A new `config-write` control-socket op takes a set of config
+  keys, writes them through exactly the validation `dezhban config set` uses, and
+  reloads in the same request — so a client never has to choose between
+  elevating and leaving a saved setting inert. It is the one op that changes
+  state outliving the daemon, so it is gated twice and **both** gates must pass:
+  the client must present the enrolled control token, and `control.allowConfigOps`
+  (new, default `true`) must permit it. Setting that key `false` refuses config
+  writes even from a client holding a valid token.
+
+- **`dezhban token`** manages that enrollment: `token status` (no root — whether
+  the feature is set up is not itself a secret), `sudo dezhban token enroll`
+  (mints a token, records only its hash root-only, prints the token once), and
+  `sudo dezhban token forget` (un-enrolls, so a host whose token was lost falls
+  back to `sudo` rather than becoming impossible to configure). Enrolling again
+  replaces the previous token, which is the revocation path for one that leaked.
 
 - **Unrecognised config keys are now reported instead of ignored.** Go's JSON
   decoder drops fields it does not know, so a typo — or a key renamed by an

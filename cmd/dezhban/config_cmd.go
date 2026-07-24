@@ -273,6 +273,44 @@ func writeTargetPath(flagVal string) string {
 	return defaultConfigPath()
 }
 
+// writeConfigKeys applies dotted key/value assignments to the config at path and
+// saves it: the same load → apply → validate → atomic-write cycle `config set`
+// performs, exposed so the running daemon can serve a config-write control op
+// without shelling out to itself.
+//
+// Routing both through configFields is the point. A daemon that accepted a whole
+// config document from a socket client would be trusting that client to compose
+// a safe one; a key/value map can only express changes the CLI would also have
+// accepted, validated by the same code, and an unknown key is refused by name
+// rather than silently ignored.
+//
+// Applied in sorted key order so a rejected batch reports the same key whichever
+// order the map happened to iterate in — the keys are independent (validation
+// runs once, over the finished config), so order changes nothing else.
+func writeConfigKeys(path string, pairs map[string]string) error {
+	cfg, err := config.Load(path)
+	if err != nil {
+		return fmt.Errorf("read config: %w", err)
+	}
+	keys := make([]string, 0, len(pairs))
+	for k := range pairs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		field, ok := configFields[k]
+		if !ok {
+			return fmt.Errorf("unknown key %q", k)
+		}
+		if err := field.set(cfg, pairs[k]); err != nil {
+			return fmt.Errorf("invalid value for %s: %w", k, err)
+		}
+	}
+	// Save validates the finished config and writes it atomically, so a batch
+	// with one bad value leaves the file untouched rather than half-applied.
+	return config.Save(path, cfg)
+}
+
 func configPath(flagVal string) int {
 	if p := resolveConfigPath(flagVal); p != "" {
 		fmt.Println(p)

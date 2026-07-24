@@ -858,18 +858,46 @@ func Marshal(c *Config) ([]byte, error) {
 // Save validates c and writes it as pretty-printed JSON to path, creating parent
 // directories as needed. The file is world-readable (0644) so unprivileged
 // inspect commands can read the config the root daemon uses; it holds no secrets.
+//
+// The write is atomic — staged in the same directory and renamed — so an
+// interrupted save leaves either the old config or the new one, never a
+// truncated file. That matters more than it looks: this config is what arms the
+// guard at boot, so a half-written file would not merely lose a setting, it
+// would leave the host unprotected on the next start. Same convention as the
+// daemon's other on-disk records (internal/learned, internal/armed).
 func Save(path string, c *Config) error {
 	data, err := Marshal(c)
 	if err != nil {
 		return err
 	}
-	if dir := filepath.Dir(path); dir != "" && dir != "." {
+	dir := filepath.Dir(path)
+	if dir != "" && dir != "." {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return fmt.Errorf("create config dir %q: %w", dir, err)
 		}
 	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	tmp, err := os.CreateTemp(dir, ".dezhban-config-*")
+	if err != nil {
+		return fmt.Errorf("stage config %q: %w", path, err)
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
+
+	// CreateTemp makes 0600; the published file must stay readable by the
+	// unprivileged tools that inspect it.
+	if err := tmp.Chmod(0o644); err != nil {
+		_ = tmp.Close()
 		return fmt.Errorf("write config %q: %w", path, err)
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("write config %q: %w", path, err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("write config %q: %w", path, err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("install config %q: %w", path, err)
 	}
 	return nil
 }

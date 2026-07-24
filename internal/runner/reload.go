@@ -53,6 +53,7 @@ type LiveSettings struct {
 
 	AllowSwitchOps bool
 	AllowPauseOps  bool
+	AllowConfigOps bool
 }
 
 // ReloadReport names what a reload actually did, so the answer travelling back
@@ -91,5 +92,6 @@ func (o Options) Live() LiveSettings {
 		EndpointGrace:           o.EndpointGrace,
 		AllowSwitchOps:          o.AllowSwitchOps,
 		AllowPauseOps:           o.AllowPauseOps,
+		AllowConfigOps:          o.AllowConfigOps,
 	}
 }

@@ -25,6 +25,7 @@ Commands:
   vpn          Manage VPN profiles and learned endpoints (list/add/remove/import/promote/forget)
   setup        Interactive wizard to create or update the config
   config       Inspect or change the config without hand-editing JSON
+  token        Enroll/remove the control token authorising password-free config changes (root, except status)
   completion   Print a shell completion script (bash|zsh|fish)
   upgrade      Check/download/apply a newer release (check: no root; download/apply: root, macOS)
   version      Print the version
@@ -53,6 +54,8 @@ daemon** over its control socket and need no password at all:
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
 | `setup`, `config set`/`edit` | Yes, but only for the config write itself. |
+| `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
+| `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
 | `upgrade check` | **No** — read-only, no root. |
 | `upgrade download`, `upgrade apply` | Yes — root, macOS only. `download`'s staging directory is root-owned on purpose: a writable-by-anyone staging area would let a local user swap the verified `.pkg` before `apply` installs it. |
 
@@ -180,6 +183,35 @@ succeeds and says so; the new values are read the next time it starts.
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+### Changing settings without a password
+
+Settings changes can also go over the control socket, so the macOS app's Settings
+pane doesn't ask for your password on every edit. That op is gated twice, and both
+gates must pass:
+
+- **Proof** — the client must present the enrolled **control token**. The socket's
+  own gate is filesystem permissions (root-owned, mode `0660`, admin group), which
+  is a fine bar for ops that only move between fail-closed postures but not for one
+  that changes state outliving the daemon. The token raises that bar; it does not
+  lower it.
+- **Policy** — `control.allowConfigOps` must be true (it is, by default). Set it
+  `false` and config writes are refused even from a client holding a valid token,
+  which sends settings changes back to `sudo dezhban config set`.
+
+```sh
+dezhban token status               # is a token enrolled on this host?
+sudo dezhban token enroll          # mint one, print it once, record only its hash
+sudo dezhban token forget          # un-enroll; config writes fall back to sudo
+```
+
+Only the **hash** is stored, root-owned in the daemon's state directory. `enroll`
+prints the token itself exactly once, on stdout — it is never recoverable
+afterwards, and enrolling again replaces the previous one, which is how you revoke
+a token that has leaked. The macOS app enrolls on your behalf and keeps its copy in
+the login keychain behind Touch ID, so *reading* the token is the biometric prompt;
+enroll by hand only when scripting a client of your own. Rationale:
+[ADR 0003](../adr/0003-biometric-token-over-existing-daemon.md).
 
 ## Connect & switch VPNs
 

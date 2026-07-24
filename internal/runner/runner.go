@@ -213,6 +213,11 @@ type Options struct {
 	// debug. Run invokes it from a background writer goroutine (see publishBuffer),
 	// so a slow write never stalls the enforcement loop; it may run concurrently
 	// with the loop and need not be fast. nil → no-op (tests / legacy callers).
+	Publish func(state.Snapshot)
+	// BlockedCountries is copied verbatim into each published snapshot so an
+	// observer can show what the daemon is configured to block. Informational only.
+	BlockedCountries []string
+
 	// ReloadC delivers replacement settings to the running loop, so a config
 	// edit takes effect without a restart. Nil (the default) means reloading is
 	// not wired up and the loop simply never selects on it.
@@ -230,10 +235,25 @@ type Options struct {
 	// Nil means reloading is unavailable and the op is refused by name.
 	ReloadConfig func() (LiveSettings, ReloadReport, error)
 
-	Publish func(state.Snapshot)
-	// BlockedCountries is copied verbatim into each published snapshot so an
-	// observer can show what the daemon is configured to block. Informational only.
-	BlockedCountries []string
+	// WriteConfig persists a set of dotted key/value assignments to the daemon's
+	// own config file, using exactly the accessors and validation `dezhban config
+	// set` uses — one atomic write, rejected whole if any value is invalid. It is
+	// what the control socket's config-write op calls, so an authorised client
+	// never needs root to change a setting.
+	//
+	// The daemon writes the file ITSELF rather than accepting one: a caller that
+	// could hand over a whole config could hand over a hostile one, whereas a
+	// key/value map can only express changes the CLI would also have accepted.
+	// Nil means config writes are unavailable and the op is refused by name.
+	WriteConfig func(map[string]string) error
+
+	// AllowConfigOps permits writing config over the control socket. It is the
+	// policy half of that op's gate; the proof half is the control token checked
+	// in the socket's accept goroutine (internal/token). BOTH must pass —
+	// disabling this refuses config-write even from a client holding the enrolled
+	// token, which is what makes it a usable off switch. Mirrors config
+	// control.allowConfigOps.
+	AllowConfigOps bool
 }
 
 // tunnelSnapshot maps a watcher edge to the published tunnel state. Name comes
@@ -1070,6 +1090,46 @@ func (o Options) runGuard(ctx context.Context) error {
 			resp.NeedsRestart = report.NeedsRestart
 			return resp
 
+		case control.OpConfigWrite:
+			// The client has already proved it holds the enrolled token — the
+			// socket's accept goroutine refuses this op otherwise. What is left
+			// here is policy: whether this host permits config writes over the
+			// socket at all. Both halves must pass, so turning the policy off is
+			// a real off switch and not merely advisory.
+			if !o.AllowConfigOps {
+				return reply(false, "config writes over the control socket are disabled (control.allowConfigOps)")
+			}
+			if o.WriteConfig == nil || o.ReloadConfig == nil {
+				return reply(false, "this daemon cannot write its configuration")
+			}
+			if len(req.Config) == 0 {
+				return reply(false, "config-write carried no keys")
+			}
+			if werr := o.WriteConfig(req.Config); werr != nil {
+				// Nothing was written: the write path validates the whole config
+				// and rejects the batch entire, so a refusal leaves the file and
+				// the running posture exactly as they were.
+				o.Log.Warn("control: config write rejected", "keys", configKeys(req.Config), "err", werr)
+				return reply(false, werr.Error())
+			}
+			o.Log.Info("control: configuration written", "keys", configKeys(req.Config))
+			// Adopt what was just written in the same turn of the loop. Writing
+			// without reloading would reproduce the bug this whole path exists to
+			// kill: a saved setting the daemon is not yet enforcing.
+			ls, report, rerr := o.ReloadConfig()
+			if rerr != nil {
+				// The file on disk is the new one and it validated on the way in,
+				// so a failure here is a genuine surprise. Say so rather than
+				// reporting the keys as applied.
+				o.Log.Warn("control: wrote config but could not adopt it", "err", rerr)
+				return reply(false, "saved, but reload failed: "+rerr.Error())
+			}
+			applyLive(ls)
+			resp := reply(true, "")
+			resp.Applied = report.Applied
+			resp.NeedsRestart = report.NeedsRestart
+			return resp
+
 		case control.OpBlock:
 			if windowActive {
 				// A switch window owns the rules. Silently tearing it down here would
@@ -1274,6 +1334,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		o.AutoArm = ls.AutoArm
 		o.AllowSwitchOps = ls.AllowSwitchOps
 		o.AllowPauseOps = ls.AllowPauseOps
+		o.AllowConfigOps = ls.AllowConfigOps
 		o.RedialWindow = ls.RedialWindow
 		o.RedialMinUptime = ls.RedialMinUptime
 		o.EndpointGrace = ls.EndpointGrace
@@ -1292,6 +1353,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		pauseWindowMax = ls.PauseMax
 		pauseEnabled = pauseWindowMax > 0 && o.PollCommand != nil
+		o.PauseMax = ls.PauseMax // clampPause reads this, and so does the log line below
 
 		if ls.EndpointRefresh > 0 {
 			if ls.EndpointRefresh != o.EndpointRefresh {
@@ -1878,6 +1940,18 @@ func (o Options) clampPause(req string) time.Duration {
 		dur = o.PauseMax
 	}
 	return dur
+}
+
+// configKeys is the sorted key list of a config-write request, for logging.
+// Keys only, never values: the log is world-readable (0644, like state.json) and
+// a config value can name the user's VPN servers.
+func configKeys(pairs map[string]string) []string {
+	keys := make([]string, 0, len(pairs))
+	for k := range pairs {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // blockedContains reports whether cc (case-insensitive) is in the blocked list.
