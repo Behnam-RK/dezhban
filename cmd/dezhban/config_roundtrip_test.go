@@ -93,3 +93,47 @@ func TestRoundTripCasesCoverEverySettableKey(t *testing.T) {
 		}
 	}
 }
+
+// notYetSettable are keys the daemon knows about but `config set` cannot reach —
+// today the whole vpn.advanced block, which is editable only by hand. Phase G of
+// the settings epic makes them settable; emptying this list is how that phase
+// finishes. Until then it is an explicit, reviewable list rather than a silent
+// gap between what the daemon reads and what the tools can write.
+var notYetSettable = map[string]bool{
+	"vpn.advanced.switchWindowMax":         true,
+	"vpn.advanced.reconnectWindowMax":      true,
+	"vpn.advanced.reconnectMinUptime":      true,
+	"vpn.advanced.commandFreshness":        true,
+	"vpn.advanced.windowDiscoveryInterval": true,
+	"vpn.advanced.tunnelPruneAfter":        true,
+	"vpn.advanced.learnedEndpointTTL":      true,
+	"vpn.advanced.learnedMaxPerProfile":    true,
+	"vpn.advanced.promoteAfterRefreshes":   true,
+	"vpn.advanced.endpointWarnThreshold":   true,
+}
+
+// The CLI's settable keys and the daemon's reloadable keys are two views of one
+// vocabulary, maintained in different packages. If they drift, a user can set a
+// key the daemon never diffs — so it would silently never be reported as changed
+// on reload, which is the very failure this epic exists to remove.
+func TestSettableKeysAndReloadKeysAgree(t *testing.T) {
+	base := config.Default()
+	known := config.KeyValues(&base)
+
+	for key := range configFields {
+		if _, ok := known[key]; !ok {
+			t.Errorf("%q is settable but unknown to config.KeyValues, so a reload would never notice it changing", key)
+		}
+	}
+	for key := range known {
+		if _, ok := configFields[key]; ok {
+			if notYetSettable[key] {
+				t.Errorf("%q is settable now; remove it from notYetSettable", key)
+			}
+			continue
+		}
+		if !notYetSettable[key] {
+			t.Errorf("%q is a real config key with no way to set it; add it to configFields or to notYetSettable", key)
+		}
+	}
+}
