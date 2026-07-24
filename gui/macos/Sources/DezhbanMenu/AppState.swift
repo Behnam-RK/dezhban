@@ -53,7 +53,7 @@ enum PostureUI {
     }
 
     /// Maps a snapshot (or its absence/staleness) to one of the four brand states
-    /// (on / off / blocked / warning — the full-color icons from gui/assets/), plus an
+    /// (on / off / blocked / warning — the full-color icons from gui/artifacts/), plus an
     /// SF Symbol fallback for running outside the assembled bundle, plus a label.
     static func iconFor(_ s: Snapshot?) -> (state: String, symbol: String, help: String) {
         guard let s = s, isLive(s) else {
@@ -73,9 +73,17 @@ enum PostureUI {
         case "block", "full-block":
             return ("blocked", "shield.slash.fill", humanPosture(s))
         case "switch-window":
-            // The switch window relaxes egress (all outbound, or a proto/port subset
-            // if restricted) — the real IP may be exposed. Never show the plain "safe"
-            // icon here; warn so the user notices it's open.
+            // Every window relaxes egress (all outbound, or a proto/port subset if
+            // restricted) — the real IP may be exposed. Never show the plain "safe"
+            // icon for any of them.
+            //
+            // A pause gets its own look because it is the one the user asked for:
+            // amber reads as "something went wrong", which is misleading when the
+            // exposure is deliberate and expected. It is still not the calm "on"
+            // icon — the guard is relaxed either way.
+            if s.switch?.isPause == true {
+                return ("paused", "pause.circle.fill", humanPosture(s))
+            }
             return ("warning", "exclamationmark.shield.fill", humanPosture(s))
         default: // allow, guard — enforcing normally
             // Guard with the tunnel DOWN is the guard actively doing its job:
@@ -98,8 +106,11 @@ enum PostureUI {
         case "guard": return "guarding (VPN)"
         case "full-block": return "full block (VPN)"
         case "switch-window":
+            if s.switch?.isPause == true {
+                return "paused — using your real IP (guard re-arms itself when the pause ends)"
+            }
             if s.switch?.isAutoReconnect == true {
-                return "VPN dropped — reconnect window open (redial now; real IP may be exposed)"
+                return "VPN dropped — redial window open (redial now; real IP may be exposed)"
             }
             return "switch window — egress relaxed (real IP may be exposed)"
         case "stopped": return "stopped"
@@ -126,6 +137,9 @@ enum PostureUI {
         case "on": return .green
         case "blocked": return .red
         case "warning": return .orange
+        // Blue, not amber: a pause is deliberate and expected, so it must not
+        // borrow the colour that means "something went wrong".
+        case "paused": return .blue
         default: return .secondary
         }
     }
@@ -142,7 +156,7 @@ enum PostureUI {
     }
 
     /// Dock-size brand state images from the app bundle's Resources (put there by
-    /// build-app.sh from gui/assets/png), cached per state. Empty outside the bundle,
+    /// build-app.sh from gui/artifacts/png), cached per state. Empty outside the bundle,
     /// where callers fall back to SF Symbols. Shared by the Dock tile and the
     /// Overview hero.
     private static var dockIcons: [String: NSImage] = [:]

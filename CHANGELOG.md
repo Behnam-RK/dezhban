@@ -12,6 +12,25 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A dedicated PAUSED icon.** A pause used to draw the amber warning icon it
+  shared with switch and redial windows, which read as "something went wrong"
+  for the one relaxation the user deliberately asked for. It now has its own
+  brand state icon and its own wording on every surface. It is still not the
+  calm guard icon — the guard is relaxed and the real IP is in use either way.
+
+### Changed
+
+- **`gui/assets/` is now `gui/artifacts/`**, refreshed with a new brand set that
+  adds the paused state across every size and variant. Documentation, the app
+  build script, and source comments follow the new path; historical changelog
+  entries keep the old one, because that is where the files were at the time.
+- **The Dock tile shows the brand app icon** when dezhban is not cutting traffic,
+  instead of the "on" state tile. The Dock answers one question — is my traffic
+  being cut right now — so only a real cut earns a distinct tile; everything else
+  should look like the app.
+
 ### Fixed
 
 - **The menubar app no longer reads the daemon's state file on the main thread.**

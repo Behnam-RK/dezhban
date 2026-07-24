@@ -78,9 +78,12 @@ struct OverviewView: View {
             let cc = s.countryCode.map { " (\($0))" } ?? ""
             return "Full block. Your VPN is exiting through a country you've blocked\(cc). Everything is cut until it moves."
         case "switch-window":
+            if s.switch?.isPause == true {
+                return "Paused at your request. You are using your real IP, and the guard re-arms itself when the pause ends."
+            }
             let auto = s.switch?.isAutoReconnect ?? false
             return auto
-                ? "Your VPN dropped. The guard is relaxed while it reconnects — your real IP is exposed until it closes."
+                ? "Your VPN dropped. The guard is relaxed while it redials — your real IP is exposed until it closes."
                 : "Guard relaxed so a new VPN can connect — your real IP is exposed until it closes."
         case "stopped":
             return "dezhban is not running. Nothing is being blocked."

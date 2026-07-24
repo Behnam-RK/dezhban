@@ -300,7 +300,7 @@ Two surfaces, split by urgency:
     elevation path (Touch ID-capable Authorization Services vs password-only
     fallback) privileged actions will take.
 
-**Status icon** — full-color brand state icons (from `gui/assets/`), shown in both
+**Status icon** — full-color brand state icons (from `gui/artifacts/`), shown in both
 the menu bar and the Dock tile: teal allow/guard, red block/full-block, amber
 warning (switch window open or enforcement error), gray stopped or stale;
 repainted about once a second. Outside the assembled `.app` bundle (e.g. a bare

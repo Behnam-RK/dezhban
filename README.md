@@ -2,7 +2,7 @@
 
 > Persian *dežbān* (دژبان) — "gatekeeper / garrison guard."
 
-![dezhban — system-wide network kill switch](gui/assets/png/banner-1280x640.png)
+![dezhban — system-wide network kill switch](gui/artifacts/png/banner-1280x640.png)
 
 **dezhban makes sure your traffic can only leave this machine through your VPN.**
 If the VPN drops, your connection is cut instantly instead of silently falling

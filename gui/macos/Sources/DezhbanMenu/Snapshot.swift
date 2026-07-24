@@ -12,11 +12,17 @@ struct SwitchState: Codable {
     let open: Bool
     let until: Date
     let profile: String?
-    /// "manual" (operator command) or "auto" (automatic reconnect window opened
-    /// by a tunnel drop). Absent from older daemons — treat nil as "manual".
+    /// "manual" (operator command), "auto" (automatic redial window opened by a
+    /// tunnel drop), or "pause" (deliberate operator pause). Absent from older
+    /// daemons — treat nil as "manual".
     let trigger: String?
 
     var isAutoReconnect: Bool { trigger == "auto" }
+
+    /// A pause is a deliberate drop to the real ISP IP, not a VPN problem, so it
+    /// reads and looks different from the other two even though all three share
+    /// the same bounded-window machinery underneath.
+    var isPause: Bool { trigger == "pause" }
 }
 
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.

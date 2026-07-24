@@ -129,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard key != lastIconKey else { return }
         lastIconKey = key
         if let brand = Self.menubarIcon(state) {
-            // Full-color brand state icon (bundled by build-app.sh from gui/assets/png).
+            // Full-color brand state icon (bundled by build-app.sh from gui/artifacts/png).
             // Color IS the state — teal on, gray off, red blocked, amber warning —
             // drawn as-is (not templated, not tinted), so it reads identically on
             // light and dark menu bars.
@@ -171,20 +171,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func essentialClass(_ state: String, _ help: String) -> String {
         if help == "stopped" { return "stopped" }
         if help.hasPrefix("standby") { return "standby" }
-        return state // on / off / blocked / warning
+        return state // on / off / blocked / warning / paused
     }
 
     private static let essentialTitles: [String: String] = [
         "on": "Guard armed",
         "blocked": "Egress blocked",
         "warning": "Warning",
+        "paused": "Paused — using your real IP",
         "standby": "Standby — not enforcing",
         "stopped": "Protection stopped",
         "off": "Not enforcing",
     ]
 
     /// Menubar brand state images, loaded once from the app bundle's Resources
-    /// (put there by build-app.sh from gui/assets/png) and cached per state. Empty
+    /// (put there by build-app.sh from gui/artifacts/png) and cached per state. Empty
     /// when running outside the bundle, which triggers the SF Symbol fallback
     /// in refresh(). (Dock-size counterparts live in PostureUI.dockIcon, shared
     /// with the window's Overview hero.)

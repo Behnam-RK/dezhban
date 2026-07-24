@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="../../gui/assets/png/banner-1280x640.png" alt="Dezhban — system-wide network kill switch" width="640">
+  <img src="../../gui/artifacts/png/banner-1280x640.png" alt="Dezhban — system-wide network kill switch" width="640">
 </p>
 
 # Quick start
@@ -112,10 +112,11 @@ On macOS the menubar tells you the posture at a glance. There are four looks:
 
 | | Posture | What it means |
 |---|---|---|
-| <img src="../../gui/assets/png/menubar-on-color-88px.png" alt="Guard armed" height="22"> | **GUARD** | The healthy state. The tunnel is up and it is the only way out of this machine. |
-| <img src="../../gui/assets/png/menubar-off-color-88px.png" alt="Standby" height="22"> | **STANDBY** | **Not protecting.** No rules are installed and your network is fully open. This is the resting state before a VPN has ever connected — it arms itself the moment one does. |
-| <img src="../../gui/assets/png/menubar-blocked-color-88px.png" alt="Egress blocked" height="22"> | **FULL BLOCK** | Traffic is cut. Either the VPN's exit landed in a country you refused, or the guard is holding a dropped tunnel closed. Your VPN can still reconnect. |
-| <img src="../../gui/assets/png/menubar-warning-color-88px.png" alt="Warning" height="22"> | **SWITCH WINDOW** | A bounded relaxation is open and **your real IP may be exposed** until it closes on its own. Also shown if a firewall action failed. |
+| <img src="../../gui/artifacts/png/menubar-on-color-88px.png" alt="Guard armed" height="22"> | **GUARD** | The healthy state. The tunnel is up and it is the only way out of this machine. |
+| <img src="../../gui/artifacts/png/menubar-off-color-88px.png" alt="Standby" height="22"> | **STANDBY** | **Not protecting.** No rules are installed and your network is fully open. This is the resting state before a VPN has ever connected — it arms itself the moment one does. |
+| <img src="../../gui/artifacts/png/menubar-blocked-color-88px.png" alt="Egress blocked" height="22"> | **FULL BLOCK** | Traffic is cut. Either the VPN's exit landed in a country you refused, or the guard is holding a dropped tunnel closed. Your VPN can still reconnect. |
+| <img src="../../gui/artifacts/png/menubar-warning-color-88px.png" alt="Warning" height="22"> | **SWITCH WINDOW** | A bounded relaxation is open and **your real IP may be exposed** until it closes on its own. Also shown if a firewall action failed. |
+| <img src="../../gui/artifacts/png/menubar-paused-color-88px.png" alt="Paused" height="22"> | **PAUSED** | You asked for this one: a bounded drop to your real ISP IP, for something the VPN's exit can't reach. Same exposure as a switch window, but deliberate — so it gets its own icon rather than borrowing the warning look. The guard re-arms itself when the pause ends. |
 
 Two things worth knowing, because they surprise people:
 

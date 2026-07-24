@@ -213,6 +213,16 @@ type Options struct {
 	// debug. Run invokes it from a background writer goroutine (see publishBuffer),
 	// so a slow write never stalls the enforcement loop; it may run concurrently
 	// with the loop and need not be fast. nil → no-op (tests / legacy callers).
+	// ReloadC delivers replacement settings to the running loop, so a config
+	// edit takes effect without a restart. Nil (the default) means reloading is
+	// not wired up and the loop simply never selects on it.
+	//
+	// Like every other case in the select, this is handled ON the run-loop
+	// goroutine: the sender only hands over a value, and the loop alone touches
+	// the Backend. See LiveSettings for what may travel this way and what
+	// cannot.
+	ReloadC <-chan LiveSettings
+
 	Publish func(state.Snapshot)
 	// BlockedCountries is copied verbatim into each published snapshot so an
 	// observer can show what the daemon is configured to block. Informational only.
@@ -1198,6 +1208,79 @@ func (o Options) runGuard(ctx context.Context) error {
 	geoTick := time.NewTicker(o.Interval)
 	defer geoTick.Stop()
 
+	// applyLive adopts replacement settings on the run-loop goroutine. It updates
+	// `o` (a per-call copy, so nothing is shared with another run) plus the
+	// locals derived from it at startup, and reinstalls the standing rules when
+	// a change actually alters them.
+	//
+	// What it deliberately does NOT touch is an open window: `windowMax` and the
+	// running deadline are fixed at first open, and a reload arriving mid-episode
+	// must not be able to lengthen a live relaxation of the guard. New window
+	// settings apply to the next one.
+	applyLive := func(ls LiveSettings) {
+		policyChanged := ls.AllowPhysicalDNS != o.AllowPhysicalDNS ||
+			ls.AllowLocalNetwork != o.AllowLocalNetwork
+
+		// Durations are only adopted when they are actually usable. A zero here
+		// would mean a caller sent a partly-filled struct, and honouring it would
+		// stop the poll ticker outright — keeping the running value is the safe
+		// reading of "not specified".
+		if ls.Interval > 0 {
+			if ls.Interval != o.Interval {
+				geoTick.Reset(ls.Interval)
+			}
+			o.Interval = ls.Interval
+		}
+
+		if ls.Decider != nil {
+			o.Decider = ls.Decider
+		}
+		o.BlockedCountries = ls.BlockedCountries
+		o.Autodetect = ls.Autodetect
+		o.AllowPhysicalDNS = ls.AllowPhysicalDNS
+		o.AllowLocalNetwork = ls.AllowLocalNetwork
+		o.AutoArm = ls.AutoArm
+		o.AllowSwitchOps = ls.AllowSwitchOps
+		o.AllowPauseOps = ls.AllowPauseOps
+		o.ReconnectWindow = ls.ReconnectWindow
+		o.ReconnectMinUptime = ls.ReconnectMinUptime
+		o.EndpointGrace = ls.EndpointGrace
+		o.SwitchWindow = ls.SwitchWindow
+		o.WindowDiscoveryInterval = ls.WindowDiscoveryInterval
+
+		// Whether each trigger is available at all is recomputed here, so
+		// setting a window to "0" disables it live — and the other two triggers
+		// stay independent, exactly as they are at startup.
+		switchEnabled = o.SwitchWindow > 0 && o.PollCommand != nil
+		if ls.SwitchWindowMax > 0 {
+			manualWindowMax = ls.SwitchWindowMax
+		}
+		if ls.ReconnectWindowMax > 0 {
+			autoWindowMax = ls.ReconnectWindowMax
+		}
+		pauseWindowMax = ls.PauseMax
+		pauseEnabled = pauseWindowMax > 0 && o.PollCommand != nil
+
+		if ls.EndpointRefresh > 0 {
+			if ls.EndpointRefresh != o.EndpointRefresh {
+				epTick.Reset(ls.EndpointRefresh)
+			}
+			o.EndpointRefresh = ls.EndpointRefresh
+		}
+
+		o.Log.Info("configuration reloaded",
+			"interval", o.Interval,
+			"blocked_countries", o.BlockedCountries,
+			"switch_window", o.SwitchWindow,
+			"reconnect_window", o.ReconnectWindow,
+			"pause_max", o.PauseMax,
+		)
+		if policyChanged {
+			reapplyStanding("configuration reloaded")
+		}
+		snapshot()
+	}
+
 	var cmdC <-chan time.Time
 	if switchEnabled || pauseEnabled {
 		cmdInterval := o.CommandPoll
@@ -1283,6 +1366,8 @@ func (o Options) runGuard(ctx context.Context) error {
 				maybeStartCloseProbe()
 			}
 			snapshot()
+		case ls := <-o.ReloadC:
+			applyLive(ls)
 		case <-cmdC:
 			cmd, ok := o.PollCommand()
 			if !ok {
