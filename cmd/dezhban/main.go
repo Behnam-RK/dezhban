@@ -1696,6 +1696,13 @@ func cmdStatus(args []string) int {
 			if snap.ActiveProfile != "" {
 				fmt.Println("active profile:  ", snap.ActiveProfile)
 			}
+			// A posture change under way. Without this, the wait between a VPN
+			// redialing and the guard coming back looks identical to nothing
+			// happening at all.
+			if p := snap.Pending; p != nil {
+				fmt.Printf("in progress:      %s (%d of %d agreeing readings)\n",
+					pendingLabel(p.To), p.Have, p.Need)
+			}
 		}
 	}
 
@@ -1708,6 +1715,20 @@ func cmdStatus(args []string) int {
 		fmt.Println("blocked:         ", blocked)
 	}
 	return 0
+}
+
+// pendingLabel turns a pending posture into what the daemon is doing about it.
+// The posture strings themselves are stable identifiers, not prose, so they are
+// translated here rather than printed raw.
+func pendingLabel(to string) string {
+	switch to {
+	case "full-block":
+		return "escalating to full block"
+	case "guard":
+		return "restoring the guard"
+	default:
+		return "changing posture to " + to
+	}
 }
 
 // statusJSON prints a machine-readable status: the live posture from the state

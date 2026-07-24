@@ -309,6 +309,29 @@ daemon's *behaviour* afterwards, never about what the file says.
 - [ ] **No daemon running.** The write still succeeds and says so; the values are
       picked up at the next start.
 
+## Recovery after a redial
+
+Privileged, on a real host with a real VPN. The point of these checks is the
+*wait*: what the user sees between redialing and protection coming back.
+
+- [ ] **Progress is visible.** Force FULL BLOCK (`--simulate-country IR`, or a
+      real forbidden exit), then redial onto an allowed exit → `dezhban status`
+      shows "in progress: restoring the guard (1 of 2 agreeing readings)" and the
+      app's Overview shows the same count, before the posture changes.
+- [ ] **It is fast.** The guard comes back within seconds of the tunnel coming
+      up, not after a full `pollInterval` × `hysteresis`.
+- [ ] **Hysteresis still gates it.** With `hysteresis: 3`, a single allowed
+      reading does NOT restore the guard — it still takes three.
+- [ ] **No acceleration when probing would leak.** Break provider resolution (an
+      unreachable `providers` URL), force FULL BLOCK, then bring the tunnel up →
+      the daemon logs that it is not accelerating, and the probe cadence stays at
+      `pollInterval`. Accelerating here would multiply real-IP exposure.
+- [ ] **A forbidden exit that persists backs off.** Stay on a blocked exit after a
+      tunnel-up edge → probing returns to the normal cadence within ~90s instead
+      of hammering the geo providers.
+- [ ] **Nothing is claimed in standby or during a window.** Neither reports a
+      pending change: the geo state machine is not driving the posture there.
+
 ## The control token
 
 Privileged for enroll/forget, macOS-relevant but not macOS-only.

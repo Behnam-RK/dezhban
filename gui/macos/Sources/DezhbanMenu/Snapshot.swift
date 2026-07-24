@@ -48,9 +48,37 @@ struct Snapshot: Codable {
     let pid: Int?
     let activeProfile: String?      // matched VPN profile name, nil if unknown
     let `switch`: SwitchState?      // present only while a switch window is open
+    let pending: PendingFlip?       // present only while a posture change is being counted toward
 
     /// Wall-clock age of this snapshot.
     var age: TimeInterval { Date().timeIntervalSince(time) }
+
+    /// What the daemon is working toward, in words, or nil when nothing is under
+    /// way. The posture strings are stable identifiers, so they are translated
+    /// here rather than shown raw.
+    var pendingSummary: String? {
+        guard let p = pending else { return nil }
+        let what: String
+        switch p.to {
+        case "guard": what = "Restoring protection"
+        case "full-block": what = "Blocking this exit"
+        default: what = "Changing posture"
+        }
+        return "\(what) — \(p.have) of \(p.need) confirming checks"
+    }
+}
+
+/// A posture change the daemon is counting toward — mirrors Go's
+/// `state.PendingFlip`. Hysteresis requires `need` consecutive agreeing readings
+/// and `have` have arrived.
+///
+/// It exists because the posture alone cannot tell "recovering, one check to go"
+/// from "stuck", and after a VPN redials out of a full block those look identical
+/// for as long as the streak takes.
+struct PendingFlip: Codable {
+    let to: String
+    let have: Int
+    let need: Int
 }
 
 /// Reads and decodes the daemon's state file. The daemon (Go) marshals `time` as

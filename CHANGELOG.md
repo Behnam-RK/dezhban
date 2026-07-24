@@ -64,6 +64,22 @@ current as you land changes.
 
 ### Added
 
+- **Recovery after a VPN redial is now fast and visible.** Leaving FULL BLOCK used
+  to wait for the next ordinary poll — up to `pollInterval` × `hysteresis`, ~30s at
+  defaults — with nothing to show a recovery was even under way, so a normal wait
+  was indistinguishable from a stuck daemon. A tunnel coming back up now triggers
+  re-checks every couple of seconds until the outcome is decided, and the state
+  file, `status`, and the app all report progress ("restoring the guard — 1 of 2
+  confirming checks").
+
+  This changes **cadence only**: hysteresis still gates the change, an
+  undeterminable country still holds the posture, and no new relaxation of the
+  guard exists. Two rails keep it that way — it is skipped entirely when checking
+  would require lifting the guard (which would multiply real-IP exposure instead of
+  merely speeding things up), and it is time-bounded, so an exit that stays
+  forbidden falls back to the normal cadence rather than polling the geo providers
+  indefinitely.
+
 - **Settings can now be changed without a password, and the daemon adopts them
   immediately.** A new `config-write` control-socket op takes a set of config
   keys, writes them through exactly the validation `dezhban config set` uses, and

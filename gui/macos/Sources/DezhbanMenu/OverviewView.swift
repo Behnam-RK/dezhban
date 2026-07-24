@@ -44,6 +44,14 @@ struct OverviewView: View {
                            color: .orange)
                 }
 
+                // A posture change under way. Without it, the wait between the VPN
+                // redialing and protection coming back is indistinguishable from
+                // nothing happening — which is what made a normal recovery look
+                // like a stuck app. Blue, not orange: this is progress, not a fault.
+                if let progress = s.pendingSummary {
+                    banner(progress, color: .blue)
+                }
+
                 detailsGrid(s)
 
                 Divider()

@@ -82,6 +82,21 @@ func New(blockedCountries []string, hysteresis int) *Decider {
 	}
 }
 
+// Pending reports a flip the state machine is counting toward but has not
+// committed: the verdict at stake, how many consecutive agreeing readings have
+// arrived, and how many are needed. have == 0 means nothing is pending.
+//
+// It exists so the daemon can say "restoring the guard: 1 of 2 good readings"
+// instead of leaving a user watching an unchanged posture with no way to tell a
+// recovery in progress from one that is not happening. Read-only — observing
+// progress must never alter it.
+func (d *Decider) Pending() (v Verdict, have, need int) {
+	if d.streak == 0 {
+		return d.current, 0, d.need
+	}
+	return d.candidate, d.streak, d.need
+}
+
 // raw maps a single successful reading to a verdict, ignoring history. Callers
 // must not pass a failed reading; Evaluate short-circuits those before they
 // reach here.

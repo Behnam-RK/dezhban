@@ -30,6 +30,30 @@ import (
 // tunnel hangs or quorum fans out across several providers.
 const probeEgressBudget = 8 * time.Second
 
+// Accelerated recovery probing. When a tunnel comes back up while the daemon is
+// in FULL BLOCK, the exit that caused the block may already be gone — but the
+// guard cannot know until it observes an allowed country Hysteresis times, and
+// at the default cadence that is a ~30s wait during which the user sees a
+// blocked network and no sign of progress. A tunnel-up edge is a strong hint
+// that the answer changed, so probe at fastProbeInterval until the streak
+// resolves.
+//
+// This changes CADENCE ONLY. Hysteresis still gates the flip, an undeterminable
+// country still holds the posture, and the probe is the same tunnel-scoped one —
+// no new relaxation, no new window trigger. Two rails keep it that way:
+//
+//   - It runs only when FULL BLOCK carries tunnel-scoped provider passes, i.e.
+//     when probing costs no guard lift. Without them `probe` falls back to
+//     lift-and-observe, and accelerating THAT would multiply real-IP exposure by
+//     the speed-up factor — turning a recovery aid into a leak.
+//   - fastProbeBudget bounds it, so an exit that stays forbidden (or a tunnel
+//     that flaps up repeatedly) degrades back to the normal cadence instead of
+//     hammering the geo providers indefinitely.
+const (
+	fastProbeInterval = 2 * time.Second
+	fastProbeBudget   = 90 * time.Second
+)
+
 // windowRevertRetry re-arms the window timer after a FAILED posture revert, so
 // the daemon keeps trying to close a window whose Backend.Apply is failing
 // rather than leaving egress relaxed while falsely reporting the window closed.
@@ -357,7 +381,30 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 	for _, e := range endpoints {
 		snap.Endpoints = append(snap.Endpoints, e.String())
 	}
+	snap.Pending = o.pendingFlip(standby, windowOpen)
 	o.Publish(snap)
+}
+
+// pendingFlip reports the hysteresis streak the daemon is counting toward, or
+// nil when nothing is pending.
+//
+// Suppressed in standby and while a window is open, because in both the geo
+// state machine is not driving the posture: a leftover streak would advertise a
+// change that cannot arrive, which is worse than saying nothing. It is a pure
+// read of the Decider — publishing progress must never perturb it.
+func (o Options) pendingFlip(standby, windowOpen bool) *state.PendingFlip {
+	if o.Decider == nil || standby || windowOpen {
+		return nil
+	}
+	v, have, need := o.Decider.Pending()
+	if have == 0 {
+		return nil
+	}
+	to := "guard"
+	if v == decision.Block {
+		to = "full-block"
+	}
+	return &state.PendingFlip{To: to, Have: have, Need: need}
 }
 
 // Run executes the monitor→decision→enforcement loop until ctx is cancelled,
@@ -1297,6 +1344,9 @@ func (o Options) runGuard(ctx context.Context) error {
 	}
 	epTick := time.NewTicker(epInterval)
 	defer epTick.Stop()
+	// fastProbeUntil is the deadline of an accelerated recovery episode; zero
+	// means the geo ticker is running at the configured cadence.
+	var fastProbeUntil time.Time
 	geoTick := time.NewTicker(o.Interval)
 	defer geoTick.Stop()
 
@@ -1318,7 +1368,11 @@ func (o Options) runGuard(ctx context.Context) error {
 		// stop the poll ticker outright — keeping the running value is the safe
 		// reading of "not specified".
 		if ls.Interval > 0 {
-			if ls.Interval != o.Interval {
+			// Never during an accelerated recovery episode: resetting the ticker
+			// here would silently end it, and the episode's own stop path already
+			// restores the configured cadence (reading o.Interval, which this
+			// assignment updates first).
+			if ls.Interval != o.Interval && fastProbeUntil.IsZero() {
 				geoTick.Reset(ls.Interval)
 			}
 			o.Interval = ls.Interval
@@ -1373,6 +1427,41 @@ func (o Options) runGuard(ctx context.Context) error {
 			reapplyStanding("configuration reloaded")
 		}
 		snapshot()
+	}
+
+	// stopFastProbe returns the geo ticker to the configured cadence. Safe to call
+	// when no episode is running.
+	stopFastProbe := func(reason string) {
+		if fastProbeUntil.IsZero() {
+			return
+		}
+		fastProbeUntil = time.Time{}
+		geoTick.Reset(o.Interval)
+		o.Log.Debug("recovery probing back to normal cadence", "reason", reason, "interval", o.Interval)
+	}
+
+	// startFastProbe accelerates the geo ticker after a tunnel-up edge in FULL
+	// BLOCK, so a VPN that has redialed to an allowed exit is noticed in seconds
+	// rather than after poll-interval × hysteresis.
+	//
+	// Refuses unless probing is leak-free (see the fastProbeInterval comment):
+	// without the tunnel-scoped provider passes each probe briefly lifts the
+	// guard, and accelerating that would multiply the exposure it bounds.
+	startFastProbe := func(reason string) {
+		if !blocked || standby || windowActive || manualBlock {
+			return
+		}
+		if len(fullBlock.ProviderAddrs) == 0 {
+			o.Log.Debug("not accelerating recovery: each probe would have to lift the guard", "reason", reason)
+			return
+		}
+		if o.Interval <= fastProbeInterval {
+			return // already polling at least this fast
+		}
+		fastProbeUntil = time.Now().Add(fastProbeBudget)
+		geoTick.Reset(fastProbeInterval)
+		o.Log.Info("probing for recovery at an accelerated cadence",
+			"reason", reason, "interval", fastProbeInterval, "for", fastProbeBudget)
 	}
 
 	var cmdC <-chan time.Time
@@ -1455,6 +1544,15 @@ func (o Options) runGuard(ctx context.Context) error {
 			}
 			if wasUp && !st.Up {
 				maybeAutoWindow(time.Now(), st.Detail)
+			}
+			// A tunnel coming back while blocked is the strongest hint available
+			// that the forbidden exit may be gone — it is exactly the moment the
+			// user has redialed and is waiting. Going down ends any episode: there
+			// is nothing to observe through a tunnel that is not there.
+			if st.Up && !wasUp {
+				startFastProbe("tunnel came back up")
+			} else if !st.Up {
+				stopFastProbe("tunnel down")
 			}
 			if windowActive {
 				maybeStartCloseProbe()
@@ -1590,6 +1688,13 @@ func (o Options) runGuard(ctx context.Context) error {
 				snapshot()
 			}
 		case <-geoTick.C:
+			// Any state that suspends the geo state machine also ends an
+			// accelerated episode: probing faster is pointless when no reading
+			// will be taken, and this is the one place every such state is
+			// already enumerated.
+			if standby || windowActive || manualBlock {
+				stopFastProbe("geo state machine suspended")
+			}
 			if standby {
 				continue // not enforcing — nothing to decide, nothing to protect a probe with
 			}
@@ -1614,6 +1719,18 @@ func (o Options) runGuard(ctx context.Context) error {
 			if lastRes.Err == nil && !blocked {
 				goodExitThisUp, sawTunnelUp = true, true // confirmed exit through the tunnel
 				markTunnelEverUp(time.Now())
+			}
+			// End the accelerated episode once it has done its job, or once its
+			// budget is spent. Recovery is the success case; the budget is what
+			// stops an exit that stays forbidden from polling the geo providers
+			// every two seconds for as long as it persists.
+			if !fastProbeUntil.IsZero() {
+				switch {
+				case !blocked:
+					stopFastProbe("guard restored")
+				case time.Now().After(fastProbeUntil):
+					stopFastProbe("accelerated probing budget spent")
+				}
 			}
 			snapshot()
 		}
