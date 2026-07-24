@@ -183,6 +183,44 @@ func Changes(old, cur *Config) []Change {
 	return out
 }
 
+// MergeLive returns the configuration that will actually be in force after a
+// running daemon adopts `cur`: every live-appliable value taken from `cur`, and
+// everything else left as it is in `base`.
+//
+// It copies live fields onto a copy of `base` rather than starting from `cur`
+// and putting restart-required fields back. The difference matters: anything not
+// explicitly listed here — a field nobody has classified yet — stays at its
+// running value, which is the same conservative default restartReasonFor takes.
+// The alternative would adopt unclassified settings silently, which is exactly
+// the behaviour this whole file exists to prevent.
+func MergeLive(base, cur *Config) *Config {
+	out := *base
+
+	out.PollInterval = cur.PollInterval
+	out.BlockedCountries = cur.BlockedCountries
+	out.Hysteresis = cur.Hysteresis
+
+	out.VPN.Autodetect = cur.VPN.Autodetect
+	out.VPN.AllowPhysicalDNS = cur.VPN.AllowPhysicalDNS
+	out.VPN.AllowLocalNetwork = cur.VPN.AllowLocalNetwork
+	out.VPN.AutoArm = cur.VPN.AutoArm
+	out.VPN.SwitchWindow = cur.VPN.SwitchWindow
+	out.VPN.ReconnectWindow = cur.VPN.ReconnectWindow
+	out.VPN.PauseMax = cur.VPN.PauseMax
+	out.VPN.EndpointRefresh = cur.VPN.EndpointRefresh
+	out.VPN.EndpointGrace = cur.VPN.EndpointGrace
+
+	out.Control.AllowSwitchOps = cur.Control.AllowSwitchOps
+	out.Control.AllowPauseOps = cur.Control.AllowPauseOps
+
+	out.VPN.Advanced.SwitchWindowMax = cur.VPN.Advanced.SwitchWindowMax
+	out.VPN.Advanced.ReconnectWindowMax = cur.VPN.Advanced.ReconnectWindowMax
+	out.VPN.Advanced.ReconnectMinUptime = cur.VPN.Advanced.ReconnectMinUptime
+	out.VPN.Advanced.WindowDiscoveryInterval = cur.VPN.Advanced.WindowDiscoveryInterval
+
+	return &out
+}
+
 // SplitByRestart partitions changes into those a running daemon can adopt and
 // those that need a restart. Callers report both, so the user is never told a
 // change took effect when it did not.

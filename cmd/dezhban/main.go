@@ -303,7 +303,7 @@ func cmdRun(args []string) int {
 	// platform logger. The build closure assembles the run loop lazily so it can
 	// use whichever logger the service selects.
 	build := func(l *slog.Logger) (runner.Options, error) {
-		return assembleOptions(cfg, l, ov)
+		return assembleOptions(cfg, resolveConfigPath(*cfgPath), l, ov)
 	}
 	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath, persist); err != nil {
 		log.Error("run loop failed", "err", err)
@@ -338,7 +338,11 @@ func parseOverrides(simCountry, simTunDown string) (runOverrides, error) {
 // decider, and firewall backend. It is shared by the `run` command and the
 // service Start path; the logger is supplied by the caller so service mode can
 // route output to the platform logger.
-func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (runner.Options, error) {
+// cfgPath is the already-resolved path the daemon read cfg from — kept so a
+// live reload re-reads exactly the same file, rather than re-running resolution
+// and possibly landing on a different one mid-run. Empty means built-in
+// defaults, which is a config that cannot change, so reloading is not offered.
+func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov runOverrides) (runner.Options, error) {
 	// Everything the daemon publishes to the outside world lives under this one
 	// directory — state.json for the menubar app, control.sock for passwordless
 	// routine ops. It must be traversable by the unprivileged user or both silently
@@ -472,6 +476,37 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		}
 	}
 
+	// Live reload: re-read the same file and hand the run loop what it can adopt,
+	// plus the names of the keys it cannot. `running` tracks the configuration
+	// actually in force so successive reloads diff against reality rather than
+	// against whatever was on disk at startup.
+	//
+	// Restart-required keys are reported, never applied. Telling a user their
+	// setting took effect while the daemon still enforces the old value is the
+	// same failure as silently discarding it.
+	running := *cfg
+	var reload func() (runner.LiveSettings, runner.ReloadReport, error)
+	if cfgPath != "" {
+		reload = func() (runner.LiveSettings, runner.ReloadReport, error) {
+			next, lerr := config.Load(cfgPath)
+			if lerr != nil {
+				// A malformed edit must not disturb a running kill switch: report
+				// the parse failure and keep enforcing what is already in force.
+				return runner.LiveSettings{}, runner.ReloadReport{}, lerr
+			}
+			live, needRestart := config.SplitByRestart(config.Changes(&running, next))
+			report := runner.ReloadReport{
+				Applied:      changeKeys(live),
+				NeedsRestart: changeKeys(needRestart),
+			}
+			// Only the live half is adopted, so `running` keeps restart-required
+			// keys at the values still being enforced. A later reload therefore
+			// keeps reporting them as pending until a restart actually lands.
+			running = *config.MergeLive(&running, next)
+			return liveSettingsFrom(&running), report, nil
+		}
+	}
+
 	log.Info("run loop started",
 		"interval", cfg.PollInterval,
 		"providers", len(providers),
@@ -537,7 +572,48 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		PollCommand:             switchPollOrNil(switchEnabled || pauseEnabled, pollCommand),
 		Publish:                 publish,
 		BlockedCountries:        cfg.BlockedCountries,
+		ReloadConfig:            reload,
 	}, nil
+}
+
+// changeKeys reduces a change list to the key names a caller reports back.
+func changeKeys(changes []config.Change) []string {
+	if len(changes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(changes))
+	for _, ch := range changes {
+		out = append(out, ch.Key)
+	}
+	return out
+}
+
+// liveSettingsFrom maps a config to the settings a running loop can adopt. It is
+// the reload-time counterpart of the same fields in assembleOptions, and a test
+// pins the two together so a key cannot be wired at startup but forgotten on
+// reload — which would silently revert it on the next config edit.
+func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
+	adv := cfg.VPN.Advanced
+	return runner.LiveSettings{
+		Interval:                cfg.PollInterval,
+		Decider:                 decision.New(cfg.BlockedCountries, cfg.Hysteresis),
+		BlockedCountries:        cfg.BlockedCountries,
+		Autodetect:              cfg.VPN.Autodetect,
+		AllowPhysicalDNS:        cfg.VPN.AllowPhysicalDNS,
+		AllowLocalNetwork:       cfg.VPN.AllowLocalNetwork,
+		AutoArm:                 cfg.VPN.AutoArm,
+		SwitchWindow:            cfg.VPN.SwitchWindow,
+		SwitchWindowMax:         adv.SwitchWindowMax,
+		ReconnectWindow:         cfg.VPN.ReconnectWindow,
+		ReconnectWindowMax:      adv.ReconnectWindowMax,
+		ReconnectMinUptime:      adv.ReconnectMinUptime,
+		PauseMax:                cfg.VPN.PauseMax,
+		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
+		EndpointRefresh:         cfg.VPN.EndpointRefresh,
+		EndpointGrace:           cfg.VPN.EndpointGrace,
+		AllowSwitchOps:          cfg.Control.AllowSwitchOps,
+		AllowPauseOps:           cfg.Control.AllowPauseOps,
+	}
 }
 
 // switchPollOrNil returns the command poller only when the switch window is

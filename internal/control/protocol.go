@@ -57,6 +57,13 @@ const (
 	// OpResume ends an open pause early, re-arming immediately instead of
 	// waiting out the deadline. Gated by allowPauseOps.
 	OpResume Op = "resume"
+	// OpReload makes the daemon re-read its own config file and adopt whatever
+	// it can without restarting. Ungated, and deliberately so: the config file
+	// is root-owned, so this op grants no authority its caller did not already
+	// have — it only asks the daemon to notice a change root already made. The
+	// reply names what was adopted and what still needs a restart, so no caller
+	// can report a setting as applied when it is not.
+	OpReload Op = "reload"
 )
 
 // Version is the wire protocol version. A request carrying a different version is
@@ -85,6 +92,12 @@ type Response struct {
 	// never like a refusal, which is deliberate and must not be routed around.
 	// Optional on the wire (omitempty), so older peers interop unchanged.
 	Transient bool `json:"transient,omitempty"`
+	// Applied and NeedsRestart answer an OpReload: which changed keys the running
+	// daemon adopted, and which ones it could not. Both are reported because a
+	// reload that silently ignored half a config edit would leave the user
+	// believing a security setting took effect when it had not.
+	Applied      []string `json:"applied,omitempty"`
+	NeedsRestart []string `json:"needsRestart,omitempty"`
 }
 
 // errResponse is the shorthand for a refusal.

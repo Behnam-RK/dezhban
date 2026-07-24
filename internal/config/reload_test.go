@@ -134,3 +134,79 @@ func TestEveryRestartReasonExplainsItself(t *testing.T) {
 		}
 	}
 }
+
+// MergeLive has to move exactly the live keys and nothing else. If it moved a
+// restart-required key too, the daemon's idea of its running config would drift
+// from what it is actually enforcing, and the key would stop being reported as
+// pending — the user would never learn a restart was still owed.
+func TestMergeLiveMovesOnlyLiveKeys(t *testing.T) {
+	base := Default()
+
+	cur := Default()
+	cur.PollInterval = 99 * time.Second                     // live
+	cur.VPN.ReconnectWindow = Disabled                      // live, and security-relevant
+	cur.Control.AllowPauseOps = !base.Control.AllowPauseOps // live
+	cur.LogLevel = "debug"                                  // restart-required
+	cur.VPN.ArmAtBoot = !base.VPN.ArmAtBoot                 // restart-required
+	cur.Providers = []string{"https://ifconfig.co/json"}    // restart-required
+
+	got := Changes(&base, MergeLive(&base, &cur))
+
+	want := map[string]bool{
+		"pollInterval":          true,
+		"vpn.reconnectWindow":   true,
+		"control.allowPauseOps": true,
+	}
+	for _, ch := range got {
+		if !want[ch.Key] {
+			t.Errorf("MergeLive adopted %q, which is not live-appliable", ch.Key)
+		}
+		delete(want, ch.Key)
+	}
+	for key := range want {
+		t.Errorf("MergeLive did not adopt the live key %q", key)
+	}
+}
+
+// Every key MergeLive is willing to move must be one classified as live, and
+// every live key must actually be moved. This is what keeps the field-by-field
+// copy above honest against the liveKeys table beside it.
+func TestMergeLiveCoversExactlyTheLiveKeys(t *testing.T) {
+	base := Default()
+
+	// A config that differs from base in every single key.
+	cur := Default()
+	cur.PollInterval = base.PollInterval + time.Second
+	cur.BlockedCountries = []string{"ZZ"}
+	cur.Hysteresis = base.Hysteresis + 1
+	cur.VPN.Autodetect = !base.VPN.Autodetect
+	cur.VPN.AllowPhysicalDNS = !base.VPN.AllowPhysicalDNS
+	cur.VPN.AllowLocalNetwork = !base.VPN.AllowLocalNetwork
+	cur.VPN.AutoArm = !base.VPN.AutoArm
+	cur.VPN.SwitchWindow = base.VPN.SwitchWindow + time.Second
+	cur.VPN.ReconnectWindow = base.VPN.ReconnectWindow + time.Second
+	cur.VPN.PauseMax = base.VPN.PauseMax + time.Second
+	cur.VPN.EndpointRefresh = base.VPN.EndpointRefresh + time.Second
+	cur.VPN.EndpointGrace = base.VPN.EndpointGrace + time.Second
+	cur.Control.AllowSwitchOps = !base.Control.AllowSwitchOps
+	cur.Control.AllowPauseOps = !base.Control.AllowPauseOps
+	cur.VPN.Advanced.SwitchWindowMax = base.VPN.Advanced.SwitchWindowMax + time.Second
+	cur.VPN.Advanced.ReconnectWindowMax = base.VPN.Advanced.ReconnectWindowMax + time.Second
+	cur.VPN.Advanced.ReconnectMinUptime = base.VPN.Advanced.ReconnectMinUptime + time.Second
+	cur.VPN.Advanced.WindowDiscoveryInterval = base.VPN.Advanced.WindowDiscoveryInterval + time.Second
+
+	moved := map[string]bool{}
+	for _, ch := range Changes(&base, MergeLive(&base, &cur)) {
+		moved[ch.Key] = true
+	}
+	for key := range liveKeys {
+		if !moved[key] {
+			t.Errorf("live key %q is never adopted by MergeLive", key)
+		}
+	}
+	for key := range moved {
+		if !liveKeys[key] {
+			t.Errorf("MergeLive adopts %q, which is not classified as live", key)
+		}
+	}
+}

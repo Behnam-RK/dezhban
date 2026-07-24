@@ -55,6 +55,18 @@ type LiveSettings struct {
 	AllowPauseOps  bool
 }
 
+// ReloadReport names what a reload actually did, so the answer travelling back
+// to the user distinguishes the two outcomes that matter: keys the running
+// daemon adopted, and keys that changed on disk but are still being enforced at
+// their old values until a restart.
+//
+// Both halves are reported even when one is empty. "Nothing needed a restart"
+// and "we didn't check" have to look different to whoever is reading.
+type ReloadReport struct {
+	Applied      []string
+	NeedsRestart []string
+}
+
 // Live captures the current live-appliable settings. It exists so a reload can
 // be expressed as a diff against what the loop is actually running, and so tests
 // can assert that adopting a LiveSettings really did change the loop's behaviour

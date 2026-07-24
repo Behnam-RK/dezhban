@@ -223,6 +223,13 @@ type Options struct {
 	// cannot.
 	ReloadC <-chan LiveSettings
 
+	// ReloadConfig re-reads the daemon's configuration from disk and derives both
+	// the settings to adopt and the report of what changed. It is what the
+	// control socket's reload op calls, on the run-loop goroutine, so the daemon
+	// pulls the new config itself rather than trusting a caller to hand one over.
+	// Nil means reloading is unavailable and the op is refused by name.
+	ReloadConfig func() (LiveSettings, ReloadReport, error)
+
 	Publish func(state.Snapshot)
 	// BlockedCountries is copied verbatim into each published snapshot so an
 	// observer can show what the daemon is configured to block. Informational only.
@@ -1025,6 +1032,11 @@ func (o Options) runGuard(ctx context.Context) error {
 	// loop (as a select case), which is what lets it call Backend.Apply at all —
 	// the accept goroutine never does. Every path returns a Response; the server is
 	// waiting on it under a timeout.
+	// Forward declaration: applyLive needs the tickers built further down, but
+	// handleControl below needs to call it. Assigned exactly once, before the
+	// select loop that can invoke either.
+	var applyLive func(LiveSettings)
+
 	handleControl := func(req control.Request) control.Response {
 		reply := func(ok bool, msg string) control.Response {
 			return control.Response{
@@ -1037,6 +1049,26 @@ func (o Options) runGuard(ctx context.Context) error {
 		switch req.Op {
 		case control.OpStatus:
 			return reply(true, "")
+
+		case control.OpReload:
+			// Re-reads the root-owned config file the daemon already trusts, so
+			// this grants the caller no authority they did not have — it only
+			// asks the daemon to notice a change. The reply names both halves of
+			// the outcome so nothing downstream can claim a key took effect when
+			// it is still being enforced at its old value.
+			if o.ReloadConfig == nil {
+				return reply(false, "this daemon cannot reload its configuration")
+			}
+			ls, report, rerr := o.ReloadConfig()
+			if rerr != nil {
+				o.Log.Warn("control: config reload failed; continuing on the running configuration", "err", rerr)
+				return reply(false, "reload failed: "+rerr.Error())
+			}
+			applyLive(ls)
+			resp := reply(true, "")
+			resp.Applied = report.Applied
+			resp.NeedsRestart = report.NeedsRestart
+			return resp
 
 		case control.OpBlock:
 			if windowActive {
@@ -1217,7 +1249,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	// running deadline are fixed at first open, and a reload arriving mid-episode
 	// must not be able to lengthen a live relaxation of the guard. New window
 	// settings apply to the next one.
-	applyLive := func(ls LiveSettings) {
+	applyLive = func(ls LiveSettings) {
 		policyChanged := ls.AllowPhysicalDNS != o.AllowPhysicalDNS ||
 			ls.AllowLocalNetwork != o.AllowLocalNetwork
 
