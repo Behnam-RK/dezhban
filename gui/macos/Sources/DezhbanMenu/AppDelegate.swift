@@ -43,6 +43,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         watchdog.start()
         refresh()
+        // Launching the app shows the app: reaching the main window only through
+        // the menubar dropdown made opening it a two-step discovery problem, and
+        // the menubar item stays available either way.
+        //
+        // Except when the launch wasn't the user's doing. AppKit clears this flag
+        // for launches it performed on their behalf rather than at their request —
+        // a login item, a state restoration, opening a file — and a window
+        // appearing unbidden at every boot is exactly the noise a menubar app
+        // should not make. A missing flag reads as an ordinary launch, so the
+        // window still opens if AppKit ever stops reporting this.
+        let deliberateLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool) ?? true
+        if deliberateLaunch {
+            MainWindow.shared.open()
+        }
         AppState.shared.refreshServiceState()
         AppState.shared.checkForUpdates()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
