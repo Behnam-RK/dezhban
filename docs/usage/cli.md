@@ -161,6 +161,22 @@ first) and no half-applied config if one value is rejected. It is also one privi
 one password prompt instead of one per key; the macOS app's VPN Guard pane uses it
 for exactly that reason.
 
+After a successful write, `config set` (and `config reset`) asks a running daemon
+to re-read its configuration, and reports what that achieved:
+
+```
+set pollInterval = 20s  (/etc/dezhban/config.json)
+Saved and applied: pollInterval
+Restart dezhban to apply: logLevel
+```
+
+Most keys take effect immediately. A few cannot, because the daemon built
+something from them before its run loop started — the logger, the geo providers,
+the control socket, the tunnel watcher, arm-at-boot. Those are named explicitly
+rather than applied silently, so a setting is never reported as in force while
+the old value is still being enforced. With no daemon running, the write still
+succeeds and says so; the new values are read the next time it starts.
+
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.

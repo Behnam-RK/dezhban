@@ -14,6 +14,22 @@ current as you land changes.
 
 ### Added
 
+- **Config changes now apply without restarting the daemon.** The daemon read its
+  configuration exactly once, at startup, and nothing told it to look again — no
+  watcher, no signal, no control op — so `config set` wrote the file and notified
+  nobody, and declining the macOS app's restart prompt left the new settings inert
+  on disk. A new `reload` control op makes the daemon re-read the same file and
+  adopt what it can, and `config set`/`config reset` trigger it automatically.
+
+  The reply names both halves: keys that took effect, and keys still being
+  enforced at their old values because the daemon built something from them
+  before its run loop started (the logger, geo providers, the control socket, the
+  tunnel watcher, arm-at-boot). Those are reported by name rather than applied
+  silently — a setting is never claimed to be in force when it is not. A
+  malformed edit changes nothing and keeps the kill switch enforcing the
+  configuration already in force, and a reload can never lengthen a switch,
+  redial, or pause window that is already open.
+
 - **A dedicated PAUSED icon.** A pause used to draw the amber warning icon it
   shared with switch and redial windows, which read as "something went wrong"
   for the one relaxation the user deliberately asked for. It now has its own

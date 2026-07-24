@@ -355,6 +355,10 @@ func configSet(flagVal string, args []string) int {
 	for _, p := range pairs {
 		fmt.Printf("set %s = %s  (%s)\n", p.key, configFields[p.key].get(cfg), path)
 	}
+	// Writing the file used to be the whole story, which is why "I changed a
+	// setting and nothing happened" was the most common complaint: the daemon
+	// read its config once at startup and nobody ever told it to look again.
+	notifyReload(flagVal)
 	return 0
 }
 
@@ -413,6 +417,9 @@ func configReset(flagVal string, args []string) int {
 	for _, k := range keys {
 		fmt.Printf("reset %s = %s  (%s)\n", k, configFields[k].get(cfg), path)
 	}
+	// A reset is a config write like any other, and returning to a default is
+	// just as much a change the daemon has to be told about.
+	notifyReload(flagVal)
 	return 0
 }
 
