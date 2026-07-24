@@ -1,7 +1,7 @@
 # ADR-0003: Biometric-gated token over the existing daemon, not an SMAppService helper
 
 **Date**: 2026-07-20
-**Status**: accepted, implementation pending
+**Status**: implemented (2026-07-24)
 **Deciders**: Behnam RK
 
 ## Context
@@ -107,12 +107,39 @@ Also: `AboutView` currently advertises "Authorization Services (Touch ID capable
 this project's own findings that is false, and it must be replaced with the true
 enrollment state.
 
-## Progress
+## What shipped (2026-07-24)
 
-Alternative 1 (the sudo-retry complement, not a substitute for the Decision above) has
-shipped: `Elevation` now prefers `sudo` + `pam_tid` and falls back to Authorization
-Services, then the legacy AppleScript dialog. **The Decision itself — the keychain token,
-the `config-write`/`reload` control-socket ops, `control.allowConfigOps` — has not.**
-`AboutView` still reports "Authorization Services (Touch ID capable)", the exact string
-this ADR calls out as false; it has not yet been replaced with the true enrollment state.
-Status stays `implementation pending` until the token path lands.
+Everything the Decision named, plus the Alternative-1 complement:
+
+- **`reload`** (`internal/control`, handled on the run loop) re-reads the root-owned
+  config and adopts what it can, reporting live-applied and restart-required keys by
+  name. Ungated: it grants no authority the caller lacked, since the file is already
+  root-owned.
+- **The token** (`internal/token`): a 256-bit secret whose SHA-256 hash lives root-only
+  at `<state dir>/control.token`. Compared in constant time. Every ambiguous case fails
+  closed — no verifier wired, no enrollment, an empty hash file, an omitted token.
+  `dezhban token status|enroll|forget` manages it; enrolling replaces, which is the
+  revocation path.
+- **`config-write`**, token-gated in the socket's accept goroutine (so an unauthorised
+  request never reaches the goroutine that touches the firewall) and policy-gated on
+  `control.allowConfigOps` in the run loop (so the live value governs, and turning it
+  off refuses even a valid token).
+- **The app** stores its copy under `kSecAccessControlBiometryCurrentSet` and
+  `...ThisDeviceOnly`, and reaches the socket through the Go CLI's
+  `config set --token-stdin` — Swift still never speaks the protocol.
+- **Alternative 1**: `Elevation` prefers `sudo` + `pam_tid` with a bundled
+  `SUDO_ASKPASS` helper, so a Touch ID miss continues to a password prompt instead of
+  dead-ending, and falls back to Authorization Services then the legacy dialog.
+- **`AboutView`** no longer claims "Authorization Services (Touch ID capable)". It now
+  reports the two paths separately and truthfully: what a settings change will cost
+  (token enrolled → Touch ID) and what a lifecycle action will cost (pam_tid → Touch ID
+  via sudo).
+
+Two deviations worth recording, both narrowing rather than widening:
+
+- **`config reset --all` is not served over the socket.** It resets keys the op cannot
+  express (`vpn.advanced.*`), so serving it there would reset less than it claims. It is
+  refused by name and sent to the privileged path.
+- **A daemon refusal is never retried with elevation**, in either the CLI or the app.
+  Only "no token", "cancelled prompt", and "no daemon" fall back. Retrying a refusal as
+  root would make `control.allowConfigOps` advisory.

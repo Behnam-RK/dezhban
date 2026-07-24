@@ -37,6 +37,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/runner"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/svc"
+	"github.com/behnam-rk/dezhban/internal/token"
 )
 
 // The build stamps (version/commit/date) and their ReadBuildInfo fallback live
@@ -77,6 +78,7 @@ Commands:
   vpn         Manage VPN profiles and learned endpoints (list/add/remove/import/…)
   setup       Interactive wizard to create or update the config
   config      Inspect or change the config without hand-editing JSON
+  token       Enroll/remove the control token that authorises password-free config changes
   completion  Print a shell completion script (bash|zsh|fish)
   upgrade     Check/download/apply a newer release (check: no root; apply: macOS, root)
   version     Print the version
@@ -149,6 +151,8 @@ func run(args []string) int {
 		return cmdSetup(rest)
 	case "config":
 		return cmdConfig(rest)
+	case "token":
+		return cmdToken(rest)
 	case "completion":
 		return cmdCompletion(rest)
 	case "upgrade":
@@ -215,18 +219,19 @@ func requireRoot(cmd string) bool {
 	return false
 }
 
-// loadConfig is a small helper shared by the commands that take --config. It
-// resolves the path (so --config can be omitted) before loading.
-// reportRetired warns once per retired key found in the config file. The keys are
-// inert, so this is the only signal an operator gets that a setting they wrote is
-// not doing anything — silence here would let someone believe a discarded
-// security setting took effect.
+// reportRetired warns once per inert key found in the config file: keys that
+// were retired, keys that were renamed, and keys the schema simply does not
+// recognise. All three share one property — the operator wrote a setting and it
+// is doing nothing — and this is the only signal they get. Silence would let
+// someone believe a discarded security setting took effect.
 func reportRetired(cfg *config.Config, log *slog.Logger) {
 	for _, r := range cfg.Retired {
-		log.Warn("config key is retired and has no effect", "key", r.Key, "why", r.Reason)
+		log.Warn("config key has no effect", "key", r.Key, "why", r.Reason)
 	}
 }
 
+// loadConfig is a small helper shared by the commands that take --config. It
+// resolves the path (so --config can be omitted) before loading.
 func loadConfig(path string) (*config.Config, error) {
 	return config.Load(resolveConfigPath(path))
 }
@@ -303,7 +308,7 @@ func cmdRun(args []string) int {
 	// platform logger. The build closure assembles the run loop lazily so it can
 	// use whichever logger the service selects.
 	build := func(l *slog.Logger) (runner.Options, error) {
-		return assembleOptions(cfg, l, ov)
+		return assembleOptions(cfg, resolveConfigPath(*cfgPath), l, ov)
 	}
 	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath, persist); err != nil {
 		log.Error("run loop failed", "err", err)
@@ -338,7 +343,11 @@ func parseOverrides(simCountry, simTunDown string) (runOverrides, error) {
 // decider, and firewall backend. It is shared by the `run` command and the
 // service Start path; the logger is supplied by the caller so service mode can
 // route output to the platform logger.
-func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (runner.Options, error) {
+// cfgPath is the already-resolved path the daemon read cfg from — kept so a
+// live reload re-reads exactly the same file, rather than re-running resolution
+// and possibly landing on a different one mid-run. Empty means built-in
+// defaults, which is a config that cannot change, so reloading is not offered.
+func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov runOverrides) (runner.Options, error) {
 	// Everything the daemon publishes to the outside world lives under this one
 	// directory — state.json for the menubar app, control.sock for passwordless
 	// routine ops. It must be traversable by the unprivileged user or both silently
@@ -472,6 +481,37 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		}
 	}
 
+	// Live reload: re-read the same file and hand the run loop what it can adopt,
+	// plus the names of the keys it cannot. `running` tracks the configuration
+	// actually in force so successive reloads diff against reality rather than
+	// against whatever was on disk at startup.
+	//
+	// Restart-required keys are reported, never applied. Telling a user their
+	// setting took effect while the daemon still enforces the old value is the
+	// same failure as silently discarding it.
+	running := *cfg
+	var reload func() (runner.LiveSettings, runner.ReloadReport, error)
+	if cfgPath != "" {
+		reload = func() (runner.LiveSettings, runner.ReloadReport, error) {
+			next, lerr := config.Load(cfgPath)
+			if lerr != nil {
+				// A malformed edit must not disturb a running kill switch: report
+				// the parse failure and keep enforcing what is already in force.
+				return runner.LiveSettings{}, runner.ReloadReport{}, lerr
+			}
+			live, needRestart := config.SplitByRestart(config.Changes(&running, next))
+			report := runner.ReloadReport{
+				Applied:      changeKeys(live),
+				NeedsRestart: changeKeys(needRestart),
+			}
+			// Only the live half is adopted, so `running` keeps restart-required
+			// keys at the values still being enforced. A later reload therefore
+			// keeps reporting them as pending until a restart actually lands.
+			running = *config.MergeLive(&running, next)
+			return liveSettingsFrom(&running), report, nil
+		}
+	}
+
 	log.Info("run loop started",
 		"interval", cfg.PollInterval,
 		"providers", len(providers),
@@ -490,7 +530,40 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		if err != nil {
 			log.Warn("control socket unavailable — routine ops will ask for a password", "err", err)
 		} else {
-			log.Info("control socket listening", "path", ctl.Path(), "group", cfg.Control.Group, "switch_ops", cfg.Control.AllowSwitchOps)
+			// The token verifier is wired whenever the socket exists, never
+			// conditionally on control.allowConfigOps: that key is live-reloadable,
+			// so a verifier installed only when it happened to be true at startup
+			// would leave the op permanently refused after someone turned it on.
+			// Policy is enforced in the run loop, where the current value lives.
+			tokenPath := defaultTokenPath()
+			ctl.VerifyToken = func(presented string) bool {
+				ok, err := token.Verify(tokenPath, presented)
+				if err != nil {
+					// Including ErrNotEnrolled: no enrollment means the feature is
+					// unavailable, not that anything goes.
+					log.Debug("control: token verification refused", "err", err)
+					return false
+				}
+				return ok
+			}
+			log.Info("control socket listening",
+				"path", ctl.Path(),
+				"group", cfg.Control.Group,
+				"switch_ops", cfg.Control.AllowSwitchOps,
+				"config_ops", cfg.Control.AllowConfigOps,
+				"token_enrolled", token.Enrolled(tokenPath),
+			)
+		}
+	}
+
+	// Config writes over the socket need somewhere to write. With no config file
+	// resolved the daemon is running on built-in defaults, and inventing a file
+	// for it to persist into would change which config a later start reads —
+	// so the op is simply unavailable, and says so by name.
+	var writeConfigKeysAt func(map[string]string) error
+	if cfgPath != "" {
+		writeConfigKeysAt = func(pairs map[string]string) error {
+			return writeConfigKeys(cfgPath, pairs)
 		}
 	}
 
@@ -530,14 +603,58 @@ func assembleOptions(cfg *config.Config, log *slog.Logger, ov runOverrides) (run
 		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
 		SwitchWindow:            cfg.VPN.SwitchWindow,
 		SwitchWindowMax:         adv.SwitchWindowMax,
-		ReconnectWindow:         cfg.VPN.ReconnectWindow,
-		ReconnectWindowMax:      adv.ReconnectWindowMax,
-		ReconnectMinUptime:      adv.ReconnectMinUptime,
+		RedialWindow:            cfg.VPN.RedialWindow,
+		RedialWindowMax:         adv.RedialWindowMax,
+		RedialMinUptime:         adv.RedialMinUptime,
 		Learn:                   learnHook,
 		PollCommand:             switchPollOrNil(switchEnabled || pauseEnabled, pollCommand),
 		Publish:                 publish,
 		BlockedCountries:        cfg.BlockedCountries,
+		ReloadConfig:            reload,
+		WriteConfig:             writeConfigKeysAt,
+		AllowConfigOps:          cfg.Control.AllowConfigOps,
 	}, nil
+}
+
+// changeKeys reduces a change list to the key names a caller reports back.
+func changeKeys(changes []config.Change) []string {
+	if len(changes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(changes))
+	for _, ch := range changes {
+		out = append(out, ch.Key)
+	}
+	return out
+}
+
+// liveSettingsFrom maps a config to the settings a running loop can adopt. It is
+// the reload-time counterpart of the same fields in assembleOptions, and a test
+// pins the two together so a key cannot be wired at startup but forgotten on
+// reload — which would silently revert it on the next config edit.
+func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
+	adv := cfg.VPN.Advanced
+	return runner.LiveSettings{
+		Interval:                cfg.PollInterval,
+		Decider:                 decision.New(cfg.BlockedCountries, cfg.Hysteresis),
+		BlockedCountries:        cfg.BlockedCountries,
+		Autodetect:              cfg.VPN.Autodetect,
+		AllowPhysicalDNS:        cfg.VPN.AllowPhysicalDNS,
+		AllowLocalNetwork:       cfg.VPN.AllowLocalNetwork,
+		AutoArm:                 cfg.VPN.AutoArm,
+		SwitchWindow:            cfg.VPN.SwitchWindow,
+		SwitchWindowMax:         adv.SwitchWindowMax,
+		RedialWindow:            cfg.VPN.RedialWindow,
+		RedialWindowMax:         adv.RedialWindowMax,
+		RedialMinUptime:         adv.RedialMinUptime,
+		PauseMax:                cfg.VPN.PauseMax,
+		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
+		EndpointRefresh:         cfg.VPN.EndpointRefresh,
+		EndpointGrace:           cfg.VPN.EndpointGrace,
+		AllowSwitchOps:          cfg.Control.AllowSwitchOps,
+		AllowPauseOps:           cfg.Control.AllowPauseOps,
+		AllowConfigOps:          cfg.Control.AllowConfigOps,
+	}
 }
 
 // switchPollOrNil returns the command poller only when the switch window is
@@ -558,7 +675,7 @@ func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov run
 		return nil
 	}
 	// In autodetect mode the watcher must sample ALL tunnel-like interfaces, not
-	// just the set known at startup: utunN names change across reconnects, so
+	// just the set known at startup: utunN names change across redials, so
 	// pinning the watcher to the start-time list (which liveSample treats as an
 	// allowlist) would blind it to a renumbered or newly-created tunnel and stop
 	// the runner growing/pruning its guarded set. An empty Tunnels makes
@@ -1071,6 +1188,12 @@ func defaultLearnedPath() string { return filepath.Join(stateDir(), "learned.jso
 // arms from. See internal/armed and docs/adr/0008-arm-at-boot.md.
 func defaultArmedPath() string { return filepath.Join(stateDir(), "armed.json") }
 
+// defaultTokenPath is the root-owned hash of the enrolled control token. It sits
+// in the daemon's state dir with the other root-owned records, and deliberately
+// NOT beside the world-readable state.json content: anything that could read it
+// could forge the proof it exists to check. See internal/token.
+func defaultTokenPath() string { return filepath.Join(stateDir(), "control.token") }
+
 // defaultLogPath is the daemon's persistent, size-rotated log file (0644, like
 // state.json — readable history for the GUI and unprivileged operators).
 func defaultLogPath() string { return filepath.Join(stateDir(), "logs", "dezhban.log") }
@@ -1102,7 +1225,7 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println("interfaces; guarding the wrong one would not protect you.")
 	fmt.Println()
 	fmt.Println()
-	fmt.Println("recommended config (autodetect handles interface renumbering across reconnects):")
+	fmt.Println("recommended config (autodetect handles interface renumbering across redials):")
 	fmt.Println(`  "vpn": {`)
 	fmt.Println(`    "enabled": true,`)
 	fmt.Println(`    "autodetect": true,`)
@@ -1143,11 +1266,12 @@ func cmdValidate(args []string) int {
 	fmt.Printf("  poll interval:     %s\n", cfg.PollInterval)
 	fmt.Printf("  vpn tunnels:       %s\n", strings.Join(cfg.VPN.TunnelInterfaces, ", "))
 	fmt.Printf("  vpn endpoints:     %s\n", strings.Join(cfg.VPN.Endpoints, ", "))
-	// Retired keys are not an error — the config is valid and will run — but
-	// `validate` is exactly where someone checks whether their file says what
-	// they think it says, so a key that no longer does anything belongs here.
+	// Inert keys — retired, renamed, or simply unrecognised — are not an error;
+	// the config is valid and will run. But `validate` is exactly where someone
+	// checks whether their file says what they think it says, so a key that does
+	// nothing belongs here more than anywhere.
 	for _, r := range cfg.Retired {
-		fmt.Printf("\n  note: %q no longer has any effect.\n        %s\n", r.Key, r.Reason)
+		fmt.Printf("\n  note: %q has no effect.\n        %s\n", r.Key, r.Reason)
 	}
 	return 0
 }
@@ -1547,10 +1671,10 @@ func cmdStatus(args []string) int {
 			// The Disabled sentinel is negative — print "off", never "-1ns".
 			fmt.Println("switch window:    off")
 		}
-		if cfg.VPN.ReconnectWindow > 0 {
-			fmt.Println("reconnect window:", cfg.VPN.ReconnectWindow)
+		if cfg.VPN.RedialWindow > 0 {
+			fmt.Println("redial window:", cfg.VPN.RedialWindow)
 		} else {
-			fmt.Println("reconnect window: off")
+			fmt.Println("redial window: off")
 		}
 		if cfg.VPN.PauseMax > 0 {
 			fmt.Println("pause max:       ", cfg.VPN.PauseMax)
@@ -1563,7 +1687,7 @@ func cmdStatus(args []string) int {
 				kind := "switch state:    "
 				switch snap.Switch.Trigger {
 				case state.TriggerAuto:
-					kind = "reconnect state: " // auto window opened by a tunnel drop
+					kind = "redial state: " // auto window opened by a tunnel drop
 				case state.TriggerPause:
 					kind = "pause state:     " // operator pause (dezhban pause)
 				}
@@ -1571,6 +1695,13 @@ func cmdStatus(args []string) int {
 			}
 			if snap.ActiveProfile != "" {
 				fmt.Println("active profile:  ", snap.ActiveProfile)
+			}
+			// A posture change under way. Without this, the wait between a VPN
+			// redialing and the guard coming back looks identical to nothing
+			// happening at all.
+			if p := snap.Pending; p != nil {
+				fmt.Printf("in progress:      %s (%d of %d agreeing readings)\n",
+					pendingLabel(p.To), p.Have, p.Need)
 			}
 		}
 	}
@@ -1584,6 +1715,20 @@ func cmdStatus(args []string) int {
 		fmt.Println("blocked:         ", blocked)
 	}
 	return 0
+}
+
+// pendingLabel turns a pending posture into what the daemon is doing about it.
+// The posture strings themselves are stable identifiers, not prose, so they are
+// translated here rather than printed raw.
+func pendingLabel(to string) string {
+	switch to {
+	case "full-block":
+		return "escalating to full block"
+	case "guard":
+		return "restoring the guard"
+	default:
+		return "changing posture to " + to
+	}
 }
 
 // statusJSON prints a machine-readable status: the live posture from the state

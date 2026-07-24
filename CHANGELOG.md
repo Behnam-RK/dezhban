@@ -12,6 +12,179 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed — BREAKING
+
+- **"reconnect" is now "redial" everywhere.** The codebase used both words for the
+  same thing, and the macOS app already said "redial now" inside a window it
+  called a "reconnect window". One word, chosen for being unambiguous about what
+  the VPN client is doing, now runs through the config keys, the Go and Swift
+  identifiers, the CLI output, and the documentation.
+
+  Three config keys are renamed with **no aliases**, so an existing config must
+  be updated by hand:
+
+  | Old | New |
+  |---|---|
+  | `vpn.reconnectWindow` | `vpn.redialWindow` |
+  | `vpn.advanced.reconnectWindowMax` | `vpn.advanced.redialWindowMax` |
+  | `vpn.advanced.reconnectMinUptime` | `vpn.advanced.redialMinUptime` |
+
+  Missing one is loud rather than silent — the old names are recognised as
+  renamed and reported with their replacement by `dezhban validate` and at daemon
+  start (see below) — but the old key genuinely stops taking effect. Nothing else
+  about the behaviour changes: the automatic window, its cap, and its anti-flap
+  gate work exactly as before under the new names.
+
+### Fixed
+
+- **Lowering a window cap now binds the very next window.** A reload adopted the
+  new `vpn.pauseMax` for the "is pausing available at all" check but left the
+  clamp reading the value the daemon started with, so `vpn.pauseMax` reduced from
+  30m to 1m was reported as applied while a 9-minute pause was still granted —
+  a security setting accepted and silently discarded, which is the failure this
+  project treats as the worst one it can have.
+
+- **The config file is now written atomically.** It was written in place, so a
+  save interrupted partway could leave a truncated file. That is not merely a
+  lost setting: this config is what arms the guard at boot, so an unparseable one
+  would leave the host unprotected at the next start. It is now staged and
+  renamed, the same convention the daemon's other on-disk records already use.
+
+- **A failed Touch ID no longer strands you on a password-only prompt.** The app
+  ran `sudo` with stdin on `/dev/null`, so the moment a biometric read missed —
+  a closed lid, a wet finger, a couple of bad reads — PAM's password fallback hit
+  EOF, failed instantly, and the whole attempt dropped to an Authorization
+  Services dialog that cannot offer Touch ID at all. There was no retry, which is
+  why `pam_tid` looked broken when it was configured correctly all along. The app
+  now runs `sudo -A` with a bundled `SUDO_ASKPASS` helper, so a miss becomes the
+  ordinary "enter your password" continuation that macOS's own biometric prompts
+  offer. The helper lives inside the code-signed bundle — sudo executes whatever
+  `SUDO_ASKPASS` names, so it must never be a path a local process can rewrite.
+  Machines without `pam_tid` are unaffected and still use the system dialog.
+
+### Added
+
+- **Recovery after a VPN redial is now fast and visible.** Leaving FULL BLOCK used
+  to wait for the next ordinary poll — up to `pollInterval` × `hysteresis`, ~30s at
+  defaults — with nothing to show a recovery was even under way, so a normal wait
+  was indistinguishable from a stuck daemon. A tunnel coming back up now triggers
+  re-checks every couple of seconds until the outcome is decided, and the state
+  file, `status`, and the app all report progress ("restoring the guard — 1 of 2
+  confirming checks").
+
+  This changes **cadence only**: hysteresis still gates the change, an
+  undeterminable country still holds the posture, and no new relaxation of the
+  guard exists. Two rails keep it that way — it is skipped entirely when checking
+  would require lifting the guard (which would multiply real-IP exposure instead of
+  merely speeding things up), and it is time-bounded, so an exit that stays
+  forbidden falls back to the normal cadence rather than polling the geo providers
+  indefinitely.
+
+- **Settings can now be changed without a password, and the daemon adopts them
+  immediately.** A new `config-write` control-socket op takes a set of config
+  keys, writes them through exactly the validation `dezhban config set` uses, and
+  reloads in the same request — so a client never has to choose between
+  elevating and leaving a saved setting inert. It is the one op that changes
+  state outliving the daemon, so it is gated twice and **both** gates must pass:
+  the client must present the enrolled control token, and `control.allowConfigOps`
+  (new, default `true`) must permit it. Setting that key `false` refuses config
+  writes even from a client holding a valid token.
+
+- **The macOS app can change settings with a Touch ID tap instead of a password.**
+  A new "Use Touch ID for settings changes" toggle in Settings enrolls a control
+  token and keeps it in the login keychain under `.biometryCurrentSet`, so
+  *reading* the token is the biometric prompt — there is no separate "is this
+  allowed?" question for a tampered app to answer for itself. Changing your
+  fingerprints invalidates the stored token by design; re-enrolling from the same
+  toggle restores it, and turning the toggle off removes both the keychain item
+  and the daemon's hash. Macs without Touch ID keep the password path unchanged.
+  A cancelled prompt or a stopped daemon falls back to the password path; a
+  daemon *refusal* is reported and never retried with elevation.
+
+- **`dezhban config set --token-stdin`** does the same thing from a script: the
+  token is read from stdin — never an argument or an environment variable, both
+  of which other local processes can read — and the daemon performs the write.
+
+- **`dezhban token`** manages that enrollment: `token status` (no root — whether
+  the feature is set up is not itself a secret), `sudo dezhban token enroll`
+  (mints a token, records only its hash root-only, prints the token once), and
+  `sudo dezhban token forget` (un-enrolls, so a host whose token was lost falls
+  back to `sudo` rather than becoming impossible to configure). Enrolling again
+  replaces the previous token, which is the revocation path for one that leaked.
+
+- **Unrecognised config keys are now reported instead of ignored.** Go's JSON
+  decoder drops fields it does not know, so a typo — or a key renamed by an
+  upgrade — silently reverted that setting to its default. Someone who wrote
+  `"redialWindow": "0"` to forbid every automatic relaxation would have got the
+  30s default back without a word. Every key the schema does not define is now
+  listed by `dezhban validate` and warned about at daemon start, with renamed
+  keys naming their replacement. It stays a report rather than a hard failure:
+  refusing to start would leave the machine with no kill switch at all, which is
+  worse than running with one setting at its default and saying so.
+
+- **Config changes now apply without restarting the daemon.** The daemon read its
+  configuration exactly once, at startup, and nothing told it to look again — no
+  watcher, no signal, no control op — so `config set` wrote the file and notified
+  nobody, and declining the macOS app's restart prompt left the new settings inert
+  on disk. A new `reload` control op makes the daemon re-read the same file and
+  adopt what it can, and `config set`/`config reset` trigger it automatically.
+
+  The reply names both halves: keys that took effect, and keys still being
+  enforced at their old values because the daemon built something from them
+  before its run loop started (the logger, geo providers, the control socket, the
+  tunnel watcher, arm-at-boot). Those are reported by name rather than applied
+  silently — a setting is never claimed to be in force when it is not. A
+  malformed edit changes nothing and keeps the kill switch enforcing the
+  configuration already in force, and a reload can never lengthen a switch,
+  redial, or pause window that is already open.
+
+- **A dedicated PAUSED icon.** A pause used to draw the amber warning icon it
+  shared with switch and redial windows, which read as "something went wrong"
+  for the one relaxation the user deliberately asked for. It now has its own
+  brand state icon and its own wording on every surface. It is still not the
+  calm guard icon — the guard is relaxed and the real IP is in use either way.
+
+### Changed
+
+- **The macOS app no longer restarts the daemon to apply settings.** Saving now
+  applies the change outright, and the restart prompt appears only when the
+  daemon reports keys it could not adopt live — naming them, so the choice is
+  informed rather than a blanket warning on every edit. Declining says exactly
+  which settings are still on their old values instead of the previous vague
+  "restart later to apply". The pane also re-reads the config file whenever you
+  return to the app, so an edit made in a terminal no longer leaves it showing
+  values the daemon has stopped using; unsaved edits suppress the re-read rather
+  than being discarded.
+- **`gui/assets/` is now `gui/artifacts/`**, refreshed with a new brand set that
+  adds the paused state across every size and variant. Documentation, the app
+  build script, and source comments follow the new path; historical changelog
+  entries keep the old one, because that is where the files were at the time.
+- **The Dock tile shows the brand app icon** when dezhban is not cutting traffic,
+  instead of the "on" state tile. The Dock answers one question — is my traffic
+  being cut right now — so only a real cut earns a distinct tile; everything else
+  should look like the app.
+
+### Fixed
+
+- **The menubar app no longer reads the daemon's state file on the main thread.**
+  The 1-second poll stat'd and decoded `state.json` inline, so any stall in that
+  filesystem call froze the whole UI — clicks included. The read now runs on a
+  background queue and publishes its result back on the main thread, and a tick
+  is skipped while a previous read is still outstanding so slow reads cannot
+  stack up. This is the leading suspect for the reported random beachballs; it
+  is a hazard worth removing either way.
+
+### Added
+
+- **Main-thread stall detection in the menubar app.** A background watchdog pings
+  the main queue twice a second and records any stall past one second, plus how
+  long it lasted, to unified logging under the `sh.dezhban.menu` subsystem
+  (`log show --last 1h --predicate 'subsystem == "sh.dezhban.menu"'`). The
+  beachballs have no cause visible in the source — every subprocess and
+  elevation call is already dispatched off-main — so they have to be caught in
+  the act. Diagnostic only: it observes the main thread and never blocks it, and
+  it touches neither the daemon nor the firewall.
+
 ## [0.7.0] - 2026-07-22
 
 ### Added

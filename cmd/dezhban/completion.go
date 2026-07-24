@@ -40,7 +40,7 @@ func cmdCompletion(args []string) int {
 
 // completionCommands is the subcommand list the scripts offer. Kept next to the
 // scripts so it is obvious to update when a command is added.
-const completionCommands = "run block unblock status validate monitor print-rules doctor panic install uninstall start stop restart detect-vpn switch pause resume vpn setup config completion upgrade version help"
+const completionCommands = "run block unblock status validate monitor print-rules doctor panic install uninstall start stop restart detect-vpn switch pause resume vpn setup config token completion upgrade version help"
 
 const bashCompletion = `# dezhban bash completion
 _dezhban() {
@@ -53,7 +53,8 @@ _dezhban() {
         --mode) COMPREPLY=( $(compgen -W "guard fullblock switch" -- "$cur") ); return ;;
         --config) COMPREPLY=( $(compgen -f -- "$cur") ); return ;;
         completion) COMPREPLY=( $(compgen -W "bash zsh fish" -- "$cur") ); return ;;
-        config) COMPREPLY=( $(compgen -W "path show get set edit" -- "$cur") ); return ;;
+        config) COMPREPLY=( $(compgen -W "path show get set reset edit" -- "$cur") ); return ;;
+        token) COMPREPLY=( $(compgen -W "status enroll forget" -- "$cur") ); return ;;
     esac
     if [ "$COMP_CWORD" -eq 1 ]; then
         COMPREPLY=( $(compgen -W "` + completionCommands + `" -- "$cur") )
@@ -79,7 +80,8 @@ _dezhban() {
         --mode) compadd -- guard fullblock switch; return ;;
         --config) _files; return ;;
         completion) compadd -- bash zsh fish; return ;;
-        config) compadd -- path show get set edit; return ;;
+        config) compadd -- path show get set reset edit; return ;;
+        token) compadd -- status enroll forget; return ;;
     esac
     compadd -- --config --mode --force --guard --dry-run --once --json --discover --simulate-country --verbose --no-sudo --no-daemon
 }
@@ -94,7 +96,8 @@ complete -c dezhban -n '__fish_use_subcommand' -a '` + completionCommands + `'
 complete -c dezhban -l mode -x -a 'guard fullblock switch'
 complete -c dezhban -l config -r
 complete -c dezhban -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
-complete -c dezhban -n '__fish_seen_subcommand_from config' -a 'path show get set edit'
+complete -c dezhban -n '__fish_seen_subcommand_from config' -a 'path show get set reset edit'
+complete -c dezhban -n '__fish_seen_subcommand_from token' -a 'status enroll forget'
 # common flags
 complete -c dezhban -l force
 complete -c dezhban -l guard

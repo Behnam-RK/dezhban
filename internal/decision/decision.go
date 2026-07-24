@@ -15,7 +15,7 @@
 // model, where the firewall was open at rest and an undeterminable country was
 // the only reason to cut. Under the guard the standing rules ARE the
 // fail-closed block for physical leaks, so escalating on an unknown would cut
-// the tunnel's own egress and livelock the very reconnect that could fix it.
+// the tunnel's own egress and livelock the very redial that could fix it.
 // Only a *successful* reading moves the state machine. See docs/adr/0001.
 package decision
 
@@ -82,6 +82,21 @@ func New(blockedCountries []string, hysteresis int) *Decider {
 	}
 }
 
+// Pending reports a flip the state machine is counting toward but has not
+// committed: the verdict at stake, how many consecutive agreeing readings have
+// arrived, and how many are needed. have == 0 means nothing is pending.
+//
+// It exists so the daemon can say "restoring the guard: 1 of 2 good readings"
+// instead of leaving a user watching an unchanged posture with no way to tell a
+// recovery in progress from one that is not happening. Read-only — observing
+// progress must never alter it.
+func (d *Decider) Pending() (v Verdict, have, need int) {
+	if d.streak == 0 {
+		return d.current, 0, d.need
+	}
+	return d.candidate, d.streak, d.need
+}
+
 // raw maps a single successful reading to a verdict, ignoring history. Callers
 // must not pass a failed reading; Evaluate short-circuits those before they
 // reach here.
@@ -103,7 +118,7 @@ func (d *Decider) Evaluate(r monitor.Result) Verdict {
 		// counting toward. A blip during a 2-of-3 streak must not hand the
 		// blocked exit a free reprieve, and it must not escalate either: under
 		// the guard, FULL BLOCK cuts the tunnel's own egress and would livelock
-		// the reconnect that could fix the lookup.
+		// the redial that could fix the lookup.
 		return d.current
 	}
 	v := d.raw(r)

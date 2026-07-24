@@ -57,6 +57,20 @@ const (
 	// OpResume ends an open pause early, re-arming immediately instead of
 	// waiting out the deadline. Gated by allowPauseOps.
 	OpResume Op = "resume"
+	// OpConfigWrite validates and writes config keys, then reloads — the whole
+	// "change a setting" flow with no elevation. Unlike every other op it
+	// changes state that outlives the daemon, so the socket's group gate is not
+	// a strong enough bar for it: it is TOKEN-GATED (internal/token) and
+	// additionally governed by control.allowConfigOps. A client that cannot
+	// prove it holds the enrolled token is refused, whatever its group.
+	OpConfigWrite Op = "config-write"
+	// OpReload makes the daemon re-read its own config file and adopt whatever
+	// it can without restarting. Ungated, and deliberately so: the config file
+	// is root-owned, so this op grants no authority its caller did not already
+	// have — it only asks the daemon to notice a change root already made. The
+	// reply names what was adopted and what still needs a restart, so no caller
+	// can report a setting as applied when it is not.
+	OpReload Op = "reload"
 )
 
 // Version is the wire protocol version. A request carrying a different version is
@@ -69,6 +83,13 @@ type Request struct {
 	Op       Op     `json:"op"`
 	Duration string `json:"duration,omitempty"` // switch-open: window length, e.g. "90s"
 	Profile  string `json:"profile,omitempty"`  // switch-open: attribution
+	// Token authorises the ops the socket's group gate is not a strong enough
+	// bar for — see internal/token. Absent for every other op, and never logged:
+	// it is the secret itself, not a reference to one.
+	Token string `json:"token,omitempty"`
+	// Config carries the keys a config-write op should set, as dotted key to
+	// value, using exactly the vocabulary `dezhban config set` accepts.
+	Config map[string]string `json:"config,omitempty"`
 }
 
 // Response is the daemon's single reply. Mode/Posture reuse the stable strings
@@ -85,6 +106,12 @@ type Response struct {
 	// never like a refusal, which is deliberate and must not be routed around.
 	// Optional on the wire (omitempty), so older peers interop unchanged.
 	Transient bool `json:"transient,omitempty"`
+	// Applied and NeedsRestart answer an OpReload: which changed keys the running
+	// daemon adopted, and which ones it could not. Both are reported because a
+	// reload that silently ignored half a config edit would leave the user
+	// believing a security setting took effect when it had not.
+	Applied      []string `json:"applied,omitempty"`
+	NeedsRestart []string `json:"needsRestart,omitempty"`
 }
 
 // errResponse is the shorthand for a refusal.

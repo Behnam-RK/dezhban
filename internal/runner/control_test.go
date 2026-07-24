@@ -30,11 +30,20 @@ func controlSocket(t *testing.T) string {
 // startControlled runs the loop with a live control socket and returns the socket
 // path. The loop is cancelled and drained on cleanup.
 func startControlled(t *testing.T, o Options) string {
+	return startControlledWith(t, o, nil)
+}
+
+// startControlledWith is startControlled with a hook to configure the server
+// before it starts — used by the token-gated ops, which need a verifier wired.
+func startControlledWith(t *testing.T, o Options, tune func(*control.Server)) string {
 	t.Helper()
 	path := controlSocket(t)
 	srv, err := control.New(path, "", discardLog())
 	if err != nil {
 		t.Fatalf("control.New: %v", err)
+	}
+	if tune != nil {
+		tune(srv)
 	}
 	o.Control = srv
 	o.Log = discardLog()

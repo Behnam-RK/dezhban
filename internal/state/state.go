@@ -81,6 +81,27 @@ type Snapshot struct {
 	ActiveProfile string `json:"activeProfile,omitempty"`
 	// Switch describes an open switch window, present only while one is active.
 	Switch *SwitchState `json:"switch,omitempty"`
+	// Pending describes a posture change the daemon is counting toward but has
+	// not committed, present only while a hysteresis streak is running.
+	Pending *PendingFlip `json:"pending,omitempty"`
+}
+
+// PendingFlip is a posture change under way: hysteresis requires Need
+// consecutive agreeing exit-country readings and Have of them have arrived.
+//
+// It exists because the posture alone cannot distinguish "recovering, two more
+// readings to go" from "stuck, nothing is happening" — and after a VPN redials
+// out of FULL BLOCK those look identical for up to poll-interval × hysteresis.
+// Reporting the count is what makes the wait legible instead of alarming.
+//
+// Informational only. Publishing progress must never influence it: the streak
+// belongs to decision.Decider, and only a successful reading may move it.
+type PendingFlip struct {
+	// To is the posture being counted toward, using the same stable strings as
+	// Snapshot.Posture ("guard" or "full-block").
+	To   string `json:"to"`
+	Have int    `json:"have"`
+	Need int    `json:"need"`
 }
 
 // SwitchState describes an open switch window for observers (status, menubar).
@@ -89,7 +110,7 @@ type SwitchState struct {
 	Until   time.Time `json:"until"`
 	Profile string    `json:"profile,omitempty"`
 	// Trigger says what opened the window: TriggerManual (operator command) or
-	// TriggerAuto (automatic reconnect window on a tunnel drop). Additive field —
+	// TriggerAuto (automatic redial window on a tunnel drop). Additive field —
 	// absent in snapshots from older daemons, so observers must treat "" as
 	// TriggerManual.
 	Trigger string `json:"trigger,omitempty"`

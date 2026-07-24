@@ -38,10 +38,18 @@ struct OverviewView: View {
                 if let sw = s.switch, sw.open {
                     // The window relaxes egress — the real IP may be exposed. Keep it
                     // loud, with the same rounded-down countdown as the menubar.
-                    banner(sw.isAutoReconnect
-                           ? "VPN dropped — reconnect window open, redial now (closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now))))"
+                    banner(sw.isAutoRedial
+                           ? "VPN dropped — redial window open, redial now (closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now))))"
                            : "Switch window OPEN — closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now)))",
                            color: .orange)
+                }
+
+                // A posture change under way. Without it, the wait between the VPN
+                // redialing and protection coming back is indistinguishable from
+                // nothing happening — which is what made a normal recovery look
+                // like a stuck app. Blue, not orange: this is progress, not a fault.
+                if let progress = s.pendingSummary {
+                    banner(progress, color: .blue)
                 }
 
                 detailsGrid(s)
@@ -71,16 +79,19 @@ struct OverviewView: View {
             return "Guard off — standby. Nothing is being blocked. Connect your VPN and dezhban arms itself."
         case "guard":
             if PostureUI.guardHoldsDownedTunnel(s) {
-                return "Guard active, but no tunnel is up — all egress is cut until your VPN reconnects."
+                return "Guard active, but no tunnel is up — all egress is cut until your VPN redials."
             }
             return "Guard active. Traffic leaves only through your VPN tunnel."
         case "full-block":
             let cc = s.countryCode.map { " (\($0))" } ?? ""
             return "Full block. Your VPN is exiting through a country you've blocked\(cc). Everything is cut until it moves."
         case "switch-window":
-            let auto = s.switch?.isAutoReconnect ?? false
+            if s.switch?.isPause == true {
+                return "Paused at your request. You are using your real IP, and the guard re-arms itself when the pause ends."
+            }
+            let auto = s.switch?.isAutoRedial ?? false
             return auto
-                ? "Your VPN dropped. The guard is relaxed while it reconnects — your real IP is exposed until it closes."
+                ? "Your VPN dropped. The guard is relaxed while it redials — your real IP is exposed until it closes."
                 : "Guard relaxed so a new VPN can connect — your real IP is exposed until it closes."
         case "stopped":
             return "dezhban is not running. Nothing is being blocked."
@@ -175,7 +186,7 @@ struct OverviewView: View {
                 .disabled(!(blocked || guardHolds))
                 .help(routineHint("Releases a manual block and resumes monitoring."))
             if let sw = s.switch, sw.open {
-                Button("\(sw.isAutoReconnect ? "Cancel reconnect window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
+                Button("\(sw.isAutoRedial ? "Cancel redial window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
                     AppActions.routine(["switch", "--cancel"], "cancel the switch window")
                 }
                 .help(routineHint("Closes the window and restores the guard."))

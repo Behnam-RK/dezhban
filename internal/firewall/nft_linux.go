@@ -111,7 +111,7 @@ func (b *nftBackend) Cleanup() error {
 //   - ModeFullBlock, VPN (tunnel ifaces present): drop the tunnel-iface accept
 //     so no user traffic leaks to a forbidden exit, but KEEP the endpoint
 //     accepts open so the encrypted handshake reaches the server and the tunnel
-//     can reconnect. Identical to ModeGuard minus the tunnel-iface accept. The
+//     can redial. Identical to ModeGuard minus the tunnel-iface accept. The
 //     dst-IP allowlist is still meaningless under a tunnel, so it is omitted;
 //     the daemon opens a brief guard window to probe for recovery (Phase 4).
 //
@@ -170,7 +170,7 @@ func renderNftRuleset(p Policy) string {
 			// VPN full block (including the zero-tunnel standing posture): drop the
 			// tunnel-iface accept so no user traffic can egress to a forbidden exit,
 			// but KEEP the endpoint accepts so the encrypted handshake still reaches
-			// the server and the tunnel can reconnect. A cut endpoint would livelock
+			// the server and the tunnel can redial. A cut endpoint would livelock
 			// recovery (the VPN could never re-establish to be re-evaluated).
 			emitDaddrAccepts(rule, p.VPNEndpoints, "")
 			emitTunnelProviders(rule, p)
@@ -206,7 +206,7 @@ func emitWindowPortAccepts(rule func(string), p Policy) {
 // emitAllowPhysicalDNS renders the opt-in plain-DNS pass (vpn.allowPhysicalDNS)
 // so a VPN client can re-resolve its server hostname while the tunnel is down.
 // Deliberately unscoped (`to any`): resolution must work regardless of which
-// resolver the system uses on reconnect.
+// resolver the system uses on redial.
 func emitAllowPhysicalDNS(rule func(string), p Policy) {
 	if !p.AllowPhysicalDNS {
 		return

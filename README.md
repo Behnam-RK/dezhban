@@ -2,11 +2,11 @@
 
 > Persian *dežbān* (دژبان) — "gatekeeper / garrison guard."
 
-![dezhban — system-wide network kill switch](gui/assets/png/banner-1280x640.png)
+![dezhban — system-wide network kill switch](gui/artifacts/png/banner-1280x640.png)
 
 **dezhban makes sure your traffic can only leave this machine through your VPN.**
 If the VPN drops, your connection is cut instantly instead of silently falling
-back to your real IP. If the VPN reconnects somewhere you've told it to refuse,
+back to your real IP. If the VPN redials somewhere you've told it to refuse,
 everything stops. On macOS it's a menubar app you click; everywhere else, and
 for anyone who prefers it, it's a CLI and background service.
 
@@ -102,7 +102,7 @@ One enforcement model — the guard. What changes is the posture:
 ```
   STANDBY  --arm-->  GUARD  <==>  FULL BLOCK   (blocked / allowed country)
                         |
-                        +--switch or reconnect-->  SWITCH WINDOW
+                        +--switch or redial-->  SWITCH WINDOW
                                                     (bounded, self-closing)
 ```
 
@@ -110,13 +110,13 @@ One enforcement model — the guard. What changes is the posture:
   state before any tunnel has been observed. Arms itself when a VPN connects.
 - **GUARD** — the healthy state. Only the tunnel may carry traffic off the
   machine, so a drop is cut instantly (zero leak window with
-  `vpn.reconnectWindow: "0"`; by default a bounded reconnect window follows the
+  `vpn.redialWindow: "0"`; by default a bounded redial window follows the
   cut so the VPN can redial).
 - **FULL BLOCK** — the VPN's exit landed in a blocked country. All user traffic
   is cut, but the endpoint handshake stays open so the tunnel can recover.
 - **SWITCH WINDOW** — the one sanctioned relaxation, bounded and self-closing,
   from exactly two triggers: an explicit operator command, or the automatic
-  reconnect window.
+  redial window.
 
 Full state machine and exact rulesets: [docs/concepts/modes.md](docs/concepts/modes.md).
 

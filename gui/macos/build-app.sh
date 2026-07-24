@@ -58,12 +58,15 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/DezhbanMenu"
 cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
-# Brand assets (gui/assets/png): full-color menubar + Dock state
-# icons. Optional — a checkout without gui/assets/ still builds, and AppDelegate
+# SUDO_ASKPASS helper. Lives in the (code-signed, read-only) bundle so sudo is
+# never pointed at a path a local process could swap out from under it.
+install -m 0755 "$HERE/askpass.sh" "$APP/Contents/Resources/askpass.sh"
+# Brand artifacts (gui/artifacts/png): full-color menubar + Dock state
+# icons. Optional — a checkout without gui/artifacts/ still builds, and AppDelegate
 # falls back to SF Symbols / the static app icon when the PNGs are absent.
-ASSETS="$REPO_ROOT/gui/assets/png"
+ASSETS="$REPO_ROOT/gui/artifacts/png"
 if [[ -d "$ASSETS" ]]; then
-	for state in on off blocked warning; do
+	for state in on off blocked warning paused; do
 		# Menubar: the asset pack ships dedicated colored menubar glyphs
 		# (88px tall = 22pt @4x; AppDelegate scales to a 22pt pointing height,
 		# preserving aspect). Older packs without them fall back to downscaling
@@ -75,11 +78,18 @@ if [[ -d "$ASSETS" ]]; then
 			sips -Z 44 "$ASSETS/icon-$state-512.png" \
 				--out "$APP/Contents/Resources/menubar-state-$state.png" >/dev/null
 		fi
-		# Dock tile: the 512px state tiles. Only "on"/"blocked" — PostureUI.dockState
-		# coarsens every state down to one of those two, so "off"/"warning" tiles
-		# would never be read; skip staging PNGs the Dock icon can't request.
-		if [[ "$state" == "on" || "$state" == "blocked" ]] && [[ -f "$ASSETS/icon-$state-512.png" ]]; then
-			cp "$ASSETS/icon-$state-512.png" "$APP/Contents/Resources/dock-state-$state.png"
+		# Dock tile: PostureUI.dockState coarsens every state down to "blocked" or
+		# "on", so only those two are ever requested. "blocked" is the state tile,
+		# because a cut is the one thing the Dock has to shout about. "on" is the
+		# brand app icon rather than a state tile: the Dock answers "is dezhban
+		# cutting my traffic right now?", and everything that is not a cut should
+		# look like the app, not like a status light.
+		if [[ "$state" == "blocked" && -f "$ASSETS/icon-blocked-512.png" ]]; then
+			cp "$ASSETS/icon-blocked-512.png" "$APP/Contents/Resources/dock-state-blocked.png"
+		fi
+		if [[ "$state" == "on" && -f "$ASSETS/app-icon-1024.png" ]]; then
+			sips -Z 512 "$ASSETS/app-icon-1024.png" \
+				--out "$APP/Contents/Resources/dock-state-on.png" >/dev/null
 		fi
 	done
 fi

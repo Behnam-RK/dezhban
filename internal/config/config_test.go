@@ -401,7 +401,7 @@ func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
 		t.Errorf("default switchWindow = %s, want 5s", cfg.VPN.SwitchWindow)
 	}
 	a := cfg.VPN.Advanced
-	if a.SwitchWindowMax != 3*time.Minute || a.ReconnectWindowMax != 10*time.Minute ||
+	if a.SwitchWindowMax != 3*time.Minute || a.RedialWindowMax != 10*time.Minute ||
 		a.CommandFreshness != 30*time.Second ||
 		a.LearnedMaxPerProfile != 16 || a.PromoteAfterRefreshes != 3 ||
 		a.EndpointWarnThreshold != 256 || a.LearnedEndpointTTL != 720*time.Hour ||
@@ -428,8 +428,8 @@ func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
 	if cfg2.VPN.Advanced.SwitchWindowMax != 3*time.Minute {
 		t.Errorf("switchWindowMax = %s, want default 3m", cfg2.VPN.Advanced.SwitchWindowMax)
 	}
-	if cfg2.VPN.Advanced.ReconnectWindowMax != 10*time.Minute {
-		t.Errorf("reconnectWindowMax = %s, want default 10m", cfg2.VPN.Advanced.ReconnectWindowMax)
+	if cfg2.VPN.Advanced.RedialWindowMax != 10*time.Minute {
+		t.Errorf("redialWindowMax = %s, want default 10m", cfg2.VPN.Advanced.RedialWindowMax)
 	}
 }
 
@@ -494,9 +494,9 @@ func TestNormalizeWindowProtocols(t *testing.T) {
 	}
 }
 
-// --- automatic reconnect window config ---
+// --- automatic redial window config ---
 
-func TestReconnectWindowDefaultsAndDisable(t *testing.T) {
+func TestRedialWindowDefaultsAndDisable(t *testing.T) {
 	dir := t.TempDir()
 	write := func(name, body string) string {
 		p := filepath.Join(dir, name)
@@ -511,20 +511,20 @@ func TestReconnectWindowDefaultsAndDisable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.VPN.ReconnectWindow != defaultReconnectWindow {
-		t.Errorf("ReconnectWindow = %s, want default %s", cfg.VPN.ReconnectWindow, defaultReconnectWindow)
+	if cfg.VPN.RedialWindow != defaultRedialWindow {
+		t.Errorf("RedialWindow = %s, want default %s", cfg.VPN.RedialWindow, defaultRedialWindow)
 	}
-	if cfg.VPN.Advanced.ReconnectMinUptime != defaultReconnectMinUptime {
-		t.Errorf("ReconnectMinUptime = %s, want default %s", cfg.VPN.Advanced.ReconnectMinUptime, defaultReconnectMinUptime)
+	if cfg.VPN.Advanced.RedialMinUptime != defaultRedialMinUptime {
+		t.Errorf("RedialMinUptime = %s, want default %s", cfg.VPN.Advanced.RedialMinUptime, defaultRedialMinUptime)
 	}
 
 	// Explicit "0" → disabled (negative sentinel), and it must survive Normalize.
-	cfg, err = Load(write("off.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "reconnectWindow": "0s"}}`))
+	cfg, err = Load(write("off.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "redialWindow": "0s"}}`))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if cfg.VPN.ReconnectWindow >= 0 {
-		t.Errorf("ReconnectWindow = %s after explicit \"0s\", want the Disabled sentinel (<0)", cfg.VPN.ReconnectWindow)
+	if cfg.VPN.RedialWindow >= 0 {
+		t.Errorf("RedialWindow = %s after explicit \"0s\", want the Disabled sentinel (<0)", cfg.VPN.RedialWindow)
 	}
 
 	// The disabled state must round-trip through Marshal/Load.
@@ -532,23 +532,23 @@ func TestReconnectWindowDefaultsAndDisable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Marshal: %v", err)
 	}
-	if !strings.Contains(string(data), `"reconnectWindow": "0s"`) {
-		t.Errorf("Marshal did not emit reconnectWindow \"0s\":\n%s", data)
+	if !strings.Contains(string(data), `"redialWindow": "0s"`) {
+		t.Errorf("Marshal did not emit redialWindow \"0s\":\n%s", data)
 	}
 	cfg2, err := Load(write("off-roundtrip.json", string(data)))
 	if err != nil {
 		t.Fatalf("Load(round-trip): %v", err)
 	}
-	if cfg2.VPN.ReconnectWindow >= 0 {
-		t.Errorf("disabled reconnectWindow did not survive a save/load round-trip: %s", cfg2.VPN.ReconnectWindow)
+	if cfg2.VPN.RedialWindow >= 0 {
+		t.Errorf("disabled redialWindow did not survive a save/load round-trip: %s", cfg2.VPN.RedialWindow)
 	}
 
-	// No floor any more: "3s" now validates. Above reconnectWindowMax (10m
+	// No floor any more: "3s" now validates. Above redialWindowMax (10m
 	// default, separate from switchWindowMax) must still fail.
 	for _, bad := range []string{`"11m"`} {
-		_, err := Load(write("bad.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "reconnectWindow": `+bad+`}}`))
-		if err == nil || !strings.Contains(err.Error(), "reconnectWindow") {
-			t.Errorf("reconnectWindow %s: err = %v, want out-of-range error", bad, err)
+		_, err := Load(write("bad.json", `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "redialWindow": `+bad+`}}`))
+		if err == nil || !strings.Contains(err.Error(), "redialWindow") {
+			t.Errorf("redialWindow %s: err = %v, want out-of-range error", bad, err)
 		}
 	}
 }
@@ -583,7 +583,7 @@ func TestSavePreservesEndpointGraceAndAutoArm(t *testing.T) {
 
 // vpn.pauseMax defaults to 30m when absent, and "0" must survive as the
 // Disabled sentinel through Normalize and a save/load round-trip — the same
-// class of bug CLAUDE.md calls out for switchWindow/reconnectWindow: a "0"
+// class of bug CLAUDE.md calls out for switchWindow/redialWindow: a "0"
 // silently coerced back to a default is a security setting accepted, discarded,
 // and never reported.
 func TestPauseMaxDefaultAndDisableSentinel(t *testing.T) {
@@ -691,7 +691,7 @@ func TestEndpointGraceDefaultVisible(t *testing.T) {
 // Both windows must be independently disableable with "0". switchWindow could
 // not be disabled at all before the single-mode merge: Normalize coerced any
 // value <= 0 back to the default, so an operator asking for a strictly
-// zero-leak posture was silently overridden. reconnectWindow already had the
+// zero-leak posture was silently overridden. redialWindow already had the
 // sentinel; this asserts the pair now behaves the same and that disabling one
 // never disables the other.
 func TestWindowDisableMatrix(t *testing.T) {
@@ -702,8 +702,8 @@ func TestWindowDisableMatrix(t *testing.T) {
 	}{
 		{"both default", `{"vpn":{"endpoints":["1.2.3.4"]}}`, false, false},
 		{"switch off only", `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"0"}}`, true, false},
-		{"reconnect off only", `{"vpn":{"endpoints":["1.2.3.4"],"reconnectWindow":"0"}}`, false, true},
-		{"both off", `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"0","reconnectWindow":"0"}}`, true, true},
+		{"redial off only", `{"vpn":{"endpoints":["1.2.3.4"],"redialWindow":"0"}}`, false, true},
+		{"both off", `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"0","redialWindow":"0"}}`, true, true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -720,31 +720,31 @@ func TestWindowDisableMatrix(t *testing.T) {
 			if off := cfg.VPN.SwitchWindow <= 0; off != c.wantSwitchOff {
 				t.Errorf("switchWindow disabled = %v, want %v (got %s)", off, c.wantSwitchOff, cfg.VPN.SwitchWindow)
 			}
-			if off := cfg.VPN.ReconnectWindow <= 0; off != c.wantRecOff {
-				t.Errorf("reconnectWindow disabled = %v, want %v (got %s)", off, c.wantRecOff, cfg.VPN.ReconnectWindow)
+			if off := cfg.VPN.RedialWindow <= 0; off != c.wantRecOff {
+				t.Errorf("redialWindow disabled = %v, want %v (got %s)", off, c.wantRecOff, cfg.VPN.RedialWindow)
 			}
 		})
 	}
 }
 
-// No floor any more (2026-07-22 defaults review): switchWindow/reconnectWindow
+// No floor any more (2026-07-22 defaults review): switchWindow/redialWindow
 // values well under the old 10s/5s floors must validate, right up to their
 // (now independent) caps.
 func TestWindowNoFloor(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "cfg.json")
-	body := `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"3s","reconnectWindow":"1s"}}`
+	body := `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"3s","redialWindow":"1s"}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := Load(path)
 	if err != nil {
-		t.Fatalf("Load: %v, want a sub-10s switchWindow and sub-5s reconnectWindow to validate", err)
+		t.Fatalf("Load: %v, want a sub-10s switchWindow and sub-5s redialWindow to validate", err)
 	}
 	if cfg.VPN.SwitchWindow != 3*time.Second {
 		t.Errorf("SwitchWindow = %s, want 3s", cfg.VPN.SwitchWindow)
 	}
-	if cfg.VPN.ReconnectWindow != 1*time.Second {
-		t.Errorf("ReconnectWindow = %s, want 1s", cfg.VPN.ReconnectWindow)
+	if cfg.VPN.RedialWindow != 1*time.Second {
+		t.Errorf("RedialWindow = %s, want 1s", cfg.VPN.RedialWindow)
 	}
 }
 

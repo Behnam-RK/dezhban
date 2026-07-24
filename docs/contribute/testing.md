@@ -28,7 +28,7 @@ GOOS=linux go build ./... && GOOS=windows go build ./...
 - [ ] **Block cuts egress.** `sudo dezhban block` → general egress dies
       (`curl https://example.com` fails) but loopback works, DNS resolves (with
       `vpn.allowPhysicalDNS` on, the default), the VPN endpoint stays reachable
-      so the tunnel can reconnect, and LAN devices still answer (with
+      so the tunnel can redial, and LAN devices still answer (with
       `vpn.allowLocalNetwork` on, the default). This is FULL BLOCK — it carries
       **no** destination allowlist; a VPN posture opens the tunnel endpoint.
 - [ ] **`block --force` keeps the geo providers reachable.** `sudo dezhban block
@@ -163,7 +163,7 @@ Only a live host can prove these — CI cannot reach a printer.
       provider host (e.g. via `/etc/hosts`) while running in GUARD → the posture
       **stays** `guard` however many error-ticks pass, and the log says the exit
       country is unknown. It must never reach `full-block` on errors alone:
-      that would cut the tunnel's own egress and livelock the reconnect.
+      that would cut the tunnel's own egress and livelock the redial.
 - [ ] **An unknown country does not lift a block either.** Repeat while in
       `full-block` → it stays blocked.
 - [ ] **An error mid-streak does not cancel a pending flip.** With `hysteresis: 3`,
@@ -191,7 +191,7 @@ The guard is where a misconfiguration locks the host out. Run
       (`--simulate-country IR`).
 - [ ] **An undeterminable country HOLDS the current posture** rather than
       escalating — escalating on an unknown would cut the tunnel's own egress and
-      livelock the reconnect.
+      livelock the redial.
 - [ ] **Unblock restores everything.**
 
 ### macOS worked example (pf)
@@ -215,7 +215,7 @@ curl -m5 https://example.com                # expect: succeeds (rides the tunnel
 
 # Tunnel drop cuts egress, no fall-through to the physical interface:
 sudo ifconfig utunN down
-curl -m5 https://example.com                # expect: hangs/fails — reconnect the VPN to restore
+curl -m5 https://example.com                # expect: hangs/fails — redial the VPN to restore
 
 # Forbidden country cuts the tunnel too (FULL BLOCK) — run in the foreground to force it:
 sudo dezhban run --config <config> --simulate-country IR &
@@ -239,38 +239,38 @@ sudo dezhban unblock                         # expect: connectivity back, anchor
       `learned.json`, and closes the window early on a verified exit. `--cancel`
       and expiry both revert to the prior fail-closed posture.
 - [ ] **Promotion.** `dezhban vpn promote` makes a learned endpoint permanent, so
-      reconnecting to that VPN needs no window at all.
+      redialing to that VPN needs no window at all.
 - [ ] **Import.** `dezhban vpn import` extracts the expected hosts from WireGuard,
       OpenVPN, and V2Ray configs — stripping ports, dropping private/loopback
       addresses, and rejecting garbage.
 - [ ] **Dynamic tunnels.** A newly-appeared tunnel is guarded within one watcher
       tick, with no restart. Zero tunnels up = endpoints-open standing posture,
       with geo suppressed.
-- [ ] **Automatic reconnect window.** With a rotating-server VPN (e.g.
+- [ ] **Automatic redial window.** With a rotating-server VPN (e.g.
       RocketTunnel) guarded and healthy: disconnect, then hit the client's
-      connect button within `vpn.reconnectWindow` (default 30s) — the VPN
-      reconnects to a **fresh, never-seen server** with no operator action;
-      `status` shows `reconnect state: OPEN` (`status --json`:
+      connect button within `vpn.redialWindow` (default 30s) — the VPN
+      redials to a **fresh, never-seen server** with no operator action;
+      `status` shows `redial state: OPEN` (`status --json`:
       `switch.trigger: "auto"`) while it lasts, and the menubar app posts the
-      "VPN dropped — reconnect window open" notification.
+      "VPN dropped — redial window open" notification.
 - [ ] **Auto-window expiry fails closed.** Disconnect the VPN and let the
-      window lapse with no reconnect: egress is cut, STAYS cut (no second
+      window lapse with no redial: egress is cut, STAYS cut (no second
       window without a tunnel-up first), and a later client connect to a
       *known/learned* endpoint still succeeds under the standing posture.
 - [ ] **No auto window from FULL BLOCK.** `--simulate-country IR` → FULL BLOCK,
       then drop the tunnel: no window opens; recovery still requires the probe
       confirming an allowed exit (or a manual `switch`).
-- [ ] **Strict opt-out.** With `vpn.reconnectWindow: "0"`, a drop opens nothing
+- [ ] **Strict opt-out.** With `vpn.redialWindow: "0"`, a drop opens nothing
       and behavior matches the pre-0.3 zero-relaxation guard.
 
 ### The two windows disable independently
 
 Run all four permutations; each setting must disable **only** its own trigger.
 
-- [ ] `switchWindow: "0"`, `reconnectWindow` default → `dezhban switch` refuses
+- [ ] `switchWindow: "0"`, `redialWindow` default → `dezhban switch` refuses
       with a message naming `vpn.switchWindow`, but a tunnel drop **still** opens
-      the automatic reconnect window.
-- [ ] `switchWindow` default, `reconnectWindow: "0"` → a drop opens nothing, but
+      the automatic redial window.
+- [ ] `switchWindow` default, `redialWindow: "0"` → a drop opens nothing, but
       `dezhban switch` **still** works.
 - [ ] **Both `"0"` — the strict zero-leak posture.** A drop is cut instantly with
       no window at all, and `dezhban switch` refuses. Nothing can relax the guard.
@@ -281,8 +281,78 @@ Run all four permutations; each setting must disable **only** its own trigger.
 
 **Full live macOS pass:** `setup` → connect VPN A (guarded) → disconnect →
 `dezhban switch` → connect self-hosted VPN B → the window learns the endpoint and
-closes → `vpn promote` → reconnect to B with **no** window → `--simulate-country
+closes → `vpn promote` → redial to B with **no** window → `--simulate-country
 IR` still escalates to FULL BLOCK → `sudo dezhban panic` restores.
+
+## Live reload
+
+Against a **running** daemon. The bug this replaced was silent: the file changed
+and the daemon kept enforcing the old value, so every check here is about the
+daemon's *behaviour* afterwards, never about what the file says.
+
+- [ ] **A live key takes effect with no restart.** `dezhban config set
+      pollInterval 5s` → the output says `Saved and applied: pollInterval`, and
+      the daemon's log shows geo polls at the new cadence within seconds.
+- [ ] **A restart-required key says so instead of lying.** `dezhban config set
+      logLevel debug` → `Restart dezhban to apply: logLevel`, and the log level
+      is genuinely unchanged until `dezhban restart`.
+- [ ] **A malformed edit does not disturb enforcement.** Hand-edit the config to
+      invalid JSON, then trigger a reload → the reload is refused with a parse
+      error and the guard keeps enforcing the last good configuration.
+- [ ] **A lowered cap binds the very next window.** With a pause open-able, set
+      `vpn.pauseMax` to `1m`, then `dezhban pause 9m` → the pause ends
+      after 1m. (A reload that reported the cap applied while still clamping to
+      the old, larger value was a real bug.)
+- [ ] **Disabling a trigger live actually disables it.** `dezhban config set
+      vpn.switchWindow 0` → `dezhban switch` refuses immediately, without a
+      restart, and the *other* two triggers still work.
+- [ ] **No daemon running.** The write still succeeds and says so; the values are
+      picked up at the next start.
+
+## Recovery after a redial
+
+Privileged, on a real host with a real VPN. The point of these checks is the
+*wait*: what the user sees between redialing and protection coming back.
+
+- [ ] **Progress is visible.** Force FULL BLOCK (`--simulate-country IR`, or a
+      real forbidden exit), then redial onto an allowed exit → `dezhban status`
+      shows "in progress: restoring the guard (1 of 2 agreeing readings)" and the
+      app's Overview shows the same count, before the posture changes.
+- [ ] **It is fast.** The guard comes back within seconds of the tunnel coming
+      up, not after a full `pollInterval` × `hysteresis`.
+- [ ] **Hysteresis still gates it.** With `hysteresis: 3`, a single allowed
+      reading does NOT restore the guard — it still takes three.
+- [ ] **No acceleration when probing would leak.** Break provider resolution (an
+      unreachable `providers` URL), force FULL BLOCK, then bring the tunnel up →
+      the daemon logs that it is not accelerating, and the probe cadence stays at
+      `pollInterval`. Accelerating here would multiply real-IP exposure.
+- [ ] **A forbidden exit that persists backs off.** Stay on a blocked exit after a
+      tunnel-up edge → probing returns to the normal cadence within ~90s instead
+      of hammering the geo providers.
+- [ ] **Nothing is claimed in standby or during a window.** Neither reports a
+      pending change: the geo state machine is not driving the posture there.
+
+## The control token
+
+Privileged for enroll/forget, macOS-relevant but not macOS-only.
+
+- [ ] **Not enrolled is a refusal, not a bypass.** With no token enrolled, a
+      `config-write` over the socket is refused. Confirm `dezhban token status`
+      reports "not enrolled".
+- [ ] **Enroll, then write without a password.** `sudo dezhban token enroll` →
+      a token on stdout; a client presenting it can change a setting over the
+      socket with no elevation, and the daemon adopts it in the same request.
+- [ ] **A wrong or absent token is refused** even from an account in the socket's
+      admin group — group membership alone must not authorise a config write.
+- [ ] **The hash file is root-only.** `ls -l /var/db/dezhban/control.token` →
+      mode `0600`, owned by root. Anything that can read it can forge the proof.
+- [ ] **The policy switch overrides a valid token.** Set
+      `control.allowConfigOps: false` → a client holding the correct token is
+      still refused, and the message names the setting.
+- [ ] **Re-enrolling revokes.** Enroll a second time → the first token no longer
+      works. This is the revocation path for a leaked token.
+- [ ] **`token forget` recovers a stranded host.** After forgetting, config
+      changes fall back to `sudo` rather than being impossible.
 
 ## Service lifecycle
 
@@ -298,8 +368,8 @@ Per OS, privileged:
 - [ ] **Uninstall.** `dezhban uninstall` → fully removed.
 - [ ] **Crash recovery.** Kill the service process while blocked →
       restart-on-failure brings it back and it re-enforces.
-- [ ] **`restart` applies a config change** (there is no live reload), and `start`
-      and `stop` are idempotent.
+- [ ] **`restart` applies the restart-required keys** (most keys apply live — see
+      the section below), and `start` and `stop` are idempotent.
 
 ## Upgrade
 
@@ -375,7 +445,7 @@ task gui:build && open dist/Dezhban.app
       within a few seconds ("AUTO-ARMED" in the log) and a "Guard armed"
       notification. Disconnect → guard HOLDS (red blocked icon, egress cut).
       **Unblock** (menubar or Overview) → back to `standby`, egress open.
-      Reconnect → arms again.
+      Redial → arms again.
 - [ ] **Essential notifications.** With notifications on (Settings pane), the
       armed/blocked/warning/standby/stopped transitions each notify once; no
       notification at app launch or on routine country/endpoint updates.
@@ -398,6 +468,34 @@ task gui:build && open dist/Dezhban.app
 - [ ] **Failures are visible, not silent.** Move the CLI binary aside (or invalidate
       the config), then trigger Start/Stop → the alert shows real stderr.
 
+### Elevation & Touch ID
+
+These need a Mac with Touch ID and `pam_tid` enabled in `/etc/pam.d/sudo_local`.
+CI cannot run any of them — a biometric prompt has no headless form — and the
+failure they guard against is precisely the one that made every Touch ID user
+end up typing a password.
+
+- [ ] **A Touch ID miss offers a password, not a dead end.** Trigger a privileged
+      action (Start/Stop), then deliberately fail the biometric read three times
+      (a non-enrolled finger works). Expect the bundled askpass dialog asking for
+      the administrator password, and the action completing after a correct one.
+      **Before the `SUDO_ASKPASS` fix, the first miss dropped straight to a
+      password-only Authorization Services dialog.**
+- [ ] **Cancelling means cancelled.** Dismiss the Touch ID prompt, then dismiss
+      the password dialog. The action must report failure and change nothing — not
+      silently retry, and not leave a half-applied state.
+- [ ] **Clamshell / no sensor.** With the lid closed on an external display, a
+      privileged action still reaches a usable password prompt.
+- [ ] **The timestamp cache still works.** Two privileged actions in quick
+      succession prompt once, not twice.
+- [ ] **No `pam_tid`, no regression.** Comment out `pam_tid` in
+      `/etc/pam.d/sudo_local` → privileged actions fall back to the system
+      Authorization Services dialog exactly as before, not to the askpass dialog.
+- [ ] **The askpass helper is where it should be.** `ls -l
+      /Applications/Dezhban.app/Contents/Resources/askpass.sh` is present, mode
+      `0755`, and inside the bundle — never a user-writable path, since sudo
+      executes whatever `SUDO_ASKPASS` names.
+
 ### Overview degraded states
 
 - [ ] CLI binary moved aside → Overview explains "dezhban CLI not found" (and the
@@ -417,6 +515,29 @@ task gui:build && open dist/Dezhban.app
 - [ ] Protection fields seed from `dezhban config show` values; Apply raises the
       restart-warning choice; "Save only" writes without restarting.
 - [ ] **Open Config File…** opens the resolved config path.
+
+#### Use Touch ID for settings changes
+
+- [ ] **Opening the pane never prompts.** The toggle shows the right state
+      without a biometric prompt — enrollment is checked without reading the
+      token, and reading it is the only thing that should ever prompt.
+- [ ] **Turning it on** asks for a password once, then reports success. `dezhban
+      token status` in a terminal agrees that a token is enrolled.
+- [ ] **Applying a change then costs a Touch ID tap, not a password**, and the
+      change is in force when the pane says "Saved and applied".
+- [ ] **Cancelling the Touch ID prompt falls back to the password path** rather
+      than failing the save — a cancelled biometric is not a refusal.
+- [ ] **A daemon refusal is not escalated.** Set `control.allowConfigOps: false`
+      and restart; a save reports the refusal and must NOT then show an admin
+      password prompt that would perform it anyway.
+- [ ] **Turning it off removes both copies.** The toggle goes off, `dezhban token
+      status` reports "not enrolled", and saves ask for a password again.
+- [ ] **Changing your fingerprints invalidates the stored token** (this is the
+      point of `.biometryCurrentSet`): add or remove a fingerprint, then save →
+      it falls back to the password path, and re-enrolling from the toggle
+      restores Touch ID.
+- [ ] **On a Mac without Touch ID** the toggle is disabled and explains why;
+      settings changes keep working through the password path.
 
 ### VPN Guard pane
 

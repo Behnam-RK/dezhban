@@ -24,7 +24,7 @@ cannot complete. This is why recovery uses a time-windowed probe that lifts the 
 a `probeEgressBudget` of roughly eight seconds, runs one lookup, and re-cuts — a
 recurring, deliberate leak whose only purpose is to make one measurement possible.
 
-**(b) Switch and reconnect windows — not a gap at all.** During a window the tunnel is
+**(b) Switch and redial windows — not a gap at all.** During a window the tunnel is
 usually down; that is why the window exists. A lookup then has no tunnel exit to measure.
 **Failing is correct.** dezhban is reporting an expected condition as an error.
 

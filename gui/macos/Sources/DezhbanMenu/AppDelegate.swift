@@ -18,6 +18,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
+    private let watchdog = MainThreadWatchdog()
+    /// Set while a background state-file read is outstanding, so a slow or
+    /// stalled read can never stack a second one behind it on every tick.
+    private var readInFlight = false
 
     /// Every ~24h, not more often — this is a background courtesy check, not
     /// a thing to hammer GitHub with. See UpdateChecker's doc comment.
@@ -37,7 +41,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // selector, so the gating on "Block now" etc. would be ignored.
         menu.autoenablesItems = false
         statusItem.menu = menu
+        watchdog.start()
         refresh()
+        // Launching the app shows the app: reaching the main window only through
+        // the menubar dropdown made opening it a two-step discovery problem, and
+        // the menubar item stays available either way.
+        //
+        // Except when the launch wasn't the user's doing. AppKit clears this flag
+        // for launches it performed on their behalf rather than at their request —
+        // a login item, a state restoration, opening a file — and a window
+        // appearing unbidden at every boot is exactly the noise a menubar app
+        // should not make. A missing flag reads as an ordinary launch, so the
+        // window still opens if AppKit ever stops reporting this.
+        let deliberateLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool) ?? true
+        if deliberateLaunch {
+            MainWindow.shared.open()
+        }
         AppState.shared.refreshServiceState()
         AppState.shared.checkForUpdates()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
@@ -65,12 +84,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// once-a-second `now` into AppState so the window's countdowns stay live off
     /// this same single timer.
     private func refresh() {
-        let mtime = StateReader.modificationTime()
-        if mtime != lastMtime {
-            lastMtime = mtime
-            snapshot = StateReader.read()
-            AppState.shared.snapshot = snapshot
+        pollStateFile()
+        repaint()
+    }
+
+    /// Stats and decodes the state file on a background queue, publishing the
+    /// result back on main. Both filesystem calls are cheap in the normal case,
+    /// but the main thread must never be the one waiting on I/O: a state file on
+    /// a stalled mount, or a slow stat under memory pressure, freezes the entire
+    /// UI. That is the leading suspect for the reported beachballs, and it is a
+    /// hazard worth removing whether or not it turns out to be the cause. A tick
+    /// is skipped entirely while a previous read is outstanding, so slow reads
+    /// can never stack up behind each other.
+    private func pollStateFile() {
+        guard !readInFlight else { return }
+        readInFlight = true
+        let known = lastMtime
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let mtime = StateReader.modificationTime()
+            // Re-decode only when the file actually changed — the daemon rewrites
+            // it about once per poll.
+            let changed = mtime != known
+            let fresh = changed ? StateReader.read() : nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.readInFlight = false
+                guard changed else { return }
+                self.lastMtime = mtime
+                self.snapshot = fresh
+                AppState.shared.snapshot = fresh
+                self.repaint()
+            }
         }
+    }
+
+    /// Repaints the menubar icon from the cached snapshot. Runs every tick rather
+    /// than only when the file changes, so staleness can flip the icon to gray
+    /// without the daemon having written anything.
+    private func repaint() {
         AppState.shared.now = Date()
         guard let button = statusItem.button else { return }
         let (state, symbol, help) = PostureUI.iconFor(snapshot)
@@ -78,7 +129,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard key != lastIconKey else { return }
         lastIconKey = key
         if let brand = Self.menubarIcon(state) {
-            // Full-color brand state icon (bundled by build-app.sh from gui/assets/png).
+            // Full-color brand state icon (bundled by build-app.sh from gui/artifacts/png).
             // Color IS the state — teal on, gray off, red blocked, amber warning —
             // drawn as-is (not templated, not tinted), so it reads identically on
             // light and dark menu bars.
@@ -120,20 +171,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func essentialClass(_ state: String, _ help: String) -> String {
         if help == "stopped" { return "stopped" }
         if help.hasPrefix("standby") { return "standby" }
-        return state // on / off / blocked / warning
+        return state // on / off / blocked / warning / paused
     }
 
     private static let essentialTitles: [String: String] = [
         "on": "Guard armed",
         "blocked": "Egress blocked",
         "warning": "Warning",
+        "paused": "Paused — using your real IP",
         "standby": "Standby — not enforcing",
         "stopped": "Protection stopped",
         "off": "Not enforcing",
     ]
 
     /// Menubar brand state images, loaded once from the app bundle's Resources
-    /// (put there by build-app.sh from gui/assets/png) and cached per state. Empty
+    /// (put there by build-app.sh from gui/artifacts/png) and cached per state. Empty
     /// when running outside the bundle, which triggers the SF Symbol fallback
     /// in refresh(). (Dock-size counterparts live in PostureUI.dockIcon, shared
     /// with the window's Overview hero.)
