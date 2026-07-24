@@ -37,7 +37,7 @@ type VPN struct {
 	// these are concrete names; autodetect/pattern expansion lands with netdetect.
 	TunnelInterfaces []string
 	// Endpoints are the VPN server addresses reachable on the physical interface,
-	// kept open so the tunnel can stay up and reconnect. Each entry may be an IP
+	// kept open so the tunnel can stay up and redial. Each entry may be an IP
 	// literal or a hostname (resolved and re-resolved at runtime) — hostnames let
 	// third-party VPNs that publish a server name rather than a fixed IP be used.
 	Endpoints []string
@@ -51,8 +51,8 @@ type VPN struct {
 	AutoDiscoverEndpoints bool
 	// AllowPhysicalDNS opens plain DNS (port 53) egress on the physical link in
 	// guard and VPN full-block rulesets, so a VPN client can re-resolve its
-	// server hostname and reconnect while the tunnel is down. ON by default
-	// (2026-07-19 defaults review: reconnectability beats hiding DNS-query
+	// server hostname and redial while the tunnel is down. ON by default
+	// (2026-07-19 defaults review: redialability beats hiding DNS-query
 	// metadata for this project's users); set false to close the metadata leak.
 	AllowPhysicalDNS bool
 	// AllowLocalNetwork passes traffic to private, link-local and multicast
@@ -113,16 +113,16 @@ type VPN struct {
 	// handshake to an as-yet-unknown server is allowed so its endpoint can be
 	// learned. Defaults to 5s; an explicit "0" disables manual switch windows
 	// entirely (kept internally as a negative sentinel so Normalize can tell
-	// "disabled" from "absent", exactly like ReconnectWindow); validated to
+	// "disabled" from "absent", exactly like RedialWindow); validated to
 	// (0, Advanced.SwitchWindowMax] otherwise — no floor.
 	//
 	// Disabling is a TIGHTENING: the switch window is the only sanctioned
 	// relaxation of the guard, so turning it off leaves nothing that can relax it.
 	// The cost is that a brand-new VPN's server must be added to config by hand,
 	// since there is no longer a window in which its handshake could be observed.
-	// Independent of ReconnectWindow — disabling one never disables the other.
+	// Independent of RedialWindow — disabling one never disables the other.
 	SwitchWindow time.Duration
-	// ReconnectWindow is the duration of the AUTOMATIC reconnect window: when
+	// RedialWindow is the duration of the AUTOMATIC redial window: when
 	// the tunnel drops while the guard is healthy (GUARD posture, not standby,
 	// not FULL BLOCK), the daemon opens a switch-window relaxation for this long
 	// so the VPN client can redial any server — including one dezhban has never
@@ -131,19 +131,19 @@ type VPN struct {
 	// endpoint, and on expiry reverts fail-closed. Defaults to 30s; an explicit
 	// "0" disables the automatic window (kept internally as a negative sentinel
 	// so Normalize can tell "disabled" from "absent"); validated to
-	// (0, Advanced.ReconnectWindowMax] otherwise — no floor.
-	ReconnectWindow time.Duration
+	// (0, Advanced.RedialWindowMax] otherwise — no floor.
+	RedialWindow time.Duration
 	// PauseMax caps an operator-requested bounded pause (`dezhban pause` / the
 	// GUI's "Pause protection"): a deliberate, timed drop to the real ISP IP,
 	// e.g. to reach a sanctioned-country-only service the VPN's exit can't
 	// reach. It is a THIRD relaxation of the guard alongside the switch window
-	// and the automatic reconnect window — sharing their bounded-timer
+	// and the automatic redial window — sharing their bounded-timer
 	// machinery, but with its own cap, never shared with SwitchWindowMax or
-	// ReconnectWindowMax (collapsing caps silently truncates whichever
+	// RedialWindowMax (collapsing caps silently truncates whichever
 	// trigger has the larger budget). Defaults to 30m; an explicit "0"
 	// disables pausing entirely (kept internally as a negative sentinel so
 	// Normalize can tell "disabled" from "absent", exactly like SwitchWindow /
-	// ReconnectWindow). Unlike those two, PauseMax is the cap itself — the
+	// RedialWindow). Unlike those two, PauseMax is the cap itself — the
 	// requested duration comes from the CLI/GUI call, not a config default.
 	PauseMax time.Duration
 	// Advanced holds tunables for behaviors that are otherwise baked-in design
@@ -172,7 +172,7 @@ type Profile struct {
 	// IfaceHint is an optional tunnel-interface name prefix (e.g. "wg",
 	// "nordlynx") shown in `vpn list` output to help identify a profile. It never
 	// gates enforcement — pinning an interface by name goes stale across
-	// reconnects, so the hint is advisory / display-only.
+	// redials, so the hint is advisory / display-only.
 	IfaceHint string
 }
 
@@ -184,13 +184,13 @@ type Advanced struct {
 	// or a `--for` override), anchored to the window's first open. Default 3m.
 	// No floor — any positive value up to this cap is accepted.
 	SwitchWindowMax time.Duration
-	// ReconnectWindowMax caps the AUTOMATIC reconnect window (VPN.ReconnectWindow),
+	// RedialWindowMax caps the AUTOMATIC redial window (VPN.RedialWindow),
 	// anchored the same way. Kept separate from SwitchWindowMax because the two
 	// triggers have different exposure budgets: a longer automatic window lets a
 	// slow VPN client finish redialing without the operator having to intervene.
 	// Never let the two share one cap — that would silently truncate whichever
 	// trigger has the larger intended budget. Default 10m. No floor.
-	ReconnectWindowMax time.Duration
+	RedialWindowMax time.Duration
 	// CommandFreshness is how recent a control-file command must be to be acted
 	// on (replay/stale-file guard). Default 30s.
 	CommandFreshness time.Duration
@@ -216,13 +216,13 @@ type Advanced struct {
 	// EndpointWarnThreshold is the union-size at which doctor warns about
 	// rule-list bloat. Default 256.
 	EndpointWarnThreshold int
-	// ReconnectMinUptime is the anti-flap gate on the automatic reconnect
+	// RedialMinUptime is the anti-flap gate on the automatic redial
 	// window: an auto-window opens only if the tunnel had been up at least this
 	// long, or a non-blocked exit was confirmed during that uptime. Without it a
 	// VPN flapping up/down would chain windows and turn the guard into a sieve.
 	// Default 15s; an explicit "0" disables the gate (negative sentinel
-	// internally, same convention as VPN.ReconnectWindow).
-	ReconnectMinUptime time.Duration
+	// internally, same convention as VPN.RedialWindow).
+	RedialMinUptime time.Duration
 	// WindowProtocols / WindowPorts optionally restrict a switch window to the
 	// given protocols ("udp"/"tcp") and destination ports instead of allowing all
 	// outbound. Empty (default) = allow all outbound for the window's duration.
@@ -343,7 +343,7 @@ type fileVPN struct {
 	TunnelWatch           string        `json:"tunnelWatch"`
 	Profiles              []fileProfile `json:"profiles,omitempty"`
 	SwitchWindow          string        `json:"switchWindow,omitempty"`
-	ReconnectWindow       string        `json:"reconnectWindow,omitempty"`
+	RedialWindow          string        `json:"redialWindow,omitempty"`
 	PauseMax              string        `json:"pauseMax,omitempty"`
 	Advanced              *fileAdvanced `json:"advanced,omitempty"`
 }
@@ -356,7 +356,7 @@ type fileProfile struct {
 
 type fileAdvanced struct {
 	SwitchWindowMax         string   `json:"switchWindowMax,omitempty"`
-	ReconnectWindowMax      string   `json:"reconnectWindowMax,omitempty"`
+	RedialWindowMax         string   `json:"redialWindowMax,omitempty"`
 	CommandFreshness        string   `json:"commandFreshness,omitempty"`
 	WindowDiscoveryInterval string   `json:"windowDiscoveryInterval,omitempty"`
 	TunnelPruneAfter        string   `json:"tunnelPruneAfter,omitempty"`
@@ -366,7 +366,7 @@ type fileAdvanced struct {
 	EndpointWarnThreshold   int      `json:"endpointWarnThreshold,omitempty"`
 	WindowProtocols         []string `json:"windowProtocols,omitempty"`
 	WindowPorts             []int    `json:"windowPorts,omitempty"`
-	ReconnectMinUptime      string   `json:"reconnectMinUptime,omitempty"`
+	RedialMinUptime         string   `json:"redialMinUptime,omitempty"`
 }
 
 // Default returns a Config with safe, security-first defaults.
@@ -435,6 +435,11 @@ func Load(path string) (*Config, error) {
 			}
 			if err := apply(&cfg, fc); err != nil {
 				return nil, fmt.Errorf("config %q: %w", path, err)
+			}
+			// Anything the schema does not recognise is recorded rather than
+			// ignored — see unknown.go for why silence is the wrong default here.
+			for _, key := range unknownKeys(data) {
+				cfg.Retired = append(cfg.Retired, Retired{Key: key, Reason: describeUnknown(key)})
 			}
 		}
 	}
@@ -544,7 +549,7 @@ func apply(cfg *Config, fc fileConfig) error {
 				return fmt.Errorf("vpn.switchWindow: must not be negative (got %s); use \"0\" to disable", d)
 			}
 			if d == 0 {
-				// Same explicit-opt-out sentinel as reconnectWindow. Without it
+				// Same explicit-opt-out sentinel as redialWindow. Without it
 				// Normalize would coerce 0 back to the default and silently ignore
 				// the operator asking for a strictly zero-leak posture — the worst
 				// kind of bug in a security tool: a setting that is accepted,
@@ -554,18 +559,18 @@ func apply(cfg *Config, fc fileConfig) error {
 				v.SwitchWindow = d
 			}
 		}
-		if fc.VPN.ReconnectWindow != "" {
-			d, err := time.ParseDuration(fc.VPN.ReconnectWindow)
+		if fc.VPN.RedialWindow != "" {
+			d, err := time.ParseDuration(fc.VPN.RedialWindow)
 			if err != nil {
-				return fmt.Errorf("vpn.reconnectWindow: %w", err)
+				return fmt.Errorf("vpn.redialWindow: %w", err)
 			}
 			if d < 0 {
-				return fmt.Errorf("vpn.reconnectWindow: must not be negative (got %s); use \"0\" to disable", d)
+				return fmt.Errorf("vpn.redialWindow: must not be negative (got %s); use \"0\" to disable", d)
 			}
 			if d == 0 {
-				v.ReconnectWindow = Disabled // explicit opt-out, survives Normalize
+				v.RedialWindow = Disabled // explicit opt-out, survives Normalize
 			} else {
-				v.ReconnectWindow = d
+				v.RedialWindow = d
 			}
 		}
 		if fc.VPN.PauseMax != "" {
@@ -642,7 +647,7 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 	if err := parse("switchWindowMax", fa.SwitchWindowMax, &a.SwitchWindowMax); err != nil {
 		return a, err
 	}
-	if err := parse("reconnectWindowMax", fa.ReconnectWindowMax, &a.ReconnectWindowMax); err != nil {
+	if err := parse("redialWindowMax", fa.RedialWindowMax, &a.RedialWindowMax); err != nil {
 		return a, err
 	}
 	if err := parse("commandFreshness", fa.CommandFreshness, &a.CommandFreshness); err != nil {
@@ -657,18 +662,18 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 	if err := parse("learnedEndpointTTL", fa.LearnedEndpointTTL, &a.LearnedEndpointTTL); err != nil {
 		return a, err
 	}
-	if fa.ReconnectMinUptime != "" {
-		d, err := time.ParseDuration(fa.ReconnectMinUptime)
+	if fa.RedialMinUptime != "" {
+		d, err := time.ParseDuration(fa.RedialMinUptime)
 		if err != nil {
-			return a, fmt.Errorf("vpn.advanced.reconnectMinUptime: %w", err)
+			return a, fmt.Errorf("vpn.advanced.redialMinUptime: %w", err)
 		}
 		if d < 0 {
-			return a, fmt.Errorf("vpn.advanced.reconnectMinUptime: must not be negative (got %s); use \"0\" to disable", d)
+			return a, fmt.Errorf("vpn.advanced.redialMinUptime: must not be negative (got %s); use \"0\" to disable", d)
 		}
 		if d == 0 {
-			a.ReconnectMinUptime = Disabled // explicit opt-out of the anti-flap gate
+			a.RedialMinUptime = Disabled // explicit opt-out of the anti-flap gate
 		} else {
-			a.ReconnectMinUptime = d
+			a.RedialMinUptime = d
 		}
 	}
 	a.LearnedMaxPerProfile = fa.LearnedMaxPerProfile
@@ -722,7 +727,7 @@ func toFileConfig(c *Config) fileConfig {
 			TunnelWatch:           c.VPN.TunnelWatch.String(),
 			Profiles:              toFileProfiles(c.VPN.Profiles),
 			SwitchWindow:          optDurString(c.VPN.SwitchWindow),
-			ReconnectWindow:       optDurString(c.VPN.ReconnectWindow),
+			RedialWindow:          optDurString(c.VPN.RedialWindow),
 			PauseMax:              optDurString(c.VPN.PauseMax),
 			Advanced:              toFileAdvanced(c.VPN.Advanced),
 		},
@@ -778,8 +783,8 @@ func toFileAdvanced(a Advanced) *fileAdvanced {
 		fa.SwitchWindowMax = durString(a.SwitchWindowMax)
 		nonDefault = true
 	}
-	if a.ReconnectWindowMax != defaultReconnectWindowMax {
-		fa.ReconnectWindowMax = durString(a.ReconnectWindowMax)
+	if a.RedialWindowMax != defaultRedialWindowMax {
+		fa.RedialWindowMax = durString(a.RedialWindowMax)
 		nonDefault = true
 	}
 	if a.CommandFreshness != defaultCommandFreshness {
@@ -810,8 +815,8 @@ func toFileAdvanced(a Advanced) *fileAdvanced {
 		fa.EndpointWarnThreshold = a.EndpointWarnThreshold
 		nonDefault = true
 	}
-	if a.ReconnectMinUptime != defaultReconnectMinUptime {
-		fa.ReconnectMinUptime = optDurString(a.ReconnectMinUptime)
+	if a.RedialMinUptime != defaultRedialMinUptime {
+		fa.RedialMinUptime = optDurString(a.RedialMinUptime)
 		nonDefault = true
 	}
 	if !nonDefault {
@@ -909,8 +914,8 @@ func Normalize(cfg *Config) {
 	if cfg.VPN.SwitchWindow == 0 {
 		cfg.VPN.SwitchWindow = defaultSwitchWindow
 	}
-	if cfg.VPN.ReconnectWindow == 0 {
-		cfg.VPN.ReconnectWindow = defaultReconnectWindow
+	if cfg.VPN.RedialWindow == 0 {
+		cfg.VPN.RedialWindow = defaultRedialWindow
 	}
 	if cfg.VPN.PauseMax == 0 {
 		cfg.VPN.PauseMax = defaultPauseMax
@@ -924,8 +929,8 @@ func normalizeAdvanced(a *Advanced) {
 	if a.SwitchWindowMax <= 0 {
 		a.SwitchWindowMax = defaultSwitchWindowMax
 	}
-	if a.ReconnectWindowMax <= 0 {
-		a.ReconnectWindowMax = defaultReconnectWindowMax
+	if a.RedialWindowMax <= 0 {
+		a.RedialWindowMax = defaultRedialWindowMax
 	}
 	if a.CommandFreshness <= 0 {
 		a.CommandFreshness = defaultCommandFreshness
@@ -948,8 +953,8 @@ func normalizeAdvanced(a *Advanced) {
 	if a.EndpointWarnThreshold <= 0 {
 		a.EndpointWarnThreshold = defaultEndpointWarnThreshold
 	}
-	if a.ReconnectMinUptime == 0 {
-		a.ReconnectMinUptime = defaultReconnectMinUptime
+	if a.RedialMinUptime == 0 {
+		a.RedialMinUptime = defaultRedialMinUptime
 	}
 	// Canonicalize protocol strings so validation and pf/nft/WFP rendering agree:
 	// the renderers emit these values verbatim, so a stray space or capital (" UDP",
@@ -972,11 +977,11 @@ const (
 	defaultPromoteAfterRefreshes   = 3
 	defaultEndpointWarnThreshold   = 256
 
-	defaultReconnectWindow    = 30 * time.Second
-	defaultReconnectWindowMax = 10 * time.Minute
-	defaultReconnectMinUptime = 15 * time.Second
-	defaultPauseMax           = 30 * time.Minute
-	defaultEndpointGrace      = 15 * time.Minute
+	defaultRedialWindow    = 30 * time.Second
+	defaultRedialWindowMax = 10 * time.Minute
+	defaultRedialMinUptime = 15 * time.Second
+	defaultPauseMax        = 30 * time.Minute
+	defaultEndpointGrace   = 15 * time.Minute
 
 	maxProfileName = 64
 
@@ -1085,7 +1090,7 @@ func (c *Config) Validate() error {
 		// A config with no endpoints is VALID and rests in STANDBY. It used to be a
 		// load-time error, because `vpn.enabled: true` was a promise to enforce and
 		// a guard that can never learn a server address can never let the tunnel
-		// reconnect. With the mode flag gone, every config is a guard config, so
+		// redial. With the mode flag gone, every config is a guard config, so
 		// rejecting here would make a fresh install — which legitimately knows no
 		// endpoints yet — fail to load at all.
 		//
@@ -1170,20 +1175,20 @@ func validateSwitchWindow(v VPN) error {
 		return fmt.Errorf("vpn.switchWindow %s exceeds vpn.advanced.switchWindowMax %s (or \"0\" to disable)", v.SwitchWindow, max)
 	}
 
-	rmax := v.Advanced.ReconnectWindowMax
+	rmax := v.Advanced.RedialWindowMax
 	if rmax <= 0 {
-		rmax = defaultReconnectWindowMax
+		rmax = defaultRedialWindowMax
 	}
-	// ReconnectWindow < 0 is the explicit "disabled" sentinel and always valid.
-	// Capped separately from the manual window — see Advanced.ReconnectWindowMax.
-	if v.ReconnectWindow > 0 && v.ReconnectWindow > rmax {
-		return fmt.Errorf("vpn.reconnectWindow %s exceeds vpn.advanced.reconnectWindowMax %s (or \"0\" to disable)", v.ReconnectWindow, rmax)
+	// RedialWindow < 0 is the explicit "disabled" sentinel and always valid.
+	// Capped separately from the manual window — see Advanced.RedialWindowMax.
+	if v.RedialWindow > 0 && v.RedialWindow > rmax {
+		return fmt.Errorf("vpn.redialWindow %s exceeds vpn.advanced.redialWindowMax %s (or \"0\" to disable)", v.RedialWindow, rmax)
 	}
 	return nil
 }
 
 func validateAdvanced(a Advanced) error {
-	// No floor on switchWindowMax/reconnectWindowMax (2026-07-22 defaults
+	// No floor on switchWindowMax/redialWindowMax (2026-07-22 defaults
 	// review): any positive value is accepted; Normalize already fills a
 	// non-positive value with its default before Validate ever runs.
 	for _, p := range a.WindowProtocols {

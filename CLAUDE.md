@@ -8,8 +8,8 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 switch** written in Go, for hosts behind a full-tunnel VPN. It has **one**
 enforcement model: an **always-on interface guard**. Egress is allowed only
 through the tunnel, so a tunnel drop is cut instantly — by default a bounded
-reconnect window then follows so the VPN can redial (set
-`vpn.reconnectWindow: "0"` for a strict zero-leak cut) — and it full-blocks when
+redial window then follows so the VPN can redial (set
+`vpn.redialWindow: "0"` for a strict zero-leak cut) — and it full-blocks when
 the VPN exit lands in a forbidden country. On a host that has connected
 successfully before, `vpn.armAtBoot` (default true) arms the guard at startup
 too, so a reboot stays blocked until the VPN redials rather than opening for
@@ -105,7 +105,7 @@ The design depends on these invariants (rationale in
   The standing guard rule is itself the fail-closed block for physical leaks, so
   only a *successful* blocked-country reading may escalate to FULL BLOCK, and
   only a successful allowed reading may restore GUARD. Escalating on an unknown
-  would cut the tunnel's own egress and livelock the very reconnect that could
+  would cut the tunnel's own egress and livelock the very redial that could
   fix the lookup. This lives in `decision.Evaluate`, which short-circuits on
   `r.Err != nil` without touching the hysteresis streak — so a blip neither
   commits a flip nor cancels one that real readings were counting toward. There
@@ -158,11 +158,11 @@ The design depends on these invariants (rationale in
   (1) an explicit operator command, via the **root-owned command file**
   (`internal/command`, always available, root-only) or the **control socket**
   (`internal/control`, admin-group, gated by `control.allowSwitchOps`, default
-  true; `false` restores root-only); (2) the **automatic reconnect window**
-  (`vpn.reconnectWindow`, default 30s, `"0"` disables — an explicit opt-out):
+  true; `false` restores root-only); (2) the **automatic redial window**
+  (`vpn.redialWindow`, default 30s, `"0"` disables — an explicit opt-out):
   a tunnel-down edge from *healthy GUARD only* — never from standby, FULL BLOCK,
   an already-open window, or a tunnel never observed up, and gated against
-  flapping by `vpn.advanced.reconnectMinUptime`; (3) an explicit operator
+  flapping by `vpn.advanced.redialMinUptime`; (3) an explicit operator
   **pause** (`dezhban pause`/`resume`, `state.TriggerPause`), via the same
   command file or the control socket (gated separately by
   `control.allowPauseOps`, default true, independent of `allowSwitchOps`) —
@@ -173,24 +173,24 @@ The design depends on these invariants (rationale in
   fail-closed posture on cancel/expiry, one auto window per drop (expiry never
   re-opens) — but each has its OWN hard cap, deliberately never shared: the
   manual trigger is bounded by `switchWindowMax` (default 3m, no floor), the
-  automatic one by `reconnectWindowMax` (default 10m, no floor), pause by
+  automatic one by `redialWindowMax` (default 10m, no floor), pause by
   `vpn.pauseMax` (default 30m, no floor). Collapsing these into one shared cap
   would silently truncate whichever trigger has the larger intended budget —
-  the `Options.SwitchWindowMax` / `Options.ReconnectWindowMax` / `Options.PauseMax`
+  the `Options.SwitchWindowMax` / `Options.RedialWindowMax` / `Options.PauseMax`
   split in `internal/runner` and the per-episode `windowMax` selected by
   trigger at first open (`Run`'s `openWindow` closure) exist for exactly this
   reason. Never widen a window past its own cap, never add a FOURTH trigger
   without a new ADR, never let any of the three outlive its deadline.
 - **All three windows are independently disableable, and "disabled" must
   survive `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
-  `vpn.reconnectWindow: "0"` removes trigger (2); `vpn.pauseMax: "0"` removes
+  `vpn.redialWindow: "0"` removes trigger (2); `vpn.pauseMax: "0"` removes
   trigger (3); all three set to `"0"` is the strict zero-leak posture in which
   *nothing* can relax the guard. Each parses to the
   negative `config.Disabled` sentinel, because `Normalize` coerces a plain `0`
   back to the default — accepting a security setting and silently discarding it
   is the worst bug this tool can have. Disabling one must never disable the
   others: the manual path gates on `switchEnabled`, the automatic path gates
-  only on `ReconnectWindow > 0`, pause gates only on `PauseMax > 0`.
+  only on `RedialWindow > 0`, pause gates only on `PauseMax > 0`.
   `TestWindowDisableMatrix` pins all four permutations of the first two;
   pause's own default/disable round-trip is pinned separately
   (`TestPauseMaxDefaultAndDisableSentinel`, `TestConfigSetSwitchWindowZeroDisables`).
@@ -244,7 +244,7 @@ The design depends on these invariants (rationale in
   the whole-command sudo re-exec: `writeConfig` elevates just the *write*, so the
   interactive wizard doesn't restart itself and lose its own in-memory result.
 - `defaultSwitchWindow` is **5s** (the manual trigger's default duration, distinct
-  from its `switchWindowMax` cap of 3m). `vpn.advanced.reconnectMinUptime` (the
+  from its `switchWindowMax` cap of 3m). `vpn.advanced.redialMinUptime` (the
   anti-flap gate on the automatic trigger) honors the same `config.Disabled`
   sentinel as the two windows: `"0"` is an explicit, persisted opt-out, not a
   default that `Normalize` silently restores.

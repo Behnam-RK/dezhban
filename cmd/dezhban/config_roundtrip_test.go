@@ -38,7 +38,7 @@ var roundTripCases = map[string]roundTripCase{
 	"vpn.autoArm":               {set: "false", want: "false"},
 	"vpn.armAtBoot":             {set: "false", want: "false"},
 	"vpn.switchWindow":          {set: "7s", want: "7s"},
-	"vpn.reconnectWindow":       {set: "45s", want: "45s"},
+	"vpn.redialWindow":          {set: "45s", want: "45s"},
 	"vpn.pauseMax":              {set: "12m", want: "12m0s"},
 	"vpn.endpointRefresh":       {set: "2m", want: "2m0s"},
 	"vpn.endpointGrace":         {set: "9m", want: "9m0s"},
@@ -101,8 +101,8 @@ func TestRoundTripCasesCoverEverySettableKey(t *testing.T) {
 // gap between what the daemon reads and what the tools can write.
 var notYetSettable = map[string]bool{
 	"vpn.advanced.switchWindowMax":         true,
-	"vpn.advanced.reconnectWindowMax":      true,
-	"vpn.advanced.reconnectMinUptime":      true,
+	"vpn.advanced.redialWindowMax":         true,
+	"vpn.advanced.redialMinUptime":         true,
 	"vpn.advanced.commandFreshness":        true,
 	"vpn.advanced.windowDiscoveryInterval": true,
 	"vpn.advanced.tunnelPruneAfter":        true,

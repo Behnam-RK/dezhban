@@ -99,9 +99,9 @@ func TestRenderBlockScriptVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	}
 	s := renderBlockScript(p)
 
-	// The endpoint allow stays open so the tunnel can reconnect.
+	// The endpoint allow stays open so the tunnel can redial.
 	if !strings.Contains(s, "203.0.113.5") {
-		t.Errorf("VPN full block must keep the endpoint allow (reconnect path):\n%s", s)
+		t.Errorf("VPN full block must keep the endpoint allow (redial path):\n%s", s)
 	}
 	// No tunnel-interface allow: the iface name appears only in that rule's alias.
 	if strings.Contains(s, "utun4") {

@@ -28,7 +28,7 @@ GOOS=linux go build ./... && GOOS=windows go build ./...
 - [ ] **Block cuts egress.** `sudo dezhban block` → general egress dies
       (`curl https://example.com` fails) but loopback works, DNS resolves (with
       `vpn.allowPhysicalDNS` on, the default), the VPN endpoint stays reachable
-      so the tunnel can reconnect, and LAN devices still answer (with
+      so the tunnel can redial, and LAN devices still answer (with
       `vpn.allowLocalNetwork` on, the default). This is FULL BLOCK — it carries
       **no** destination allowlist; a VPN posture opens the tunnel endpoint.
 - [ ] **`block --force` keeps the geo providers reachable.** `sudo dezhban block
@@ -163,7 +163,7 @@ Only a live host can prove these — CI cannot reach a printer.
       provider host (e.g. via `/etc/hosts`) while running in GUARD → the posture
       **stays** `guard` however many error-ticks pass, and the log says the exit
       country is unknown. It must never reach `full-block` on errors alone:
-      that would cut the tunnel's own egress and livelock the reconnect.
+      that would cut the tunnel's own egress and livelock the redial.
 - [ ] **An unknown country does not lift a block either.** Repeat while in
       `full-block` → it stays blocked.
 - [ ] **An error mid-streak does not cancel a pending flip.** With `hysteresis: 3`,
@@ -191,7 +191,7 @@ The guard is where a misconfiguration locks the host out. Run
       (`--simulate-country IR`).
 - [ ] **An undeterminable country HOLDS the current posture** rather than
       escalating — escalating on an unknown would cut the tunnel's own egress and
-      livelock the reconnect.
+      livelock the redial.
 - [ ] **Unblock restores everything.**
 
 ### macOS worked example (pf)
@@ -215,7 +215,7 @@ curl -m5 https://example.com                # expect: succeeds (rides the tunnel
 
 # Tunnel drop cuts egress, no fall-through to the physical interface:
 sudo ifconfig utunN down
-curl -m5 https://example.com                # expect: hangs/fails — reconnect the VPN to restore
+curl -m5 https://example.com                # expect: hangs/fails — redial the VPN to restore
 
 # Forbidden country cuts the tunnel too (FULL BLOCK) — run in the foreground to force it:
 sudo dezhban run --config <config> --simulate-country IR &
@@ -239,38 +239,38 @@ sudo dezhban unblock                         # expect: connectivity back, anchor
       `learned.json`, and closes the window early on a verified exit. `--cancel`
       and expiry both revert to the prior fail-closed posture.
 - [ ] **Promotion.** `dezhban vpn promote` makes a learned endpoint permanent, so
-      reconnecting to that VPN needs no window at all.
+      redialing to that VPN needs no window at all.
 - [ ] **Import.** `dezhban vpn import` extracts the expected hosts from WireGuard,
       OpenVPN, and V2Ray configs — stripping ports, dropping private/loopback
       addresses, and rejecting garbage.
 - [ ] **Dynamic tunnels.** A newly-appeared tunnel is guarded within one watcher
       tick, with no restart. Zero tunnels up = endpoints-open standing posture,
       with geo suppressed.
-- [ ] **Automatic reconnect window.** With a rotating-server VPN (e.g.
+- [ ] **Automatic redial window.** With a rotating-server VPN (e.g.
       RocketTunnel) guarded and healthy: disconnect, then hit the client's
-      connect button within `vpn.reconnectWindow` (default 30s) — the VPN
-      reconnects to a **fresh, never-seen server** with no operator action;
-      `status` shows `reconnect state: OPEN` (`status --json`:
+      connect button within `vpn.redialWindow` (default 30s) — the VPN
+      redials to a **fresh, never-seen server** with no operator action;
+      `status` shows `redial state: OPEN` (`status --json`:
       `switch.trigger: "auto"`) while it lasts, and the menubar app posts the
-      "VPN dropped — reconnect window open" notification.
+      "VPN dropped — redial window open" notification.
 - [ ] **Auto-window expiry fails closed.** Disconnect the VPN and let the
-      window lapse with no reconnect: egress is cut, STAYS cut (no second
+      window lapse with no redial: egress is cut, STAYS cut (no second
       window without a tunnel-up first), and a later client connect to a
       *known/learned* endpoint still succeeds under the standing posture.
 - [ ] **No auto window from FULL BLOCK.** `--simulate-country IR` → FULL BLOCK,
       then drop the tunnel: no window opens; recovery still requires the probe
       confirming an allowed exit (or a manual `switch`).
-- [ ] **Strict opt-out.** With `vpn.reconnectWindow: "0"`, a drop opens nothing
+- [ ] **Strict opt-out.** With `vpn.redialWindow: "0"`, a drop opens nothing
       and behavior matches the pre-0.3 zero-relaxation guard.
 
 ### The two windows disable independently
 
 Run all four permutations; each setting must disable **only** its own trigger.
 
-- [ ] `switchWindow: "0"`, `reconnectWindow` default → `dezhban switch` refuses
+- [ ] `switchWindow: "0"`, `redialWindow` default → `dezhban switch` refuses
       with a message naming `vpn.switchWindow`, but a tunnel drop **still** opens
-      the automatic reconnect window.
-- [ ] `switchWindow` default, `reconnectWindow: "0"` → a drop opens nothing, but
+      the automatic redial window.
+- [ ] `switchWindow` default, `redialWindow: "0"` → a drop opens nothing, but
       `dezhban switch` **still** works.
 - [ ] **Both `"0"` — the strict zero-leak posture.** A drop is cut instantly with
       no window at all, and `dezhban switch` refuses. Nothing can relax the guard.
@@ -281,7 +281,7 @@ Run all four permutations; each setting must disable **only** its own trigger.
 
 **Full live macOS pass:** `setup` → connect VPN A (guarded) → disconnect →
 `dezhban switch` → connect self-hosted VPN B → the window learns the endpoint and
-closes → `vpn promote` → reconnect to B with **no** window → `--simulate-country
+closes → `vpn promote` → redial to B with **no** window → `--simulate-country
 IR` still escalates to FULL BLOCK → `sudo dezhban panic` restores.
 
 ## Service lifecycle
@@ -375,7 +375,7 @@ task gui:build && open dist/Dezhban.app
       within a few seconds ("AUTO-ARMED" in the log) and a "Guard armed"
       notification. Disconnect → guard HOLDS (red blocked icon, egress cut).
       **Unblock** (menubar or Overview) → back to `standby`, egress open.
-      Reconnect → arms again.
+      Redial → arms again.
 - [ ] **Essential notifications.** With notifications on (Settings pane), the
       armed/blocked/warning/standby/stopped transitions each notify once; no
       notification at app launch or on routine country/endpoint updates.

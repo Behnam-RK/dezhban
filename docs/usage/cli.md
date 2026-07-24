@@ -185,7 +185,7 @@ the system path need root (hence `sudo`); a permission error prints a `sudo` hin
 
 After a one-time `setup`, run dezhban (or install the service) and connect any
 VPN. Known VPNs need no ceremony, and a drop or server rotation is covered by the
-[automatic reconnect window](../concepts/modes.md#automatic-reconnect-window) with no
+[automatic redial window](../concepts/modes.md#automatic-redial-window) with no
 interaction; the manual switch window below is the fallback — e.g. for arming a
 brand-new VPN while the guard is already holding the line.
 

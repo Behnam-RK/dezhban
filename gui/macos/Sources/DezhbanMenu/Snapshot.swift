@@ -17,7 +17,7 @@ struct SwitchState: Codable {
     /// daemons — treat nil as "manual".
     let trigger: String?
 
-    var isAutoReconnect: Bool { trigger == "auto" }
+    var isAutoRedial: Bool { trigger == "auto" }
 
     /// A pause is a deliberate drop to the real ISP IP, not a VPN problem, so it
     /// reads and looks different from the other two even though all three share

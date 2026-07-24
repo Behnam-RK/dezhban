@@ -100,12 +100,12 @@ type Options struct {
 	SwitchWindowMax time.Duration
 	WindowProtos    []string
 	WindowPorts     []int
-	// ReconnectWindowMax caps the AUTOMATIC reconnect window (see
-	// ReconnectWindow below) and is deliberately independent of
+	// RedialWindowMax caps the AUTOMATIC redial window (see
+	// RedialWindow below) and is deliberately independent of
 	// SwitchWindowMax — sharing one cap between the two triggers would
 	// silently truncate whichever trigger has the larger intended budget.
 	// <=0 → 10m.
-	ReconnectWindowMax time.Duration
+	RedialWindowMax time.Duration
 	// WindowDiscoveryInterval is how often endpoints are re-resolved while a
 	// switch window is open (fast, to learn the new server quickly). <=0 → 2s.
 	WindowDiscoveryInterval time.Duration
@@ -132,9 +132,9 @@ type Options struct {
 	// "Pause protection"): a deliberate, timed drop to the real ISP IP,
 	// sharing the switch-window machinery as a third trigger
 	// (state.TriggerPause) but with its own cap, never shared with
-	// SwitchWindowMax or ReconnectWindowMax. <=0 → pausing is off entirely
+	// SwitchWindowMax or RedialWindowMax. <=0 → pausing is off entirely
 	// (mirrors config.Disabled on vpn.pauseMax — there is no "fallback
-	// default" here the way ReconnectWindowMax has one, because an absent
+	// default" here the way RedialWindowMax has one, because an absent
 	// vpn.pauseMax is already filled to 30m by config.Normalize).
 	PauseMax time.Duration
 	// AllowPauseOps permits opening and ending a pause over the control socket
@@ -189,19 +189,19 @@ type Options struct {
 	// time a tunnel is observed up this run. nil → the fact is never recorded
 	// (tests / legacy callers); ArmAtBoot then has no effect on future boots.
 	MarkTunnelUp func(time.Time)
-	// ReconnectWindow (vpn.reconnectWindow): when >0, a tunnel-down edge from a
+	// RedialWindow (vpn.redialWindow): when >0, a tunnel-down edge from a
 	// healthy GUARD posture (not standby, not FULL BLOCK, no window already
 	// open) automatically opens a switch-window relaxation of this duration so
 	// the VPN client can redial any server — including one never seen before.
 	// The window closes early on a confirmed good exit (learning the new
 	// endpoint) and reverts fail-closed on expiry. <=0 → no automatic window.
-	ReconnectWindow time.Duration
-	// ReconnectMinUptime is the anti-flap gate: the auto-window opens only if
+	RedialWindow time.Duration
+	// RedialMinUptime is the anti-flap gate: the auto-window opens only if
 	// the tunnel had been up at least this long, or a non-blocked exit was
 	// confirmed during that uptime. <=0 → gate off.
-	ReconnectMinUptime time.Duration
+	RedialMinUptime time.Duration
 	// Watcher, when non-nil, emits tunnel up/down edges. In VPN mode a down edge
-	// can open the automatic reconnect window (see ReconnectWindow); the standing
+	// can open the automatic redial window (see RedialWindow); the standing
 	// guard rule already cuts the drop itself with no leak. In legacy mode a down
 	// edge triggers an immediate block — a kill switch needing only a tunnel
 	// name, no endpoints.
@@ -313,7 +313,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 	// most common of them is not a fault at all:
 	//
 	//   no tunnel up   → EXPECTED. There is no VPN exit to measure. This is the
-	//                    normal state during a switch/reconnect window (the
+	//                    normal state during a switch/redial window (the
 	//                    tunnel is down — that is why the window exists), in
 	//                    standby, and across any drop. Reporting it as an error
 	//                    trains people to ignore the field.
@@ -468,9 +468,9 @@ func (o Options) runGuard(ctx context.Context) error {
 	endpoints := set.Addrs
 	lastSet := set
 	// Sighting times for endpoint retention (see reconcileWithGrace): a VPN
-	// client reconnecting after a drop dials a server whose live socket vanished
+	// client redialing after a drop dials a server whose live socket vanished
 	// with the tunnel, so endpoints must outlive their sockets for a bounded
-	// grace or the guard walls off the very reconnect it is holding the line for.
+	// grace or the guard walls off the very redial it is holding the line for.
 	epGrace := o.EndpointGrace
 	if epGrace <= 0 {
 		epGrace = 15 * time.Minute
@@ -510,12 +510,12 @@ func (o Options) runGuard(ctx context.Context) error {
 	if standby && shouldArmAtBoot(o.ArmAtBoot, o.TunnelEverUp, len(endpoints)) {
 		standby = false
 		o.Log.Info("arming at boot (vpn.armAtBoot) — tunnel not observed yet, but this host has connected "+
-			"before and an endpoint is known; blocking until it reconnects", "endpoints", len(endpoints))
+			"before and an endpoint is known; blocking until it redials", "endpoints", len(endpoints))
 	}
 	if len(endpoints) == 0 && !relaxed && !standby {
 		return errors.New("refusing to start: no usable vpn endpoints — set vpn.endpoints (IP or hostname), " +
 			"vpn.profiles, or enable vpn.autoDiscoverEndpoints/vpn.autodetect; a guard with no way to reach the " +
-			"server can never let the tunnel reconnect")
+			"server can never let the tunnel redial")
 	}
 
 	// A tunnel is UP and we do not know its server. `relaxed` does NOT cover this.
@@ -628,7 +628,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	var lastTun []state.Tunnel
 	var enfErr error
 
-	// Automatic reconnect-window tracking. sawTunnelUp distinguishes an OBSERVED
+	// Automatic redial-window tracking. sawTunnelUp distinguishes an OBSERVED
 	// healthy tunnel (watcher up sample, or a confirmed exit reading) from the
 	// armed start's presumption of up — an auto-window must never open for a
 	// tunnel that was never actually there. tunnelUpSince/goodExitThisUp feed the
@@ -723,9 +723,9 @@ func (o Options) runGuard(ctx context.Context) error {
 	}
 
 	// manualWindowMax / autoWindowMax are the absolute caps on real-IP exposure
-	// for a manual vs. an automatic-reconnect episode, kept separate so one
+	// for a manual vs. an automatic-redial episode, kept separate so one
 	// trigger's budget can never silently truncate the other's (see
-	// Options.ReconnectWindowMax's doc comment). windowMax below is fixed to
+	// Options.RedialWindowMax's doc comment). windowMax below is fixed to
 	// whichever applies for the CURRENT episode the instant it first opens (in
 	// openWindow's first-open branch) and anchors to that open (windowStart), so
 	// repeated "open" commands can never extend a single window past it.
@@ -733,7 +733,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	if manualWindowMax <= 0 {
 		manualWindowMax = 3 * time.Minute
 	}
-	autoWindowMax := o.ReconnectWindowMax
+	autoWindowMax := o.RedialWindowMax
 	if autoWindowMax <= 0 {
 		autoWindowMax = 10 * time.Minute
 	}
@@ -841,24 +841,24 @@ func (o Options) runGuard(ctx context.Context) error {
 		snapshot()
 	}
 
-	// maybeAutoWindow opens the automatic reconnect window on a tunnel up→down
+	// maybeAutoWindow opens the automatic redial window on a tunnel up→down
 	// edge. Only from a healthy standing GUARD: never in standby (egress already
 	// open), never from FULL BLOCK (the last known exit was forbidden — relaxing
 	// from a known-bad state needs an explicit operator command), never while a
 	// window is already open, and never for a tunnel that was only ever presumed
 	// up. The anti-flap gate keeps a flapping VPN from chaining windows.
 	maybeAutoWindow := func(now time.Time, detail string) {
-		if o.ReconnectWindow <= 0 || windowActive || standby || blocked || !sawTunnelUp {
+		if o.RedialWindow <= 0 || windowActive || standby || blocked || !sawTunnelUp {
 			return
 		}
-		if minUp := o.ReconnectMinUptime; minUp > 0 && !goodExitThisUp &&
+		if minUp := o.RedialMinUptime; minUp > 0 && !goodExitThisUp &&
 			!tunnelUpSince.IsZero() && now.Sub(tunnelUpSince) < minUp {
-			o.Log.Warn("vpn tunnel down — reconnect window suppressed (flap guard: tunnel up "+
+			o.Log.Warn("vpn tunnel down — redial window suppressed (flap guard: tunnel up "+
 				now.Sub(tunnelUpSince).Round(time.Second).String()+" with no confirmed exit); guard holds",
 				"minUptime", minUp, "detail", detail)
 			return
 		}
-		openWindow(now, o.ReconnectWindow, "", state.TriggerAuto)
+		openWindow(now, o.RedialWindow, "", state.TriggerAuto)
 	}
 
 	// closeWindowRevert reverts to the prior posture (expiry / cancel). Session-
@@ -1274,8 +1274,8 @@ func (o Options) runGuard(ctx context.Context) error {
 		o.AutoArm = ls.AutoArm
 		o.AllowSwitchOps = ls.AllowSwitchOps
 		o.AllowPauseOps = ls.AllowPauseOps
-		o.ReconnectWindow = ls.ReconnectWindow
-		o.ReconnectMinUptime = ls.ReconnectMinUptime
+		o.RedialWindow = ls.RedialWindow
+		o.RedialMinUptime = ls.RedialMinUptime
 		o.EndpointGrace = ls.EndpointGrace
 		o.SwitchWindow = ls.SwitchWindow
 		o.WindowDiscoveryInterval = ls.WindowDiscoveryInterval
@@ -1287,8 +1287,8 @@ func (o Options) runGuard(ctx context.Context) error {
 		if ls.SwitchWindowMax > 0 {
 			manualWindowMax = ls.SwitchWindowMax
 		}
-		if ls.ReconnectWindowMax > 0 {
-			autoWindowMax = ls.ReconnectWindowMax
+		if ls.RedialWindowMax > 0 {
+			autoWindowMax = ls.RedialWindowMax
 		}
 		pauseWindowMax = ls.PauseMax
 		pauseEnabled = pauseWindowMax > 0 && o.PollCommand != nil
@@ -1304,7 +1304,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			"interval", o.Interval,
 			"blocked_countries", o.BlockedCountries,
 			"switch_window", o.SwitchWindow,
-			"reconnect_window", o.ReconnectWindow,
+			"redial_window", o.RedialWindow,
 			"pause_max", o.PauseMax,
 		)
 		if policyChanged {
@@ -1336,7 +1336,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// But with a watcher, up/down is the watcher's to report: this
 			// startup reading only presumes up, and had the tunnel actually been
 			// down it could have egressed the allowlisted physical path. Let the
-			// watcher's own up sample set sawTunnelUp, so an auto reconnect window
+			// watcher's own up sample set sawTunnelUp, so an auto redial window
 			// never opens for a tunnel it never observed up.
 			if o.Watcher == nil {
 				sawTunnelUp = true
@@ -1380,7 +1380,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				o.Log.Debug("tunnel down (standby — not enforcing)", "detail", st.Detail)
 			default:
 				o.Log.Warn("vpn tunnel down — guard holds the line (physical egress stays blocked, "+
-					"endpoints open for reconnect)", "detail", st.Detail)
+					"endpoints open for redial)", "detail", st.Detail)
 			}
 			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
 				tunnels = next
@@ -1545,7 +1545,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				continue // standing posture: nothing to observe until a tunnel exists
 			}
 			if o.Watcher != nil && !tunnelUp && !blocked {
-				o.Log.Debug("vpn tunnel down — skipping geo lookup (guard holds, endpoints open for reconnect)")
+				o.Log.Debug("vpn tunnel down — skipping geo lookup (guard holds, endpoints open for redial)")
 				continue
 			}
 			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
@@ -1691,7 +1691,7 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 	if res.Err != nil {
 		// Say which of these it is. A lookup that fails because there is no
 		// tunnel to measure through is not a fault — it is the normal state
-		// during a switch/reconnect window (the tunnel is down; that is why the
+		// during a switch/redial window (the tunnel is down; that is why the
 		// window exists), in standby, and across any drop. Logging that at Warn
 		// alongside genuine failures is what made the geo providers look broken.
 		if tunnelUp {
@@ -1701,7 +1701,7 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 		}
 		// Either way: hold the current posture. The standing guard already blocks
 		// physical leaks, so an unknown must not escalate GUARD→FULL BLOCK (which
-		// cuts tunnel egress and livelocks the reconnect) nor lift an active FULL
+		// cuts tunnel egress and livelocks the redial) nor lift an active FULL
 		// BLOCK on a blip. Only a *successful* reading moves the state machine.
 		return res, enfErr
 	}
@@ -1747,9 +1747,9 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 // logged at error and the next tick re-applies the block.
 // Both GUARD and FULL BLOCK keep the endpoint passes open, so the encrypted
 // tunnel transport survives the re-cut — the probe toggles only the tunnel's
-// user-egress, never tearing down a tunnel that has reconnected. That is what
+// user-egress, never tearing down a tunnel that has redialed. That is what
 // lets a genuinely-down tunnel come back and a later probe observe an allowed
-// country, instead of the block livelocking the reconnect.
+// country, instead of the block livelocking the redial.
 // It returns the observed result plus any re-cut failure: a failed re-cut leaves
 // egress open until the next tick, so it is surfaced as an enforcement error. A
 // failed guard LIFT is not — the guard still holds, egress stays cut — so that path
@@ -1920,7 +1920,7 @@ func firstOr(s []string) string {
 // fresh ride along as if still fresh while they are within grace of their last
 // sighting. Rationale: autodiscovered endpoints are only observable while their
 // socket lives, and the socket dies with the tunnel — pruning them at the next
-// refresh would wall off exactly the reconnect the guard keeps endpoints open
+// refresh would wall off exactly the redial the guard keeps endpoints open
 // for. A genuinely rotated-away server ages out once unseen past the grace.
 // Entries neither current nor fresh are dropped from lastSeen so it can't grow
 // without bound. growOnly (an active block or switch window) is unchanged —
@@ -1961,7 +1961,7 @@ func reconcileEndpoints(current []netip.Addr, fresh netdetect.EndpointSet, block
 		// A guard-time refresh that brings nothing new is either identical (no-op)
 		// or a loss-only shrink — the signature of a transient DNS/discovery flake.
 		// Keep the current set: dropping a still-needed server endpoint here and
-		// then taking a geo BLOCK would restore a guard that can't reconnect. A
+		// then taking a geo BLOCK would restore a guard that can't redial. A
 		// genuine rotation surfaces a new address, so it still replaces.
 		if sameAddrs(current, unionAddrs(current, fresh.Addrs)) {
 			return current, false

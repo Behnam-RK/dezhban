@@ -15,7 +15,7 @@
 // model, where the firewall was open at rest and an undeterminable country was
 // the only reason to cut. Under the guard the standing rules ARE the
 // fail-closed block for physical leaks, so escalating on an unknown would cut
-// the tunnel's own egress and livelock the very reconnect that could fix it.
+// the tunnel's own egress and livelock the very redial that could fix it.
 // Only a *successful* reading moves the state machine. See docs/adr/0001.
 package decision
 
@@ -103,7 +103,7 @@ func (d *Decider) Evaluate(r monitor.Result) Verdict {
 		// counting toward. A blip during a 2-of-3 streak must not hand the
 		// blocked exit a free reprieve, and it must not escalate either: under
 		// the guard, FULL BLOCK cuts the tunnel's own egress and would livelock
-		// the reconnect that could fix the lookup.
+		// the redial that could fix the lookup.
 		return d.current
 	}
 	v := d.raw(r)

@@ -34,7 +34,7 @@ Keys (dotted; list values are comma-separated):
   vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
   vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.allowLocalNetwork
   vpn.autoArm vpn.armAtBoot vpn.switchWindow
-  vpn.reconnectWindow vpn.pauseMax vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
+  vpn.redialWindow vpn.pauseMax vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
   control.allowPauseOps
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
@@ -117,7 +117,7 @@ var configFields = map[string]configField{
 			}
 			if c.VPN.SwitchWindow == 0 {
 				// "0" means off, not "reset to default" — same explicit-opt-out
-				// sentinel as vpn.reconnectWindow. Without this remap, Normalize
+				// sentinel as vpn.redialWindow. Without this remap, Normalize
 				// would silently coerce a plain 0 back to the 5s default and the
 				// operator's "0" would have no effect (the worst kind of bug in a
 				// security tool: a setting accepted, discarded, and never reported).
@@ -126,19 +126,19 @@ var configFields = map[string]configField{
 			return nil
 		},
 	},
-	"vpn.reconnectWindow": {
+	"vpn.redialWindow": {
 		get: func(c *config.Config) string {
-			if c.VPN.ReconnectWindow < 0 {
+			if c.VPN.RedialWindow < 0 {
 				return "0s" // explicitly disabled
 			}
-			return c.VPN.ReconnectWindow.String()
+			return c.VPN.RedialWindow.String()
 		},
 		set: func(c *config.Config, v string) error {
-			if err := setDuration(&c.VPN.ReconnectWindow, v); err != nil {
+			if err := setDuration(&c.VPN.RedialWindow, v); err != nil {
 				return err
 			}
-			if c.VPN.ReconnectWindow == 0 {
-				c.VPN.ReconnectWindow = config.Disabled // "0" means off, not "reset to default"
+			if c.VPN.RedialWindow == 0 {
+				c.VPN.RedialWindow = config.Disabled // "0" means off, not "reset to default"
 			}
 			return nil
 		},

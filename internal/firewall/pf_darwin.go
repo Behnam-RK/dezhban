@@ -200,7 +200,7 @@ func (b *pfBackend) Cleanup() error {
 //     geo-API allowlist — what `block --force` renders.
 //   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface pass, so no
 //     user traffic leaks to a forbidden exit — but keep the endpoint pass so the
-//     encrypted handshake reaches the server and the tunnel can reconnect.
+//     encrypted handshake reaches the server and the tunnel can redial.
 //     Identical to ModeGuard minus the tunnel-iface pass. The dst-IP allowlist
 //     is still meaningless under a tunnel and stays omitted; the daemon opens a
 //     brief guard window to probe for recovery (see Phase 4).
@@ -265,7 +265,7 @@ func renderRuleset(p Policy) string {
 			// VPN full block (including the zero-tunnel standing posture): no
 			// tunnel-iface pass, so no user traffic leaks to a forbidden exit — but
 			// keep the endpoint pass so the encrypted handshake reaches the server
-			// and the tunnel can reconnect (a cut endpoint would livelock recovery).
+			// and the tunnel can redial (a cut endpoint would livelock recovery).
 			if len(p.VPNEndpoints) > 0 {
 				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 			}
@@ -330,9 +330,9 @@ func joinPorts(ports []int) string {
 }
 
 // allowPhysicalDNSRule is the opt-in plain-DNS pass (vpn.allowPhysicalDNS): a
-// VPN client that re-resolves its server hostname on reconnect can do so while
+// VPN client that re-resolves its server hostname on redial can do so while
 // the tunnel is down. `to any` deliberately — resolution must work regardless
-// of which resolver the system uses on reconnect.
+// of which resolver the system uses on redial.
 const allowPhysicalDNSRule = "pass out quick proto { udp tcp } to any port 53 no state\n"
 
 // tunnelProviderRules renders the tunnel-scoped geo-provider passes used in FULL

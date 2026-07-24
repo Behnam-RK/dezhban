@@ -89,7 +89,7 @@ type SwitchState struct {
 	Until   time.Time `json:"until"`
 	Profile string    `json:"profile,omitempty"`
 	// Trigger says what opened the window: TriggerManual (operator command) or
-	// TriggerAuto (automatic reconnect window on a tunnel drop). Additive field —
+	// TriggerAuto (automatic redial window on a tunnel drop). Additive field —
 	// absent in snapshots from older daemons, so observers must treat "" as
 	// TriggerManual.
 	Trigger string `json:"trigger,omitempty"`

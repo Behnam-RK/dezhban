@@ -89,7 +89,7 @@ differ.
 ### Alternative 3: Persist the pause deadline so a restart resumes it
 
 - **Pros**: closer to a literal "the pause survives everything."
-- **Cons**: neither the manual switch window nor the automatic reconnect
+- **Cons**: neither the manual switch window nor the automatic redial
   window survives a daemon restart today — both are pure in-memory episodes
   on the run loop's own timers, and a restart simply re-enters via the normal
   startup posture. Making pause the one relaxation that *does* survive a
@@ -120,7 +120,7 @@ differ.
   only reaches hosts that have already had a working tunnel (the intended
   population), never a fresh install.
 - Pause is a **third** sanctioned relaxation, alongside the switch window and
-  the automatic reconnect window — CLAUDE.md's invariant that the switch
+  the automatic redial window — CLAUDE.md's invariant that the switch
   window is "the ONLY sanctioned relaxation" is deliberately superseded by
   this ADR to "three sanctioned relaxations, each with its own cap, never
   shared." The two-trigger invariant was never a value in itself; the value is
@@ -139,7 +139,7 @@ differ.
 - **A confirmed good exit during an open pause can close it early.** The
   switch-window machinery's discovery/probe logic (`maybeStartCloseProbe` /
   `finishCloseProbe`) is shared by all three triggers and does not distinguish
-  "a VPN reconnected, so close early" (correct for a switch window) from "the
+  "a VPN redialed, so close early" (correct for a switch window) from "the
   operator is deliberately paused" (where an early close ends the pause
   sooner than requested). This is a tightening, not a leak — the guard
   re-arming early is always safe — so it is accepted as a known nuance rather

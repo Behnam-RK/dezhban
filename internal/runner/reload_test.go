@@ -105,23 +105,23 @@ func TestReloadLeavesTheStandingPostureIntact(t *testing.T) {
 
 	reloadC := make(chan LiveSettings, 1)
 	reloadC <- LiveSettings{
-		Interval:        time.Hour,
-		Decider:         decision.New([]string{"IR"}, 1),
-		SwitchWindow:    time.Minute, // would be a longer window — for the NEXT one
-		ReconnectWindow: time.Minute,
+		Interval:     time.Hour,
+		Decider:      decision.New([]string{"IR"}, 1),
+		SwitchWindow: time.Minute, // would be a longer window — for the NEXT one
+		RedialWindow: time.Minute,
 	}
 
 	o := Options{
-		Monitor:         steadyMonitor{cc: "US"},
-		Decider:         decision.New([]string{"IR"}, 1),
-		Backend:         be,
-		Log:             discardLog(),
-		Interval:        time.Hour,
-		Tunnels:         []string{"utun4"},
-		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		SwitchWindow:    5 * time.Second,
-		ReconnectWindow: 30 * time.Second,
-		ReloadC:         reloadC,
+		Monitor:      steadyMonitor{cc: "US"},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Hour,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		SwitchWindow: 5 * time.Second,
+		RedialWindow: 30 * time.Second,
+		ReloadC:      reloadC,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -150,9 +150,9 @@ func TestLiveCapturesEveryLiveSetting(t *testing.T) {
 		AutoArm:                 true,
 		SwitchWindow:            5 * time.Second,
 		SwitchWindowMax:         3 * time.Minute,
-		ReconnectWindow:         30 * time.Second,
-		ReconnectWindowMax:      10 * time.Minute,
-		ReconnectMinUptime:      15 * time.Second,
+		RedialWindow:            30 * time.Second,
+		RedialWindowMax:         10 * time.Minute,
+		RedialMinUptime:         15 * time.Second,
 		PauseMax:                30 * time.Minute,
 		WindowDiscoveryInterval: time.Second,
 		EndpointRefresh:         time.Minute,

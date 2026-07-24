@@ -109,7 +109,7 @@ enum PostureUI {
             if s.switch?.isPause == true {
                 return "paused — using your real IP (guard re-arms itself when the pause ends)"
             }
-            if s.switch?.isAutoReconnect == true {
+            if s.switch?.isAutoRedial == true {
                 return "VPN dropped — redial window open (redial now; real IP may be exposed)"
             }
             return "switch window — egress relaxed (real IP may be exposed)"

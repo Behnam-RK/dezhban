@@ -23,7 +23,7 @@ struct SettingsView: View {
         "vpn.autodetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
         "vpn.allowLocalNetwork",
         "blockedCountries", "pollInterval",
-        "vpn.switchWindow", "vpn.reconnectWindow", "vpn.endpointGrace",
+        "vpn.switchWindow", "vpn.redialWindow", "vpn.endpointGrace",
         "vpn.endpointRefresh", "vpn.tunnelWatch",
     ]
 
@@ -45,7 +45,7 @@ struct SettingsView: View {
     @State private var blockedCountries = ""
     @State private var pollInterval = ""
     @State private var switchWindow = ""
-    @State private var reconnectWindow = ""
+    @State private var redialWindow = ""
     @State private var endpointGrace = ""
     @State private var endpointRefresh = ""
     @State private var tunnelWatch = ""
@@ -62,7 +62,7 @@ struct SettingsView: View {
          String(autodetect), String(autoDiscover), String(autoArm),
          String(allowLocalNetwork),
          blockedCountries, pollInterval,
-         switchWindow, reconnectWindow, endpointGrace,
+         switchWindow, redialWindow, endpointGrace,
          endpointRefresh, tunnelWatch]
     }
 
@@ -133,7 +133,7 @@ struct SettingsView: View {
                     TextField("Switch window (e.g. 5s)", text: $switchWindow)
                         .disabled(!canApply)
                         .help("Manual switch window (`dezhban switch`): 0 disables it, otherwise up to 3m.")
-                    TextField("Reconnect window (e.g. 30s)", text: $reconnectWindow)
+                    TextField("Redial window (e.g. 30s)", text: $redialWindow)
                         .disabled(!canApply)
                         .help("Automatic window opened when a healthy tunnel drops, so the VPN client can "
                             + "redial: 0 disables it, otherwise up to 10m.")
@@ -324,7 +324,7 @@ struct SettingsView: View {
         tunnelInterfaces = ""; endpoints = ""
         autodetect = false; autoDiscover = false; autoArm = false; allowLocalNetwork = true
         blockedCountries = ""; pollInterval = ""
-        switchWindow = ""; reconnectWindow = ""; endpointGrace = ""
+        switchWindow = ""; redialWindow = ""; endpointGrace = ""
         endpointRefresh = ""; tunnelWatch = ""
         state.refreshServiceState()
         // `path` is the same resolution ConfigApply.seed already did for the
@@ -346,7 +346,7 @@ struct SettingsView: View {
             blockedCountries = v[6]
             pollInterval = v[7]
             switchWindow = v[8]
-            reconnectWindow = v[9]
+            redialWindow = v[9]
             endpointGrace = v[10]
             endpointRefresh = v[11]
             tunnelWatch = v[12]
@@ -364,14 +364,14 @@ struct SettingsView: View {
     private func apply() {
         let poll = pollInterval.trimmingCharacters(in: .whitespaces)
         let window = switchWindow.trimmingCharacters(in: .whitespaces)
-        let reconnect = reconnectWindow.trimmingCharacters(in: .whitespaces)
+        let redial = redialWindow.trimmingCharacters(in: .whitespaces)
         let grace = endpointGrace.trimmingCharacters(in: .whitespaces)
         let refresh = endpointRefresh.trimmingCharacters(in: .whitespaces)
         let watch = tunnelWatch.trimmingCharacters(in: .whitespaces)
         for (label, value) in [
             ("Geo IP lookup interval", poll),
             ("Switch window", window),
-            ("Reconnect window", reconnect),
+            ("Redial window", redial),
             ("Endpoint grace", grace),
             ("Endpoint refresh", refresh),
             ("Tunnel watch", watch),
@@ -392,7 +392,7 @@ struct SettingsView: View {
             "blockedCountries=\(blockedCountries.trimmingCharacters(in: .whitespaces))",
             "pollInterval=\(poll)",
             "vpn.switchWindow=\(window)",
-            "vpn.reconnectWindow=\(reconnect)",
+            "vpn.redialWindow=\(redial)",
             "vpn.endpointGrace=\(grace)",
             "vpn.endpointRefresh=\(refresh)",
             "vpn.tunnelWatch=\(watch)",

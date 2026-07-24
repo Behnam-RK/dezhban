@@ -42,9 +42,9 @@ type LiveSettings struct {
 	// what the per-trigger caps exist to prevent.
 	SwitchWindow            time.Duration
 	SwitchWindowMax         time.Duration
-	ReconnectWindow         time.Duration
-	ReconnectWindowMax      time.Duration
-	ReconnectMinUptime      time.Duration
+	RedialWindow            time.Duration
+	RedialWindowMax         time.Duration
+	RedialMinUptime         time.Duration
 	PauseMax                time.Duration
 	WindowDiscoveryInterval time.Duration
 
@@ -82,9 +82,9 @@ func (o Options) Live() LiveSettings {
 		AutoArm:                 o.AutoArm,
 		SwitchWindow:            o.SwitchWindow,
 		SwitchWindowMax:         o.SwitchWindowMax,
-		ReconnectWindow:         o.ReconnectWindow,
-		ReconnectWindowMax:      o.ReconnectWindowMax,
-		ReconnectMinUptime:      o.ReconnectMinUptime,
+		RedialWindow:            o.RedialWindow,
+		RedialWindowMax:         o.RedialWindowMax,
+		RedialMinUptime:         o.RedialMinUptime,
 		PauseMax:                o.PauseMax,
 		WindowDiscoveryInterval: o.WindowDiscoveryInterval,
 		EndpointRefresh:         o.EndpointRefresh,

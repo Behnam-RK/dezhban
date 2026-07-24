@@ -87,10 +87,10 @@ prior fail-closed posture.
 (`dezhban switch`, or the app), to connect a brand-new VPN. Trigger one, capped
 by `advanced.switchWindowMax`.
 
-**Reconnect window** — a switch window opened *automatically* when the tunnel drops from
+**Redial window** — a switch window opened *automatically* when the tunnel drops from
 healthy GUARD, so the VPN can redial. Trigger two, capped by
-`advanced.reconnectWindowMax`. Same machinery, same rails; only the trigger and
-the cap differ. User-facing: "Your VPN dropped — reconnecting".
+`advanced.redialWindowMax`. Same machinery, same rails; only the trigger and
+the cap differ. User-facing: "Your VPN dropped — redialing".
 
 **Pause** — a switch window opened by an explicit operator command
 (`dezhban pause`, or the app) to deliberately use the real ISP IP for a domestic-

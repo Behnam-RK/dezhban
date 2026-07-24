@@ -24,7 +24,7 @@ const (
 	// ModeFullBlock cuts outbound egress except loopback. Under a VPN it drops
 	// the tunnel-interface pass — so no user traffic egresses to a forbidden
 	// exit — but KEEPS the VPN endpoint passes, so the encrypted handshake
-	// still reaches the server and the tunnel can reconnect (a cut endpoint
+	// still reaches the server and the tunnel can redial (a cut endpoint
 	// would livelock recovery: the tunnel could never re-establish to be
 	// re-evaluated). It is therefore ModeGuard minus the tunnel-interface pass.
 	// `block --force` uses this Mode with no VPN context at all — no tunnel,
@@ -78,12 +78,12 @@ type Policy struct {
 	// presence marks VPN mode even in ModeFullBlock.
 	TunnelIfaces []string
 	// VPNEndpoints are the VPN server IPs reachable on the physical interface,
-	// kept open so the tunnel can stay up / reconnect.
+	// kept open so the tunnel can stay up / redial.
 	VPNEndpoints []netip.Addr
 	// AllowPhysicalDNS adds a plain-DNS (port 53) egress pass to guard and VPN
 	// full-block rulesets so a VPN client can re-resolve its server hostname
 	// while the tunnel is down. Deliberately `to any`: resolution must work
-	// regardless of which resolver the system uses on reconnect. The residual
+	// regardless of which resolver the system uses on redial. The residual
 	// leak is DNS-query metadata only, gated behind a default-off config flag.
 	//
 	// Note that the rule is unscoped by INTERFACE as well as by destination, so

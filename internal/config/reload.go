@@ -52,7 +52,7 @@ func KeyValues(c *Config) map[string]string {
 		"vpn.autoArm":               strconv.FormatBool(v.AutoArm),
 		"vpn.armAtBoot":             strconv.FormatBool(v.ArmAtBoot),
 		"vpn.switchWindow":          dur(v.SwitchWindow),
-		"vpn.reconnectWindow":       dur(v.ReconnectWindow),
+		"vpn.redialWindow":          dur(v.RedialWindow),
 		"vpn.pauseMax":              dur(v.PauseMax),
 		"vpn.endpointRefresh":       dur(v.EndpointRefresh),
 		"vpn.endpointGrace":         dur(v.EndpointGrace),
@@ -65,8 +65,8 @@ func KeyValues(c *Config) map[string]string {
 		"control.allowPauseOps":  strconv.FormatBool(c.Control.AllowPauseOps),
 
 		"vpn.advanced.switchWindowMax":         dur(adv.SwitchWindowMax),
-		"vpn.advanced.reconnectWindowMax":      dur(adv.ReconnectWindowMax),
-		"vpn.advanced.reconnectMinUptime":      dur(adv.ReconnectMinUptime),
+		"vpn.advanced.redialWindowMax":         dur(adv.RedialWindowMax),
+		"vpn.advanced.redialMinUptime":         dur(adv.RedialMinUptime),
 		"vpn.advanced.commandFreshness":        dur(adv.CommandFreshness),
 		"vpn.advanced.windowDiscoveryInterval": dur(adv.WindowDiscoveryInterval),
 		"vpn.advanced.tunnelPruneAfter":        dur(adv.TunnelPruneAfter),
@@ -122,7 +122,7 @@ var liveKeys = map[string]bool{
 	"vpn.allowLocalNetwork": true,
 	"vpn.autoArm":           true,
 	"vpn.switchWindow":      true,
-	"vpn.reconnectWindow":   true,
+	"vpn.redialWindow":      true,
 	"vpn.pauseMax":          true,
 	"vpn.endpointRefresh":   true,
 	"vpn.endpointGrace":     true,
@@ -131,8 +131,8 @@ var liveKeys = map[string]bool{
 	"control.allowPauseOps":  true,
 
 	"vpn.advanced.switchWindowMax":         true,
-	"vpn.advanced.reconnectWindowMax":      true,
-	"vpn.advanced.reconnectMinUptime":      true,
+	"vpn.advanced.redialWindowMax":         true,
+	"vpn.advanced.redialMinUptime":         true,
 	"vpn.advanced.windowDiscoveryInterval": true,
 }
 
@@ -205,7 +205,7 @@ func MergeLive(base, cur *Config) *Config {
 	out.VPN.AllowLocalNetwork = cur.VPN.AllowLocalNetwork
 	out.VPN.AutoArm = cur.VPN.AutoArm
 	out.VPN.SwitchWindow = cur.VPN.SwitchWindow
-	out.VPN.ReconnectWindow = cur.VPN.ReconnectWindow
+	out.VPN.RedialWindow = cur.VPN.RedialWindow
 	out.VPN.PauseMax = cur.VPN.PauseMax
 	out.VPN.EndpointRefresh = cur.VPN.EndpointRefresh
 	out.VPN.EndpointGrace = cur.VPN.EndpointGrace
@@ -214,8 +214,8 @@ func MergeLive(base, cur *Config) *Config {
 	out.Control.AllowPauseOps = cur.Control.AllowPauseOps
 
 	out.VPN.Advanced.SwitchWindowMax = cur.VPN.Advanced.SwitchWindowMax
-	out.VPN.Advanced.ReconnectWindowMax = cur.VPN.Advanced.ReconnectWindowMax
-	out.VPN.Advanced.ReconnectMinUptime = cur.VPN.Advanced.ReconnectMinUptime
+	out.VPN.Advanced.RedialWindowMax = cur.VPN.Advanced.RedialWindowMax
+	out.VPN.Advanced.RedialMinUptime = cur.VPN.Advanced.RedialMinUptime
 	out.VPN.Advanced.WindowDiscoveryInterval = cur.VPN.Advanced.WindowDiscoveryInterval
 
 	return &out

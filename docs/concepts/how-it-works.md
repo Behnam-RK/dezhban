@@ -56,7 +56,7 @@ block everything else
 
 Which holes does that leave to maintain?
 
-- **The tunnel set.** Tunnel interfaces (`utunN`) renumber across reconnects,
+- **The tunnel set.** Tunnel interfaces (`utunN`) renumber across redials,
   so a watcher samples the system every second (`vpn.tunnelWatch`) and the loop
   grows/prunes the guarded set live. Explicitly configured interfaces are
   pinned and never pruned.
@@ -97,23 +97,23 @@ below in [Exit-country policing](#exit-country-policing).
    nothing falls back to your real interface.
 2. **t ≤ ~1 s** — the watcher observes the drop. The GUI icon flips to the red
    blocked state, a notification fires, and — if the drop came from a healthy
-   GUARD — the **automatic reconnect window** opens
-   ([modes.md § Automatic reconnect window](modes.md#automatic-reconnect-window)):
-   egress is relaxed for `vpn.reconnectWindow` (default 30s) so your VPN client
+   GUARD — the **automatic redial window** opens
+   ([modes.md § Automatic redial window](modes.md#automatic-redial-window)):
+   egress is relaxed for `vpn.redialWindow` (default 30s) so your VPN client
    can redial *any* server, including one dezhban has never seen. Rotating-pool
    and anti-censorship VPNs pick fresh servers constantly; without the window,
-   every reconnect would need a manual `switch`.
-3. **You hit reconnect** (or the client auto-reconnects). The tunnel comes up,
+   every redial would need a manual `switch`.
+3. **You hit redial** (or the client auto-redials). The tunnel comes up,
    the daemon discovers the new server socket, runs a geo lookup through the
    tunnel, and on a confirmed non-blocked exit **snaps the window shut early**,
    learns the endpoint, and restores GUARD. Total interaction required: zero.
-4. **Or nothing reconnects.** The window expires and the guard **fail-closes
+4. **Or nothing redials.** The window expires and the guard **fail-closes
    and stays closed** — no second window until a tunnel actually comes back.
    A flapping tunnel doesn't get windows at all
-   (`vpn.advanced.reconnectMinUptime`).
+   (`vpn.advanced.redialMinUptime`).
 
 Prefer the original strict behavior — a drop is cut and *stays* cut with zero
-relaxation? `vpn.reconnectWindow: "0"`.
+relaxation? `vpn.redialWindow: "0"`.
 
 ## Exit-country policing
 
@@ -123,7 +123,7 @@ machine (hysteresis again). Three outcomes:
 
 - **Allowed country** → stay in GUARD.
 - **Undeterminable** (lookup failed) → **hold the current posture.** Escalating
-  on an unknown would cut the tunnel's own egress and livelock the reconnect;
+  on an unknown would cut the tunnel's own egress and livelock the redial;
   the standing guard already covers the leak the failure might hide.
 - **Confirmed blocked country** → **FULL BLOCK**: the tunnel-egress pass is
   dropped so none of your traffic reaches the forbidden exit, but the endpoint
@@ -140,7 +140,7 @@ machine (hysteresis again). Three outcomes:
 Everything above never *widens* access on its own authority except through one
 mechanism: the bounded switch window, opened by exactly two triggers — an
 operator command (`dezhban switch`, for arming a brand-new VPN) or the
-automatic reconnect flow above. Full mechanics, the independent per-trigger
+automatic redial flow above. Full mechanics, the independent per-trigger
 caps, and the safety rails: [modes.md § Switching between
 VPNs](modes.md#switching-between-vpns).
 

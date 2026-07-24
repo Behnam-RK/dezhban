@@ -217,13 +217,14 @@ func requireRoot(cmd string) bool {
 
 // loadConfig is a small helper shared by the commands that take --config. It
 // resolves the path (so --config can be omitted) before loading.
-// reportRetired warns once per retired key found in the config file. The keys are
-// inert, so this is the only signal an operator gets that a setting they wrote is
-// not doing anything — silence here would let someone believe a discarded
-// security setting took effect.
+// reportRetired warns once per inert key found in the config file: keys that
+// were retired, keys that were renamed, and keys the schema simply does not
+// recognise. All three share one property — the operator wrote a setting and it
+// is doing nothing — and this is the only signal they get. Silence would let
+// someone believe a discarded security setting took effect.
 func reportRetired(cfg *config.Config, log *slog.Logger) {
 	for _, r := range cfg.Retired {
-		log.Warn("config key is retired and has no effect", "key", r.Key, "why", r.Reason)
+		log.Warn("config key has no effect", "key", r.Key, "why", r.Reason)
 	}
 }
 
@@ -565,9 +566,9 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
 		SwitchWindow:            cfg.VPN.SwitchWindow,
 		SwitchWindowMax:         adv.SwitchWindowMax,
-		ReconnectWindow:         cfg.VPN.ReconnectWindow,
-		ReconnectWindowMax:      adv.ReconnectWindowMax,
-		ReconnectMinUptime:      adv.ReconnectMinUptime,
+		RedialWindow:            cfg.VPN.RedialWindow,
+		RedialWindowMax:         adv.RedialWindowMax,
+		RedialMinUptime:         adv.RedialMinUptime,
 		Learn:                   learnHook,
 		PollCommand:             switchPollOrNil(switchEnabled || pauseEnabled, pollCommand),
 		Publish:                 publish,
@@ -604,9 +605,9 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 		AutoArm:                 cfg.VPN.AutoArm,
 		SwitchWindow:            cfg.VPN.SwitchWindow,
 		SwitchWindowMax:         adv.SwitchWindowMax,
-		ReconnectWindow:         cfg.VPN.ReconnectWindow,
-		ReconnectWindowMax:      adv.ReconnectWindowMax,
-		ReconnectMinUptime:      adv.ReconnectMinUptime,
+		RedialWindow:            cfg.VPN.RedialWindow,
+		RedialWindowMax:         adv.RedialWindowMax,
+		RedialMinUptime:         adv.RedialMinUptime,
 		PauseMax:                cfg.VPN.PauseMax,
 		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
@@ -634,7 +635,7 @@ func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov run
 		return nil
 	}
 	// In autodetect mode the watcher must sample ALL tunnel-like interfaces, not
-	// just the set known at startup: utunN names change across reconnects, so
+	// just the set known at startup: utunN names change across redials, so
 	// pinning the watcher to the start-time list (which liveSample treats as an
 	// allowlist) would blind it to a renumbered or newly-created tunnel and stop
 	// the runner growing/pruning its guarded set. An empty Tunnels makes
@@ -1178,7 +1179,7 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println("interfaces; guarding the wrong one would not protect you.")
 	fmt.Println()
 	fmt.Println()
-	fmt.Println("recommended config (autodetect handles interface renumbering across reconnects):")
+	fmt.Println("recommended config (autodetect handles interface renumbering across redials):")
 	fmt.Println(`  "vpn": {`)
 	fmt.Println(`    "enabled": true,`)
 	fmt.Println(`    "autodetect": true,`)
@@ -1219,11 +1220,12 @@ func cmdValidate(args []string) int {
 	fmt.Printf("  poll interval:     %s\n", cfg.PollInterval)
 	fmt.Printf("  vpn tunnels:       %s\n", strings.Join(cfg.VPN.TunnelInterfaces, ", "))
 	fmt.Printf("  vpn endpoints:     %s\n", strings.Join(cfg.VPN.Endpoints, ", "))
-	// Retired keys are not an error — the config is valid and will run — but
-	// `validate` is exactly where someone checks whether their file says what
-	// they think it says, so a key that no longer does anything belongs here.
+	// Inert keys — retired, renamed, or simply unrecognised — are not an error;
+	// the config is valid and will run. But `validate` is exactly where someone
+	// checks whether their file says what they think it says, so a key that does
+	// nothing belongs here more than anywhere.
 	for _, r := range cfg.Retired {
-		fmt.Printf("\n  note: %q no longer has any effect.\n        %s\n", r.Key, r.Reason)
+		fmt.Printf("\n  note: %q has no effect.\n        %s\n", r.Key, r.Reason)
 	}
 	return 0
 }
@@ -1623,10 +1625,10 @@ func cmdStatus(args []string) int {
 			// The Disabled sentinel is negative — print "off", never "-1ns".
 			fmt.Println("switch window:    off")
 		}
-		if cfg.VPN.ReconnectWindow > 0 {
-			fmt.Println("reconnect window:", cfg.VPN.ReconnectWindow)
+		if cfg.VPN.RedialWindow > 0 {
+			fmt.Println("redial window:", cfg.VPN.RedialWindow)
 		} else {
-			fmt.Println("reconnect window: off")
+			fmt.Println("redial window: off")
 		}
 		if cfg.VPN.PauseMax > 0 {
 			fmt.Println("pause max:       ", cfg.VPN.PauseMax)
@@ -1639,7 +1641,7 @@ func cmdStatus(args []string) int {
 				kind := "switch state:    "
 				switch snap.Switch.Trigger {
 				case state.TriggerAuto:
-					kind = "reconnect state: " // auto window opened by a tunnel drop
+					kind = "redial state: " // auto window opened by a tunnel drop
 				case state.TriggerPause:
 					kind = "pause state:     " // operator pause (dezhban pause)
 				}

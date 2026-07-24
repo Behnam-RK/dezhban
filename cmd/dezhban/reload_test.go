@@ -23,15 +23,15 @@ func TestLiveSettingsFromMapsEveryField(t *testing.T) {
 	cfg.VPN.AllowLocalNetwork = true
 	cfg.VPN.AutoArm = true
 	cfg.VPN.SwitchWindow = 5 * time.Second
-	cfg.VPN.ReconnectWindow = 30 * time.Second
+	cfg.VPN.RedialWindow = 30 * time.Second
 	cfg.VPN.PauseMax = 30 * time.Minute
 	cfg.VPN.EndpointRefresh = time.Minute
 	cfg.VPN.EndpointGrace = 15 * time.Minute
 	cfg.Control.AllowSwitchOps = true
 	cfg.Control.AllowPauseOps = true
 	cfg.VPN.Advanced.SwitchWindowMax = 3 * time.Minute
-	cfg.VPN.Advanced.ReconnectWindowMax = 10 * time.Minute
-	cfg.VPN.Advanced.ReconnectMinUptime = 15 * time.Second
+	cfg.VPN.Advanced.RedialWindowMax = 10 * time.Minute
+	cfg.VPN.Advanced.RedialMinUptime = 15 * time.Second
 	cfg.VPN.Advanced.WindowDiscoveryInterval = time.Second
 
 	got := reflect.ValueOf(liveSettingsFrom(&cfg))
@@ -49,12 +49,12 @@ func TestLiveSettingsFromMapsEveryField(t *testing.T) {
 func TestLiveSettingsFromPreservesDisabledWindows(t *testing.T) {
 	cfg := config.Default()
 	cfg.VPN.SwitchWindow = config.Disabled
-	cfg.VPN.ReconnectWindow = config.Disabled
+	cfg.VPN.RedialWindow = config.Disabled
 	cfg.VPN.PauseMax = config.Disabled
 
 	ls := liveSettingsFrom(&cfg)
-	if ls.SwitchWindow > 0 || ls.ReconnectWindow > 0 || ls.PauseMax > 0 {
-		t.Errorf("a disabled window survived as enabled: switch=%v reconnect=%v pause=%v",
-			ls.SwitchWindow, ls.ReconnectWindow, ls.PauseMax)
+	if ls.SwitchWindow > 0 || ls.RedialWindow > 0 || ls.PauseMax > 0 {
+		t.Errorf("a disabled window survived as enabled: switch=%v redial=%v pause=%v",
+			ls.SwitchWindow, ls.RedialWindow, ls.PauseMax)
 	}
 }

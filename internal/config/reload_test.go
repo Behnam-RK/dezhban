@@ -71,11 +71,11 @@ func TestChangesClassifiesLiveAndRestartRequired(t *testing.T) {
 func TestKeyValuesRendersDisabledWindowsAsOff(t *testing.T) {
 	c := Default()
 	c.VPN.SwitchWindow = Disabled
-	c.VPN.ReconnectWindow = Disabled
+	c.VPN.RedialWindow = Disabled
 	c.VPN.PauseMax = Disabled
 
 	kv := KeyValues(&c)
-	for _, key := range []string{"vpn.switchWindow", "vpn.reconnectWindow", "vpn.pauseMax"} {
+	for _, key := range []string{"vpn.switchWindow", "vpn.redialWindow", "vpn.pauseMax"} {
 		if kv[key] != "off" {
 			t.Errorf("%s rendered as %q, want \"off\"", key, kv[key])
 		}
@@ -87,14 +87,14 @@ func TestKeyValuesRendersDisabledWindowsAsOff(t *testing.T) {
 func TestChangesReportsDisablingAWindow(t *testing.T) {
 	old := Default()
 	cur := Default()
-	cur.VPN.ReconnectWindow = Disabled
+	cur.VPN.RedialWindow = Disabled
 
-	ch := changeFor(t, Changes(&old, &cur), "vpn.reconnectWindow")
+	ch := changeFor(t, Changes(&old, &cur), "vpn.redialWindow")
 	if ch.To != "off" {
-		t.Errorf("disabling the reconnect window reported %q, want \"off\"", ch.To)
+		t.Errorf("disabling the redial window reported %q, want \"off\"", ch.To)
 	}
 	if ch.NeedsRestart() {
-		t.Errorf("disabling the reconnect window reported as needing a restart (%q)", ch.RestartReason)
+		t.Errorf("disabling the redial window reported as needing a restart (%q)", ch.RestartReason)
 	}
 }
 
@@ -144,7 +144,7 @@ func TestMergeLiveMovesOnlyLiveKeys(t *testing.T) {
 
 	cur := Default()
 	cur.PollInterval = 99 * time.Second                     // live
-	cur.VPN.ReconnectWindow = Disabled                      // live, and security-relevant
+	cur.VPN.RedialWindow = Disabled                         // live, and security-relevant
 	cur.Control.AllowPauseOps = !base.Control.AllowPauseOps // live
 	cur.LogLevel = "debug"                                  // restart-required
 	cur.VPN.ArmAtBoot = !base.VPN.ArmAtBoot                 // restart-required
@@ -154,7 +154,7 @@ func TestMergeLiveMovesOnlyLiveKeys(t *testing.T) {
 
 	want := map[string]bool{
 		"pollInterval":          true,
-		"vpn.reconnectWindow":   true,
+		"vpn.redialWindow":      true,
 		"control.allowPauseOps": true,
 	}
 	for _, ch := range got {
@@ -184,15 +184,15 @@ func TestMergeLiveCoversExactlyTheLiveKeys(t *testing.T) {
 	cur.VPN.AllowLocalNetwork = !base.VPN.AllowLocalNetwork
 	cur.VPN.AutoArm = !base.VPN.AutoArm
 	cur.VPN.SwitchWindow = base.VPN.SwitchWindow + time.Second
-	cur.VPN.ReconnectWindow = base.VPN.ReconnectWindow + time.Second
+	cur.VPN.RedialWindow = base.VPN.RedialWindow + time.Second
 	cur.VPN.PauseMax = base.VPN.PauseMax + time.Second
 	cur.VPN.EndpointRefresh = base.VPN.EndpointRefresh + time.Second
 	cur.VPN.EndpointGrace = base.VPN.EndpointGrace + time.Second
 	cur.Control.AllowSwitchOps = !base.Control.AllowSwitchOps
 	cur.Control.AllowPauseOps = !base.Control.AllowPauseOps
 	cur.VPN.Advanced.SwitchWindowMax = base.VPN.Advanced.SwitchWindowMax + time.Second
-	cur.VPN.Advanced.ReconnectWindowMax = base.VPN.Advanced.ReconnectWindowMax + time.Second
-	cur.VPN.Advanced.ReconnectMinUptime = base.VPN.Advanced.ReconnectMinUptime + time.Second
+	cur.VPN.Advanced.RedialWindowMax = base.VPN.Advanced.RedialWindowMax + time.Second
+	cur.VPN.Advanced.RedialMinUptime = base.VPN.Advanced.RedialMinUptime + time.Second
 	cur.VPN.Advanced.WindowDiscoveryInterval = base.VPN.Advanced.WindowDiscoveryInterval + time.Second
 
 	moved := map[string]bool{}

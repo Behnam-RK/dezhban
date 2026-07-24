@@ -80,7 +80,7 @@ The failure chain:
 wrong/internal vpn.endpoints
   → physical-side `pass to <endpoint>` matches nothing real
   → VPN transport blocked on the physical link
-  → tunnel drops, can't reconnect (its path to the server is cut)
+  → tunnel drops, can't redial (its path to the server is cut)
   → DNS + everything over the tunnel fails → lockout
 ```
 
@@ -106,18 +106,18 @@ dezhban validate --config <your-config>   # confirm it parses
 task install FRESH=1                      # tear down + reinstall (or: sh scripts/reinstall.sh)
 ```
 
-### Reconnect livelock during tunnel warmup (fixed)
+### Redial livelock during tunnel warmup (fixed)
 
-Symptom: after disconnecting and reconnecting your VPN, **neither the VPN nor the
+Symptom: after disconnecting and redialing your VPN, **neither the VPN nor the
 internet recovered until you stopped the daemon** (`Ctrl+C`), even though the
 tunnel interface came back up. The log showed `FULL BLOCK country=""` during the
-reconnect.
+redial.
 
-**Cause (historical).** A freshly reconnected tunnel reports "up" before it is
+**Cause (historical).** A freshly redialed tunnel reports "up" before it is
 actually routing/DNS-ready. Guard mode used to run the geo lookup during that
 warmup; the lookup failed (`no such host`), and the then-current fail-closed
 behavior escalated a run of failures to FULL BLOCK with an *empty* country — which cut the tunnel's
-own egress and prevented the very reconnect it was waiting for (a livelock).
+own egress and prevented the very redial it was waiting for (a livelock).
 
 **Fix (current behavior).** An **undeterminable** country now
 *holds* the current posture instead of escalating — only a *successful* reading
@@ -128,10 +128,10 @@ hostnames, keep `vpn.allowPhysicalDNS` on (the default) so the client can re-res
 server on the physical link while the tunnel is down. The residual leak is
 DNS-query metadata only; your traffic stays blocked.
 
-### My VPN can't reconnect after a drop (rotating-server VPNs)
+### My VPN can't redial after a drop (rotating-server VPNs)
 
 Symptom: the guard cuts egress on a VPN drop (correct), but hitting the client's
-reconnect button does nothing — the VPN never comes back without a manual
+redial button does nothing — the VPN never comes back without a manual
 `dezhban switch`.
 
 **Cause.** Rotating-pool and anti-censorship VPNs (NordVPN, ProtonVPN,
@@ -140,14 +140,14 @@ only passes *known* endpoints on the physical link, so the redial targets an
 address dezhban has never seen and is dropped — `endpointGrace` only covers
 redials to the *same* server.
 
-**Fix (current behavior).** The [automatic reconnect
-window](../concepts/modes.md#automatic-reconnect-window) (`vpn.reconnectWindow`, default
+**Fix (current behavior).** The [automatic redial
+window](../concepts/modes.md#automatic-redial-window) (`vpn.redialWindow`, default
 `30s`) opens on the drop so the client can redial anywhere; the new server is
 learned and the guard snaps back on a confirmed good exit. If you disabled it
-(`"0"`), reconnects to fresh servers need `dezhban switch` — that is the
+(`"0"`), redials to fresh servers need `dezhban switch` — that is the
 configured strict behavior, not a bug. If the window keeps getting suppressed in
 the logs, your tunnel is flapping faster than
-`vpn.advanced.reconnectMinUptime` (default `15s`) — fix the VPN, or lower/zero
+`vpn.advanced.redialMinUptime` (default `15s`) — fix the VPN, or lower/zero
 the gate if the flapping is expected.
 
 ### Note for NetworkExtension VPNs (macOS)

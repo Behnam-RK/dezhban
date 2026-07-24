@@ -12,7 +12,40 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed — BREAKING
+
+- **"reconnect" is now "redial" everywhere.** The codebase used both words for the
+  same thing, and the macOS app already said "redial now" inside a window it
+  called a "reconnect window". One word, chosen for being unambiguous about what
+  the VPN client is doing, now runs through the config keys, the Go and Swift
+  identifiers, the CLI output, and the documentation.
+
+  Three config keys are renamed with **no aliases**, so an existing config must
+  be updated by hand:
+
+  | Old | New |
+  |---|---|
+  | `vpn.reconnectWindow` | `vpn.redialWindow` |
+  | `vpn.advanced.reconnectWindowMax` | `vpn.advanced.redialWindowMax` |
+  | `vpn.advanced.reconnectMinUptime` | `vpn.advanced.redialMinUptime` |
+
+  Missing one is loud rather than silent — the old names are recognised as
+  renamed and reported with their replacement by `dezhban validate` and at daemon
+  start (see below) — but the old key genuinely stops taking effect. Nothing else
+  about the behaviour changes: the automatic window, its cap, and its anti-flap
+  gate work exactly as before under the new names.
+
 ### Added
+
+- **Unrecognised config keys are now reported instead of ignored.** Go's JSON
+  decoder drops fields it does not know, so a typo — or a key renamed by an
+  upgrade — silently reverted that setting to its default. Someone who wrote
+  `"redialWindow": "0"` to forbid every automatic relaxation would have got the
+  30s default back without a word. Every key the schema does not define is now
+  listed by `dezhban validate` and warned about at daemon start, with renamed
+  keys naming their replacement. It stays a report rather than a hard failure:
+  refusing to start would leave the machine with no kill switch at all, which is
+  worse than running with one setting at its default and saying so.
 
 - **Config changes now apply without restarting the daemon.** The daemon read its
   configuration exactly once, at startup, and nothing told it to look again — no
