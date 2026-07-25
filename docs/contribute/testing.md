@@ -493,7 +493,7 @@ task gui:build && open dist/Dezhban.app
 - [ ] **Menubar panic works without the window.** From a fresh launch (main window
       never opened): Panic shows a confirmation, confirming removes the rules and
       the transcript appears in an alert; cancelling does nothing.
-- [ ] **Window panic** routes its transcript to the Logs & Diagnostics pane and
+- [ ] **Window panic** routes its transcript to the Logs pane and
       navigates there.
 - [ ] **Failures are visible, not silent.** Move the CLI binary aside (or invalidate
       the config), then trigger Start/Stop → the alert shows real stderr.
@@ -586,9 +586,16 @@ end up typing a password.
 - [ ] Killing the daemon mid-restart makes the pane report failure, not success.
 - [ ] One prompt per apply — not one per field.
 
-### Logs & Diagnostics pane
+### Diagnostics pane
 
-- [ ] **Diagnostics** match a hand-run `dezhban doctor --config …`.
+- [ ] Rows and their statuses match a hand-run `dezhban doctor --config …`;
+      checking "Find my VPN's server" matches `dezhban doctor --discover`.
+- [ ] A `fail`/`warn` row's fix text is readable and matches the fix text
+      `dezhban doctor` prints in a terminal.
+- [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
+
+### Logs pane
+
 - [ ] "Show last hour" matches a hand-run `log show --last 1h --predicate
       'process == "dezhban"'`. "Stream live" updates live; Stop — or closing the
       window mid-stream — ends the child process (no orphaned `log stream` in `ps`).

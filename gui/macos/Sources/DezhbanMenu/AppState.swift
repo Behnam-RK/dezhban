@@ -4,15 +4,18 @@ import DezhbanCore
 
 /// The main window's sidebar sections.
 enum SidebarSection: String, CaseIterable, Identifiable {
-    case overview, settings, logs, about
+    case overview, diagnostics, settings, logs, about
 
     var id: String { rawValue }
 
     var label: String {
         switch self {
         case .overview: return "Overview"
+        case .diagnostics: return "Diagnostics"
         case .settings: return "Settings"
-        case .logs: return "Logs & Diagnostics"
+        // Structured findings moved to the Diagnostics pane above; this pane
+        // is transcripts only now (panic, install, config apply, `log` output).
+        case .logs: return "Logs"
         case .about: return "About"
         }
     }
@@ -20,6 +23,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     var systemImage: String {
         switch self {
         case .overview: return "shield.lefthalf.filled"
+        case .diagnostics: return "stethoscope"
         case .settings: return "gearshape"
         case .logs: return "text.alignleft"
         case .about: return "info.circle"
@@ -27,7 +31,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     }
 }
 
-/// The Logs & Diagnostics pane's backing store: one shared monospaced transcript
+/// The Logs pane's backing store: one shared monospaced transcript
 /// (NSTextStorage, appended in place — O(n) over a long `log stream`, unlike
 /// re-setting a String each chunk) plus the live-stream lifecycle. Successor to
 /// the retired OutputPanel; every long-running window action writes here.
@@ -119,7 +123,7 @@ final class AppState: ObservableObject {
 
     var isLive: Bool { PostureUI.isLive(snapshot) }
 
-    /// Routes a finished transcript into the Logs & Diagnostics pane and
+    /// Routes a finished transcript into the Logs pane and
     /// navigates there — the window-side output surface for long actions.
     func showInLogs(title: String, text: String) {
         console.set(title: title, text: text.isEmpty ? "(no output)" : text)

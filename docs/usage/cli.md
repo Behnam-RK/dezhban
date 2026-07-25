@@ -366,9 +366,13 @@ Two surfaces, split by urgency:
     validated `config set` batch, **"Use Touch ID for settings changes"** (see
     below), and the raw config file escape hatch (some advanced options are
     JSON-only).
-  - **Logs & Diagnostics** — read-only `doctor`, a scoped `log show --last 1h`,
-    a live `log stream` with Stop (also opens Console.app), and the transcripts
-    of window-triggered panic/install/uninstall/apply runs.
+  - **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
+    with fixes inline instead of a text dump; an optional "Find my VPN's
+    server" checkbox runs it with `--discover`. Read-only, same guarantee as
+    running `dezhban doctor` in a terminal.
+  - **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
+    (also opens Console.app), and the transcripts of window-triggered
+    panic/install/uninstall/apply/restart runs.
   - **About** — version, config/binary paths, posture, service state, and which
     elevation path (Touch ID-capable Authorization Services vs password-only
     fallback) privileged actions will take.

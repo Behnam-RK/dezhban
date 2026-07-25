@@ -337,7 +337,15 @@ current as you land changes.
   prose (`printDoctor`, byte-identical to before this change) or
   `{checks: [{name, status, summary, details, fixes}], ok}` via `--json` —
   for a consumer that needs to render findings itself instead of parsing
-  text, which the next release's Diagnostics pane does.
+  text, which the macOS app's new Diagnostics pane (below) does.
+- **A Diagnostics pane in the macOS app**, replacing the Logs pane's old "Run
+  diagnostics" button (which dumped `doctor`'s raw text into the transcript
+  view). Renders `doctor --json`'s checks as status rows — config, tunnels,
+  endpoints, lockout risk, Touch ID, and an optional "Find my VPN's server"
+  (`--discover`) — with fix text inline, read-only and root-free like the CLI
+  command it wraps. The sidebar's "Logs & Diagnostics" section is renamed
+  **Logs**; it keeps its transcript job (last-hour/live logs, and the output
+  of panic/install/config-apply/restart) but no longer runs `doctor` itself.
 
 ## [0.7.0] - 2026-07-22
 
