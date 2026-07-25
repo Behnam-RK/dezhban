@@ -1737,11 +1737,16 @@ func cmdStatus(args []string) int {
 func statusJSON(cfg *config.Config) int {
 	statePath := defaultStatePath()
 	out := struct {
-		Version          string          `json:"version"`
-		Commit           string          `json:"commit,omitempty"`    // build stamp; empty outside a git tree
-		BuildDate        string          `json:"buildDate,omitempty"` // RFC3339
-		Privileged       bool            `json:"privileged"`
-		Service          string          `json:"service"`
+		Version    string `json:"version"`
+		Commit     string `json:"commit,omitempty"`    // build stamp; empty outside a git tree
+		BuildDate  string `json:"buildDate,omitempty"` // RFC3339
+		Privileged bool   `json:"privileged"`
+		Service    string `json:"service"`
+		// ControlReachable is the machine-readable form of controlStatus's
+		// sentence: whether routine ops will reach the daemon with no password
+		// prompt. Added so a consumer (the macOS app) doesn't have to scrape the
+		// human "daemon control:" status line for a substring.
+		ControlReachable bool            `json:"controlReachable"`
 		StatePath        string          `json:"statePath"`
 		State            *state.Snapshot `json:"state,omitempty"`    // nil when no snapshot has been published yet
 		StateAge         string          `json:"stateAge,omitempty"` // wall-clock age of the snapshot
@@ -1756,6 +1761,7 @@ func statusJSON(cfg *config.Config) int {
 		BuildDate:        buildStamp.Date,
 		Privileged:       privilege.IsPrivileged(),
 		Service:          svc.Status(),
+		ControlReachable: controlReachable(cfg),
 		StatePath:        statePath,
 		PollInterval:     cfg.PollInterval.String(),
 		BlockedCountries: cfg.BlockedCountries,

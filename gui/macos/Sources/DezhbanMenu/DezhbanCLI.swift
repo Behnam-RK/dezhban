@@ -229,17 +229,26 @@ enum DezhbanCLI {
         return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
     }
 
+    /// Merged fields from `status --json` that the app needs but the daemon's
+    /// Snapshot itself doesn't carry (those come from Snapshot/Display instead).
+    private struct StatusJSON: Decodable {
+        let service: String
+        let controlReachable: Bool
+    }
+
+    private static func readStatusJSON() -> StatusJSON? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["status", "--json"])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(StatusJSON.self, from: data)
+    }
+
     /// Whether the daemon's control socket is answering — i.e. whether routine ops
-    /// will go through without a password. Parsed from `status`'s "daemon control"
-    /// line, so the GUI and the CLI agree on one source of truth.
+    /// will go through without a password. Reads `status --json`'s
+    /// `controlReachable` field, so the GUI and the CLI agree on one source of
+    /// truth without the app scraping a human sentence for a substring.
     static func daemonControlReachable() -> Bool {
-        guard let bin = binaryPath() else { return false }
-        let r = exec(bin, ["status"])
-        guard r.status == 0 else { return false }
-        for line in r.out.split(separator: "\n") where line.hasPrefix("daemon control:") {
-            return line.contains("reachable") && !line.contains("unreachable")
-        }
-        return false
+        readStatusJSON()?.controlReachable ?? false
     }
 
     /// Whether the OS service is currently registered, per `status --json`'s
@@ -247,27 +256,7 @@ enum DezhbanCLI {
     /// source of truth, so the GUI never invents its own notion of "installed"
     /// that could drift from the CLI's.
     static func serviceInstalled() -> Bool {
-        guard let bin = binaryPath() else { return false }
-        let r = exec(bin, ["status", "--json"])
-        guard r.status == 0, let data = r.out.data(using: .utf8) else { return false }
-        struct StatusJSON: Decodable { let service: String }
-        guard let decoded = try? JSONDecoder().decode(StatusJSON.self, from: data) else { return false }
-        return decoded.service.hasPrefix("installed")
-    }
-
-    /// The daemon's currently-published enforcement posture from `status --json`,
-    /// or nil if none is reported yet / the read failed. Reads stdout only (via
-    /// `exec`, like `serviceInstalled()`) rather than `run`'s combined output —
-    /// a warning on stderr with a 0 exit would otherwise corrupt the JSON parse.
-    static func reportedPosture() -> String? {
-        guard let bin = binaryPath() else { return nil }
-        let r = exec(bin, ["status", "--json"])
-        guard r.status == 0, let data = r.out.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let stateObj = obj["state"] as? [String: Any],
-              let posture = stateObj["posture"] as? String, !posture.isEmpty
-        else { return nil }
-        return posture
+        readStatusJSON()?.service.hasPrefix("installed") ?? false
     }
 
     /// Memoization for `resolvedConfigPath()`. The resolved value is stable for the

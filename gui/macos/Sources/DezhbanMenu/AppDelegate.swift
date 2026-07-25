@@ -154,7 +154,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Essential-transition notifications. The FIRST classification after
         // launch is recorded silently — notifying the user about the state the
         // world was already in when the app opened is noise, not news.
-        let essential = essentialClass(state, help)
+        let essential = essentialClass(state, snapshot)
         if let prev = lastEssential, prev != essential {
             NotificationManager.post(title: Self.essentialTitles[essential] ?? "Dezhban", body: "dezhban — \(help)")
         }
@@ -165,13 +165,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var lastEssential: String?
 
-    /// Collapses (icon state, help) into the coarse classes worth interrupting a
-    /// person for. Standby and stopped both draw the gray icon but mean very
-    /// different things, so they class by the help text, not the icon.
-    private func essentialClass(_ state: String, _ help: String) -> String {
-        if help == "stopped" { return "stopped" }
-        if help.hasPrefix("standby") { return "standby" }
-        return state // on / off / blocked / warning / paused
+    /// Collapses (icon state, snapshot) into the coarse classes worth
+    /// interrupting a person for. Standby and stopped both draw the "off" icon
+    /// but mean very different things, so they class off the snapshot's own
+    /// posture/liveness rather than parsing the rendered prose — the daemon's
+    /// Display.Key is deliberately coarse (five brand states), so "off" alone
+    /// can't tell them apart, but the stable posture string can.
+    private func essentialClass(_ state: String, _ snap: Snapshot?) -> String {
+        guard let snap = snap, PostureUI.isLive(snap) else { return "stopped" }
+        if snap.posture == "standby" { return "standby" }
+        return state // on / blocked / warning / paused
     }
 
     private static let essentialTitles: [String: String] = [
@@ -238,9 +241,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // "my VPN is off on purpose — release the line" action.
         let guardHolds = isRunning && PostureUI.guardHoldsDownedTunnel(s)
         addAction("Block now", #selector(blockNow), enabled: isRunning && !blocked)
-            .toolTip = routineHint("Cuts all egress and holds it until you unblock.")
+            .toolTip = AppState.shared.routineHint("Cuts all egress and holds it until you unblock.")
         addAction("Unblock", #selector(unblockNow), enabled: isRunning && (blocked || guardHolds))
-            .toolTip = routineHint("Releases a manual block and resumes monitoring.")
+            .toolTip = AppState.shared.routineHint("Releases a manual block and resumes monitoring.")
 
         // Switch window: connect a brand-new VPN whose server isn't known yet.
         // Time-critical mid-flow, and the countdown is glanceable — so it stays.
@@ -248,10 +251,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let left = max(0, sw.until.timeIntervalSinceNow)
             addAction("Cancel VPN switch (\(PostureUI.mmss(left)) left)", #selector(cancelSwitch),
                       enabled: isRunning)
-                .toolTip = routineHint("Closes the window and restores the guard.")
+                .toolTip = AppState.shared.routineHint("Closes the window and restores the guard.")
         } else {
             addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
-                .toolTip = routineHint("Briefly relaxes the guard so a new VPN can connect.")
+                .toolTip = AppState.shared.routineHint("Briefly relaxes the guard so a new VPN can connect.")
         }
 
         // Panic is the lockout escape hatch: it must never depend on the main
@@ -268,7 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The dropdown's one-line glance: posture, plus exit country/provider when known.
     private func statusLine(_ s: Snapshot) -> String {
-        var line = PostureUI.humanPosture(s).capitalized
+        var line = PostureUI.humanPosture(s)
         if let e = s.enforcementErr, !e.isEmpty {
             line = "⚠︎ Enforcement failed — open Dezhban for details"
         } else if let cc = s.countryCode, !cc.isEmpty {
@@ -276,14 +279,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let p = s.provider, !p.isEmpty { line += " via \(p)" }
         }
         return line
-    }
-
-    /// Appends the password expectation to a routine action's tooltip, so the menu
-    /// tells the truth about what the click will cost before it costs it.
-    private func routineHint(_ what: String) -> String {
-        AppState.shared.controlIsReachable
-            ? "\(what) No password needed — the running daemon handles it."
-            : "\(what) Will ask for your password (the daemon isn’t reachable)."
     }
 
     // MARK: - actions

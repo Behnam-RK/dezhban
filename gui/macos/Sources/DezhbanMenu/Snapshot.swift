@@ -49,23 +49,22 @@ struct Snapshot: Codable {
     let activeProfile: String?      // matched VPN profile name, nil if unknown
     let `switch`: SwitchState?      // present only while a switch window is open
     let pending: PendingFlip?       // present only while a posture change is being counted toward
+    let display: Display?          // the rendered sentence — nil from an older daemon
 
     /// Wall-clock age of this snapshot.
     var age: TimeInterval { Date().timeIntervalSince(time) }
+}
 
-    /// What the daemon is working toward, in words, or nil when nothing is under
-    /// way. The posture strings are stable identifiers, so they are translated
-    /// here rather than shown raw.
-    var pendingSummary: String? {
-        guard let p = pending else { return nil }
-        let what: String
-        switch p.to {
-        case "guard": what = "Restoring protection"
-        case "full-block": what = "Blocking this exit"
-        default: what = "Changing posture"
-        }
-        return "\(what) — \(p.have) of \(p.need) confirming checks"
-    }
+/// The rendered form of a Snapshot — mirrors Go's `render.Display` (carried via
+/// `state.Display`). `key` is the stable machine classification
+/// ("on"/"off"/"blocked"/"warning"/"paused") and is also a PNG filename
+/// component (menubar-state-<key>.png, dock-state-<key>.png); `headline` and
+/// `detail` are the sentences every surface displays instead of composing its
+/// own. Optional because an older daemon's snapshot won't have one.
+struct Display: Codable {
+    let key: String
+    let headline: String
+    let detail: String
 }
 
 /// A posture change the daemon is counting toward — mirrors Go's

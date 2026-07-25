@@ -52,70 +52,46 @@ enum PostureUI {
         return s.age <= staleThreshold(s) && s.posture != "stopped"
     }
 
-    /// Maps a snapshot (or its absence/staleness) to one of the four brand states
-    /// (on / off / blocked / warning — the full-color icons from gui/artifacts/), plus an
-    /// SF Symbol fallback for running outside the assembled bundle, plus a label.
+    /// Maps a snapshot (or its absence/staleness) to one of the five brand states
+    /// (on / off / blocked / warning / paused — the full-color icons from
+    /// gui/artifacts/), an SF Symbol fallback for running outside the assembled
+    /// bundle, and the headline sentence. The key and headline both come from
+    /// the daemon's own render.Display (internal/render on the Go side) — this
+    /// function no longer composes any prose itself, only the SF Symbol choice
+    /// and the liveness/staleness override, which are inherently client-side.
     static func iconFor(_ s: Snapshot?) -> (state: String, symbol: String, help: String) {
         guard let s = s, isLive(s) else {
             return ("off", "shield", "stopped") // gray / hollow shield: not enforcing
         }
-        // A failed firewall action means the intended posture was NOT achieved (e.g. a
-        // failed block leaves posture "allow" during a live leak). Surface it as a
-        // warning regardless of posture so a "safe" icon never masks a failed enforce.
-        if let e = s.enforcementErr, !e.isEmpty {
-            return ("warning", "exclamationmark.triangle.fill", "enforcement error")
+        guard let d = s.display else {
+            // An older daemon predating Display, or a snapshot built by hand
+            // (tests). Should be rare and transient in practice.
+            return ("warning", "exclamationmark.triangle.fill", "unknown posture (\(s.posture))")
         }
-        switch s.posture {
-        case "standby":
-            // vpn.autoArm parked: daemon alive, nothing enforced, arms on VPN
-            // connect. Gray like "off" — the truthful "not enforcing" look.
-            return ("off", "shield", humanPosture(s))
-        case "block", "full-block":
-            return ("blocked", "shield.slash.fill", humanPosture(s))
-        case "switch-window":
-            // Every window relaxes egress (all outbound, or a proto/port subset if
-            // restricted) — the real IP may be exposed. Never show the plain "safe"
-            // icon for any of them.
-            //
-            // A pause gets its own look because it is the one the user asked for:
-            // amber reads as "something went wrong", which is misleading when the
-            // exposure is deliberate and expected. It is still not the calm "on"
-            // icon — the guard is relaxed either way.
-            if s.switch?.isPause == true {
-                return ("paused", "pause.circle.fill", humanPosture(s))
-            }
-            return ("warning", "exclamationmark.shield.fill", humanPosture(s))
-        default: // allow, guard — enforcing normally
-            // Guard with the tunnel DOWN is the guard actively doing its job:
-            // physical egress is cut until the VPN comes back. The posture string
-            // stays "guard" (the standing rule didn't change), but visually this
-            // is a blocked state, not a calm "on" — show it as blocked so a
-            // dropped VPN is impossible to miss.
-            if guardHoldsDownedTunnel(s) {
-                return ("blocked", "shield.slash.fill", "VPN down — egress blocked (guard)")
-            }
-            return ("on", "checkmark.shield.fill", humanPosture(s))
+        // A failed firewall action gets its own SF Symbol (distinct from the
+        // shield used for a relaxed-but-intentional window), even though the key
+        // and headline are already "warning"/"Enforcement failed" from Go.
+        if let e = s.enforcementErr, !e.isEmpty {
+            return (d.key, "exclamationmark.triangle.fill", d.headline)
+        }
+        return (d.key, sfSymbol(for: d.key), d.headline)
+    }
+
+    private static func sfSymbol(for key: String) -> String {
+        switch key {
+        case "on": return "checkmark.shield.fill"
+        case "blocked": return "shield.slash.fill"
+        case "warning": return "exclamationmark.shield.fill"
+        case "paused": return "pause.circle.fill"
+        default: return "shield" // "off"
         }
     }
 
+    /// The headline sentence for a snapshot, or a plain fallback for one with no
+    /// rendered Display. Thin wrapper so callers don't each need their own
+    /// fallback.
     static func humanPosture(_ s: Snapshot) -> String {
-        switch s.posture {
-        case "allow": return "allowing"
-        case "block": return "blocking"
-        case "standby": return "standby — waiting for VPN (not enforcing)"
-        case "guard": return "guarding (VPN)"
-        case "full-block": return "full block (VPN)"
-        case "switch-window":
-            if s.switch?.isPause == true {
-                return "paused — using your real IP (guard re-arms itself when the pause ends)"
-            }
-            if s.switch?.isAutoRedial == true {
-                return "VPN dropped — redial window open (redial now; real IP may be exposed)"
-            }
-            return "switch window — egress relaxed (real IP may be exposed)"
-        case "stopped": return "stopped"
-        default: return s.posture
-        }
+        s.display?.headline ?? "posture: \(s.posture)"
     }
 
     /// Guard mode holding a downed tunnel: Unblock doubles as the "my VPN is off
@@ -277,6 +253,16 @@ final class AppState: ObservableObject {
     func showInLogs(title: String, text: String) {
         console.set(title: title, text: text.isEmpty ? "(no output)" : text)
         selectedSection = .logs
+    }
+
+    /// Appends the password expectation to a routine action's hint, so a button
+    /// or menu item tells the truth about what the click will cost before it
+    /// costs it. Shared by the window (OverviewView) and the menubar
+    /// (AppDelegate), which used to compose this byte-identically on their own.
+    func routineHint(_ what: String) -> String {
+        controlIsReachable
+            ? "\(what) No password needed — the running daemon handles it."
+            : "\(what) Will ask for your password (the daemon isn’t reachable)."
     }
 
     /// Recomputes the installed/reachable caches off the main thread. Skips the
