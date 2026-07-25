@@ -35,6 +35,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
 	"github.com/behnam-rk/dezhban/internal/privilege"
+	"github.com/behnam-rk/dezhban/internal/render"
 	"github.com/behnam-rk/dezhban/internal/runner"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/svc"
@@ -1640,6 +1641,12 @@ func cmdStatus(args []string) int {
 	}
 
 	fmt.Println(buildStamp.line())
+	snap, staterr := state.Read(defaultStatePath())
+	if staterr != nil {
+		snap = state.Snapshot{Posture: render.PostureStopped}
+	}
+	disp := render.Text(snap)
+	fmt.Printf("%s — %s\n", disp.Headline, disp.Detail)
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
 	fmt.Println("service:         ", svc.Status())
 	fmt.Println("daemon control:  ", controlStatus(cfg))
@@ -1696,28 +1703,12 @@ func cmdStatus(args []string) int {
 		} else {
 			fmt.Println("pause max:        off")
 		}
-		// Live switch-window / active-profile state from the daemon's snapshot.
-		if snap, err := state.Read(defaultStatePath()); err == nil {
-			if snap.Switch != nil && snap.Switch.Open {
-				kind := "switch state:    "
-				switch snap.Switch.Trigger {
-				case state.TriggerAuto:
-					kind = "redial state: " // auto window opened by a tunnel drop
-				case state.TriggerPause:
-					kind = "pause state:     " // operator pause (dezhban pause)
-				}
-				fmt.Printf("%s OPEN until %s\n", kind, snap.Switch.Until.Format(time.Kitchen))
-			}
-			if snap.ActiveProfile != "" {
-				fmt.Println("active profile:  ", snap.ActiveProfile)
-			}
-			// A posture change under way. Without this, the wait between a VPN
-			// redialing and the guard coming back looks identical to nothing
-			// happening at all.
-			if p := snap.Pending; p != nil {
-				fmt.Printf("in progress:      %s (%d of %d agreeing readings)\n",
-					pendingLabel(p.To), p.Have, p.Need)
-			}
+		// Live active-profile state from the daemon's snapshot. Window state and
+		// the pending hysteresis streak are already in the headline/detail
+		// printed above — repeating them here would be the same duplicated
+		// rendering this command used to have.
+		if staterr == nil && snap.ActiveProfile != "" {
+			fmt.Println("active profile:  ", snap.ActiveProfile)
 		}
 	}
 
@@ -1730,20 +1721,6 @@ func cmdStatus(args []string) int {
 		fmt.Println("blocked:         ", blocked)
 	}
 	return 0
-}
-
-// pendingLabel turns a pending posture into what the daemon is doing about it.
-// The posture strings themselves are stable identifiers, not prose, so they are
-// translated here rather than printed raw.
-func pendingLabel(to string) string {
-	switch to {
-	case "full-block":
-		return "escalating to full block"
-	case "guard":
-		return "restoring the guard"
-	default:
-		return "changing posture to " + to
-	}
 }
 
 // statusJSON prints a machine-readable status: the live posture from the state

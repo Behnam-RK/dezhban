@@ -4,17 +4,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/render"
 	"github.com/behnam-rk/dezhban/internal/state"
-)
-
-// These mirror the literal posture strings runner.go publishes into
-// state.Snapshot.Posture (internal/state has no exported constants for them,
-// and this package doesn't add any either — that would be a second source of
-// truth for values internal/runner already owns; it just names the two this
-// package treats specially).
-const (
-	posturePassGuard   = "guard"
-	posturePassStandby = "standby"
 )
 
 // staleFallback is the staleness budget used when a snapshot has no
@@ -75,13 +66,13 @@ func CanActivate(statePath string) GateResult {
 	}
 
 	switch snap.Posture {
-	case posturePassGuard:
+	case render.PostureGuard:
 		return GateResult{OK: true, Reason: "guard is healthy — the tunnel carries traffic during the restart", Posture: snap.Posture}
-	case posturePassStandby:
+	case render.PostureStandby:
 		return GateResult{OK: true, Reason: "standby — no rules are installed, nothing to interrupt", Posture: snap.Posture}
-	case "full-block":
+	case render.PostureFullBlock:
 		return GateResult{OK: false, Reason: "FULL BLOCK is active — restarting would lift the block on a forbidden-country exit", Posture: snap.Posture}
-	case "switch-window":
+	case render.PostureSwitchWindow:
 		return GateResult{OK: false, Reason: "a switch window is open — restarting would cancel it mid-use", Posture: snap.Posture}
 	default:
 		return GateResult{OK: false, Reason: fmt.Sprintf("posture %q is not safe to restart through", snap.Posture), Posture: snap.Posture}

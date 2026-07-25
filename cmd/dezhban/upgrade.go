@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/logging"
+	"github.com/behnam-rk/dezhban/internal/render"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/update"
 )
@@ -455,7 +456,7 @@ func activate(stashDir, version string) int {
 		// usually means something else is wrong with the state directory.
 		fmt.Fprintln(os.Stderr, "warning: upgrade succeeded but could not clear the rollback stash:", err)
 	}
-	fmt.Printf("upgrade complete — now running v%s (posture: %s)\n", version, snap.Posture)
+	fmt.Printf("upgrade complete — now running v%s (%s)\n", version, render.Text(snap).Headline)
 	return 0
 }
 
@@ -503,16 +504,6 @@ func rollback(stashDir string) int {
 	return 1 // the upgrade itself still failed; report non-zero even though rollback succeeded
 }
 
-// postureStopped mirrors the literal posture string runner.go publishes into
-// state.Snapshot.Posture (internal/runner/runner.go's final-snapshot-before-
-// teardown write) when the daemon is shutting down. Named here rather than
-// left as a bare literal for the same reason internal/update/gate.go names
-// posturePassGuard/posturePassStandby instead of importing constants:
-// internal/state has no exported constants for these values, and this
-// package doesn't add any either — that would be a second source of truth
-// for strings internal/runner already owns.
-const postureStopped = "stopped"
-
 // waitForHealthySnapshot polls the state file for a snapshot published AFTER
 // `after` (so a stale pre-restart snapshot can never read as proof the NEW
 // process is healthy) that is neither the terminal "stopped" posture nor
@@ -524,7 +515,7 @@ func waitForHealthySnapshot(path string, after time.Time, budget time.Duration) 
 	for {
 		if snap, err := state.Read(path); err == nil {
 			last = snap
-			if snap.Time.After(after) && snap.Posture != postureStopped && snap.EnforcementErr == "" {
+			if snap.Time.After(after) && snap.Posture != render.PostureStopped && snap.EnforcementErr == "" {
 				return snap, true
 			}
 		}

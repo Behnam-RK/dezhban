@@ -13,6 +13,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/learned"
+	"github.com/behnam-rk/dezhban/internal/render"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/vpnimport"
 )
@@ -223,13 +224,13 @@ func waitForSwitch(statePath string) int {
 		if snap.Switch != nil && snap.Switch.Open {
 			if !sawOpen {
 				sawOpen = true
-				fmt.Printf("  window open until %s — connect now…\n", snap.Switch.Until.Format(time.Kitchen))
+				fmt.Printf("  %s — connect now…\n", render.Text(snap).Detail)
 			}
 			continue
 		}
 		if sawOpen {
 			fmt.Println("  window closed.")
-			if snap.Posture == "guard" {
+			if snap.Posture == render.PostureGuard {
 				fmt.Println("  guard active. If a new endpoint was learned, make it permanent with:")
 				fmt.Printf("    sudo dezhban vpn promote <name>   (see: dezhban vpn list)\n")
 			}
@@ -246,16 +247,22 @@ func printSwitchStatus(statePath string) int {
 		fmt.Println("switch window: unknown (no state file; is the daemon running?)")
 		return 0
 	}
-	if snap.Switch != nil && snap.Switch.Open {
-		if snap.Switch.Trigger == state.TriggerPause {
-			// A pause shares the window machinery but is not a switch window —
-			// report it by name so "OPEN" here doesn't read as a stray switch.
-			fmt.Printf("pause: OPEN until %s (end early with `dezhban resume`)\n", snap.Switch.Until.Format(time.RFC3339))
-		} else {
-			fmt.Printf("switch window: OPEN until %s (profile %q)\n", snap.Switch.Until.Format(time.RFC3339), snap.Switch.Profile)
-		}
-	} else {
+	if snap.Switch == nil || !snap.Switch.Open {
 		fmt.Println("switch window: closed")
+		return 0
+	}
+	detail := render.Text(snap).Detail
+	switch snap.Switch.Trigger {
+	case state.TriggerPause:
+		// A pause shares the window machinery but is not a switch window —
+		// name the extra hint accordingly.
+		fmt.Printf("%s (end early with `dezhban resume`)\n", detail)
+	default:
+		extra := ""
+		if snap.Switch.Profile != "" {
+			extra = fmt.Sprintf(" (profile %q)", snap.Switch.Profile)
+		}
+		fmt.Printf("%s%s\n", detail, extra)
 	}
 	return 0
 }
@@ -325,7 +332,7 @@ func cmdVPNList(args []string) int {
 	// snapshot is unreadable). Matches the "active state" the command advertises.
 	if snap, err := state.Read(defaultStatePath()); err == nil {
 		if snap.Switch != nil && snap.Switch.Open {
-			line := fmt.Sprintf("\nswitch window OPEN until %s", snap.Switch.Until.Format(time.Kitchen))
+			line := "\n" + render.Text(snap).Detail
 			if snap.Switch.Profile != "" {
 				line += fmt.Sprintf(" (profile %q)", snap.Switch.Profile)
 			}
