@@ -154,6 +154,30 @@ enum AppActions {
         return alert.runModal() == .alertFirstButtonReturn
     }
 
+    /// Confirms an explicit "Restart dezhban" from Settings. A restart always
+    /// briefly stops enforcement while the service comes back up — see
+    /// ConfigApply.restartNow — so the wording is stronger exactly when that gap
+    /// matters: during FULL BLOCK or an open switch/redial/pause window, lifting
+    /// enforcement (even briefly) is the one thing this tool exists to prevent,
+    /// so `exposedNow` switches to a `.critical` alert that says so plainly
+    /// rather than a generic "are you sure?". This deliberately does NOT reuse
+    /// `update.CanActivate` (Go): that gate stops the *updater* from silently
+    /// restarting through a block; an operator explicitly asking is a different
+    /// act, and refusing it outright would remove a recovery tool rather than
+    /// just asking them to confirm the exposure.
+    static func confirmRestart(exposedNow: Bool) -> Bool {
+        let alert = NSAlert()
+        alert.alertStyle = exposedNow ? .critical : .warning
+        alert.messageText = "Restart dezhban?"
+        alert.informativeText = exposedNow
+            ? "dezhban is currently blocking traffic or running an open window. Restarting briefly stops "
+                + "enforcement — your real IP may be exposed for a few seconds while the service comes back up."
+            : "This briefly stops network filtering, usually for under a few seconds, while the service restarts."
+        alert.addButton(withTitle: "Restart")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     /// Panic is the last-resort override, so — unlike Block/Unblock — it asks
     /// for confirmation before tearing down every dezhban rule.
     static func confirmPanic() -> Bool {

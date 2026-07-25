@@ -544,6 +544,10 @@ end up typing a password.
       the app relaunches after a logout/login cycle.
 - [ ] Protection fields seed from `dezhban config show` values; Apply raises the
       restart-warning choice; "Save only" writes without restarting.
+- [ ] **Restart dezhban…** works with nothing else pending: a plain "are you
+      sure?" during GUARD or STANDBY, but a stronger, `.critical` warning during
+      FULL BLOCK or an open switch/redial/pause window that says enforcement is
+      briefly lifted and your real IP may be exposed. Cancelling changes nothing.
 - [ ] **Open Config File…** opens the resolved config path.
 
 #### Use Touch ID for settings changes

@@ -41,6 +41,7 @@ struct SettingsView: View {
     @State private var status = ""
     @State private var canApply = false
     @State private var bootBusy = false
+    @State private var restartBusy = false
     @State private var tokenBusy = false
     @State private var tokenEnrolled = ControlToken.isStored
     /// Evaluated once rather than in `body`: whether this Mac has biometry cannot
@@ -180,6 +181,8 @@ struct SettingsView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
+            Button("Restart dezhban…", action: restartNow)
+                .disabled(restartBusy || !state.cliFound)
             Button("Reset to Defaults…", action: resetToDefaults)
                 .disabled(!canApply)
             Button("Reload", action: seed)
@@ -188,6 +191,26 @@ struct SettingsView: View {
                 .disabled(!canApply)
         }
         .padding(12)
+    }
+
+    // MARK: - explicit restart
+
+    /// Restart is a lifecycle action about the running daemon, not a settings
+    /// change — no keys are written here — so it lives beside Apply rather than
+    /// inside it, and it is the one place a restart can be asked for with
+    /// nothing pending.
+    private func restartNow() {
+        let exposedNow = state.snapshot?.posture == "full-block" || (state.snapshot?.switch?.open ?? false)
+        guard AppActions.confirmRestart(exposedNow: exposedNow) else { return }
+        restartBusy = true
+        status = "Restarting…"
+        ConfigApply.restartNow(awaitPosture: true, title: "Restart") { outcome in
+            restartBusy = false
+            status = outcome.status
+            if let title = outcome.transcriptTitle, let text = outcome.transcript {
+                state.showInLogs(title: title, text: text)
+            }
+        }
     }
 
     // MARK: - reset to defaults

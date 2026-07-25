@@ -324,6 +324,13 @@ current as you land changes.
   than the switch window's amber "Closes in …", since a pause is deliberate,
   not a warning. `status --json` gains `pauseEnabled` so the app doesn't have
   to shell out separately to read `vpn.pauseMax`.
+- **An explicit "Restart dezhban…" control in Settings**, beside Apply. Restart
+  was previously only reachable as a side effect of applying settings that
+  needed one; this makes it a direct, one-prompt action with its own
+  confirmation, and the confirmation gets noticeably stronger — a `.critical`
+  alert naming the exposure — when restarting would lift enforcement during
+  FULL BLOCK or an open window, since that gap is the one thing this tool
+  exists to prevent.
 
 ## [0.7.0] - 2026-07-22
 

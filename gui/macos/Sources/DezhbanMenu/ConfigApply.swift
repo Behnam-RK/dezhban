@@ -213,9 +213,11 @@ enum ConfigApply {
 
     /// Restarts the service so restart-required keys take effect. Split out of the
     /// write because it is now a separate, opt-in step rather than something
-    /// bundled into every config change.
-    private static func restartNow(awaitPosture: Bool, title: String,
-                                   completion: @escaping (Outcome) -> Void) {
+    /// bundled into every config change. Internal (not private): also the entry
+    /// point for the Settings pane's standalone "Restart dezhban" button, which
+    /// calls this directly rather than only ever reaching it through `apply`.
+    static func restartNow(awaitPosture: Bool, title: String,
+                           completion: @escaping (Outcome) -> Void) {
         // Marked BEFORE the restart: only a snapshot published after this instant
         // can have come from the new daemon.
         let mark = Date()
