@@ -488,6 +488,13 @@ task gui:build && open dist/Dezhban.app
       Letting a pause expire re-arms it with no action needed. With
       `vpn.pauseMax: "0"`, Pause is disabled in both surfaces with a reason
       ("vpn.pauseMax is \"0\""), not just a silent no-op.
+- [ ] **Profile picker.** With `configs/dezhban.profiles.json`, Overview's
+      details grid lists every configured profile and marks the one that
+      matched (`(active)`), matching `dezhban vpn list`; "Switching VPN…"
+      becomes a menu with "Any known VPN" plus one item per profile, and
+      picking a profile passes `--name <profile>` (`dezhban vpn list` shows the
+      learned endpoint attributed to it afterward). With no profiles
+      configured, it's a plain button, not a one-item menu.
 - [ ] **Privileged actions.** Start/Stop raise a native admin prompt (Touch ID or
       password), run, and the state reflects the result.
 - [ ] **Menubar panic works without the window.** From a fresh launch (main window

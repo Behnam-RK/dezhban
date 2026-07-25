@@ -1,4 +1,5 @@
 import Foundation
+import DezhbanCore
 
 /// The outcome of a CLI invocation: whether it succeeded and everything it
 /// printed (stdout + stderr combined), so callers can show the user what
@@ -266,6 +267,20 @@ enum DezhbanCLI {
     /// read is stale, so it only ever costs a wrong hint, never a wrong action.
     static func pauseEnabled() -> Bool {
         readStatusJSON()?.pauseEnabled ?? false
+    }
+
+    /// Reads the configured VPN profiles from `config show`'s `vpn` block —
+    /// the profile *list* lives in config, never in the daemon's Snapshot
+    /// (which only carries `activeProfile`, the one that matched last). Uses
+    /// `exec` directly (stdout only) rather than `.run`, same reasoning as
+    /// `DiagnosticsView`'s doctor call: nothing should be able to corrupt the
+    /// JSON parse by writing to stderr, even though `config show` doesn't
+    /// today.
+    static func readProfiles() -> ProfilesInfo? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["config", "show", "--config", resolvedConfigPath()])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return ProfilesInfo.decode(data)
     }
 
     /// Memoization for `resolvedConfigPath()`. The resolved value is stable for the

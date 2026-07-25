@@ -346,6 +346,13 @@ current as you land changes.
   command it wraps. The sidebar's "Logs & Diagnostics" section is renamed
   **Logs**; it keeps its transcript job (last-hour/live logs, and the output
   of panic/install/config-apply/restart) but no longer runs `doctor` itself.
+- **VPN profile visibility in the macOS app.** Overview's details grid lists
+  every configured profile (`vpn.profiles`) and marks the one the daemon last
+  matched (`activeProfile`), reading `config show` the same way `dezhban vpn
+  list` does. "Switching VPN…" becomes a menu — "Any known VPN" plus one item
+  per profile — so a switch window can be opened targeted at a specific VPN
+  (`switch --no-wait --name <profile>`), the same profile-attribution flag the
+  CLI already had.
 
 ## [0.7.0] - 2026-07-22
 

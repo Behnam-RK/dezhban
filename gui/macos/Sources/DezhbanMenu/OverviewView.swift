@@ -119,7 +119,12 @@ struct OverviewView: View {
             if let eps = s.endpoints, !eps.isEmpty {
                 row("Endpoints", eps.joined(separator: ", "))
             }
-            if let p = s.activeProfile, !p.isEmpty {
+            if let profiles = state.profiles, !profiles.profiles.isEmpty {
+                let names = profiles.profiles.map { p in
+                    p.name == s.activeProfile ? "\(p.name) (active)" : p.name
+                }
+                row("VPN profiles", names.joined(separator: ", "))
+            } else if let p = s.activeProfile, !p.isEmpty {
                 row("VPN profile", p)
             }
             if let bc = s.blockedCountries, !bc.isEmpty {
@@ -161,8 +166,7 @@ struct OverviewView: View {
                 }
                 .help(state.routineHint("Closes the window and restores the guard."))
             } else {
-                Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
-                    .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
+                switchMenu
                 Button("Pause — use my real IP") { AppActions.routine(["pause"], "pause the guard") }
                     .disabled(!state.pauseIsEnabled)
                     .help(state.pauseIsEnabled
@@ -172,6 +176,32 @@ struct OverviewView: View {
             Spacer()
             Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
                 .help("Stops dezhban. Asks for your password — it can’t stop itself while running.")
+        }
+    }
+
+    /// Opens a switch window, optionally targeted at a known VPN profile so the
+    /// learned endpoint is attributed to it (`switch --no-wait --name <profile>`).
+    /// Plain button when there are no profiles to pick from — a menu with a
+    /// single "Any known VPN" entry would just be a worse button.
+    @ViewBuilder
+    private var switchMenu: some View {
+        if let profiles = state.profiles, !profiles.profiles.isEmpty {
+            Menu("Switching VPN…") {
+                Button("Any known VPN") {
+                    AppActions.routine(["switch", "--no-wait"], "open a switch window")
+                }
+                Divider()
+                ForEach(profiles.profiles) { p in
+                    Button(p.name) {
+                        AppActions.routine(["switch", "--no-wait", "--name", p.name],
+                                           "open a switch window for \(p.name)")
+                    }
+                }
+            }
+            .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
+        } else {
+            Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
+                .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
         }
     }
 

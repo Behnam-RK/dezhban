@@ -113,6 +113,9 @@ final class AppState: ObservableObject {
     /// Advisory only, same convention as `controlIsReachable` — `dezhban pause`
     /// still refuses for real if this cache is stale.
     @Published var pauseIsEnabled = true
+    /// The configured VPN profiles (nil: not yet read, or config unreadable).
+    /// Lives in config, not the daemon's Snapshot — see DezhbanCLI.readProfiles.
+    @Published var profiles: ProfilesInfo?
     @Published var selectedSection: SidebarSection? = .overview
     /// Last update check result (nil: none run yet, or the last one found
     /// nothing worth reporting — see UpdateChecker.check's doc comment on why
@@ -155,10 +158,12 @@ final class AppState: ObservableObject {
             let installed = DezhbanCLI.serviceInstalled()
             let control = DezhbanCLI.daemonControlReachable()
             let pause = DezhbanCLI.pauseEnabled()
+            let profiles = DezhbanCLI.readProfiles()
             DispatchQueue.main.async {
                 self?.serviceIsInstalled = installed
                 self?.controlIsReachable = control
                 self?.pauseIsEnabled = pause
+                self?.profiles = profiles
             }
         }
     }

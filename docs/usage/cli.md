@@ -351,11 +351,13 @@ Two surfaces, split by urgency:
 - **Main window — everything else**, opened from the dropdown or by clicking the
   Dock icon (never automatically at launch). Sidebar sections:
   - **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
-    profile, switch-window countdown, enforcement-error banner) plus the daily
-    controls and a visually-separated Panic. Degraded states are guided: CLI
-    missing, service not installed, and daemon stopped each render an
-    explanation with the one relevant action inline (Install service… / Start
-    kill switch).
+    every configured VPN profile with the matched one marked, switch-window
+    countdown, enforcement-error banner) plus the daily controls, Pause, and a
+    visually-separated Panic. With profiles configured, "Switching VPN…"
+    becomes a menu so a switch window can target one by name. Degraded states
+    are guided: CLI missing, service not installed, and daemon stopped each
+    render an explanation with the one relevant action inline (Install
+    service… / Guard up).
   - **VPN Guard** — edits tunnels/endpoints/autodetection through
     the same validation as `config set`, then (after an explicit restart-warning
     choice) restarts the daemon to apply and verifies the new posture.
