@@ -96,6 +96,7 @@ var restartReasons = map[string]string{
 	"control.group":   "the control socket's group ownership is set when it is bound",
 
 	"vpn.tunnelWatch":           "the tunnel watcher runs on its own interval, fixed when it starts",
+	"vpn.autodetect":            "the tunnel watcher's interface allowlist is fixed when it is built",
 	"vpn.armAtBoot":             "arm-at-boot is a startup decision; it has already been taken",
 	"vpn.endpoints":             "endpoint resolution is wired up at startup",
 	"vpn.autoDiscoverEndpoints": "endpoint resolution is wired up at startup",
@@ -118,7 +119,6 @@ var liveKeys = map[string]bool{
 	"blockedCountries": true,
 	"hysteresis":       true,
 
-	"vpn.autodetect":        true,
 	"vpn.allowPhysicalDNS":  true,
 	"vpn.allowLocalNetwork": true,
 	"vpn.autoArm":           true,
@@ -202,7 +202,6 @@ func MergeLive(base, cur *Config) *Config {
 	out.BlockedCountries = cur.BlockedCountries
 	out.Hysteresis = cur.Hysteresis
 
-	out.VPN.Autodetect = cur.VPN.Autodetect
 	out.VPN.AllowPhysicalDNS = cur.VPN.AllowPhysicalDNS
 	out.VPN.AllowLocalNetwork = cur.VPN.AllowLocalNetwork
 	out.VPN.AutoArm = cur.VPN.AutoArm

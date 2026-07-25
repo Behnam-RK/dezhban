@@ -19,6 +19,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"time"
@@ -445,15 +446,17 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		}
 	}
 
-	// Switch-window control: poll the root-owned command file. Only active when
-	// the guard is on and a switch window is configured.
-	switchEnabled := cfg.VPN.SwitchWindow > 0
-	pauseEnabled := cfg.VPN.PauseMax > 0
+	// Switch-window / pause control: poll the root-owned command file. Wired
+	// unconditionally, because vpn.switchWindow and vpn.pauseMax are both
+	// live-appliable — a daemon that started with them disabled must still hear a
+	// command once one is re-enabled, or the reload would report the key as
+	// applied while the root path stayed deaf until a restart. The runner gates
+	// every command on the live value, so wiring the poller enables nothing by
+	// itself. Discarding a stale file from a prior run is unconditional for the
+	// same reason.
 	commandPath := defaultCommandPath()
-	if switchEnabled || pauseEnabled {
-		if derr := command.Discard(commandPath); derr != nil {
-			log.Debug("discard stale command file failed", "err", derr)
-		}
+	if derr := command.Discard(commandPath); derr != nil {
+		log.Debug("discard stale command file failed", "err", derr)
 	}
 	pollCommand := func() (command.Command, bool) {
 		c, ok, cerr := command.Consume(commandPath, time.Now(), adv.CommandFreshness, command.RootOwned)
@@ -507,8 +510,16 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 			// Only the live half is adopted, so `running` keeps restart-required
 			// keys at the values still being enforced. A later reload therefore
 			// keeps reporting them as pending until a restart actually lands.
+			prev := running
 			running = *config.MergeLive(&running, next)
-			return liveSettingsFrom(&running), report, nil
+			ls := liveSettingsFrom(&running)
+			if !deciderChanged(&prev, &running) {
+				// Withhold the replacement: adopting one resets the hysteresis
+				// streak, and a reload that did not touch the country list or
+				// hysteresis must not cancel a flip already being counted toward.
+				ls.Decider = nil
+			}
+			return ls, report, nil
 		}
 	}
 
@@ -607,7 +618,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		RedialWindowMax:         adv.RedialWindowMax,
 		RedialMinUptime:         adv.RedialMinUptime,
 		Learn:                   learnHook,
-		PollCommand:             switchPollOrNil(switchEnabled || pauseEnabled, pollCommand),
+		PollCommand:             pollCommand,
 		Publish:                 publish,
 		BlockedCountries:        cfg.BlockedCountries,
 		ReloadConfig:            reload,
@@ -628,6 +639,20 @@ func changeKeys(changes []config.Change) []string {
 	return out
 }
 
+// deciderChanged reports whether the country decider has to be rebuilt: only the
+// blocked-country list and the hysteresis count feed it.
+//
+// It gates the rebuild because adopting a fresh Decider resets the in-progress
+// agreement streak. That is correct when either input changed — readings counted
+// under the old list say nothing about the new one — and wrong otherwise: an
+// unrelated config edit would cancel an escalation to FULL BLOCK, or a recovery,
+// that real readings were already counting toward, and a caller writing settings
+// once per poll interval could defer a flip indefinitely.
+func deciderChanged(prev, cur *config.Config) bool {
+	return prev.Hysteresis != cur.Hysteresis ||
+		!slices.Equal(prev.BlockedCountries, cur.BlockedCountries)
+}
+
 // liveSettingsFrom maps a config to the settings a running loop can adopt. It is
 // the reload-time counterpart of the same fields in assembleOptions, and a test
 // pins the two together so a key cannot be wired at startup but forgotten on
@@ -638,7 +663,6 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 		Interval:                cfg.PollInterval,
 		Decider:                 decision.New(cfg.BlockedCountries, cfg.Hysteresis),
 		BlockedCountries:        cfg.BlockedCountries,
-		Autodetect:              cfg.VPN.Autodetect,
 		AllowPhysicalDNS:        cfg.VPN.AllowPhysicalDNS,
 		AllowLocalNetwork:       cfg.VPN.AllowLocalNetwork,
 		AutoArm:                 cfg.VPN.AutoArm,
@@ -655,15 +679,6 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 		AllowPauseOps:           cfg.Control.AllowPauseOps,
 		AllowConfigOps:          cfg.Control.AllowConfigOps,
 	}
-}
-
-// switchPollOrNil returns the command poller only when the switch window is
-// enabled, so the runner leaves the feature off otherwise.
-func switchPollOrNil(enabled bool, poll func() (command.Command, bool)) func() (command.Command, bool) {
-	if !enabled {
-		return nil
-	}
-	return poll
 }
 
 // buildWatcher constructs the tunnel watcher, or returns nil when there is

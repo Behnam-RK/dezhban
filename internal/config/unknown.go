@@ -23,10 +23,9 @@ import (
 // stale config gets a fix rather than just a complaint. Entries stay until the
 // old name is long gone.
 var renamedKeys = map[string]string{
-	"vpn.reconnectWindow":              "vpn.redialWindow",
-	"vpn.advanced.reconnectWindowMax":  "vpn.advanced.redialWindowMax",
-	"vpn.advanced.reconnectMinUptime":  "vpn.advanced.redialMinUptime",
-	"vpn.advanced.reconnectWindowsMax": "vpn.advanced.redialWindowMax",
+	"vpn.reconnectWindow":             "vpn.redialWindow",
+	"vpn.advanced.reconnectWindowMax": "vpn.advanced.redialWindowMax",
+	"vpn.advanced.reconnectMinUptime": "vpn.advanced.redialMinUptime",
 }
 
 // unknownKeys reports dotted keys present in the raw config that the file schema

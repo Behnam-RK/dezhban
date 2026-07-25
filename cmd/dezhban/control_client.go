@@ -160,18 +160,11 @@ func notifyReload(cfgPath string) {
 	}
 	if !resp.OK {
 		fmt.Fprintln(os.Stderr, "Saved, but the running daemon did not reload:", resp.Error)
+		// Deliberately not restartMarker: no key list is known here, and the marker
+		// is a machine-read contract (see its doc comment) that must never appear
+		// without the keys it promises.
 		fmt.Fprintln(os.Stderr, "Restart dezhban to apply.")
 		return
 	}
-	switch {
-	case len(resp.Applied) == 0 && len(resp.NeedsRestart) == 0:
-		fmt.Println("Saved. No change to what the daemon is enforcing.")
-	case len(resp.NeedsRestart) == 0:
-		fmt.Printf("Saved and applied: %s\n", strings.Join(resp.Applied, ", "))
-	case len(resp.Applied) == 0:
-		fmt.Printf("Saved. Restart dezhban to apply: %s\n", strings.Join(resp.NeedsRestart, ", "))
-	default:
-		fmt.Printf("Saved and applied: %s\n", strings.Join(resp.Applied, ", "))
-		fmt.Printf("Restart dezhban to apply: %s\n", strings.Join(resp.NeedsRestart, ", "))
-	}
+	reportWriteOutcome(resp.Applied, resp.NeedsRestart)
 }

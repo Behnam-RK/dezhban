@@ -538,9 +538,14 @@ func (o Options) runGuard(ctx context.Context) error {
 	// client redialing after a drop dials a server whose live socket vanished
 	// with the tunnel, so endpoints must outlive their sockets for a bounded
 	// grace or the guard walls off the very redial it is holding the line for.
-	epGrace := o.EndpointGrace
-	if epGrace <= 0 {
-		epGrace = 15 * time.Minute
+	// Read at each use, never captured: vpn.endpointGrace is live-appliable, and a
+	// value snapshotted here would leave a reload reporting the key as applied
+	// while every reconciliation kept using the startup one.
+	epGrace := func() time.Duration {
+		if o.EndpointGrace <= 0 {
+			return 15 * time.Minute
+		}
+		return o.EndpointGrace
 	}
 	epLastSeen := make(map[netip.Addr]time.Time, len(endpoints))
 	for _, a := range endpoints {
@@ -721,9 +726,14 @@ func (o Options) runGuard(ctx context.Context) error {
 		o.MarkTunnelUp(now)
 	}
 
-	winInterval := o.WindowDiscoveryInterval
-	if winInterval <= 0 {
-		winInterval = 2 * time.Second
+	// Read when a window opens rather than captured here, for the same reason
+	// epGrace above is: vpn.advanced.windowDiscoveryInterval is live-appliable, so
+	// the next window must use the reloaded value instead of the startup one.
+	winInterval := func() time.Duration {
+		if o.WindowDiscoveryInterval <= 0 {
+			return 2 * time.Second
+		}
+		return o.WindowDiscoveryInterval
 	}
 
 	switchState := func() *state.SwitchState {
@@ -773,6 +783,38 @@ func (o Options) runGuard(ctx context.Context) error {
 		} else {
 			enfErr = nil
 			o.Log.Info("switch window updated", "reason", reason, "tunnels", tunnels, "endpoints", len(endpoints))
+		}
+	}
+
+	// reapplyPolicyFlags re-installs whatever posture is currently in force after
+	// vpn.allowPhysicalDNS / vpn.allowLocalNetwork changed under a live reload.
+	//
+	// It exists because reapplyStanding deliberately skips FULL BLOCK — correct for
+	// a tunnel/endpoint change, which lands on the next guard restore — but wrong
+	// for these two flags: FullBlock CARRIES both passes (see
+	// firewall.PolicyInput.FullBlock), so turning one off while cut would leave the
+	// old pass installed while the reload reported the key as applied. A tightening
+	// reported as applied has to actually be in force.
+	reapplyPolicyFlags := func(reason string) {
+		rebuild()
+		switch {
+		case standby:
+			// Nothing is installed in standby; the rebuilt sets arm with the guard.
+		case windowActive:
+			// An unrestricted window already passes everything, so only the
+			// restricted form carries AllowLocalNetwork — which is exactly what
+			// reapplyWindow re-applies.
+			reapplyWindow(reason)
+		case blocked:
+			if err := o.Backend.Apply(fullBlock); err != nil {
+				enfErr = err
+				o.Log.Error("re-apply full block failed", "reason", reason, "err", err)
+			} else {
+				enfErr = nil
+				o.Log.Info("full block updated", "reason", reason)
+			}
+		default:
+			reapplyStanding(reason)
 		}
 	}
 
@@ -887,7 +929,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		windowDeadline = now.Add(dur)
 		windowTimer = time.NewTimer(dur)
 		windowTimerC = windowTimer.C
-		winDiscTick = time.NewTicker(winInterval)
+		winDiscTick = time.NewTicker(winInterval())
 		winDiscC = winDiscTick.C
 		enfErr = nil
 		relaxation := "all outbound allowed"
@@ -1074,7 +1116,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		fresh := o.resolveEndpointsWith(ctx, tunnels)
 		lastSet = fresh
-		if next, changed := reconcileWithGrace(endpoints, fresh, false, epLastSeen, time.Now(), epGrace); changed {
+		if next, changed := reconcileWithGrace(endpoints, fresh, false, epLastSeen, time.Now(), epGrace()); changed {
 			endpoints = next
 		}
 		if len(endpoints) == 0 {
@@ -1378,11 +1420,15 @@ func (o Options) runGuard(ctx context.Context) error {
 			o.Interval = ls.Interval
 		}
 
+		// Replacing the Decider resets the in-progress agreement streak, so the
+		// sender only supplies one when the country list or hysteresis actually
+		// changed — a reload that touched neither must not cancel an escalation or
+		// a recovery the state machine is already counting toward. See
+		// deciderChanged in cmd/dezhban.
 		if ls.Decider != nil {
 			o.Decider = ls.Decider
 		}
 		o.BlockedCountries = ls.BlockedCountries
-		o.Autodetect = ls.Autodetect
 		o.AllowPhysicalDNS = ls.AllowPhysicalDNS
 		o.AllowLocalNetwork = ls.AllowLocalNetwork
 		o.AutoArm = ls.AutoArm
@@ -1401,9 +1447,16 @@ func (o Options) runGuard(ctx context.Context) error {
 		switchEnabled = o.SwitchWindow > 0 && o.PollCommand != nil
 		if ls.SwitchWindowMax > 0 {
 			manualWindowMax = ls.SwitchWindowMax
+			// Also on `o`: clampWindow reads o.SwitchWindowMax to bound a REQUESTED
+			// duration, and a first open trusts that clamp rather than re-capping.
+			// Updating only the local would let `switch --for 2m` still be granted
+			// against the cap the daemon started with — the same bug a lowered
+			// vpn.pauseMax had.
+			o.SwitchWindowMax = ls.SwitchWindowMax
 		}
 		if ls.RedialWindowMax > 0 {
 			autoWindowMax = ls.RedialWindowMax
+			o.RedialWindowMax = ls.RedialWindowMax
 		}
 		pauseWindowMax = ls.PauseMax
 		pauseEnabled = pauseWindowMax > 0 && o.PollCommand != nil
@@ -1424,7 +1477,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			"pause_max", o.PauseMax,
 		)
 		if policyChanged {
-			reapplyStanding("configuration reloaded")
+			reapplyPolicyFlags("configuration reloaded")
 		}
 		snapshot()
 	}
@@ -1464,8 +1517,15 @@ func (o Options) runGuard(ctx context.Context) error {
 			"reason", reason, "interval", fastProbeInterval, "for", fastProbeBudget)
 	}
 
+	// Polled whenever a poller exists, NOT only when a window is enabled at
+	// startup: vpn.switchWindow and vpn.pauseMax are live-appliable, so a daemon
+	// that started with both disabled must still notice a command once one is
+	// re-enabled — otherwise the reload reports the key as applied while the
+	// root-owned command path stays deaf until a restart. Every command handler
+	// below re-checks the live value (clampWindow / clampPause return <=0 when the
+	// trigger is off), so an ungated tick can never act on a disabled trigger.
 	var cmdC <-chan time.Time
-	if switchEnabled || pauseEnabled {
+	if o.PollCommand != nil {
 		cmdInterval := o.CommandPoll
 		if cmdInterval <= 0 {
 			cmdInterval = time.Second
@@ -1581,9 +1641,9 @@ func (o Options) runGuard(ctx context.Context) error {
 				}
 				dur := o.clampWindow(cmd.Duration)
 				if dur <= 0 {
-					// Unreachable while the command poll only ticks when
-					// switchEnabled, but never open a window the operator
-					// disabled — this is the guard's only relaxation.
+					// Reachable: the poll ticks regardless of whether the trigger
+					// is enabled, so this is the live gate. Never open a window the
+					// operator disabled — this is the guard's only relaxation.
 					o.Log.Warn("ignoring switch-window command — manual switch windows are disabled (vpn.switchWindow: \"0\")")
 					continue
 				}
@@ -1609,8 +1669,9 @@ func (o Options) runGuard(ctx context.Context) error {
 				}
 				dur := o.clampPause(cmd.Duration)
 				if dur <= 0 {
-					// Unreachable while the command poll only ticks when pauseEnabled,
-					// but never open a pause the operator disabled.
+					// Reachable, and the live gate: the poll ticks regardless of
+					// whether pausing is enabled. Never open a pause the operator
+					// disabled.
 					o.Log.Warn("ignoring pause command — pausing is disabled (vpn.pauseMax: \"0\")")
 					continue
 				}
@@ -1636,7 +1697,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// socket appears, then try to close.
 			fresh := o.resolveEndpointsWith(ctx, tunnels)
 			lastSet = fresh
-			if next, changed := reconcileWithGrace(endpoints, fresh, true, epLastSeen, time.Now(), epGrace); changed {
+			if next, changed := reconcileWithGrace(endpoints, fresh, true, epLastSeen, time.Now(), epGrace()); changed {
 				endpoints = next
 				reapplyWindow("in-window endpoint discovery")
 			}
@@ -1675,7 +1736,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// replace (and thus drop) the session/in-window endpoints the window is
 			// keeping open until it closes or reverts.
 			growOnly := blocked || windowActive
-			if next, changed := reconcileWithGrace(endpoints, fresh, growOnly, epLastSeen, time.Now(), epGrace); changed {
+			if next, changed := reconcileWithGrace(endpoints, fresh, growOnly, epLastSeen, time.Now(), epGrace()); changed {
 				endpoints = next
 				reapplyStanding("endpoint refresh")
 				reapplyWindow("endpoint refresh")
@@ -2005,11 +2066,11 @@ func (o Options) resolveEndpointsWith(ctx context.Context, tunnels []string) net
 // SwitchWindowMax (no floor). An empty/invalid request falls back to the
 // configured default SwitchWindow.
 func (o Options) clampWindow(req string) time.Duration {
-	// Refuse outright when manual switch windows are disabled. Both triggers
-	// (socket op, command file) are already gated on switchEnabled, so this is
-	// unreachable today — but failing closed here means a future caller that
-	// skipped the gate can never turn "disabled" into a real relaxation of the
-	// guard, whatever value req parses to.
+	// Refuse outright when manual switch windows are disabled. This is the live
+	// gate for the command-file path, which polls regardless of whether the
+	// trigger is enabled (see the cmdC comment in runGuard); the socket op is
+	// additionally gated on switchEnabled. Failing closed here means no caller can
+	// turn "disabled" into a real relaxation of the guard, whatever req parses to.
 	if o.SwitchWindow <= 0 {
 		return 0
 	}

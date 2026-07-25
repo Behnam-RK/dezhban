@@ -30,7 +30,11 @@ type LiveSettings struct {
 	Decider          *decision.Decider
 	BlockedCountries []string
 
-	Autodetect        bool
+	// Autodetect is deliberately absent: the run loop reads it only at startup
+	// (to decide whether a missing endpoint set is tolerable), and what actually
+	// autodetects is the tunnel watcher, whose interface allowlist is fixed when
+	// it is constructed. Carrying it here would let a reload report the key as
+	// applied while nothing observable changed — see config.restartReasons.
 	AllowPhysicalDNS  bool
 	AllowLocalNetwork bool
 	AutoArm           bool
@@ -77,7 +81,6 @@ func (o Options) Live() LiveSettings {
 		Interval:                o.Interval,
 		Decider:                 o.Decider,
 		BlockedCountries:        o.BlockedCountries,
-		Autodetect:              o.Autodetect,
 		AllowPhysicalDNS:        o.AllowPhysicalDNS,
 		AllowLocalNetwork:       o.AllowLocalNetwork,
 		AutoArm:                 o.AutoArm,

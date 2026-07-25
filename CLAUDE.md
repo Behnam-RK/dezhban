@@ -198,7 +198,19 @@ The design depends on these invariants (rationale in
   keep it that way. Window timer, command poll, watcher, geo ticks, **and
   control-socket requests** are all select cases in that one loop; the socket's
   accept goroutine only forwards requests over a channel and never touches the
-  Backend. No other goroutine applies rules.
+  Backend. No other goroutine applies rules. The `config-write` and `reload` ops
+  run there too, so that loop also performs the config file's read-modify-write
+  and adopts the result in the same turn — bounded by the socket's reply timeout.
+  Keep anything added there equally bounded: a blocking call in that goroutine
+  stalls window expiry and geo ticks, i.e. the enforcement itself.
+- **A key is only "live-appliable" if the run loop re-reads it.** `config.liveKeys`
+  is a promise to the user (`Saved and applied: …`), so a value the loop snapshots
+  into a local at startup belongs in `restartReasons`, not `liveKeys` — reporting a
+  setting as applied while the old one is enforced is the same failure as silently
+  discarding it. Values that must track a reload are read through a closure
+  (`epGrace`, `winInterval` in `runGuard`) precisely so a captured copy cannot
+  compile. Adding a live key means adding a test that the *behaviour* changed, not
+  just that the field was copied — see `internal/runner/reload_test.go`.
 - **`panic` must never depend on the daemon.** It is the lockout escape hatch, so it
   is deliberately NOT a control-socket op — it removes rules directly, as root, with
   no daemon running. Same for service lifecycle (`install`/`uninstall`/`start`/`stop`/`restart`):

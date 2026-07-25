@@ -179,6 +179,8 @@ func TestMergeLiveCoversExactlyTheLiveKeys(t *testing.T) {
 	cur.PollInterval = base.PollInterval + time.Second
 	cur.BlockedCountries = []string{"ZZ"}
 	cur.Hysteresis = base.Hysteresis + 1
+	// Restart-required, and left in deliberately: the loop over `moved` below is
+	// what proves MergeLive does NOT quietly adopt it.
 	cur.VPN.Autodetect = !base.VPN.Autodetect
 	cur.VPN.AllowPhysicalDNS = !base.VPN.AllowPhysicalDNS
 	cur.VPN.AllowLocalNetwork = !base.VPN.AllowLocalNetwork

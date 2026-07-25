@@ -893,6 +893,15 @@ func Save(path string, c *Config) error {
 		_ = tmp.Close()
 		return fmt.Errorf("write config %q: %w", path, err)
 	}
+	// Flushed before the rename, or the rename could publish a name whose contents
+	// are not on disk yet: a power loss then leaves a zero-length config, which is
+	// the very "unparseable at boot, host unprotected" outcome staging exists to
+	// prevent. The same reason internal/learned, internal/armed and internal/state
+	// all sync here.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("flush config %q: %w", path, err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("write config %q: %w", path, err)
 	}

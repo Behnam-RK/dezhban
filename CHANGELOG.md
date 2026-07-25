@@ -44,11 +44,47 @@ current as you land changes.
   a security setting accepted and silently discarded, which is the failure this
   project treats as the worst one it can have.
 
+- **Five more settings now really do apply live, instead of only reporting that
+  they did.** The reload path adopted them into the daemon's own view while the
+  code that acts on them kept using the value captured at startup, so `Saved and
+  applied` was true of the bookkeeping and false of the enforcement:
+
+  - `vpn.endpointGrace` and `vpn.advanced.windowDiscoveryInterval` were read once
+    at boot; both are now read at each use, so a shortened grace binds the very
+    next endpoint reconciliation.
+  - `vpn.advanced.switchWindowMax` bounded the *episode* at its new value but left
+    `switch --for` clamped against the cap the daemon started with.
+  - `vpn.switchWindow` and `vpn.pauseMax` could be turned off live but not back
+    on: a daemon that started with both disabled never wired the command-file
+    poll, so re-enabling a window left the root-owned path deaf until a restart.
+    The poll is now always wired and every command re-checks the live value, so
+    disabling still disables — a `"0"` window cannot be opened by any trigger.
+  - `vpn.autodetect` was never live at all (what autodetects is the tunnel
+    watcher, built at startup) and is now reported as needing a restart, which is
+    what it always needed.
+
+- **A tightening now lands even while traffic is cut.** FULL BLOCK carries the
+  `vpn.allowLocalNetwork` and `vpn.allowPhysicalDNS` passes, but a reload only
+  reinstalled the *standing* rules — which it deliberately skips while blocked. So
+  closing one of those passes during a block was reported as applied while the pass
+  stayed in the firewall until the posture next changed. The current posture is now
+  re-applied in place.
+
+- **An unrelated config change no longer restarts the agreement streak.** Every
+  reload handed the run loop a freshly built country decider, which resets the
+  in-progress hysteresis count — so a settings save while a forbidden exit was
+  being confirmed cancelled the escalation, and a client writing settings once per
+  poll interval could defer FULL BLOCK indefinitely. The decider is now rebuilt only
+  when `blockedCountries` or `hysteresis` actually changed, which is the only case
+  where discarding counted readings is the right answer.
+
 - **The config file is now written atomically.** It was written in place, so a
   save interrupted partway could leave a truncated file. That is not merely a
   lost setting: this config is what arms the guard at boot, so an unparseable one
-  would leave the host unprotected at the next start. It is now staged and
-  renamed, the same convention the daemon's other on-disk records already use.
+  would leave the host unprotected at the next start. It is now staged, flushed
+  and renamed, the same convention the daemon's other on-disk records already use.
+  The control token's hash is written the same way, so a power loss cannot leave a
+  zero-length hash that reads as "not enrolled" and locks out a valid token.
 
 - **A failed Touch ID no longer strands you on a password-only prompt.** The app
   ran `sudo` with stdin on `/dev/null`, so the moment a biometric read missed —
@@ -155,6 +191,11 @@ current as you land changes.
   return to the app, so an edit made in a terminal no longer leaves it showing
   values the daemon has stopped using; unsaved edits suppress the re-read rather
   than being discarded.
+- **The app's main window opens when you launch it.** Reaching it only through the
+  menubar dropdown made opening the app a two-step discovery problem. Launches
+  macOS performs on your behalf — a login item, state restoration, opening a file —
+  still open nothing, because a window appearing unbidden at every boot is exactly
+  the noise a menubar app should not make. The menubar item is unchanged either way.
 - **`gui/assets/` is now `gui/artifacts/`**, refreshed with a new brand set that
   adds the paused state across every size and variant. Documentation, the app
   build script, and source comments follow the new path; historical changelog

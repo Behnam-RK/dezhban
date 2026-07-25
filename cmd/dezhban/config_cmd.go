@@ -344,20 +344,33 @@ func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code
 	return 0, true
 }
 
-// reportWriteOutcome prints the same two-line summary notifyReload does, so a
-// config change reads identically whether it went over the socket or through a
-// privileged write plus a reload.
+// restartMarker introduces the list of keys the running daemon could not adopt.
+//
+// It is not merely prose: the macOS app scrapes this exact prefix out of `config
+// set`'s stdout to decide whether to offer a restart at all
+// (ConfigApply.pendingRestartKeys), deliberately, so the live/restart
+// classification lives only in the daemon. Reword it and the app silently stops
+// offering the restart, reporting a pending key as fully applied — so it is a
+// single constant, pinned by TestRestartMarkerIsTheContractTheAppScrapes.
+const restartMarker = "Restart dezhban to apply:"
+
+// reportWriteOutcome is the single renderer for "what happened to the settings I
+// just saved", used by both write paths — the token/socket one and a privileged
+// write followed by a reload — so a config change reads identically either way.
 func reportWriteOutcome(applied, needsRestart []string) {
-	switch {
-	case len(applied) == 0 && len(needsRestart) == 0:
+	if len(applied) == 0 && len(needsRestart) == 0 {
 		fmt.Println("Saved. No change to what the daemon is enforcing.")
-	case len(needsRestart) == 0:
+		return
+	}
+	if len(applied) > 0 {
 		fmt.Printf("Saved and applied: %s\n", strings.Join(applied, ", "))
-	case len(applied) == 0:
-		fmt.Printf("Saved. Restart dezhban to apply: %s\n", strings.Join(needsRestart, ", "))
-	default:
-		fmt.Printf("Saved and applied: %s\n", strings.Join(applied, ", "))
-		fmt.Printf("Restart dezhban to apply: %s\n", strings.Join(needsRestart, ", "))
+	}
+	if len(needsRestart) > 0 {
+		prefix := ""
+		if len(applied) == 0 {
+			prefix = "Saved. "
+		}
+		fmt.Printf("%s%s %s\n", prefix, restartMarker, strings.Join(needsRestart, ", "))
 	}
 }
 

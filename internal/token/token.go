@@ -84,6 +84,14 @@ func Save(path, tok string) error {
 		_ = tmp.Close()
 		return fmt.Errorf("write control token: %w", err)
 	}
+	// Flushed before the rename: an unsynced rename can publish a zero-length hash
+	// after a power loss, which Verify reads as "not enrolled" — locking out a
+	// token the user still holds. Same convention as internal/learned and
+	// internal/armed.
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("flush control token: %w", err)
+	}
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("write control token: %w", err)
 	}

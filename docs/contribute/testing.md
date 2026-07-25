@@ -306,6 +306,23 @@ daemon's *behaviour* afterwards, never about what the file says.
 - [ ] **Disabling a trigger live actually disables it.** `dezhban config set
       vpn.switchWindow 0` → `dezhban switch` refuses immediately, without a
       restart, and the *other* two triggers still work.
+- [ ] **Re-enabling a trigger live works too, on both paths.** Start the daemon
+      with `vpn.switchWindow` and `vpn.pauseMax` both `"0"` (the strict zero-leak
+      posture), then `dezhban config set vpn.switchWindow 30s` → `dezhban switch`
+      opens a window with no restart, **and** so does the root command-file path
+      with the daemon's control socket stopped (`control.enabled: false`). The
+      command poll used to be wired only when a window was enabled at startup, so
+      this reported applied and did nothing.
+- [ ] **A tightening lands while traffic is cut.** Get the daemon into FULL BLOCK
+      (a forbidden exit, or `dezhban block`), then `dezhban config set
+      vpn.allowLocalNetwork false` → the LAN pass is gone from the live ruleset
+      immediately (`pfctl -a dezhban -sr` / `nft list table inet dezhban`), not
+      only after the next posture change.
+- [ ] **An unrelated edit does not reset a pending flip.** With a forbidden exit
+      and `hysteresis: 3`, wait for `status` to report `in progress: escalating to
+      full block (1 of 3 …)`, then `dezhban config set pollInterval 15s` → the
+      count keeps climbing from where it was. Then change `blockedCountries` and
+      confirm the count *does* restart, which is the one case where it should.
 - [ ] **No daemon running.** The write still succeeds and says so; the values are
       picked up at the next start.
 

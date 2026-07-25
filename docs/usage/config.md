@@ -54,6 +54,36 @@ provider behind a rotating CDN can later resolve to a different IP than the one
 pinned, breaking recovery until the next `run` refresh — prefer providers with
 stable IPs for hosts that rely on one-shot `block`.
 
+### Keys that apply live, and keys that need a restart
+
+`dezhban config set` (and the macOS app's Settings pane) tells a running daemon to
+re-read this file, so most edits take effect immediately. Some cannot: anything the
+daemon *built* at startup — the logger, the geo monitor's provider list, the
+control socket, the tunnel watcher, the endpoint resolver — is still in force at
+its old value until a restart.
+
+Nothing needs to be memorised, because the daemon reports which is which by name
+for the keys you actually changed:
+
+```
+$ sudo dezhban config set pollInterval 30s logLevel debug
+Saved and applied: pollInterval
+Restart dezhban to apply: logLevel
+```
+
+That report is authoritative — it comes from the daemon, which is the only thing
+that knows what it built — so treat it, not this page, as the answer. Nothing is
+ever reported as applied while the old value is still being enforced; that would be
+the same failure as silently discarding a setting.
+
+Two consequences worth knowing:
+
+- Re-enabling a disabled window (`vpn.switchWindow`, `vpn.pauseMax`) applies live,
+  in both directions, including on a daemon that started with everything disabled.
+- Changing `blockedCountries` or `hysteresis` restarts the agreement streak, since
+  readings counted under the old list say nothing about the new one. Any other edit
+  leaves an in-progress posture change counting undisturbed.
+
 ### Keys that do nothing
 
 Any key the schema does not define — a typo, a key from an older version, a key

@@ -69,6 +69,12 @@ enum ConfigApply {
     /// live/restart classification in exactly one place — the daemon, which is
     /// the only thing that knows what it actually built at startup. A GUI-side
     /// copy would be a second source of truth, and the one guaranteed to drift.
+    ///
+    /// `marker` below is therefore a contract, not a display string: it must stay
+    /// identical to `restartMarker` in cmd/dezhban/config_cmd.go, which is pinned
+    /// there by TestRestartMarkerIsTheContractTheAppScrapes so a reword cannot
+    /// silently stop this scan from matching — which would report a key that is
+    /// still waiting on a restart as fully applied.
     static func pendingRestartKeys(in output: String) -> [String] {
         let marker = "Restart dezhban to apply:"
         for line in output.split(separator: "\n") {
