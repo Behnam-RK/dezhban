@@ -27,7 +27,7 @@ enrolls on your behalf and keeps its copy in the login keychain behind Touch ID;
 enroll by hand only when scripting a client of your own.
 
 Enrolling again replaces the previous token, which is how you revoke one that
-has leaked. See docs/adr/0003-biometric-auth.md.`
+has leaked. See docs/adr/0003-biometric-token-over-existing-daemon.md.`
 
 func cmdToken(args []string) int {
 	if len(args) == 0 {

@@ -35,8 +35,8 @@ const probeEgressBudget = 8 * time.Second
 // guard cannot know until it observes an allowed country Hysteresis times, and
 // at the default cadence that is a ~30s wait during which the user sees a
 // blocked network and no sign of progress. A tunnel-up edge is a strong hint
-// that the answer changed, so probe at fastProbeInterval until the streak
-// resolves.
+// that the answer changed, so probe at fastProbeInterval until the guard
+// restores or the episode's budget runs out (see fastProbeBudget below).
 //
 // This changes CADENCE ONLY. Hysteresis still gates the flip, an undeterminable
 // country still holds the posture, and the probe is the same tunnel-scoped one —
@@ -896,7 +896,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		switch trigger {
 		case state.TriggerAuto:
-			o.Log.Warn("RECONNECT WINDOW OPEN — "+relaxation+"; tunnel dropped, redial any VPN now (real IP may be exposed until it closes)",
+			o.Log.Warn("REDIAL WINDOW OPEN — "+relaxation+"; tunnel dropped, redial any VPN now (real IP may be exposed until it closes)",
 				"until", windowDeadline)
 		case state.TriggerPause:
 			o.Log.Warn("PAUSED — "+relaxation+"; protection resumes automatically at the deadline (real IP is exposed until then)",

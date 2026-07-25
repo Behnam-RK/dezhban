@@ -215,7 +215,6 @@ func MergeLive(base, cur *Config) *Config {
 	out.Control.AllowSwitchOps = cur.Control.AllowSwitchOps
 	out.Control.AllowPauseOps = cur.Control.AllowPauseOps
 	out.Control.AllowConfigOps = cur.Control.AllowConfigOps
-	out.Control.AllowConfigOps = cur.Control.AllowConfigOps
 
 	out.VPN.Advanced.SwitchWindowMax = cur.VPN.Advanced.SwitchWindowMax
 	out.VPN.Advanced.RedialWindowMax = cur.VPN.Advanced.RedialWindowMax
