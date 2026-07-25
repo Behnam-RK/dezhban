@@ -188,6 +188,27 @@ succeeds and says so; the new values are read the next time it starts.
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
 
+### Presets
+
+A quick way to answer "how strict am I", without knowing which eight keys that
+touches — see [config.md](config.md#presets) for exactly what each one sets and
+what it costs you:
+
+```sh
+dezhban config preset list                  # strict/balanced/relaxed, cost, and which matches now
+dezhban config preset show strict           # one preset's key/value set
+dezhban config preset diff                  # keys that differ from the matched-or-nearest preset
+dezhban config preset diff relaxed          # keys that differ from a specific preset
+sudo dezhban config preset apply strict     # write it — same validated path as `config set`
+```
+
+`preset apply` is not a new write mechanism — it builds the same `key=value`
+pairs `config set` would take, then validates once and writes once, so it
+applies live where it can and reports what needs a restart exactly like any
+other write. It never touches identity (blocked countries, tunnel interfaces,
+endpoints, profiles); add `--json` to `list`/`show`/`diff` for machine-readable
+output.
+
 ### Changing settings without a password
 
 Settings changes can also go over the control socket, so the macOS app's Settings

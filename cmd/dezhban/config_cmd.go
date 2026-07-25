@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/netip"
 	"os"
 	"os/exec"
 	"runtime"
@@ -29,6 +31,14 @@ Subcommands:
   reset --all       Reset every tunable to defaults, preserving identity data
                     (blockedCountries, vpn.tunnelInterfaces/endpoints/profiles).
                     Delete the config file for a true wipe.
+  preset list       List strict/balanced/relaxed, their cost, and which (if any)
+                    matches the current config
+  preset show <name>       Print one preset's key/value set
+  preset diff [<name>]     Show keys that differ from a preset (default: the
+                    matched-or-nearest one)
+  preset apply <name>      Write a preset's values, validate, and save — same
+                    path as 'set', so it applies live where it can and reports
+                    what needs a restart
   edit              Open the config in $EDITOR (created from defaults if missing)
 
 Flags:
@@ -37,6 +47,8 @@ Flags:
                     Falls back to a privileged write if no daemon answers; a
                     daemon that REFUSES is reported, never routed around.
                     See 'dezhban token'.
+  --json            ('preset list'/'preset show'/'preset diff' only) print
+                    machine-readable JSON instead of prose
 
 Keys (dotted; list values are comma-separated):
   pollInterval blockedCountries hysteresis providers providerQuorum logLevel
@@ -364,6 +376,8 @@ func cmdConfig(args []string) int {
 		return configSet(cfgPath, rest, useToken)
 	case "reset":
 		return configReset(cfgPath, rest, useToken)
+	case "preset":
+		return configPreset(cfgPath, rest, useToken)
 	case "edit":
 		return configEdit(cfgPath)
 	case "-h", "--help", "help":
@@ -721,6 +735,316 @@ func configReset(flagVal string, args []string, useToken bool) int {
 	}
 	// A reset is a config write like any other, and returning to a default is
 	// just as much a change the daemon has to be told about.
+	notifyReload(flagVal)
+	return 0
+}
+
+const presetUsage = `usage: dezhban config preset <subcommand>
+
+Subcommands:
+  list              List strict/balanced/relaxed, their cost, and which (if
+                    any) matches the current config
+  show <name>       Print one preset's key/value set
+  diff [<name>]     Show keys that differ from a preset (default: the
+                    matched-or-nearest one)
+  apply <name>      Write a preset's values, validate, and save — the same
+                    path 'config set' uses, so it applies live where it can
+                    and reports what needs a restart
+
+A preset is a write-time macro over the keys that answer "how strict am I" —
+applying one changes ordinary config values, nothing else. It never touches
+identity (blockedCountries, tunnel interfaces, endpoints, profiles).`
+
+// presetJSON is the --json shape for 'preset list'/'preset show'. Values is
+// only populated by 'show' — 'list' omits it (a summary, not the full set).
+type presetJSON struct {
+	Name    string            `json:"name"`
+	Summary string            `json:"summary"`
+	Cost    string            `json:"cost"`
+	Matched bool              `json:"matched,omitempty"`
+	Values  map[string]string `json:"values,omitempty"`
+}
+
+// changeJSON mirrors config.Change in the same lowerCamelCase convention the
+// rest of the CLI's --json output uses, rather than marshaling the Go type
+// (whose exported fields would serialize capitalized) directly.
+type changeJSON struct {
+	Key           string `json:"key"`
+	From          string `json:"from"`
+	To            string `json:"to"`
+	RestartReason string `json:"restartReason,omitempty"`
+}
+
+// stripJSONFlag extracts --json from anywhere in args, the same whole-list
+// scan stripConfigFlag/stripTokenStdin use.
+func stripJSONFlag(args []string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	found := false
+	for _, a := range args {
+		if a == "--json" || a == "-json" {
+			found = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, found
+}
+
+// nearestPreset picks the preset with the fewest drifted keys from cfg —
+// used as 'preset diff's default target when the config matches none exactly,
+// so the diff always has something concrete to show against. Ties (equal
+// drift count) favor the earlier preset in config.Presets' Strict → Balanced →
+// Relaxed order.
+func nearestPreset(cfg *config.Config) config.Preset {
+	presets := config.Presets()
+	best := presets[0]
+	bestDrift := len(config.PresetDrift(cfg, best))
+	for _, p := range presets[1:] {
+		if n := len(config.PresetDrift(cfg, p)); n < bestDrift {
+			best, bestDrift = p, n
+		}
+	}
+	return best
+}
+
+func configPreset(flagVal string, args []string, useToken bool) int {
+	args, jsonOut := stripJSONFlag(args)
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, presetUsage)
+		return 2
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "list":
+		return presetList(flagVal, jsonOut)
+	case "show":
+		return presetShow(rest, jsonOut)
+	case "diff":
+		return presetDiffCmd(flagVal, rest, jsonOut)
+	case "apply":
+		return presetApply(flagVal, rest, useToken)
+	case "-h", "--help", "help":
+		fmt.Println(presetUsage)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config preset subcommand %q\n\n%s\n", sub, presetUsage)
+		return 2
+	}
+}
+
+func presetByNameOrUsage(name, usage string) (config.Preset, int) {
+	p, ok := config.PresetByName(name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown preset %q (want strict, balanced, or relaxed)\n%s\n", name, usage)
+		return config.Preset{}, 2
+	}
+	return p, 0
+}
+
+func presetList(flagVal string, jsonOut bool) int {
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+	matched, exact := config.MatchPreset(cfg)
+
+	if jsonOut {
+		out := make([]presetJSON, 0, 3)
+		for _, p := range config.Presets() {
+			out = append(out, presetJSON{
+				Name: p.Name, Summary: p.Summary, Cost: p.Cost,
+				Matched: exact && p.Name == matched,
+			})
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "preset list json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	for _, p := range config.Presets() {
+		marker := ""
+		if exact && p.Name == matched {
+			marker = "  (current)"
+		}
+		fmt.Printf("%-9s %s%s\n", p.Name, p.Summary, marker)
+		fmt.Printf("          cost: %s\n", p.Cost)
+	}
+	if !exact {
+		near := nearestPreset(cfg)
+		drift := config.PresetDrift(cfg, near)
+		fmt.Printf("\ncurrent: Custom (%d key(s) differ from %s)\n", len(drift), near.Name)
+	}
+	return 0
+}
+
+func presetShow(rest []string, jsonOut bool) int {
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset show <strict|balanced|relaxed>")
+		return 2
+	}
+	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset show <strict|balanced|relaxed>")
+	if code != 0 {
+		return code
+	}
+
+	if jsonOut {
+		data, err := json.MarshalIndent(presetJSON{Name: p.Name, Summary: p.Summary, Cost: p.Cost, Values: p.Values}, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "preset show json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	fmt.Printf("%s — %s\n", p.Name, p.Summary)
+	fmt.Printf("cost: %s\n\n", p.Cost)
+	keys := make([]string, 0, len(p.Values))
+	for k := range p.Values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("  %s = %s\n", k, p.Values[k])
+	}
+	return 0
+}
+
+func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
+	if len(rest) > 1 {
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset diff [<strict|balanced|relaxed>]")
+		return 2
+	}
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+
+	var target config.Preset
+	if len(rest) == 1 {
+		var code int
+		target, code = presetByNameOrUsage(rest[0], "usage: dezhban config preset diff [<strict|balanced|relaxed>]")
+		if code != 0 {
+			return code
+		}
+	} else if name, exact := config.MatchPreset(cfg); exact {
+		target, _ = config.PresetByName(name)
+	} else {
+		target = nearestPreset(cfg)
+	}
+
+	changes := config.PresetDrift(cfg, target)
+
+	if jsonOut {
+		out := make([]changeJSON, 0, len(changes))
+		for _, c := range changes {
+			out = append(out, changeJSON{Key: c.Key, From: c.From, To: c.To, RestartReason: c.RestartReason})
+		}
+		data, err := json.MarshalIndent(struct {
+			Preset  string       `json:"preset"`
+			Changes []changeJSON `json:"changes"`
+		}{target.Name, out}, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "preset diff json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	if len(changes) == 0 {
+		fmt.Printf("no drift from %s\n", target.Name)
+		return 0
+	}
+	fmt.Printf("drift from %s:\n", target.Name)
+	for _, c := range changes {
+		fmt.Printf("  %s: %s → %s\n", c.Key, c.From, c.To)
+	}
+	return 0
+}
+
+func presetApply(flagVal string, rest []string, useToken bool) int {
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset apply <strict|balanced|relaxed>")
+		return 2
+	}
+	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset apply <strict|balanced|relaxed>")
+	if code != 0 {
+		return code
+	}
+	fmt.Printf("applying %s: %s\n", p.Name, p.Summary)
+	fmt.Printf("cost: %s\n", p.Cost)
+
+	// Strict disables vpn.allowPhysicalDNS. A VPN endpoint given as a hostname
+	// needs the physical link's DNS to re-resolve its server while the tunnel
+	// is down — without it, a redial after a drop can silently never find the
+	// server again. Warn rather than block: the operator may already know the
+	// server's IP never changes, or intend to pin a literal IP separately.
+	if p.Name == "strict" {
+		if cfg, err := loadConfig(flagVal); err == nil {
+			for _, ep := range config.EffectiveEndpoints(cfg, nil) {
+				if ep == "" {
+					continue
+				}
+				if _, err := netip.ParseAddr(strings.TrimSpace(ep)); err != nil {
+					fmt.Println("warning: a configured VPN endpoint is a hostname, and Strict turns off")
+					fmt.Println("         vpn.allowPhysicalDNS — it will not be able to re-resolve while the")
+					fmt.Println("         tunnel is down. Consider a literal IP for vpn.endpoints, or a preset")
+					fmt.Println("         other than Strict.")
+					break
+				}
+			}
+		}
+	}
+
+	if useToken {
+		tok, terr := readTokenStdin()
+		if terr != nil {
+			fmt.Fprintln(os.Stderr, terr)
+			return 2
+		}
+		if code, handled := tryConfigWrite(flagVal, p.Values, tok); handled {
+			return code
+		}
+	}
+
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+	keys := make([]string, 0, len(p.Values))
+	for k := range p.Values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		field, ok := configFields[k]
+		if !ok {
+			// Every preset key is a real configFields entry — pinned by
+			// internal/config's TestPresetsAreWellFormed and this package's
+			// TestSettableKeysAndReloadKeysAgree. Reaching this is a bug.
+			fmt.Fprintf(os.Stderr, "preset %s: %q has no way to set it (this is a bug)\n", p.Name, k)
+			return 1
+		}
+		if err := field.set(cfg, p.Values[k]); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid value for %s: %v\n", k, err)
+			return 1
+		}
+	}
+	path := writeTargetPath(flagVal)
+	if err := writeConfig(path, cfg); err != nil {
+		return saveError(path, err)
+	}
+	for _, k := range keys {
+		fmt.Printf("set %s = %s  (%s)\n", k, configFields[k].get(cfg), path)
+	}
 	notifyReload(flagVal)
 	return 0
 }

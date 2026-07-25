@@ -374,6 +374,16 @@ current as you land changes.
   vocabulary `config set`'s reload report already uses. Each preset states its
   cost in plain words — see [config.md](docs/usage/config.md#presets). No CLI
   or GUI surface yet; that's the next two changes.
+- **`dezhban config preset list/show/diff/apply`.** `list` shows all three
+  presets, their cost, and which (if any) matches the current config (or
+  `Custom (N key(s) differ from …)`); `show <name>` prints one preset's
+  key/value set; `diff [<name>]` shows the divergent keys (defaulting to the
+  matched-or-nearest preset); `apply <name>` writes a preset's values through
+  the exact same validated path `config set` uses — one write, live where it
+  can, `Restart dezhban to apply: …` where it can't — and warns before
+  applying Strict if any configured VPN endpoint is a hostname (Strict turns
+  off `vpn.allowPhysicalDNS`, so it couldn't re-resolve while the tunnel is
+  down). `list`/`show`/`diff` take `--json`.
 
 ## [0.7.0] - 2026-07-22
 
