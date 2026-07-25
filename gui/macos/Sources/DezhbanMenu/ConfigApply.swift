@@ -65,6 +65,15 @@ enum ConfigApply {
                  awaitPosture: awaitPosture, title: title, completion: completion)
     }
 
+    /// Applies a named preset (`dezhban config preset apply <name>`) through the
+    /// exact same batched write/reload/restart-prompt path as `apply`/`resetAll` —
+    /// a preset is a write-time macro over ordinary keys, not a separate op.
+    static func applyPreset(_ name: String, awaitPosture: Bool, title: String,
+                            completion: @escaping (Outcome) -> Void) {
+        runBatch(["config", "preset", "apply", name],
+                 awaitPosture: awaitPosture, title: title, completion: completion)
+    }
+
     /// `write` arrives WITHOUT `--config`; this appends it from the resolved path.
     /// The resolution happens on the background queue below rather than in `apply` /
     /// `resetAll`, which are called from button actions on the main thread — see

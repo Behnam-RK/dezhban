@@ -384,6 +384,16 @@ current as you land changes.
   applying Strict if any configured VPN endpoint is a hostname (Strict turns
   off `vpn.allowPhysicalDNS`, so it couldn't re-resolve while the tunnel is
   down). `list`/`show`/`diff` take `--json`.
+- **A preset picker and an Advanced pane in the macOS app.** Settings gains a
+  strictness-preset row — one button per preset, checked when it matches the
+  live config, with its summary and cost shown below (or "Custom" plus a
+  disclosure of exactly which keys differ from the nearest preset, matching
+  `dezhban config preset diff`). Choosing one names the cost in the
+  confirmation, then applies through `dezhban config preset apply` via the
+  same batched write/reload/restart-prompt path Apply already uses. A
+  collapsed **Advanced** disclosure exposes all twelve now-settable
+  `vpn.advanced.*` keys, staged into the same batch (`SettingsFields` grows
+  from 13 to 25 fields).
 
 ## [0.7.0] - 2026-07-22
 

@@ -379,15 +379,16 @@ Two surfaces, split by urgency:
     are guided: CLI missing, service not installed, and daemon stopped each
     render an explanation with the one relevant action inline (Install
     service… / Guard up).
-  - **VPN Guard** — edits tunnels/endpoints/autodetection through
-    the same validation as `config set`, then (after an explicit restart-warning
-    choice) restarts the daemon to apply and verifies the new posture.
-  - **Settings** — startup ("Start protection at boot" installs the launchd
+  - **Settings** — startup ("Start the guard at boot" installs the launchd
     system service so enforcement survives reboots; "Open this app at login" via
-    `SMAppService`; essential-event notifications), protection (blocked
-    countries, switch-window duration, endpoint grace) applied through one
-    validated `config set` batch, **"Use Touch ID for settings changes"** (see
-    below), and the raw config file escape hatch (some advanced options are
+    `SMAppService`; essential-event notifications), a **strictness preset
+    picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
+    the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
+    countries, poll interval), windows (switch/redial/endpoint grace), timing,
+    all applied through one validated `config set` batch, an **Advanced**
+    disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
+    settings changes"** (see below), an explicit **Restart dezhban…**, and the
+    raw config file escape hatch (control socket, geo providers, allowlist are
     JSON-only).
   - **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
     with fixes inline instead of a text dump; an optional "Find my VPN's

@@ -23,6 +23,18 @@ struct SettingsFieldsTests {
         f.endpointGrace = "5m"
         f.endpointRefresh = "1m"
         f.tunnelWatch = "2s"
+        f.advSwitchWindowMax = "4m"
+        f.advRedialWindowMax = "11m"
+        f.advRedialMinUptime = "20s"
+        f.advCommandFreshness = "45s"
+        f.advWindowDiscoveryInterval = "2s"
+        f.advTunnelPruneAfter = "90s"
+        f.advLearnedEndpointTTL = "48h"
+        f.advLearnedMaxPerProfile = "32"
+        f.advPromoteAfterRefreshes = "5"
+        f.advEndpointWarnThreshold = "512"
+        f.advWindowProtocols = "udp,tcp"
+        f.advWindowPorts = "51820,443"
 
         let pairs = f.pairs()
         for (key, pair) in zip(SettingsFields.keys, pairs) {
@@ -39,6 +51,10 @@ struct SettingsFieldsTests {
             "IR,RU", "15s",
             "5s", "30s", "15m",
             "1m", "1s",
+            "3m", "10m", "15s",
+            "30s", "1s", "60s",
+            "720h", "16", "3",
+            "256", "udp", "51820",
         ]
         let f = SettingsFields(seeded: seeded)
         #expect(f.currentValues == seeded)
@@ -50,6 +66,9 @@ struct SettingsFieldsTests {
         #expect(labels == [
             "Geo IP lookup interval", "Switch window", "Redial window",
             "Endpoint grace", "Endpoint refresh", "Tunnel watch",
+            "Manual switch window cap", "Redial window cap", "Redial anti-flap uptime",
+            "Command freshness", "Window discovery interval", "Tunnel prune delay",
+            "Learned endpoint TTL",
         ])
     }
 

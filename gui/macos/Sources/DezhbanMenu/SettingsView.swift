@@ -42,6 +42,9 @@ struct SettingsView: View {
     @State private var canApply = false
     @State private var bootBusy = false
     @State private var restartBusy = false
+    @State private var presets: [PresetSummary] = []
+    @State private var presetDrift: PresetDiff?
+    @State private var presetBusy = false
     @State private var tokenBusy = false
     @State private var tokenEnrolled = ControlToken.isStored
     /// Evaluated once rather than in `body`: whether this Mac has biometry cannot
@@ -51,6 +54,9 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                Section("Strictness preset") {
+                    presetPicker
+                }
                 Section("Startup") {
                     Toggle("Start the guard at boot (install the system service)", isOn: bootBinding)
                         .disabled(bootBusy || !state.cliFound)
@@ -137,6 +143,44 @@ struct SettingsView: View {
                     }
                 }
                 Section {
+                    DisclosureGroup("Advanced") {
+                        Text("Touch only if you know why — these override recommended defaults.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        TextField("Manual switch window cap (e.g. 3m)", text: $fields.advSwitchWindowMax)
+                            .disabled(!canApply)
+                        TextField("Redial window cap (e.g. 10m)", text: $fields.advRedialWindowMax)
+                            .disabled(!canApply)
+                        TextField("Redial anti-flap uptime (e.g. 15s; 0 disables the gate)", text: $fields.advRedialMinUptime)
+                            .disabled(!canApply)
+                        TextField("Command freshness (e.g. 30s)", text: $fields.advCommandFreshness)
+                            .disabled(!canApply)
+                            .help("How recent a control command must be to be acted on (replay guard).")
+                        TextField("Window discovery interval (e.g. 1s)", text: $fields.advWindowDiscoveryInterval)
+                            .disabled(!canApply)
+                            .help("How often a new VPN server is looked for while a switch window is open.")
+                        TextField("Tunnel prune delay (e.g. 60s)", text: $fields.advTunnelPruneAfter)
+                            .disabled(!canApply)
+                            .help("How long a dynamically-detected tunnel must be gone before it's dropped.")
+                        TextField("Learned endpoint lifetime (e.g. 720h)", text: $fields.advLearnedEndpointTTL)
+                            .disabled(!canApply)
+                            .help("How long an unused learned endpoint is kept.")
+                        TextField("Learned endpoints per profile (e.g. 16)", text: $fields.advLearnedMaxPerProfile)
+                            .disabled(!canApply)
+                        TextField("Promote after N sightings (e.g. 3)", text: $fields.advPromoteAfterRefreshes)
+                            .disabled(!canApply)
+                            .help("Consecutive sightings before a discovered endpoint is learned under normal guard.")
+                        TextField("Endpoint-bloat warning threshold (e.g. 256)", text: $fields.advEndpointWarnThreshold)
+                            .disabled(!canApply)
+                        TextField("Switch-window protocols (comma-sep, e.g. udp,tcp)", text: $fields.advWindowProtocols)
+                            .disabled(!canApply)
+                            .help("Restricts a switch window to these protocols instead of allowing all outbound. Needs a restart to take effect.")
+                        TextField("Switch-window ports (comma-sep, e.g. 51820,443)", text: $fields.advWindowPorts)
+                            .disabled(!canApply)
+                            .help("Restricts a switch window to these ports instead of allowing all outbound. Needs a restart to take effect.")
+                    }
+                }
+                Section {
                     LabeledContent("Config file") {
                         // `configPath`, never DezhbanCLI.resolvedConfigPath(): a body
                         // getter must not spawn a process. See DezhbanCLI.exec.
@@ -209,6 +253,84 @@ struct SettingsView: View {
             status = outcome.status
             if let title = outcome.transcriptTitle, let text = outcome.transcript {
                 state.showInLogs(title: title, text: text)
+            }
+        }
+    }
+
+    // MARK: - preset picker
+
+    /// One button per preset (a segmented control would apply on selection with
+    /// no chance to confirm the cost first) plus a summary/cost line for
+    /// whichever one is current, or the drift from the nearest one when the
+    /// config is Custom.
+    private var presetPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(presets) { p in
+                    Button {
+                        confirmAndApplyPreset(p)
+                    } label: {
+                        Label(p.name.capitalized, systemImage: (p.matched ?? false) ? "checkmark.circle.fill" : "circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint((p.matched ?? false) ? Color.accentColor : Color.secondary)
+                    .disabled(presetBusy || !canApply)
+                }
+            }
+            if let matched = presets.first(where: { $0.matched ?? false }) {
+                Text(matched.summary).font(.callout).foregroundStyle(.secondary)
+                Text("Cost: \(matched.cost)").font(.callout).foregroundStyle(.secondary)
+            } else if !presets.isEmpty {
+                Text("Custom — doesn't match any preset.").font(.callout).foregroundStyle(.secondary)
+                if let drift = presetDrift, !drift.changes.isEmpty {
+                    DisclosureGroup("\(drift.changes.count) key(s) differ from \(drift.preset.capitalized)") {
+                        ForEach(drift.changes) { c in
+                            Text("\(c.key): \(c.from) → \(c.to)")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Names the cost before writing, then applies through the same batched
+    /// write/reload/restart path Apply and Reset to Defaults use — a preset is
+    /// a write-time macro over ordinary keys, not a separate kind of change.
+    private func confirmAndApplyPreset(_ p: PresetSummary) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Apply the \(p.name.capitalized) preset?"
+        alert.informativeText = "\(p.summary)\n\nCost: \(p.cost)"
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        presetBusy = true
+        status = "Applying \(p.name)…"
+        ConfigApply.applyPreset(p.name, awaitPosture: true, title: "Preset") { outcome in
+            presetBusy = false
+            status = outcome.status
+            if let title = outcome.transcriptTitle, let text = outcome.transcript {
+                state.showInLogs(title: title, text: text)
+            }
+            // Re-seed so the preset picker (and every field) reflects what
+            // actually landed, including the daemon's own normalisation.
+            if outcome.ok { seed() }
+        }
+    }
+
+    /// Reads presets and (only when the config is Custom) the drift from the
+    /// nearest one, off the main thread — both shell out.
+    private func refreshPresets() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let list = DezhbanCLI.readPresets() ?? []
+            let diff = list.contains { $0.matched ?? false } ? nil : DezhbanCLI.readPresetDiff()
+            DispatchQueue.main.async {
+                presets = list
+                presetDrift = diff
             }
         }
     }
@@ -361,6 +483,7 @@ struct SettingsView: View {
         checkUpdatesEnabled = UpdateChecker.isEnabled
         fields = SettingsFields()
         state.refreshServiceState()
+        refreshPresets()
         // `path` is the same resolution ConfigApply.seed already did for the
         // `config get` calls — reusing it here means configPath never needs its
         // own second background resolve, so there's nothing to race.

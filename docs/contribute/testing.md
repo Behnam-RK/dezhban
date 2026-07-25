@@ -556,6 +556,17 @@ end up typing a password.
       FULL BLOCK or an open switch/redial/pause window that says enforcement is
       briefly lifted and your real IP may be exposed. Cancelling changes nothing.
 - [ ] **Open Config File…** opens the resolved config path.
+- [ ] **Preset picker.** With a freshly-installed (default) config, Balanced
+      shows checked and its summary/cost text; clicking Strict shows the cost
+      in the confirmation, and after applying, Strict is checked and Balanced
+      is not. Hand-edit one key afterward (e.g. `pollInterval`) and reopen the
+      pane — no preset is checked, "Custom" shows, and the disclosure lists
+      exactly the keys that differ from the nearest preset (matches `dezhban
+      config preset diff`).
+- [ ] **Advanced disclosure.** Collapsed by default; expanding it seeds from
+      `dezhban config show`'s `vpn.advanced` block, and Apply writes changes
+      there through the same batched write as every other field (one prompt,
+      not a second one for Advanced).
 
 #### Use Touch ID for settings changes
 

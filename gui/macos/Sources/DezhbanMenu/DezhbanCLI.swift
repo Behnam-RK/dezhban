@@ -283,6 +283,28 @@ enum DezhbanCLI {
         return ProfilesInfo.decode(data)
     }
 
+    /// Reads all three presets and which (if any) matches the current config,
+    /// via `config preset list --json`.
+    static func readPresets() -> [PresetSummary]? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["config", "preset", "list", "--json", "--config", resolvedConfigPath()])
+        guard let data = r.out.data(using: .utf8) else { return nil }
+        return PresetSummary.decodeList(data)
+    }
+
+    /// Reads the keys that differ from `name` (or, if nil, the
+    /// matched-or-nearest preset — the same default `preset diff` uses),
+    /// via `config preset diff [name] --json`.
+    static func readPresetDiff(from name: String? = nil) -> PresetDiff? {
+        guard let bin = binaryPath() else { return nil }
+        var args = ["config", "preset", "diff"]
+        if let name { args.append(name) }
+        args += ["--json", "--config", resolvedConfigPath()]
+        let r = exec(bin, args)
+        guard let data = r.out.data(using: .utf8) else { return nil }
+        return PresetDiff.decode(data)
+    }
+
     /// Memoization for `resolvedConfigPath()`. The resolved value is stable for the
     /// process's lifetime: it depends on `--config`/$DEZHBAN_CONFIG (fixed at launch)
     /// and otherwise on the built-in system path — the same string whether or not the
