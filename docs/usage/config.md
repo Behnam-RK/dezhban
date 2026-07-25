@@ -271,7 +271,14 @@ config so the daemon never rewrites user intent. `dezhban vpn forget` clears the
 ## Advanced tunables (`vpn.advanced`)
 
 An optional block for behaviors that are otherwise recommended defaults. Omit it
-entirely to keep the defaults; set only the knobs you need.
+entirely to keep the defaults; set only the knobs you need. Every field below is
+reachable with `dezhban config set vpn.advanced.<field>=<value>` — the same
+validated write-and-reload path as any other key — not just by hand-editing the
+file. `switchWindowMax`, `redialWindowMax`, `redialMinUptime`, and
+`windowDiscoveryInterval` apply live; the rest (built into something the run
+loop constructs once at startup, or — for `windowProtocols`/`windowPorts` —
+only re-read when a switch window opens) need `dezhban restart` to take
+effect, which `config set` says so at the time.
 
 | Field | Default | What it controls |
 |---|---|---|

@@ -75,7 +75,23 @@ func KeyValues(c *Config) map[string]string {
 		"vpn.advanced.learnedMaxPerProfile":    strconv.Itoa(adv.LearnedMaxPerProfile),
 		"vpn.advanced.promoteAfterRefreshes":   strconv.Itoa(adv.PromoteAfterRefreshes),
 		"vpn.advanced.endpointWarnThreshold":   strconv.Itoa(adv.EndpointWarnThreshold),
+		"vpn.advanced.windowProtocols":         strings.Join(adv.WindowProtocols, ","),
+		"vpn.advanced.windowPorts":             joinInts(adv.WindowPorts),
 	}
+}
+
+// joinInts renders an int slice for display/comparison — comma-separated, no
+// spaces. Mirrors the identically-named helper cmd/dezhban uses for `config
+// set`'s get side, kept here too since KeyValues has no dependency on cmd/dezhban.
+func joinInts(ns []int) string {
+	if len(ns) == 0 {
+		return ""
+	}
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
 }
 
 // restartReasons names the keys a running daemon cannot adopt, and says why.
@@ -108,6 +124,13 @@ var restartReasons = map[string]string{
 	"vpn.advanced.learnedMaxPerProfile":  "the learned-endpoint store is wired up at startup",
 	"vpn.advanced.promoteAfterRefreshes": "endpoint promotion is wired up at startup",
 	"vpn.advanced.endpointWarnThreshold": "endpoint resolution is wired up at startup",
+
+	// Read only when a switch window opens (Options.policyInput), not on any
+	// standing interval the run loop rebuilds — the run loop's live-reload path
+	// (LiveSettings/applyLive) deliberately doesn't carry these two, so a change
+	// takes effect on the next restart rather than the next window.
+	"vpn.advanced.windowProtocols": "the switch-window ruleset is only rebuilt when a window opens; live reload doesn't carry this yet",
+	"vpn.advanced.windowPorts":     "the switch-window ruleset is only rebuilt when a window opens; live reload doesn't carry this yet",
 }
 
 // liveKeys names the keys a running daemon adopts in place. Each is either read

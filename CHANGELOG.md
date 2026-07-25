@@ -353,6 +353,15 @@ current as you land changes.
   per profile — so a switch window can be opened targeted at a specific VPN
   (`switch --no-wait --name <profile>`), the same profile-attribution flag the
   CLI already had.
+- **Every `vpn.advanced.*` key is now settable** with `dezhban config set` —
+  previously the whole block was hand-edit-only. `switchWindowMax`,
+  `redialWindowMax`, `redialMinUptime`, `windowDiscoveryInterval`,
+  `commandFreshness`, `tunnelPruneAfter`, `learnedEndpointTTL`,
+  `learnedMaxPerProfile`, `promoteAfterRefreshes`, `endpointWarnThreshold`,
+  `windowProtocols`, and `windowPorts` all go through the same validated
+  write-and-reload path, and reset/round-trip the same way every other key
+  does; `redialMinUptime=0` persists as the same explicit-disable sentinel the
+  three windows already use, not a silent reset to its 15s default.
 
 ## [0.7.0] - 2026-07-22
 

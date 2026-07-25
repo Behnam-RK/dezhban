@@ -50,6 +50,19 @@ var roundTripCases = map[string]roundTripCase{
 	"control.allowConfigOps": {set: "false", want: "false"},
 	"control.group":          {set: "wheel", want: "wheel"},
 	"control.socket":         {set: "/var/run/dezhban-test.sock", want: "/var/run/dezhban-test.sock"},
+
+	"vpn.advanced.switchWindowMax":         {set: "4m", want: "4m0s"},
+	"vpn.advanced.redialWindowMax":         {set: "11m", want: "11m0s"},
+	"vpn.advanced.redialMinUptime":         {set: "20s", want: "20s"},
+	"vpn.advanced.commandFreshness":        {set: "45s", want: "45s"},
+	"vpn.advanced.windowDiscoveryInterval": {set: "2s", want: "2s"},
+	"vpn.advanced.tunnelPruneAfter":        {set: "90s", want: "1m30s"},
+	"vpn.advanced.learnedEndpointTTL":      {set: "48h", want: "48h0m0s"},
+	"vpn.advanced.learnedMaxPerProfile":    {set: "32", want: "32"},
+	"vpn.advanced.promoteAfterRefreshes":   {set: "5", want: "5"},
+	"vpn.advanced.endpointWarnThreshold":   {set: "512", want: "512"},
+	"vpn.advanced.windowProtocols":         {set: "udp,tcp", want: "udp,tcp"},
+	"vpn.advanced.windowPorts":             {set: "51820,443", want: "51820,443"},
 }
 
 // Every settable key must survive the full path a user's edit actually takes:
@@ -95,28 +108,12 @@ func TestRoundTripCasesCoverEverySettableKey(t *testing.T) {
 	}
 }
 
-// notYetSettable are keys the daemon knows about but `config set` cannot reach —
-// today the whole vpn.advanced block, which is editable only by hand. Phase G of
-// the settings epic makes them settable; emptying this list is how that phase
-// finishes. Until then it is an explicit, reviewable list rather than a silent
-// gap between what the daemon reads and what the tools can write.
-var notYetSettable = map[string]bool{
-	"vpn.advanced.switchWindowMax":         true,
-	"vpn.advanced.redialWindowMax":         true,
-	"vpn.advanced.redialMinUptime":         true,
-	"vpn.advanced.commandFreshness":        true,
-	"vpn.advanced.windowDiscoveryInterval": true,
-	"vpn.advanced.tunnelPruneAfter":        true,
-	"vpn.advanced.learnedEndpointTTL":      true,
-	"vpn.advanced.learnedMaxPerProfile":    true,
-	"vpn.advanced.promoteAfterRefreshes":   true,
-	"vpn.advanced.endpointWarnThreshold":   true,
-}
-
 // The CLI's settable keys and the daemon's reloadable keys are two views of one
 // vocabulary, maintained in different packages. If they drift, a user can set a
 // key the daemon never diffs — so it would silently never be reported as changed
-// on reload, which is the very failure this epic exists to remove.
+// on reload, which is the very failure this epic exists to remove. Every real
+// config key must now be settable — the vpn.advanced.* block that used to be an
+// explicit, tracked exception (notYetSettable) no longer is one.
 func TestSettableKeysAndReloadKeysAgree(t *testing.T) {
 	base := config.Default()
 	known := config.KeyValues(&base)
@@ -127,14 +124,33 @@ func TestSettableKeysAndReloadKeysAgree(t *testing.T) {
 		}
 	}
 	for key := range known {
-		if _, ok := configFields[key]; ok {
-			if notYetSettable[key] {
-				t.Errorf("%q is settable now; remove it from notYetSettable", key)
-			}
-			continue
+		if _, ok := configFields[key]; !ok {
+			t.Errorf("%q is a real config key with no way to set it; add it to configFields", key)
 		}
-		if !notYetSettable[key] {
-			t.Errorf("%q is a real config key with no way to set it; add it to configFields or to notYetSettable", key)
-		}
+	}
+}
+
+// TestSetRedialMinUptimeZeroDisables pins the CLI path for the one advanced
+// duration with disable semantics: "0" must persist as the negative Disabled
+// sentinel (surviving Normalize), not silently reset to the 15s default —
+// exactly the bug class the three window keys already guard against.
+func TestSetRedialMinUptimeZeroDisables(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	base := config.Default()
+	if err := config.Save(p, &base); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdConfig([]string{"set", "vpn.advanced.redialMinUptime=0", "--config", p}); code != 0 {
+		t.Fatalf("config set exited %d, want 0", code)
+	}
+	got, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.VPN.Advanced.RedialMinUptime != config.Disabled {
+		t.Errorf("RedialMinUptime = %v, want config.Disabled", got.VPN.Advanced.RedialMinUptime)
+	}
+	if v := configFields["vpn.advanced.redialMinUptime"].get(got); v != "0s" {
+		t.Errorf("get = %q, want \"0s\"", v)
 	}
 }

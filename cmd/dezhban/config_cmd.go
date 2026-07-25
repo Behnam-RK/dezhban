@@ -46,6 +46,10 @@ Keys (dotted; list values are comma-separated):
   vpn.redialWindow vpn.pauseMax vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
   control.allowPauseOps control.allowConfigOps
+  vpn.advanced.switchWindowMax vpn.advanced.redialWindowMax vpn.advanced.redialMinUptime
+  vpn.advanced.commandFreshness vpn.advanced.windowDiscoveryInterval vpn.advanced.tunnelPruneAfter
+  vpn.advanced.learnedEndpointTTL vpn.advanced.learnedMaxPerProfile vpn.advanced.promoteAfterRefreshes
+  vpn.advanced.endpointWarnThreshold vpn.advanced.windowProtocols vpn.advanced.windowPorts
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
 
 // configField is a get/set pair for one dotted config key.
@@ -213,6 +217,129 @@ var configFields = map[string]configField{
 		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.AllowPauseOps) },
 		set: func(c *config.Config, v string) error { return setBool(&c.Control.AllowPauseOps, v) },
 	},
+	"vpn.advanced.switchWindowMax": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.SwitchWindowMax.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.SwitchWindowMax, v) },
+	},
+	"vpn.advanced.redialWindowMax": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.RedialWindowMax.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.RedialWindowMax, v) },
+	},
+	"vpn.advanced.redialMinUptime": {
+		get: func(c *config.Config) string {
+			if c.VPN.Advanced.RedialMinUptime < 0 {
+				return "0s" // explicitly disabled
+			}
+			return c.VPN.Advanced.RedialMinUptime.String()
+		},
+		set: func(c *config.Config, v string) error {
+			if err := setDuration(&c.VPN.Advanced.RedialMinUptime, v); err != nil {
+				return err
+			}
+			if c.VPN.Advanced.RedialMinUptime == 0 {
+				// "0" means the anti-flap gate is off, not "reset to default" — same
+				// explicit-opt-out sentinel as the three windows.
+				c.VPN.Advanced.RedialMinUptime = config.Disabled
+			}
+			return nil
+		},
+	},
+	"vpn.advanced.commandFreshness": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.CommandFreshness.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.CommandFreshness, v) },
+	},
+	"vpn.advanced.windowDiscoveryInterval": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.WindowDiscoveryInterval.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.WindowDiscoveryInterval, v) },
+	},
+	"vpn.advanced.tunnelPruneAfter": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.TunnelPruneAfter.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.TunnelPruneAfter, v) },
+	},
+	"vpn.advanced.learnedEndpointTTL": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.LearnedEndpointTTL.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.LearnedEndpointTTL, v) },
+	},
+	"vpn.advanced.learnedMaxPerProfile": {
+		get: func(c *config.Config) string { return strconv.Itoa(c.VPN.Advanced.LearnedMaxPerProfile) },
+		set: func(c *config.Config, v string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return fmt.Errorf("learnedMaxPerProfile: %w", err)
+			}
+			c.VPN.Advanced.LearnedMaxPerProfile = n
+			return nil
+		},
+	},
+	"vpn.advanced.promoteAfterRefreshes": {
+		get: func(c *config.Config) string { return strconv.Itoa(c.VPN.Advanced.PromoteAfterRefreshes) },
+		set: func(c *config.Config, v string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return fmt.Errorf("promoteAfterRefreshes: %w", err)
+			}
+			c.VPN.Advanced.PromoteAfterRefreshes = n
+			return nil
+		},
+	},
+	"vpn.advanced.endpointWarnThreshold": {
+		get: func(c *config.Config) string { return strconv.Itoa(c.VPN.Advanced.EndpointWarnThreshold) },
+		set: func(c *config.Config, v string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return fmt.Errorf("endpointWarnThreshold: %w", err)
+			}
+			c.VPN.Advanced.EndpointWarnThreshold = n
+			return nil
+		},
+	},
+	"vpn.advanced.windowProtocols": {
+		get: func(c *config.Config) string { return strings.Join(c.VPN.Advanced.WindowProtocols, ",") },
+		set: func(c *config.Config, v string) error { c.VPN.Advanced.WindowProtocols = splitList(v); return nil },
+	},
+	"vpn.advanced.windowPorts": {
+		get: func(c *config.Config) string { return joinInts(c.VPN.Advanced.WindowPorts) },
+		set: func(c *config.Config, v string) error {
+			ports, err := splitInts(v)
+			if err != nil {
+				return fmt.Errorf("windowPorts: %w", err)
+			}
+			c.VPN.Advanced.WindowPorts = ports
+			return nil
+		},
+	},
+}
+
+// joinInts renders an int slice the same way splitInts parses it back —
+// comma-separated, no spaces.
+func joinInts(ns []int) string {
+	if len(ns) == 0 {
+		return ""
+	}
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
+}
+
+// splitInts parses a comma-separated list of integers (e.g. a port list).
+// Empty input is an empty (nil) list, not an error.
+func splitInts(v string) ([]int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 func cmdConfig(args []string) int {
