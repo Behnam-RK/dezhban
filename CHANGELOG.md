@@ -331,6 +331,13 @@ current as you land changes.
   alert naming the exposure — when restarting would lift enforcement during
   FULL BLOCK or an open window, since that gap is the one thing this tool
   exists to prevent.
+- **`dezhban doctor --json`.** `doctor`'s checks (config, tunnels, endpoints,
+  the lockout-risk warning, Touch ID discoverability, `--discover`) are now
+  built as structured data (`runDoctor`) and rendered two ways: the existing
+  prose (`printDoctor`, byte-identical to before this change) or
+  `{checks: [{name, status, summary, details, fixes}], ok}` via `--json` —
+  for a consumer that needs to render findings itself instead of parsing
+  text, which the next release's Diagnostics pane does.
 
 ## [0.7.0] - 2026-07-22
 

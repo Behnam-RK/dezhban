@@ -130,13 +130,17 @@ dezhban validate    --config <config>                 # parse + validate, summar
 dezhban print-rules --mode guard --config <config>    # exact ruleset, not applied
 dezhban doctor      --config <config>                 # tunnels, subnets, endpoint sanity
 dezhban doctor --discover --config <config>           # macOS: find the VPN's real server IP
+dezhban doctor --json --config <config>               # the same checks as structured JSON
 dezhban monitor     --config <config>                 # live: IP, country, tunnels, endpoints, verdict
 ```
 
 `monitor` streams the live state the decision rests on; add `--once` for a single
-snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`. See
-[config.md](config.md) for the full field reference and [troubleshooting.md](troubleshooting.md)
-for the lockout-recovery runbook.
+snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`. `doctor
+--json` prints the identical findings `doctor` reports in prose — `{checks:
+[{name, status, summary, details, fixes}], ok}` — for a consumer (the macOS
+app's Diagnostics pane) that needs to render them itself rather than parse
+text. See [config.md](config.md) for the full field reference and
+[troubleshooting.md](troubleshooting.md) for the lockout-recovery runbook.
 
 ## Create & manage the config
 

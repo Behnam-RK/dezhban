@@ -1483,15 +1483,292 @@ func cmdPrintRules(args []string) int {
 	return 0
 }
 
-// cmdDoctor diagnoses the VPN guard configuration without root or side effects:
-// it validates config, lists tunnel interfaces and their subnets, and flags any
-// endpoint that sits inside a tunnel's own subnet (a guaranteed lockout). With
-// --discover it additionally runs the macOS-only best-effort hunt for the
-// connected VPN's real server IP, automating the manual netstat/scutil dance.
+// checkStatus classifies one doctorReport check for a machine consumer (the
+// macOS Diagnostics pane) without it having to parse Summary/Details prose.
+type checkStatus string
+
+const (
+	checkOK   checkStatus = "ok"
+	checkWarn checkStatus = "warn"
+	checkFail checkStatus = "fail"
+)
+
+// doctorCheck is one section of `doctor`'s output, structured. Details/Fixes
+// are the exact lines printDoctor prints under the check's header — kept as
+// data so a second renderer (the GUI's Diagnostics pane, over --json) never
+// has to reparse human prose to find out what's wrong.
+type doctorCheck struct {
+	Name    string      `json:"name"`
+	Status  checkStatus `json:"status"`
+	Summary string      `json:"summary"`
+	Details []string    `json:"details,omitempty"`
+	Fixes   []string    `json:"fixes,omitempty"`
+}
+
+// doctorReport is `doctor`'s complete findings, machine-readable via
+// `doctor --json` and human-readable via printDoctor — the same data render
+// two ways, so the CLI and the GUI can never disagree about what doctor found.
+type doctorReport struct {
+	Checks []doctorCheck `json:"checks"`
+	OK     bool          `json:"ok"`
+}
+
+// buildTunnelsCheck formats the resolved tunnel set and their subnets (already
+// looked up by the caller — this function does no I/O) into a doctorCheck.
+// Pure, so the "no subnet" and "has a subnet" branches are directly testable
+// without a real OS network interface.
+func buildTunnelsCheck(tunnels []string, nets []netdetect.TunnelNet) doctorCheck {
+	c := doctorCheck{Name: "tunnels", Status: checkOK}
+	if len(tunnels) == 0 {
+		c.Status = checkWarn
+		c.Details = []string{"(none — set vpn.tunnelInterfaces or vpn.autoDetect)"}
+		return c
+	}
+	subsByIface := map[string][]string{}
+	for _, tn := range nets {
+		subsByIface[tn.Iface] = append(subsByIface[tn.Iface], tn.Subnet.String())
+	}
+	for _, t := range tunnels {
+		if subs := subsByIface[t]; len(subs) > 0 {
+			c.Details = append(c.Details, fmt.Sprintf("%s — %s", t, strings.Join(subs, ", ")))
+		} else {
+			c.Details = append(c.Details, fmt.Sprintf("%s — no subnet (interface down or absent?)", t))
+		}
+	}
+	return c
+}
+
+// buildEndpointsCheck formats the resolved endpoint set and any misrouted
+// ("bad") ones (already computed by the caller) into a doctorCheck. Pure, so
+// the MISCONFIGURED/fix-text formatting is directly testable with a synthetic
+// `bad` slice — real subnet containment needs a live OS tunnel interface,
+// which a portable unit test cannot depend on.
+func buildEndpointsCheck(endpoints []netip.Addr, bad []netdetect.EndpointRoute) doctorCheck {
+	c := doctorCheck{Name: "endpoints", Status: checkOK}
+	if len(endpoints) == 0 {
+		c.Status = checkWarn
+		c.Details = []string{"(none resolved)"}
+		return c
+	}
+	internal := map[string]netdetect.EndpointRoute{}
+	for _, b := range bad {
+		internal[b.Endpoint.String()] = b
+	}
+	for _, ep := range endpoints {
+		if b, ok := internal[ep.String()]; ok {
+			c.Details = append(c.Details, fmt.Sprintf("%s — MISCONFIGURED: inside %s's subnet %s", ep, b.Iface, b.Subnet))
+		} else {
+			c.Details = append(c.Details, fmt.Sprintf("%s — ok (assumed reachable on the physical interface)", ep))
+		}
+	}
+	if len(bad) > 0 {
+		c.Status = checkFail
+		for _, b := range bad {
+			c.Fixes = append(c.Fixes,
+				fmt.Sprintf("%s is a tunnel-internal address (inside %s %s); set vpn.endpoints to\n"+
+					"    your VPN server's PUBLIC IP from your VPN client config.", b.Endpoint, b.Iface, b.Subnet))
+		}
+	}
+	return c
+}
+
+// buildLockoutCheck formats the "guard would block its own tunnel's transport"
+// warning. Pure — the caller decides whether the lockout condition holds.
+func buildLockoutCheck(tunnels []string) doctorCheck {
+	return doctorCheck{
+		Name:    "lockout",
+		Status:  checkFail,
+		Summary: "dezhban will refuse to start",
+		Details: []string{
+			fmt.Sprintf("The VPN guard is on and %s is up, but no server address is known.", strings.Join(tunnels, ", ")),
+			"The guard would block the tunnel's own transport and cut ALL traffic.",
+			"",
+			"Auto-discovery reads CONNECTED sockets. WireGuard (and other",
+			"NetworkExtension clients) send from an UNCONNECTED UDP socket, so they",
+			"never appear as a connected flow — discovery cannot find them. Name the",
+			"server explicitly:",
+		},
+		Fixes: []string{
+			"dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it",
+			"dezhban vpn add <name> --endpoint <host-or-ip>",
+			"sudo dezhban config set vpn.endpoints=<server-ip>",
+		},
+	}
+}
+
+// runDoctor builds the report: validates config, lists tunnel interfaces and
+// their subnets, and flags any endpoint that sits inside a tunnel's own subnet
+// (a guaranteed lockout). With discover=true it additionally runs the
+// macOS-only best-effort hunt for the connected VPN's real server IP,
+// automating the manual netstat/scutil dance. No I/O of its own beyond what
+// resolveTunnels/resolveEndpointsOnce/netdetect already do — no printing.
+func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport {
+	var checks []doctorCheck
+
+	checks = append(checks, doctorCheck{
+		Name: "config", Status: checkOK, Summary: "OK (loaded and validated)",
+	})
+
+	tunnels := resolveTunnels(cfg, log)
+	nets, _ := netdetect.TunnelSubnets(tunnels)
+	checks = append(checks, buildTunnelsCheck(tunnels, nets))
+
+	endpoints := resolveEndpointsOnce(cfg, log, tunnels)
+	var bad []netdetect.EndpointRoute
+	if len(endpoints) > 0 {
+		bad, _ = netdetect.CheckEndpointRouting(endpoints, tunnels)
+	}
+	checks = append(checks, buildEndpointsCheck(endpoints, bad))
+
+	// The guard blocks ALL egress on the physical link — which is what carries the
+	// tunnel's own encrypted transport. With a tunnel up and no known server address,
+	// arming it cuts every packet, kills the VPN, and leaves no socket for discovery to
+	// learn from: an unrecoverable blackout, not a kill switch. The daemon refuses to
+	// start in this state; doctor's whole job is to say so BEFORE you find out.
+	lockout := len(tunnels) > 0 && len(endpoints) == 0
+	if lockout {
+		checks = append(checks, buildLockoutCheck(tunnels))
+	}
+
+	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI
+	// actions) authenticate through sudo, and sudo only offers Touch ID when
+	// pam_tid is opted in via /etc/pam.d/sudo_local. Informational only — never
+	// affects the exit code; password auth is degraded UX, not a lockout risk.
+	if runtime.GOOS == "darwin" && !sudoTouchIDConfigured() {
+		checks = append(checks, doctorCheck{
+			Name:    "touchID",
+			Status:  checkWarn,
+			Summary: "not configured for sudo — privileged ops will ask for a password.",
+			Details: []string{
+				"To authenticate with a fingerprint instead (survives OS updates):",
+				"",
+				"echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local",
+			},
+		})
+	}
+
+	if discover {
+		discoverCheck := doctorCheck{Name: "discover", Status: checkOK}
+		cands, err := netdetect.DiscoverEndpoints()
+		switch {
+		case err != nil:
+			discoverCheck.Status = checkWarn
+			discoverCheck.Summary = err.Error()
+			discoverCheck.Details = []string{err.Error()}
+		case len(cands) == 0:
+			discoverCheck.Status = checkWarn
+			discoverCheck.Summary = "no physical-side public transport sockets found — is the VPN connected?"
+			discoverCheck.Details = []string{discoverCheck.Summary}
+		default:
+			configured := map[string]bool{}
+			for _, ep := range endpoints {
+				configured[ep.String()] = true
+			}
+			for _, c := range cands {
+				line := fmt.Sprintf("%s:%d", c.Server, c.Port)
+				if c.VPN != "" {
+					line += " [" + c.VPN + "]"
+				}
+				if !configured[c.Server.String()] {
+					line += "  <- not in vpn.endpoints"
+				}
+				discoverCheck.Details = append(discoverCheck.Details, line)
+			}
+			discoverCheck.Fixes = []string{"add any missing server IP to vpn.endpoints and drop stale entries."}
+		}
+		checks = append(checks, discoverCheck)
+	}
+
+	// A diagnostic that reports a guaranteed blackout and still exits 0 is one
+	// `make doctor` in a script away from being ignored — and these are exactly
+	// the two conditions the daemon refuses to start on, so doctor must agree
+	// with it.
+	return doctorReport{Checks: checks, OK: !(lockout || len(bad) > 0)}
+}
+
+// printDoctor renders a doctorReport in the exact text layout `doctor` has
+// always printed — this function's job is to keep that layout byte-identical
+// across the refactor that introduced doctorReport, not to reinterpret it.
+func printDoctor(r doctorReport) {
+	byName := map[string]doctorCheck{}
+	for _, c := range r.Checks {
+		byName[c.Name] = c
+	}
+
+	fmt.Println("dezhban doctor")
+	fmt.Println()
+	fmt.Printf("config:  %s\n", byName["config"].Summary)
+	fmt.Println()
+
+	fmt.Println("tunnels:")
+	for _, line := range byName["tunnels"].Details {
+		fmt.Printf("  %s\n", line)
+	}
+	fmt.Println()
+
+	fmt.Println("endpoints (resolved: literals + hostnames + discovery):")
+	ep := byName["endpoints"]
+	for _, line := range ep.Details {
+		fmt.Printf("  %s\n", line)
+	}
+	if len(ep.Fixes) > 0 {
+		fmt.Println()
+		fmt.Println("fixes:")
+		for _, f := range ep.Fixes {
+			fmt.Printf("  - %s\n", f)
+		}
+	}
+
+	if lockout, ok := byName["lockout"]; ok {
+		fmt.Println()
+		fmt.Printf("LOCKOUT RISK — %s:\n", lockout.Summary)
+		for _, line := range lockout.Details {
+			if line == "" {
+				fmt.Println()
+			} else {
+				fmt.Printf("  %s\n", line)
+			}
+		}
+		fmt.Println()
+		for _, f := range lockout.Fixes {
+			fmt.Printf("    %s\n", f)
+		}
+	}
+	fmt.Println()
+
+	if touchID, ok := byName["touchID"]; ok {
+		fmt.Printf("touch id: %s\n", touchID.Summary)
+		for i, line := range touchID.Details {
+			if line == "" {
+				fmt.Println()
+			} else if i == 0 {
+				fmt.Printf("  %s\n", line)
+			} else {
+				fmt.Printf("    %s\n", line)
+			}
+		}
+		fmt.Println()
+	}
+
+	if discover, ok := byName["discover"]; ok {
+		fmt.Println("discover (best-effort, macOS):")
+		for _, line := range discover.Details {
+			fmt.Println("  " + line)
+		}
+		for _, f := range discover.Fixes {
+			fmt.Printf("  %s\n", f)
+		}
+	}
+}
+
+// cmdDoctor diagnoses the VPN guard configuration without root or side effects.
+// See runDoctor for what it checks; --json prints the same findings as
+// doctorReport instead of the human layout, for the macOS Diagnostics pane.
 func cmdDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	discover := fs.Bool("discover", false, "best-effort: find the connected VPN's real server IP (macOS only)")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON instead of the human report")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)
@@ -1501,126 +1778,18 @@ func cmdDoctor(args []string) int {
 	}
 	log := newLogger(cfg)
 
-	fmt.Println("dezhban doctor")
-	fmt.Println()
-	fmt.Println("config:  OK (loaded and validated)")
-	fmt.Println()
-
-	tunnels := resolveTunnels(cfg, log)
-	fmt.Println("tunnels:")
-	if len(tunnels) == 0 {
-		fmt.Println("  (none — set vpn.tunnelInterfaces or vpn.autoDetect)")
+	report := runDoctor(cfg, log, *discover)
+	if *jsonOut {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "doctor json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
 	} else {
-		nets, _ := netdetect.TunnelSubnets(tunnels)
-		subsByIface := map[string][]string{}
-		for _, tn := range nets {
-			subsByIface[tn.Iface] = append(subsByIface[tn.Iface], tn.Subnet.String())
-		}
-		for _, t := range tunnels {
-			if subs := subsByIface[t]; len(subs) > 0 {
-				fmt.Printf("  %s — %s\n", t, strings.Join(subs, ", "))
-			} else {
-				fmt.Printf("  %s — no subnet (interface down or absent?)\n", t)
-			}
-		}
+		printDoctor(report)
 	}
-	fmt.Println()
-
-	endpoints := resolveEndpointsOnce(cfg, log, tunnels)
-	fmt.Println("endpoints (resolved: literals + hostnames + discovery):")
-	var bad []netdetect.EndpointRoute
-	if len(endpoints) == 0 {
-		fmt.Println("  (none resolved)")
-	} else {
-		bad, _ = netdetect.CheckEndpointRouting(endpoints, tunnels)
-		internal := map[string]netdetect.EndpointRoute{}
-		for _, b := range bad {
-			internal[b.Endpoint.String()] = b
-		}
-		for _, ep := range endpoints {
-			if b, ok := internal[ep.String()]; ok {
-				fmt.Printf("  %s — MISCONFIGURED: inside %s's subnet %s\n", ep, b.Iface, b.Subnet)
-			} else {
-				fmt.Printf("  %s — ok (assumed reachable on the physical interface)\n", ep)
-			}
-		}
-	}
-	if len(bad) > 0 {
-		fmt.Println()
-		fmt.Println("fixes:")
-		for _, b := range bad {
-			fmt.Printf("  - %s is a tunnel-internal address (inside %s %s); set vpn.endpoints to\n", b.Endpoint, b.Iface, b.Subnet)
-			fmt.Println("    your VPN server's PUBLIC IP from your VPN client config.")
-		}
-	}
-
-	// The guard blocks ALL egress on the physical link — which is what carries the
-	// tunnel's own encrypted transport. With a tunnel up and no known server address,
-	// arming it cuts every packet, kills the VPN, and leaves no socket for discovery to
-	// learn from: an unrecoverable blackout, not a kill switch. The daemon refuses to
-	// start in this state; doctor's whole job is to say so BEFORE you find out.
-	lockout := len(tunnels) > 0 && len(endpoints) == 0
-	if lockout {
-		fmt.Println()
-		fmt.Println("LOCKOUT RISK — dezhban will refuse to start:")
-		fmt.Printf("  The VPN guard is on and %s is up, but no server address is known.\n", strings.Join(tunnels, ", "))
-		fmt.Println("  The guard would block the tunnel's own transport and cut ALL traffic.")
-		fmt.Println()
-		fmt.Println("  Auto-discovery reads CONNECTED sockets. WireGuard (and other")
-		fmt.Println("  NetworkExtension clients) send from an UNCONNECTED UDP socket, so they")
-		fmt.Println("  never appear as a connected flow — discovery cannot find them. Name the")
-		fmt.Println("  server explicitly:")
-		fmt.Println()
-		fmt.Println("    dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it")
-		fmt.Println("    dezhban vpn add <name> --endpoint <host-or-ip>")
-		fmt.Println("    sudo dezhban config set vpn.endpoints=<server-ip>")
-	}
-	fmt.Println()
-
-	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI
-	// actions) authenticate through sudo, and sudo only offers Touch ID when
-	// pam_tid is opted in via /etc/pam.d/sudo_local. Informational only — never
-	// affects the exit code; password auth is degraded UX, not a lockout risk.
-	if runtime.GOOS == "darwin" && !sudoTouchIDConfigured() {
-		fmt.Println("touch id: not configured for sudo — privileged ops will ask for a password.")
-		fmt.Println("  To authenticate with a fingerprint instead (survives OS updates):")
-		fmt.Println()
-		fmt.Println("    echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local")
-		fmt.Println()
-	}
-
-	if *discover {
-		fmt.Println("discover (best-effort, macOS):")
-		cands, err := netdetect.DiscoverEndpoints()
-		switch {
-		case err != nil:
-			fmt.Println("  ", err)
-		case len(cands) == 0:
-			fmt.Println("  no physical-side public transport sockets found — is the VPN connected?")
-		default:
-			configured := map[string]bool{}
-			for _, ep := range endpoints {
-				configured[ep.String()] = true
-			}
-			for _, c := range cands {
-				line := fmt.Sprintf("  %s:%d", c.Server, c.Port)
-				if c.VPN != "" {
-					line += " [" + c.VPN + "]"
-				}
-				if !configured[c.Server.String()] {
-					line += "  <- not in vpn.endpoints"
-				}
-				fmt.Println(line)
-			}
-			fmt.Println("  add any missing server IP to vpn.endpoints and drop stale entries.")
-		}
-	}
-
-	// Exit non-zero when a real lockout risk was found. A diagnostic that reports a
-	// guaranteed blackout and still exits 0 is one `make doctor` in a script away from
-	// being ignored — and these are exactly the two conditions the daemon refuses to
-	// start on, so doctor must agree with it.
-	if lockout || len(bad) > 0 {
+	if !report.OK {
 		return 1
 	}
 	return 0
