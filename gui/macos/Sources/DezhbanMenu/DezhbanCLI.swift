@@ -210,6 +210,25 @@ enum DezhbanCLI {
         return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
     }
 
+    /// Runs a config write over the control socket, authorised by `token`.
+    ///
+    /// The token goes on STDIN, so it never appears in argv (visible to any local
+    /// process via `ps`) and never in the environment. Same single-client rule as
+    /// `runRoutine`: Swift does not speak the socket protocol, the Go CLI does, so
+    /// this and a terminal `dezhban config set --token-stdin` take one path.
+    ///
+    /// DEZHBAN_NO_SUDO=1 keeps the CLI from trying to re-exec under sudo from a GUI
+    /// process with no TTY. If the daemon refuses (exit 3), the CLI has already
+    /// said why and the caller must NOT retry with elevation — a refusal is the
+    /// daemon's decision, and routing around it would make the gate advisory.
+    static func runWithToken(_ args: [String], token: String) -> CommandResult {
+        guard let bin = binaryPath() else {
+            return CommandResult(ok: false, output: "dezhban CLI not found in a trusted install location")
+        }
+        let r = exec(bin, args, env: ["DEZHBAN_NO_SUDO": "1"], stdin: token + "\n")
+        return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
+    }
+
     /// Whether the daemon's control socket is answering — i.e. whether routine ops
     /// will go through without a password. Parsed from `status`'s "daemon control"
     /// line, so the GUI and the CLI agree on one source of truth.
@@ -351,7 +370,8 @@ enum DezhbanCLI {
     /// So: no CLI call from a `body` getter (use `displayConfigPath`), and every
     /// other call site hops to a background queue first. The assert makes a
     /// regression fail loudly in development instead of crashing a user's app.
-    static func exec(_ launchPath: String, _ args: [String], env: [String: String] = [:]) -> (status: Int32, out: String, err: String) {
+    static func exec(_ launchPath: String, _ args: [String], env: [String: String] = [:],
+                     stdin: String? = nil) -> (status: Int32, out: String, err: String) {
         assert(!Thread.isMainThread, "DezhbanCLI.exec on the main thread spins the run loop — dispatch to a background queue")
         let p = Process()
         p.executableURL = URL(fileURLWithPath: launchPath)
@@ -365,10 +385,21 @@ enum DezhbanCLI {
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe
+        // A secret passed to the CLI goes on stdin, never in `args`: argv is
+        // visible to other processes via `ps`, and stdin is not.
+        let inPipe: Pipe? = stdin == nil ? nil : Pipe()
+        if let inPipe = inPipe { p.standardInput = inPipe }
         do {
             try p.run()
         } catch {
             return (127, "", "\(error)")
+        }
+        if let inPipe = inPipe, let stdin = stdin {
+            // Written and closed before either output pipe is drained. Safe only
+            // because callers pass a token-sized string: a payload larger than the
+            // pipe buffer would block here while the child blocked writing output.
+            inPipe.fileHandleForWriting.write(Data(stdin.utf8))
+            try? inPipe.fileHandleForWriting.close()
         }
         // Drain both pipes without letting either block the other. Reading
         // stdout to EOF and only then stderr can deadlock: if the child fills

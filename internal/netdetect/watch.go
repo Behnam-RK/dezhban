@@ -98,7 +98,7 @@ func (w *Watcher) Watch(ctx context.Context) <-chan TunnelState {
 				}
 				// Grow / down→up is emitted immediately (a new tunnel must be
 				// guarded at once); a set that lost members or went down is
-				// debounced (a flapping reconnect must not churn rule reloads).
+				// debounced (a flapping redial must not churn rule reloads).
 				grew := setGrew(emitted.Names, st.Names)
 				shrankOrDown := (!st.Up && emitted.Up) || setShrank(emitted.Names, st.Names)
 				if st.Up && (grew || (!emitted.Up)) {

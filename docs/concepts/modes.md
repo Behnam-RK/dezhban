@@ -109,15 +109,15 @@ The healthy resting state — pass loopback + tunnel egress + the endpoint
 handshake; block all other physical egress. Because this is always on, a tunnel
 drop is cut **instantly**: traffic never silently falls back to your real
 interface. By default the cut is followed by the bounded
-[automatic reconnect window](#automatic-reconnect-window) so the VPN can redial;
-set `vpn.reconnectWindow: "0"` for a strict zero-leak cut.
+[automatic redial window](#automatic-redial-window) so the VPN can redial;
+set `vpn.redialWindow: "0"` for a strict zero-leak cut.
 
 ## FULL BLOCK
 
 The VPN's exit landed in a blocked country. Drop the tunnel-egress pass so no
 user traffic can reach a forbidden exit, but **keep the endpoint handshake open**
-so the encrypted transport survives and the tunnel can reconnect — a cut endpoint
-would livelock the reconnect. It is GUARD minus the tunnel-egress pass.
+so the encrypted transport survives and the tunnel can redial — a cut endpoint
+would livelock the redial. It is GUARD minus the tunnel-egress pass.
 
 Recovery observes the exit through a **tunnel-scoped geo-provider pass**: FULL
 BLOCK keeps a rule matching the tunnel interface *and* the provider addresses, so
@@ -149,7 +149,7 @@ exit.
 #          block drop out all
 #
 # FULL BLOCK — pass quick on lo0 all no state
-#              pass out quick to { <vpn endpoint> } no state       # reconnect path
+#              pass out quick to { <vpn endpoint> } no state       # redial path
 #              pass out quick on { utun4 } to { <providers> } no state   # exit lookup
 #              block drop out all
 ```
@@ -177,7 +177,7 @@ The standing GUARD rule is itself the fail-closed block for physical leaks, so a
 **undeterminable** country *holds* the current posture. Only a *successful*
 reading of a blocked country produces FULL BLOCK, and only a successful reading
 of an allowed one restores GUARD. Escalating on an unknown would cut the tunnel's
-own egress and livelock the very reconnect that could fix the lookup.
+own egress and livelock the very redial that could fix the lookup.
 
 A failed lookup is fully neutral: it does not commit a pending flip, and it does
 not cancel one either. A blip during a 2-of-3 hysteresis streak must not hand a
@@ -188,7 +188,7 @@ alarming message, and the most common was not a fault at all:
 
 | Cause | How it is reported |
 |---|---|
-| No tunnel up — a switch/reconnect window, standby, or a drop | **Not an error.** "Exit country unknown — no tunnel is up, so there is no VPN exit to check." |
+| No tunnel up — a switch/redial window, standby, or a drop | **Not an error.** "Exit country unknown — no tunnel is up, so there is no VPN exit to check." |
 | Tunnel up, providers unreachable | **A real warning.** The exit may be censoring the providers — an Iranian exit blocking them looks exactly like this. The posture holds. |
 | Tunnel up, response malformed | **A real error**, worth showing. |
 
@@ -285,12 +285,12 @@ fail-closed posture. For a household where every VPN uses a fixed port (e.g.
 WireGuard on 51820) you can restrict it with
 `vpn.advanced.windowProtocols`/`windowPorts`. The bounded window is the
 sanctioned relaxation of the guard, and it has exactly three sanctioned
-triggers: an explicit operator command, the automatic reconnect window below
+triggers: an explicit operator command, the automatic redial window below
 (unless you opt out), and an explicit operator [pause](#pause--deliberately-using-your-real-ip).
 Everything about the window (auto-revert, fail-closed expiry) is identical
 across triggers — except the hard cap, which is deliberately **not** shared
 between any of them: the manual trigger is capped by `advanced.switchWindowMax`
-(default 3m), the automatic one by `advanced.reconnectWindowMax` (default 10m),
+(default 3m), the automatic one by `advanced.redialWindowMax` (default 10m),
 and pause by its own `vpn.pauseMax` (default 30m) — so a longer budget on one
 trigger can never silently truncate another's. See
 [ADR-0008](../adr/0008-arm-at-boot.md) for why pause is a third trigger rather
@@ -301,32 +301,32 @@ any endpoint it learned mid-flight open — so a handshake still in progress can
 finish under the guard.
 
 **Disabling it.** `vpn.switchWindow: "0"` removes the manual trigger entirely.
-This is a *tightening*: with it off, and `reconnectWindow` off too, nothing can
+This is a *tightening*: with it off, and `redialWindow` off too, nothing can
 relax the guard. The cost is that a brand-new VPN's server must be added to
 `vpn.endpoints` by hand, since there is no longer a window in which its handshake
 could be observed. `dezhban switch` then refuses by name rather than failing
 obscurely.
 
-### Automatic reconnect window
+### Automatic redial window
 
 Surviving a drop with zero interaction: rotating-pool and anti-censorship
 VPNs pick a **fresh server on almost every
 connect** (often Cloudflare-fronted on 443), so "keep the known endpoints open"
-can never cover a reconnect — the redial target is an IP dezhban has never seen,
-and every reconnect would need a manual `switch`. The **automatic reconnect
-window** (`vpn.reconnectWindow`, default `30s`, `"0"` disables) fixes this: when
+can never cover a redial — the redial target is an IP dezhban has never seen,
+and every redial would need a manual `switch`. The **automatic redial
+window** (`vpn.redialWindow`, default `30s`, `"0"` disables) fixes this: when
 the tunnel drops while the guard is healthy, the daemon opens the same bounded
 switch-window relaxation *by itself* so the client can redial anywhere — a new
 server, or a different VPN app entirely. The moment a tunnel is back up with a
 confirmed non-blocked exit, the window snaps shut early and the new server is
-learned; if nothing reconnects, the window expires and the guard **fail-closes
+learned; if nothing redials, the window expires and the guard **fail-closes
 and stays closed** until a tunnel returns or an operator acts.
 
 This is a deliberate UX trade: a drop is no longer cut with a zero leak window —
-the real IP may be exposed for up to `reconnectWindow` while apps retry. For the
+the real IP may be exposed for up to `redialWindow` while apps retry. For the
 threat model this project targets (never hold a *standing* direct connection
 that exposes your real country to foreign services), a bounded burst of seconds
-is acceptable; if it is not acceptable to you, set `vpn.reconnectWindow: "0"`
+is acceptable; if it is not acceptable to you, set `vpn.redialWindow: "0"`
 and a drop is cut with zero leak.
 
 Safety rails, all non-negotiable:
@@ -336,19 +336,19 @@ Safety rails, all non-negotiable:
   an explicit operator command), never while another window is already open.
 - Only on an **observed** tunnel drop: a tunnel that was never actually seen up
   gets no window.
-- **Anti-flap gate** (`vpn.advanced.reconnectMinUptime`, default `15s`): a
+- **Anti-flap gate** (`vpn.advanced.redialMinUptime`, default `15s`): a
   tunnel that keeps bouncing with no confirmed exit stops earning windows, so a
   broken VPN cannot turn the guard into a sieve.
 - One window per drop: expiry does not re-open; the next window needs the
   tunnel to come back up first.
-- Capped by its own `advanced.reconnectWindowMax` (default 10m) — not
+- Capped by its own `advanced.redialWindowMax` (default 10m) — not
   `switchWindowMax`, so a longer automatic budget is never truncated to the
   manual trigger's cap. The `windowProtocols`/`windowPorts` restriction applies
   exactly as it does to a manual window.
 
-`status` shows an open auto window as `reconnect state: OPEN until …`
+`status` shows an open auto window as `redial state: OPEN until …`
 (`status --json`: `switch.trigger: "auto"`), and the menubar app announces
-"VPN dropped — reconnect window open".
+"VPN dropped — redial window open".
 
 ### Pause — deliberately using your real IP
 
@@ -365,7 +365,7 @@ dezhban resume        # end it early
 ```
 
 Capped by `vpn.pauseMax` (default **30m**; `"0"` disables pausing entirely),
-never shared with `switchWindowMax` or `reconnectWindowMax`. Gated over the
+never shared with `switchWindowMax` or `redialWindowMax`. Gated over the
 control socket by `control.allowPauseOps` (default true), independent of
 `control.allowSwitchOps` — you can turn off passwordless switching without
 losing passwordless pausing, or vice versa. Refused in STANDBY (nothing is
@@ -375,7 +375,7 @@ first), and `switch --cancel` refuses to touch a pause — the two relaxations
 never take over each other's attribution, caps, or lifecycle.
 
 Because pause shares the switch window's rule shape, it also shares its
-early-close behavior: if a VPN happens to reconnect with a confirmed good exit
+early-close behavior: if a VPN happens to redial with a confirmed good exit
 while a pause is open, the guard may re-arm before your requested duration
 elapses. That is a tightening (protection resuming early), never a leak, so it
 is accepted rather than engineered around — see
@@ -387,7 +387,7 @@ Same machinery, three triggers, three caps that are never shared:
                    opened by               default   hard cap
                    ─────────────────────   ───────   ────────────────────────
   manual switch    `dezhban switch`        5s        switchWindowMax     (3m)
-  auto reconnect   tunnel drop from        30s       reconnectWindowMax  (10m)
+  auto redial   tunnel drop from        30s       redialWindowMax  (10m)
                    healthy GUARD
   pause            `dezhban pause [dur]`   15m       pauseMax            (30m)
 
@@ -403,7 +403,7 @@ Each disables on its own, and they answer different questions:
 | Setting | Off means |
 |---|---|
 | `vpn.switchWindow: "0"` | No manual `dezhban switch`. A brand-new VPN's server must be configured by hand. |
-| `vpn.reconnectWindow: "0"` | A drop is cut with zero leak; the VPN cannot redial to an unknown server. |
+| `vpn.redialWindow: "0"` | A drop is cut with zero leak; the VPN cannot redial to an unknown server. |
 | `vpn.pauseMax: "0"` | No `dezhban pause`. The real IP is never deliberately exposed. |
 
 All three `"0"` is the strict zero-leak posture: nothing can relax the guard.

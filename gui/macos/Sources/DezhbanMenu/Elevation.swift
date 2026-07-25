@@ -183,29 +183,55 @@ enum Elevation {
     /// authorizationdb). sudo's timestamp cache makes repeat actions silent, mirroring
     /// the AuthorizationRef cache.
     ///
-    /// Returns nil when the path is unavailable (pam_tid not configured) or when sudo
-    /// could not authenticate — Touch ID cancelled, sensor unavailable (clamshell), or
-    /// fingerprint mismatch. sudo cannot tell those apart for us, and dead-ending a
-    /// clamshell user would leave them no way to elevate at all, so the caller falls
-    /// back to the password dialog — the same "Use Password…" continuation macOS's own
-    /// biometric prompts offer.
+    /// Path to the bundled SUDO_ASKPASS helper, or nil outside an assembled bundle
+    /// (a bare `swift run`), where the caller falls back as before.
+    ///
+    /// It has to come from the bundle: sudo executes whatever SUDO_ASKPASS names,
+    /// as the user, so pointing it at a writable location would let any local
+    /// process substitute a password grabber.
+    private static var askpassPath: String? {
+        guard let url = Bundle.main.url(forResource: "askpass", withExtension: "sh"),
+              FileManager.default.isExecutableFile(atPath: url.path) else { return nil }
+        return url.path
+    }
+
+    /// Returns nil when the path is unavailable (no pam_tid, no bundled askpass
+    /// helper) or when sudo could not authenticate — a cancelled prompt, or an
+    /// empty password from a dismissed dialog. The caller then falls back to the
+    /// password dialog.
+    ///
+    /// The askpass helper is what makes a failed Touch ID recoverable. sudo asked
+    /// PAM for a password with stdin on /dev/null, so the FIRST biometric miss —
+    /// a closed lid, a wet finger — read EOF, failed instantly, and dropped the
+    /// whole attempt to a password-only Authorization Services dialog with no way
+    /// back to biometrics. With `-A`, that miss becomes a prompt instead, which is
+    /// the "Use Password…" continuation macOS's own biometric UI offers.
     static func runViaSudo(shell capture: String) -> CommandResult? {
-        guard sudoTouchIDConfigured else { return nil }
+        guard sudoTouchIDConfigured, let askpass = askpassPath else { return nil }
         let script = "\(capture); rc=$?; printf '%s' \"$out\"; printf '\\n\(rcMarker)%d' \"$rc\""
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/sudo")
-        p.arguments = ["/bin/sh", "-c", script]
+        // -A: ask through SUDO_ASKPASS rather than a terminal we do not have.
+        p.arguments = ["-A", "/bin/sh", "-c", script]
+        var env = ProcessInfo.processInfo.environment
+        env["SUDO_ASKPASS"] = askpass
+        p.environment = env
         let out = Pipe()
         p.standardOutput = out
         p.standardError = out
-        p.standardInput = FileHandle.nullDevice // never let sudo wait on a password read
+        // Still /dev/null, but now because sudo has somewhere better to ask: with
+        // -A it never reads a password from stdin, so this only guarantees a
+        // stray read can't block.
+        p.standardInput = FileHandle.nullDevice
         do { try p.run() } catch { return nil }
         let data = out.fileHandleForReading.readDataToEndOfFile()
         p.waitUntilExit()
         let raw = String(decoding: data, as: UTF8.self)
         guard raw.contains(rcMarker) else {
-            // The command never ran: sudo failed to authenticate (cancel / no sensor /
-            // no cached timestamp and pam_tid declined). Let the caller fall back.
+            // The command never ran. With askpass in place this now means the user
+            // actually declined — cancelled the biometric prompt and then the
+            // password dialog — rather than the old "the first Touch ID read
+            // missed". Let the caller fall back.
             return nil
         }
         return parseCaptured(raw)

@@ -136,3 +136,35 @@ func tryControl(cfgPath string, req control.Request) (code int, handled bool) {
 	}
 	return 0, true
 }
+
+// notifyReload asks a running daemon to re-read its config after a successful
+// write, and reports what actually happened to the settings just saved.
+//
+// Best-effort by design. Editing config with no daemon running is a normal
+// thing to do — before installing, while stopped — so an unreachable daemon is
+// reported as the ordinary outcome it is rather than failing a write that has
+// already succeeded. What it must never do is stay silent: the whole point is
+// that a user learns whether their edit is in force, is waiting on a restart,
+// or is waiting on the daemon to start at all.
+func notifyReload(cfgPath string) {
+	cfg, err := loadConfig(cfgPath)
+	if err != nil || !cfg.Control.Enabled {
+		fmt.Println("Saved. Start dezhban (or restart it) to apply.")
+		return
+	}
+	resp, err := control.Do(controlSocketPath(cfg), control.Request{Op: control.OpReload})
+	if err != nil {
+		verbosef("control socket: %v", err)
+		fmt.Println("Saved. dezhban isn't running, so it will pick this up when it starts.")
+		return
+	}
+	if !resp.OK {
+		fmt.Fprintln(os.Stderr, "Saved, but the running daemon did not reload:", resp.Error)
+		// Deliberately not restartMarker: no key list is known here, and the marker
+		// is a machine-read contract (see its doc comment) that must never appear
+		// without the keys it promises.
+		fmt.Fprintln(os.Stderr, "Restart dezhban to apply.")
+		return
+	}
+	reportWriteOutcome(resp.Applied, resp.NeedsRestart)
+}

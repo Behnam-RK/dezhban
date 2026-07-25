@@ -264,7 +264,7 @@ func TestVPNProbeRespectsHysteresis(t *testing.T) {
 // In VPN guard mode an undeterminable country (lookup error) must HOLD the
 // current posture, never escalate GUARD→FULL BLOCK. The standing guard is
 // already the fail-closed block for physical leaks; escalating on an unknown
-// would cut the tunnel's own egress and livelock the reconnect. hysteresis=1
+// would cut the tunnel's own egress and livelock the redial. hysteresis=1
 // so that, without the hold, a single error would immediately FULL BLOCK.
 func TestVPNHoldsGuardOnLookupError(t *testing.T) {
 	be := &fakeBackend{}
@@ -482,7 +482,7 @@ func TestVPNWatcherObservabilityOnly(t *testing.T) {
 // While the tunnel is down and still guarding, the geo step must be skipped: a
 // lookup can only leave through the down tunnel and fail, and a failed lookup
 // fail-closes to FULL BLOCK — which renders no passes and closes the very
-// endpoints the guard holds open for reconnect. So a failing monitor must NOT
+// endpoints the guard holds open for redial. So a failing monitor must NOT
 // drive a full block while the tunnel is down; the standing guard just holds.
 func TestVPNTunnelDownSkipsGeoStep(t *testing.T) {
 	be := &fakeBackend{}
@@ -990,7 +990,7 @@ func TestVPNArmsStandingPostureWithNoTunnelAndNoEndpoint(t *testing.T) {
 	}
 }
 
-// --- automatic reconnect window ---
+// --- automatic redial window ---
 
 // edgeWatcher scripts a tunnel that is up for the first upSamples samples and
 // permanently down afterwards: one clean up→down edge. Sample runs on the
@@ -1021,23 +1021,23 @@ func (steadyFailMonitor) Once(context.Context) (monitor.Reading, error) {
 	return monitor.Reading{}, errors.New("lookup failed")
 }
 
-// A tunnel drop from healthy GUARD must open the automatic reconnect window
+// A tunnel drop from healthy GUARD must open the automatic redial window
 // (ModeSwitchWindow), and its expiry must revert to GUARD — fail closed, no
 // second window without a new up edge.
-func TestVPNAutoReconnectWindowOpensAndExpires(t *testing.T) {
+func TestVPNAutoRedialWindowOpensAndExpires(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:         steadyMonitor{cc: "US"},
-		Decider:         decision.New([]string{"IR"}, 1),
-		Backend:         be,
-		Log:             discardLog(),
-		Interval:        time.Millisecond,
-		Tunnels:         []string{"utun4"},
-		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:         edgeWatcher(5),
-		ReconnectWindow: 50 * time.Millisecond,
+		Monitor:      steadyMonitor{cc: "US"},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      edgeWatcher(5),
+		RedialWindow: 50 * time.Millisecond,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1066,9 +1066,9 @@ func TestVPNAutoReconnectWindowOpensAndExpires(t *testing.T) {
 
 // A manual command taking over an already-open AUTO window must keep the
 // episode's original (auto) exposure cap, never the manual cap — see
-// Options.ReconnectWindowMax's doc comment and the windowMax fork in Run's
+// Options.RedialWindowMax's doc comment and the windowMax fork in Run's
 // openWindow closure. SwitchWindowMax is deliberately set much larger than
-// ReconnectWindowMax here: if the two caps were ever collapsed back into one
+// RedialWindowMax here: if the two caps were ever collapsed back into one
 // shared value keyed off SwitchWindowMax (the pre-2026-07-22 shape), the
 // manual takeover's 5s request would sail through un-clamped and the window
 // would still be open when this test's context ends — no revert observed.
@@ -1080,19 +1080,19 @@ func TestManualTakeoverKeepsAutoWindowExposureCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:            steadyMonitor{cc: "US"},
-		Decider:            decision.New([]string{"IR"}, 1),
-		Backend:            be,
-		Log:                discardLog(),
-		Interval:           time.Millisecond,
-		Tunnels:            []string{"utun4"},
-		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:            edgeWatcher(2),        // drops at ~2ms, opening the AUTO window
-		ReconnectWindow:    15 * time.Millisecond, // auto window's own initial duration
-		ReconnectWindowMax: 30 * time.Millisecond, // the correct cap for this episode
-		SwitchWindow:       time.Second,           // manual switch windows enabled at all
-		SwitchWindowMax:    10 * time.Second,      // deliberately far larger than the auto cap
-		CommandPoll:        10 * time.Millisecond,
+		Monitor:         steadyMonitor{cc: "US"},
+		Decider:         decision.New([]string{"IR"}, 1),
+		Backend:         be,
+		Log:             discardLog(),
+		Interval:        time.Millisecond,
+		Tunnels:         []string{"utun4"},
+		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:         edgeWatcher(2),        // drops at ~2ms, opening the AUTO window
+		RedialWindow:    15 * time.Millisecond, // auto window's own initial duration
+		RedialWindowMax: 30 * time.Millisecond, // the correct cap for this episode
+		SwitchWindow:    time.Second,           // manual switch windows enabled at all
+		SwitchWindowMax: 10 * time.Second,      // deliberately far larger than the auto cap
+		CommandPoll:     10 * time.Millisecond,
 		PollCommand: scriptedCommands(
 			// Arrives ~10ms in, while the auto window (opened ~2ms, due 15ms
 			// later) is still active — a takeover, not a fresh open. clampWindow
@@ -1108,28 +1108,28 @@ func TestManualTakeoverKeepsAutoWindowExposureCap(t *testing.T) {
 		t.Fatalf("expected apply-switch (auto window open); calls=%v", be.calls)
 	}
 	if !applyGuardAfterSwitch(be.calls) {
-		t.Fatalf("expected the auto episode's cap (ReconnectWindowMax) to force a revert well "+
+		t.Fatalf("expected the auto episode's cap (RedialWindowMax) to force a revert well "+
 			"before this test's deadline, regardless of the takeover's 5s request; calls=%v", be.calls)
 	}
 }
 
 // A tunnel that was never OBSERVED up (armed start presumes up, but no watcher
 // up sample and no confirmed exit) must not open an auto window on its first
-// down sample — there is nothing to "reconnect".
+// down sample — there is nothing to "redial".
 func TestVPNAutoWindowRequiresObservedUp(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:         steadyFailMonitor{},
-		Decider:         decision.New([]string{"IR"}, 1),
-		Backend:         be,
-		Log:             discardLog(),
-		Interval:        time.Millisecond,
-		Tunnels:         []string{"utun4"},
-		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:         downWatcher(),
-		ReconnectWindow: 50 * time.Millisecond,
+		Monitor:      steadyFailMonitor{},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      downWatcher(),
+		RedialWindow: 50 * time.Millisecond,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1160,25 +1160,25 @@ func flapWatcher() *netdetect.Watcher {
 }
 
 // The anti-flap gate: a drop after an observed up-streak shorter than
-// ReconnectMinUptime, with no confirmed exit, must NOT get an auto window.
+// RedialMinUptime, with no confirmed exit, must NOT get an auto window.
 // (The first drop after an armed start is different: uptime before the daemon
 // started is unknowable, so it gets the benefit of the doubt — see
-// TestVPNAutoReconnectWindowOpensAndExpires.)
+// TestVPNAutoRedialWindowOpensAndExpires.)
 func TestVPNAutoWindowFlapGuard(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:            steadyFailMonitor{},
-		Decider:            decision.New([]string{"IR"}, 1),
-		Backend:            be,
-		Log:                discardLog(),
-		Interval:           time.Millisecond,
-		Tunnels:            []string{"utun4"},
-		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:            flapWatcher(),
-		ReconnectWindow:    50 * time.Millisecond,
-		ReconnectMinUptime: 10 * time.Second,
+		Monitor:         steadyFailMonitor{},
+		Decider:         decision.New([]string{"IR"}, 1),
+		Backend:         be,
+		Log:             discardLog(),
+		Interval:        time.Millisecond,
+		Tunnels:         []string{"utun4"},
+		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:         flapWatcher(),
+		RedialWindow:    50 * time.Millisecond,
+		RedialMinUptime: 10 * time.Second,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1197,15 +1197,15 @@ func TestVPNAutoWindowNotFromFullBlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:         steadyMonitor{cc: "IR"}, // forbidden exit → FULL BLOCK at startup
-		Decider:         decision.New([]string{"IR"}, 1),
-		Backend:         be,
-		Log:             discardLog(),
-		Interval:        time.Millisecond,
-		Tunnels:         []string{"utun4"},
-		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:         edgeWatcher(5),
-		ReconnectWindow: 50 * time.Millisecond,
+		Monitor:      steadyMonitor{cc: "IR"}, // forbidden exit → FULL BLOCK at startup
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      edgeWatcher(5),
+		RedialWindow: 50 * time.Millisecond,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1220,7 +1220,7 @@ func TestVPNAutoWindowNotFromFullBlock(t *testing.T) {
 // A failed exit-country lookup must be classified, not blanket-reported.
 //
 // The symptom this fixes: dezhban showed geo-provider errors during switch and
-// reconnect windows. Those are the moments the tunnel is DOWN — that is why the
+// redial windows. Those are the moments the tunnel is DOWN — that is why the
 // window exists — so there is no VPN exit to measure and the lookup failing is
 // correct behaviour. Reporting it as an error trains people to ignore the field,
 // and it was most of what made the providers look broken.

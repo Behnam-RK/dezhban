@@ -71,14 +71,14 @@ something to describe — absent in STANDBY, before any tunnel is known.
     "open": true,
     "until": "2026-07-01T12:02:00Z",
     "profile": "newvpn",
-    "trigger": "manual"                  // "manual" (operator command) | "auto" (reconnect window on a tunnel drop); absent from older daemons — treat as "manual"
+    "trigger": "manual"                  // "manual" (operator command) | "auto" (redial window on a tunnel drop); absent from older daemons — treat as "manual"
   }
 }
 ```
 
 `lookupErr` and `exitUnknown` are mutually exclusive, and the split matters. A
 lookup that fails because **no tunnel is up** is not a fault — it is the normal
-state during a switch or reconnect window, in standby, and across any drop. That
+state during a switch or redial window, in standby, and across any drop. That
 sets `exitUnknown` with a plain-language reason. `lookupErr` is reserved for a
 failure with a tunnel **up**, where there genuinely was an exit to measure —
 which may mean the exit itself is censoring the geo providers. Observers should
@@ -163,7 +163,7 @@ bounded by what the ops can actually do:
   already sanctions (GUARD ↔ FULL BLOCK). They can never open egress *past* the
   guard, so the worst an unwanted caller achieves is cutting their own network.
 - `switch-open` **can** relax the guard, bounded by its trigger's own hard cap —
-  3m for a manual switch, 10m for the automatic reconnect window, deliberately
+  3m for a manual switch, 10m for the automatic redial window, deliberately
   never shared. It is one of two genuinely-privileged ops on the socket, which is
   why it has its own flag: `control.allowSwitchOps: false` forces it back to root-only.
 - `pause` **can** also relax the guard — a third, independently-capped trigger
@@ -230,7 +230,7 @@ These invariants are load-bearing — the whole design depends on them:
   The standing guard rule **is** the fail-closed block for physical leaks, so only
   a *successful* blocked-country reading escalates to FULL BLOCK, and only a
   successful allowed reading restores GUARD. Escalating on an unknown would cut
-  the tunnel's own egress and livelock the reconnect that could fix the lookup.
+  the tunnel's own egress and livelock the redial that could fix the lookup.
   This lives in `decision.Evaluate`, which short-circuits on `r.Err != nil`
   without touching the hysteresis streak — so a blip neither commits a flip nor
   cancels one that real readings were counting toward. There is no `failClosed`
@@ -300,15 +300,15 @@ since the reasoning is not obvious from the code:
   that trade is spelled out under [Control channels](#control-channels) — it is a
   deliberate concession to usability, not an oversight.
 - **The switch window gained a second sanctioned trigger** (2026-07): the
-  [automatic reconnect window](../concepts/modes.md#automatic-reconnect-window)
-  (`vpn.reconnectWindow`, default 30s, `"0"` restores the original
+  [automatic redial window](../concepts/modes.md#automatic-redial-window)
+  (`vpn.redialWindow`, default 30s, `"0"` restores the original
   operator-only behavior). Field testing with rotating-pool anti-censorship
   VPNs (fresh Cloudflare-fronted server IP on nearly every connect) showed
-  that "keep known endpoints open" can never cover a reconnect, making every
+  that "keep known endpoints open" can never cover a redial, making every
   drop a manual `switch` — an operator burden that pushed users toward running
   with the guard off entirely. The trade is explicit and bounded: a tunnel
-  drop from healthy GUARD may expose the real IP for up to `reconnectWindow`
-  seconds while the client redials; in exchange, reconnects and VPN switches
+  drop from healthy GUARD may expose the real IP for up to `redialWindow`
+  seconds while the client redials; in exchange, redials and VPN switches
   are zero-interaction, and the guard still fail-closes on expiry. The
   alternatives were examined and rejected: standing port/protocol allows
   (443-fronted VPNs make any filter that admits the VPN admit the leak),

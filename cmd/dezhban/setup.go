@@ -121,11 +121,11 @@ func cmdSetup(args []string) int {
 	var profiles []config.Profile
 	if configureVPN {
 		// Recommended path: automatic detection (no pinned interface names that go
-		// stale across reconnects). The old pin-specific-interfaces flow survives
+		// stale across redials). The old pin-specific-interfaces flow survives
 		// behind an advanced opt-out.
 		if err := runForm(huh.NewForm(huh.NewGroup(
 			huh.NewConfirm().Title("Use automatic VPN detection? (recommended)").
-				Description("dezhban finds your tunnel and, on macOS, learns the server address itself — works with any VPN and survives reconnects.").
+				Description("dezhban finds your tunnel and, on macOS, learns the server address itself — works with any VPN and survives redials.").
 				Value(&autoMode),
 		))); err != nil {
 			return formExit(err)
@@ -138,7 +138,7 @@ func cmdSetup(args []string) int {
 				return formExit(err)
 			}
 		}
-		// Profiles + endpoints + reconnect DNS. On Linux/Windows (no live
+		// Profiles + endpoints + redial DNS. On Linux/Windows (no live
 		// discovery) at least one profile/endpoint is the reliable path.
 		epTitle := "VPN endpoint(s)"
 		epDesc := "Server IP(s)/hostname(s), comma-separated. Optional on macOS (auto-discovered); needed elsewhere."
@@ -151,7 +151,7 @@ func cmdSetup(args []string) int {
 				Value(&profileFiles),
 			huh.NewInput().Title(epTitle).Description(epDesc).Value(&endpoints),
 			huh.NewConfirm().Title("Allow DNS on the physical link while the tunnel is down?").
-				Description("Lets a VPN client re-resolve its server hostname to reconnect. Leaks only DNS-query metadata; your traffic stays blocked. Recommended if any endpoint is a hostname.").
+				Description("Lets a VPN client re-resolve its server hostname to redial. Leaks only DNS-query metadata; your traffic stays blocked. Recommended if any endpoint is a hostname.").
 				Value(&allowPhysicalDNS),
 		))); err != nil {
 			return formExit(err)

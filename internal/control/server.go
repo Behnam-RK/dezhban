@@ -36,6 +36,13 @@ type Server struct {
 	self     os.FileInfo
 	requests chan ConnRequest
 
+	// VerifyToken authorises the ops that need more than the socket's group
+	// gate. Verified here, in the accept goroutine, so an unauthorised request
+	// never reaches the run loop and the loop never carries auth logic. Nil
+	// means no verifier was wired, which refuses every token-gated op — the
+	// safe reading of "not configured".
+	VerifyToken func(token string) bool
+
 	stopOnce sync.Once
 	wg       sync.WaitGroup
 }
@@ -205,7 +212,17 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	}
 
 	switch req.Op {
-	case OpStatus, OpBlock, OpUnblock, OpOpenSwitch, OpCancelSwitch, OpPause, OpResume:
+	case OpStatus, OpBlock, OpUnblock, OpOpenSwitch, OpCancelSwitch, OpPause, OpResume, OpReload:
+	case OpConfigWrite:
+		// Authorised here rather than in the run loop, so a request that cannot
+		// prove itself never reaches the goroutine that touches the firewall.
+		// A missing verifier refuses: "nobody wired this up" must not read as
+		// "no proof required".
+		if s.VerifyToken == nil || !s.VerifyToken(req.Token) {
+			s.log.Warn("control: rejected an unauthorised config-write")
+			s.reply(conn, errResponse("config-write requires an enrolled control token"))
+			return
+		}
 	default:
 		s.reply(conn, errResponse(fmt.Sprintf("unknown op %q", req.Op)))
 		return

@@ -15,7 +15,7 @@
 // the real VPN, so we additionally require a global-unicast address — the mark
 // of an interface that actually routes. VPN *endpoint* detection is
 // likewise not automated: a wrong endpoint punches a hole in the block, or if
-// missing prevents reconnection, so endpoints stay explicit in config. Explicit
+// missing prevents redial, so endpoints stay explicit in config. Explicit
 // config values always win over detection.
 package netdetect
 
@@ -202,7 +202,7 @@ type EndpointRoute struct {
 // FULL BLOCK or tunnel drop and the host can recover. An endpoint that is itself
 // a tunnel-internal address (e.g. the tunnel's peer at 10.0.0.x) can never serve
 // that role — pinning a physical-side `pass to <endpoint>` for it is futile, the
-// tunnel can't reconnect through itself, and the host locks itself out.
+// tunnel can't redial through itself, and the host locks itself out.
 //
 // This is deterministic and has no false positives under a full-tunnel VPN: a
 // full tunnel owns the default route, so a route-table probe would report EVERY

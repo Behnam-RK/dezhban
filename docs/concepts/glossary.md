@@ -87,10 +87,10 @@ prior fail-closed posture.
 (`dezhban switch`, or the app), to connect a brand-new VPN. Trigger one, capped
 by `advanced.switchWindowMax`.
 
-**Reconnect window** — a switch window opened *automatically* when the tunnel drops from
+**Redial window** — a switch window opened *automatically* when the tunnel drops from
 healthy GUARD, so the VPN can redial. Trigger two, capped by
-`advanced.reconnectWindowMax`. Same machinery, same rails; only the trigger and
-the cap differ. User-facing: "Your VPN dropped — reconnecting".
+`advanced.redialWindowMax`. Same machinery, same rails; only the trigger and
+the cap differ. User-facing: "Your VPN dropped — redialing".
 
 **Pause** — a switch window opened by an explicit operator command
 (`dezhban pause`, or the app) to deliberately use the real ISP IP for a domestic-
@@ -143,6 +143,22 @@ carefully in guard mode: the standing GUARD rule is *itself* the fail-closed blo
 undeterminable country **holds** the current posture. Only a *successful* reading of a
 blocked country escalates to FULL BLOCK — escalating on an unknown would cut the tunnel's
 own egress and livelock recovery.
+
+**Hysteresis** — the number of consecutive agreeing exit-country readings required before
+the posture actually changes (`hysteresis`, default 2). It is what stops one odd reading
+flapping the firewall. An undeterminable reading neither commits a change nor cancels one
+in progress.
+
+**Confirming checks** — how a hysteresis streak is described to users: "restoring the
+guard — 1 of 2 confirming checks". Published in the state file and `status --json` as
+`pending`, so `status` and the app say the same thing. Informational only; observing
+progress never alters it.
+
+**Accelerated recovery** — after a tunnel comes back up during FULL BLOCK, the exit
+country is re-checked every few seconds instead of once per `pollInterval`, until the
+streak resolves or a bounded budget runs out. It changes **cadence only** — hysteresis
+still gates the change, and it is skipped entirely when checking would require lifting
+the guard.
 
 **Policy** — the internal description of what should be enforced. Rendered by a backend
 into an actual **ruleset**.

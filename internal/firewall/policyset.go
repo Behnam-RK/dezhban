@@ -119,7 +119,7 @@ func CountInvalid(addrs []netip.Addr) int {
 
 // FullBlock is the cut posture: no tunnel-interface pass, so no user traffic can
 // reach a forbidden exit — but the endpoint pass stays open so the encrypted
-// handshake still reaches the server and the tunnel can reconnect. Cutting the
+// handshake still reaches the server and the tunnel can redial. Cutting the
 // endpoint too would livelock recovery.
 //
 // The dst-IP allowlist is meaningless against a tunnel's encrypted outer packets,

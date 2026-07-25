@@ -25,6 +25,7 @@ Commands:
   vpn          Manage VPN profiles and learned endpoints (list/add/remove/import/promote/forget)
   setup        Interactive wizard to create or update the config
   config       Inspect or change the config without hand-editing JSON
+  token        Enroll/remove the control token authorising password-free config changes (root, except status)
   completion   Print a shell completion script (bash|zsh|fish)
   upgrade      Check/download/apply a newer release (check: no root; download/apply: root, macOS)
   version      Print the version
@@ -53,6 +54,8 @@ daemon** over its control socket and need no password at all:
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
 | `setup`, `config set`/`edit` | Yes, but only for the config write itself. |
+| `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
+| `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
 | `upgrade check` | **No** — read-only, no root. |
 | `upgrade download`, `upgrade apply` | Yes — root, macOS only. `download`'s staging directory is root-owned on purpose: a writable-by-anyone staging area would let a local user swap the verified `.pkg` before `apply` installs it. |
 
@@ -161,15 +164,80 @@ first) and no half-applied config if one value is rejected. It is also one privi
 one password prompt instead of one per key; the macOS app's VPN Guard pane uses it
 for exactly that reason.
 
+After a successful write, `config set` (and `config reset`) asks a running daemon
+to re-read its configuration, and reports what that achieved:
+
+```
+set pollInterval = 20s  (/etc/dezhban/config.json)
+Saved and applied: pollInterval
+Restart dezhban to apply: logLevel
+```
+
+Most keys take effect immediately. A few cannot, because the daemon built
+something from them before its run loop started — the logger, the geo providers,
+the control socket, the tunnel watcher, arm-at-boot. Those are named explicitly
+rather than applied silently, so a setting is never reported as in force while
+the old value is still being enforced. With no daemon running, the write still
+succeeds and says so; the new values are read the next time it starts.
+
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+### Changing settings without a password
+
+Settings changes can also go over the control socket, so the macOS app's Settings
+pane doesn't ask for your password on every edit. That op is gated twice, and both
+gates must pass:
+
+- **Proof** — the client must present the enrolled **control token**. The socket's
+  own gate is filesystem permissions (root-owned, mode `0660`, admin group), which
+  is a fine bar for ops that only move between fail-closed postures but not for one
+  that changes state outliving the daemon. The token raises that bar; it does not
+  lower it.
+- **Policy** — `control.allowConfigOps` must be true (it is, by default). Set it
+  `false` and config writes are refused even from a client holding a valid token,
+  which sends settings changes back to `sudo dezhban config set`.
+
+```sh
+dezhban token status               # is a token enrolled on this host?
+sudo dezhban token enroll          # mint one, print it once, record only its hash
+sudo dezhban token forget          # un-enroll; config writes fall back to sudo
+```
+
+Only the **hash** is stored, root-owned in the daemon's state directory. `enroll`
+prints the token itself exactly once, on stdout — it is never recoverable
+afterwards, and enrolling again replaces the previous one, which is how you revoke
+a token that has leaked. Rationale:
+[ADR 0003](../adr/0003-biometric-token-over-existing-daemon.md).
+
+To use a token from a script, give `config set` the `--token-stdin` flag and pipe
+the token in. It never goes in an argument or an environment variable, both of
+which other processes can read:
+
+```sh
+printf '%s' "$DEZHBAN_TOKEN" | dezhban config set --token-stdin pollInterval=20s
+```
+
+If no daemon answers, the write falls back to the ordinary privileged path. If the
+daemon **refuses**, that is reported and never routed around — a refusal is a
+decision, and re-running it as root would make the gate advisory.
+
+In the macOS app this is the **"Use Touch ID for settings changes"** toggle in
+Settings. Turning it on enrolls a token (one password prompt, once) and stores it
+in the login keychain under `.biometryCurrentSet`, so *reading* the token is the
+Touch ID prompt — there is no separate "is this allowed?" question for a tampered
+app to answer for itself. Because the item is bound to the fingerprints enrolled
+at the time, changing your fingerprints invalidates it; re-enrolling from the same
+toggle restores it. Turning the toggle off removes **both** copies, the keychain
+item and the daemon's hash. Macs without Touch ID keep using the password path,
+which is exactly what they had before.
 
 ## Connect & switch VPNs
 
 After a one-time `setup`, run dezhban (or install the service) and connect any
 VPN. Known VPNs need no ceremony, and a drop or server rotation is covered by the
-[automatic reconnect window](../concepts/modes.md#automatic-reconnect-window) with no
+[automatic redial window](../concepts/modes.md#automatic-redial-window) with no
 interaction; the manual switch window below is the fallback — e.g. for arming a
 brand-new VPN while the guard is already holding the line.
 
@@ -291,8 +359,9 @@ Two surfaces, split by urgency:
     system service so enforcement survives reboots; "Open this app at login" via
     `SMAppService`; essential-event notifications), protection (blocked
     countries, switch-window duration, endpoint grace) applied through one
-    validated `config set` batch, and the raw config file escape hatch (some
-    advanced options are JSON-only).
+    validated `config set` batch, **"Use Touch ID for settings changes"** (see
+    below), and the raw config file escape hatch (some advanced options are
+    JSON-only).
   - **Logs & Diagnostics** — read-only `doctor`, a scoped `log show --last 1h`,
     a live `log stream` with Stop (also opens Console.app), and the transcripts
     of window-triggered panic/install/uninstall/apply runs.
@@ -300,7 +369,7 @@ Two surfaces, split by urgency:
     elevation path (Touch ID-capable Authorization Services vs password-only
     fallback) privileged actions will take.
 
-**Status icon** — full-color brand state icons (from `gui/assets/`), shown in both
+**Status icon** — full-color brand state icons (from `gui/artifacts/`), shown in both
 the menu bar and the Dock tile: teal allow/guard, red block/full-block, amber
 warning (switch window open or enforcement error), gray stopped or stale;
 repainted about once a second. Outside the assembled `.app` bundle (e.g. a bare

@@ -84,7 +84,7 @@ func TestFlapResetsStreak(t *testing.T) {
 // Errors never escalate on their own, however many arrive. Under the guard the
 // standing rules ARE the fail-closed block for physical leaks, so a run of
 // failed lookups must hold the posture rather than commit FULL BLOCK — which
-// would cut the tunnel's own egress and livelock the reconnect that could fix
+// would cut the tunnel's own egress and livelock the redial that could fix
 // the lookup in the first place.
 func TestErrorsNeverCommitABlock(t *testing.T) {
 	d := New([]string{"IR"}, 3)

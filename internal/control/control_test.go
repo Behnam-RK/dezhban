@@ -354,3 +354,94 @@ func TestPermissionDeniedIsForbiddenNotUnavailable(t *testing.T) {
 		t.Fatalf("got %v, want ErrForbidden only — ErrUnavailable makes the CLI fall back to sudo silently", err)
 	}
 }
+
+// --- config-write authorisation ---
+//
+// config-write is the only op whose authority the socket's group gate cannot
+// supply: it changes state that outlives the daemon. These pin that a request
+// which cannot prove it holds the enrolled token never reaches the run loop —
+// not merely that it gets an error back.
+
+// The default posture. A server nobody wired a verifier into must refuse, or
+// "the daemon was built without token support" would silently mean "no proof
+// required".
+func TestConfigWriteRefusedWithoutAVerifier(t *testing.T) {
+	srv, _ := newTestServer(t)
+	// Deliberately no handler: reaching the run loop at all is the failure.
+	resp, err := Do(srv.Path(), Request{Op: OpConfigWrite, Token: "anything"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.OK {
+		t.Error("config-write succeeded with no token verifier configured")
+	}
+	if resp.Transient {
+		t.Error("a refusal was marked transient; callers would retry it or escalate around it")
+	}
+}
+
+func TestConfigWriteRefusedWithAWrongToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.VerifyToken = func(tok string) bool { return tok == "the-right-one" }
+
+	resp, err := Do(srv.Path(), Request{Op: OpConfigWrite, Token: "not-it"})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.OK {
+		t.Error("config-write succeeded with the wrong token")
+	}
+}
+
+// A client that simply omits the field must be refused like any other
+// unauthorised caller — this is the request an attacker with socket access
+// sends first.
+func TestConfigWriteRefusedWithNoToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.VerifyToken = func(tok string) bool { return tok == "the-right-one" }
+
+	resp, err := Do(srv.Path(), Request{Op: OpConfigWrite})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if resp.OK {
+		t.Error("config-write succeeded with no token at all")
+	}
+}
+
+func TestConfigWriteReachesTheRunLoopWithTheRightToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.VerifyToken = func(tok string) bool { return tok == "the-right-one" }
+	handle(t, srv, Response{OK: true, Applied: []string{"pollInterval"}})
+
+	resp, err := Do(srv.Path(), Request{
+		Op:     OpConfigWrite,
+		Token:  "the-right-one",
+		Config: map[string]string{"pollInterval": "25s"},
+	})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("authorised config-write was refused: %s", resp.Error)
+	}
+	if len(resp.Applied) != 1 || resp.Applied[0] != "pollInterval" {
+		t.Errorf("applied = %v, want [pollInterval]", resp.Applied)
+	}
+}
+
+// Ops that are NOT token-gated must stay reachable without one, or adding the
+// token would quietly break every routine passwordless action.
+func TestUngatedOpsStillWorkWithoutAToken(t *testing.T) {
+	srv, _ := newTestServer(t)
+	srv.VerifyToken = func(string) bool { return false }
+	handle(t, srv, Response{OK: true, Posture: "guard"})
+
+	resp, err := Do(srv.Path(), Request{Op: OpStatus})
+	if err != nil {
+		t.Fatalf("Do: %v", err)
+	}
+	if !resp.OK {
+		t.Fatalf("status was refused when no token was supplied: %s", resp.Error)
+	}
+}

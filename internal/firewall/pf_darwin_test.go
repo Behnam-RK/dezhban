@@ -112,7 +112,7 @@ func TestApplyGuardRequiresTunnelIface(t *testing.T) {
 func TestRenderRulesetVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	// VPN full block cuts the tunnel-interface pass (no user leak) but keeps the
 	// endpoint pass so the encrypted handshake reaches the server and the tunnel
-	// can reconnect. The dst-IP allowlist stays meaningless under a tunnel.
+	// can redial. The dst-IP allowlist stays meaningless under a tunnel.
 	p := Policy{
 		Mode:         ModeFullBlock,
 		TunnelIfaces: []string{"utun4"},
@@ -121,9 +121,9 @@ func TestRenderRulesetVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	}
 	rs := renderRuleset(p)
 
-	// The endpoint pass stays open (reconnect path).
+	// The endpoint pass stays open (redial path).
 	if !strings.Contains(rs, "203.0.113.5") {
-		t.Errorf("VPN full block must keep the endpoint pass (reconnect path):\n%s", rs)
+		t.Errorf("VPN full block must keep the endpoint pass (redial path):\n%s", rs)
 	}
 	// No tunnel-interface pass: the iface name appears only in that pass rule.
 	if strings.Contains(rs, "utun4") {
@@ -154,7 +154,7 @@ func TestRenderRulesetAllowPhysicalDNS(t *testing.T) {
 	}
 	assertDefaultDenyLast(t, guard)
 
-	// VPN full block + AllowPhysicalDNS: the DNS pass appears (reconnect aid).
+	// VPN full block + AllowPhysicalDNS: the DNS pass appears (redial aid).
 	fb := renderRuleset(Policy{
 		Mode:             ModeFullBlock,
 		TunnelIfaces:     []string{"utun4"},

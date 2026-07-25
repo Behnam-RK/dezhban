@@ -139,9 +139,9 @@ func TestRenderNftVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	rs := renderNftRuleset(p)
 
 	// The endpoint pass stays open so the encrypted handshake reaches the server
-	// and the tunnel can reconnect — a cut endpoint would livelock recovery.
+	// and the tunnel can redial — a cut endpoint would livelock recovery.
 	if !strings.Contains(rs, "203.0.113.5") {
-		t.Errorf("VPN full block must keep the endpoint accept (reconnect path):\n%s", rs)
+		t.Errorf("VPN full block must keep the endpoint accept (redial path):\n%s", rs)
 	}
 	// But the tunnel-interface accept is dropped: no user traffic may leak to a
 	// forbidden exit. The tunnel iface name appears only in that accept rule.

@@ -160,7 +160,7 @@ func (b *wfpBackend) Cleanup() error {
 //     geo-API allowlist — what `block --force` renders.
 //   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface allow, so no
 //     user traffic leaks to a forbidden exit — but keep the endpoint allow so the
-//     encrypted handshake reaches the server and the tunnel can reconnect.
+//     encrypted handshake reaches the server and the tunnel can redial.
 //     Identical to ModeGuard minus the tunnel-iface allow. The dst-IP allowlist
 //     is still meaningless under a tunnel.
 //
@@ -218,7 +218,7 @@ func renderBlockScript(p Policy) string {
 			// VPN full block (including the zero-tunnel standing posture): no
 			// tunnel-iface allow, so no user traffic leaks to a forbidden exit — but
 			// keep the endpoint allow so the encrypted handshake reaches the server
-			// and the tunnel can reconnect (a cut endpoint would livelock recovery).
+			// and the tunnel can redial (a cut endpoint would livelock recovery).
 			if ep := psAddrList(p.VPNEndpoints); ep != "" {
 				rule("endpoint", "-RemoteAddress "+ep)
 			}
@@ -291,7 +291,7 @@ func emitLocalNetworkRules(rule func(name, args string), p Policy) {
 // emitAllowPhysicalDNSRules renders the opt-in plain-DNS pass
 // (vpn.allowPhysicalDNS) so a VPN client can re-resolve its server hostname
 // while the tunnel is down. Deliberately unscoped by address — resolution must
-// work regardless of which resolver the system uses on reconnect.
+// work regardless of which resolver the system uses on redial.
 func emitAllowPhysicalDNSRules(rule func(name, args string), p Policy) {
 	if !p.AllowPhysicalDNS {
 		return
