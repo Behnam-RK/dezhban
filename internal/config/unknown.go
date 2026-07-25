@@ -2,7 +2,9 @@ package config
 
 import (
 	"encoding/json"
+	"fmt"
 	"reflect"
+	"regexp"
 	"sort"
 	"strings"
 )
@@ -53,17 +55,36 @@ func walkUnknown(raw map[string]any, t reflect.Type, prefix string, out *[]strin
 			*out = append(*out, prefix+name)
 			continue
 		}
-		// Recurse into nested objects (vpn, vpn.advanced, control) so a typo
-		// inside a block is caught with its full dotted path, not just its leaf.
-		nested, isObj := val.(map[string]any)
-		if !isObj {
-			continue
-		}
 		for ft.Kind() == reflect.Ptr {
 			ft = ft.Elem()
 		}
-		if ft.Kind() == reflect.Struct {
-			walkUnknown(nested, ft, prefix+name+".", out)
+		switch v := val.(type) {
+		case map[string]any:
+			// Recurse into nested objects (vpn, vpn.advanced, control) so a typo
+			// inside a block is caught with its full dotted path, not just its leaf.
+			if ft.Kind() == reflect.Struct {
+				walkUnknown(v, ft, prefix+name+".", out)
+			}
+		case []any:
+			// Recurse into arrays of objects (vpn.profiles) the same way. Without
+			// this case a typo or a renamed key inside a profile was silently
+			// dropped — the exact failure this file exists to prevent, just one
+			// JSON container type away from where it was already caught.
+			if ft.Kind() != reflect.Slice {
+				continue
+			}
+			elemType := ft.Elem()
+			for elemType.Kind() == reflect.Ptr {
+				elemType = elemType.Elem()
+			}
+			if elemType.Kind() != reflect.Struct {
+				continue
+			}
+			for i, item := range v {
+				if obj, ok := item.(map[string]any); ok {
+					walkUnknown(obj, elemType, fmt.Sprintf("%s%s[%d].", prefix, name, i), out)
+				}
+			}
 		}
 	}
 }
@@ -87,10 +108,20 @@ func jsonFields(t reflect.Type) map[string]reflect.Type {
 	return out
 }
 
+// arrayIndexPattern matches a []any element index in a dotted key, e.g. the
+// "[2]" in "vpn.profiles[2].ifaceHint".
+var arrayIndexPattern = regexp.MustCompile(`\[\d+\]`)
+
 // describeUnknown turns a dotted key into the line a user sees, naming the
-// replacement when the key was renamed rather than merely mistyped.
+// replacement when the key was renamed rather than merely mistyped. A key
+// reported from inside an array element (e.g. "vpn.profiles[2].ifaceHint")
+// keeps its index for the user — it says exactly which entry to fix — but is
+// normalised to "vpn.profiles[].ifaceHint" before consulting renamedKeys, so
+// one map entry covers a rename inside every element rather than needing one
+// per index.
 func describeUnknown(key string) string {
-	if to, ok := renamedKeys[key]; ok {
+	lookupKey := arrayIndexPattern.ReplaceAllString(key, "[]")
+	if to, ok := renamedKeys[lookupKey]; ok {
 		return "renamed to " + to + "; the old name has no effect"
 	}
 	return "not a recognised config key; it has no effect"

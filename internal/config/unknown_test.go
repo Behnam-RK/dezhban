@@ -68,6 +68,45 @@ func TestRenamedKeysPointAtTheirReplacement(t *testing.T) {
 	}
 }
 
+// The failure this guards against for array-valued keys: vpn.profiles is a
+// []object, and walkUnknown used to only recurse into map[string]any, so a
+// typo or a renamed key inside a profile was silently dropped — the very
+// failure this file exists to prevent, just one JSON container type away from
+// where it was already caught for vpn/vpn.advanced/control.
+func TestUnknownKeysInsideProfilesAreReported(t *testing.T) {
+	cfg := loadFromJSON(t, `{
+	  "vpn": {
+	    "profiles": [
+	      {"name": "a", "endpoints": ["1.1.1.1"], "ifaceHint": "wg"},
+	      {"name": "b", "endpoints": ["2.2.2.2"], "bogusKey": true}
+	    ]
+	  }
+	}`)
+
+	got := retiredKeys(cfg)
+	if !slices.Contains(got, "vpn.profiles[1].bogusKey") {
+		t.Errorf("unknown key inside a profile element was not reported (with its index); reported: %v", got)
+	}
+	if slices.Contains(got, "vpn.profiles[0].ifaceHint") {
+		t.Errorf("a known profile key was reported as unknown: %v", got)
+	}
+}
+
+// describeUnknown must normalise an array index away before consulting
+// renamedKeys, so a rename inside a profile is reported for every element with
+// one map entry rather than needing one per index. Uses a synthetic entry
+// (saved/restored) rather than depending on any real rename existing.
+func TestRenamedKeyInsideAnArrayElementIsNormalised(t *testing.T) {
+	const oldKey, newKey = "vpn.profiles[].syntheticOld", "vpn.profiles[].syntheticNew"
+	renamedKeys[oldKey] = newKey
+	t.Cleanup(func() { delete(renamedKeys, oldKey) })
+
+	got := describeUnknown("vpn.profiles[3].syntheticOld")
+	if want := "renamed to " + newKey; !strings.Contains(got, want) {
+		t.Errorf("describeUnknown(%q) = %q, want it to mention %q", "vpn.profiles[3].syntheticOld", got, want)
+	}
+}
+
 // A valid config must stay quiet, or the report becomes noise nobody reads.
 func TestKnownKeysAreNotReportedAsUnknown(t *testing.T) {
 	cfg := loadFromJSON(t, `{
