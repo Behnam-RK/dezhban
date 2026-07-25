@@ -294,6 +294,50 @@ effect, which `config set` says so at the time.
 | `endpointWarnThreshold` | `256` | Union size at which `doctor` warns about rule-list bloat. |
 | `windowProtocols` / `windowPorts` | (empty = allow all) | Restrict the switch window to these protocols/ports instead of all outbound — only useful when every VPN you switch to uses a fixed port set (e.g. WireGuard on 51820). |
 
+## Presets
+
+A **preset** is a named bundle of values for the keys that answer "how strict am
+I" — a write-time macro, not runtime state. Applying one writes those keys
+through the ordinary config path (same validation, same live-reload/restart
+reporting as `config set`); the daemon never knows a preset was applied, only the
+resulting values. A config that has since drifted from all three shows as
+**Custom** rather than silently keeping a stale label.
+
+Presets never touch identity — blocked countries, tunnel interfaces, endpoints,
+profiles — the same carve-out `config reset --all` uses, which is what keeps
+`vpn.profiles` (VPN identities) cleanly distinct from presets (strictness
+strategies).
+
+| Key | Strict | Balanced (shipped default) | Relaxed |
+|---|---|---|---|
+| `vpn.switchWindow` | `0` (disabled) | `5s` | `30s` |
+| `vpn.redialWindow` | `0` (disabled) | `30s` | `2m` |
+| `vpn.pauseMax` | `0` (disabled) | `30m` | `2h` |
+| `pollInterval` | `10s` | `15s` | `30s` |
+| `hysteresis` | `1` | `2` | `3` |
+| `vpn.allowLocalNetwork` | `false` | `true` | `true` |
+| `vpn.allowPhysicalDNS` | `false` | `true` | `true` |
+| `vpn.armAtBoot` | `true` | `true` | `false` |
+
+Each preset states its cost in plain words, never a bare "safe"/"strict" label
+(see [glossary.md](../concepts/glossary.md)'s "Words we do not use"):
+
+- **Strict** — zero relaxation, fastest exit checks. Cost: connecting a new VPN
+  or reconnecting after a drop needs the server's address in `vpn.endpoints`
+  ahead of time (no window to redial or switch through); pausing to use your
+  real IP is unavailable; a VPN endpoint given as a hostname can't re-resolve
+  while the tunnel is down (`allowPhysicalDNS` off); faster polling means more
+  geo-provider requests.
+- **Balanced** — the shipped defaults. Cost: a brief, bounded exposure window
+  whenever the VPN redials or a new one connects; local devices stay reachable,
+  which also lets them reach you on an untrusted network.
+- **Relaxed** — longer windows, slower checks, doesn't arm at boot. Cost: longer
+  exposure per window; a forbidden exit takes longer to catch; a reboot before
+  the VPN reconnects leaves the network open until you arm it by hand.
+
+See [cli.md](cli.md#create--manage-the-config) for `dezhban config preset
+list/show/diff/apply`.
+
 ## Sample configs
 
 - [`configs/dezhban.example.json`](../../configs/dezhban.example.json) — reference: fully automatic (autoDetect + endpoint discovery).

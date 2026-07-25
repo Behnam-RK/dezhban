@@ -362,6 +362,18 @@ current as you land changes.
   write-and-reload path, and reset/round-trip the same way every other key
   does; `redialMinUptime=0` persists as the same explicit-disable sentinel the
   three windows already use, not a silent reset to its 15s default.
+- **Strict/Balanced/Relaxed presets, defined once in the config core**
+  (`internal/config.Presets`). A preset is a write-time macro over the eight
+  keys that answer "how strict am I" (the three relaxation windows, poll
+  cadence and hysteresis, the two firewall-pass toggles, arm-at-boot) — never
+  runtime state, and never identity (blocked countries, tunnel interfaces,
+  endpoints, profiles), the same carve-out `config reset --all` already uses.
+  `Balanced` is exactly `config.Default()`, so the shipped defaults and the
+  middle preset can never disagree. `PresetDrift`/`MatchPreset` compare a
+  config against a preset (or report "Custom") using the same `config.Change`
+  vocabulary `config set`'s reload report already uses. Each preset states its
+  cost in plain words — see [config.md](docs/usage/config.md#presets). No CLI
+  or GUI surface yet; that's the next two changes.
 
 ## [0.7.0] - 2026-07-22
 

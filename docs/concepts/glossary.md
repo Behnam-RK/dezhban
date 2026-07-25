@@ -167,6 +167,17 @@ streak resolves or a bounded budget runs out. It changes **cadence only** — hy
 still gates the change, and it is skipped entirely when checking would require lifting
 the guard.
 
+**Preset** — a named bundle of values for the keys that answer "how strict am I"
+(the three relaxation windows, poll cadence and hysteresis, the two firewall-pass
+toggles, arm-at-boot): **Strict**, **Balanced** (the shipped defaults), **Relaxed**.
+Applying one is a write-time macro — it writes those keys through the ordinary
+`config set` path, same validation and same live-reload/restart reporting as a hand
+edit. The daemon never knows a preset was applied; a config that has since drifted
+from all three shows as **Custom**. Presets never touch identity (blocked countries,
+tunnel interfaces, endpoints, profiles) — same carve-out as `config reset --all`.
+Each preset states its **cost** in plain words beside its summary — see
+["Safe"/"Secure" as a preset name](#words-we-do-not-use).
+
 **Policy** — the internal description of what should be enforced. Rendered by a backend
 into an actual **ruleset**.
 
