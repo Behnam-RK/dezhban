@@ -597,7 +597,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		PauseMax:          cfg.VPN.PauseMax,
 		AllowPauseOps:     cfg.Control.AllowPauseOps,
 		Tunnels:           tunnels,
-		Autodetect:        cfg.VPN.Autodetect,
+		AutoDetect:        cfg.VPN.AutoDetect,
 		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
 		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
 		ResolveEndpoints:  func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
@@ -694,7 +694,7 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 // its up/down samples are what drive the guard's posture decisions — or when a
 // tunnel-drop simulation is requested.
 func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov runOverrides) *netdetect.Watcher {
-	if len(tunnels) == 0 && !cfg.VPN.Autodetect && !ov.tunnelDownSet {
+	if len(tunnels) == 0 && !cfg.VPN.AutoDetect && !ov.tunnelDownSet {
 		return nil
 	}
 	// In autodetect mode the watcher must sample ALL tunnel-like interfaces, not
@@ -705,7 +705,7 @@ func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov run
 	// liveSample consider every interface; the runner still starts from `tunnels`.
 	// With autodetect off, explicit pins keep their allowlist semantics.
 	watchTunnels := tunnels
-	if cfg.VPN.Autodetect {
+	if cfg.VPN.AutoDetect {
 		watchTunnels = nil
 	}
 	w := &netdetect.Watcher{Tunnels: watchTunnels, Interval: cfg.VPN.TunnelWatch, Log: log}
@@ -823,7 +823,7 @@ func cmdBlock(args []string) int {
 		// opens the tunnel endpoint, never a destination allowlist.
 		tunnels := resolveTunnels(cfg, log)
 		if len(tunnels) == 0 {
-			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autodetect)")
+			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autoDetect)")
 			return 1
 		}
 		endpoints := resolveEndpointsOnce(cfg, log, tunnels)
@@ -857,7 +857,7 @@ func cmdBlock(args []string) int {
 }
 
 // resolveTunnels returns the VPN tunnel interface names to guard. Explicit
-// config values always win; when none are set and vpn.autodetect is enabled, it
+// config values always win; when none are set and vpn.autoDetect is enabled, it
 // discovers them via netdetect. It may return empty (autodetect found nothing) —
 // callers must treat an empty guard set as a hard error, never proceed (an empty
 // guard would be a total lockout).
@@ -865,7 +865,7 @@ func resolveTunnels(cfg *config.Config, log *slog.Logger) []string {
 	if len(cfg.VPN.TunnelInterfaces) > 0 {
 		return cfg.VPN.TunnelInterfaces
 	}
-	if !cfg.VPN.Autodetect {
+	if !cfg.VPN.AutoDetect {
 		return nil
 	}
 	tun, err := netdetect.TunnelInterfaces()
@@ -1248,10 +1248,10 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println("interfaces; guarding the wrong one would not protect you.")
 	fmt.Println()
 	fmt.Println()
-	fmt.Println("recommended config (autodetect handles interface renumbering across redials):")
+	fmt.Println("recommended config (autoDetect handles interface renumbering across redials):")
 	fmt.Println(`  "vpn": {`)
 	fmt.Println(`    "enabled": true,`)
-	fmt.Println(`    "autodetect": true,`)
+	fmt.Println(`    "autoDetect": true,`)
 	fmt.Println(`    "autoDiscoverEndpoints": true`)
 	fmt.Println(`  }`)
 	fmt.Println()
@@ -1509,7 +1509,7 @@ func cmdDoctor(args []string) int {
 	tunnels := resolveTunnels(cfg, log)
 	fmt.Println("tunnels:")
 	if len(tunnels) == 0 {
-		fmt.Println("  (none — set vpn.tunnelInterfaces or vpn.autodetect)")
+		fmt.Println("  (none — set vpn.tunnelInterfaces or vpn.autoDetect)")
 	} else {
 		nets, _ := netdetect.TunnelSubnets(tunnels)
 		subsByIface := map[string][]string{}
@@ -1682,7 +1682,7 @@ func cmdStatus(args []string) int {
 
 	{
 		tunnels := cfg.VPN.TunnelInterfaces
-		if len(tunnels) == 0 && cfg.VPN.Autodetect {
+		if len(tunnels) == 0 && cfg.VPN.AutoDetect {
 			tunnels = []string{"(autodetect)"}
 		}
 		fmt.Println("vpn tunnels:     ", strings.Join(tunnels, ", "))

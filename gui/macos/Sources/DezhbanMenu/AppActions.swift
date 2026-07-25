@@ -148,7 +148,7 @@ enum AppActions {
         let alert = NSAlert()
         alert.alertStyle = .informational
         alert.messageText = "Download and install v\(version)?"
-        alert.informativeText = "This restarts the app. If the daemon is in a safe posture (guard or standby), it also briefly restarts enforcement to activate the new version — never during FULL BLOCK or an open switch window."
+        alert.informativeText = "This restarts the app. If dezhban is in a safe posture (guard or standby), it also briefly restarts enforcement to activate the new version — never during FULL BLOCK or an open switch window."
         alert.addButton(withTitle: "Upgrade")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

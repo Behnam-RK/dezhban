@@ -31,7 +31,7 @@ var roundTripCases = map[string]roundTripCase{
 
 	"vpn.tunnelInterfaces":      {set: "utun7", want: "utun7"},
 	"vpn.endpoints":             {set: "203.0.113.9", want: "203.0.113.9"},
-	"vpn.autodetect":            {set: "false", want: "false"},
+	"vpn.autoDetect":            {set: "false", want: "false"},
 	"vpn.autoDiscoverEndpoints": {set: "false", want: "false"},
 	"vpn.allowPhysicalDNS":      {set: "false", want: "false"},
 	"vpn.allowLocalNetwork":     {set: "false", want: "false"},

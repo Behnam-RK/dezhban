@@ -76,7 +76,7 @@ struct AboutView: View {
         } header: {
             Text("Updates")
         } footer: {
-            Text("Checks GitHub for a newer release. Applying restarts the app and, only if the daemon is in a safe posture (guard or standby — never during FULL BLOCK or an open switch window), briefly restarts enforcement to activate it. See docs/usage/upgrade.md.")
+            Text("Checks GitHub for a newer release. Applying restarts the app and, only if dezhban is in a safe posture (guard or standby — never during FULL BLOCK or an open switch window), briefly restarts enforcement to activate it. See docs/usage/upgrade.md.")
                 .foregroundStyle(.secondary)
         }
     }

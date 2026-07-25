@@ -150,8 +150,8 @@ struct OverviewView: View {
                     .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
             }
             Spacer()
-            Button("Stop kill switch") { AppActions.privileged(["stop"], "stop the kill switch") }
-                .help("Stops the daemon. Asks for your password — a daemon can’t stop itself.")
+            Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
+                .help("Stops dezhban. Asks for your password — it can’t stop itself while running.")
         }
     }
 
@@ -166,7 +166,7 @@ struct OverviewView: View {
                 Label("Panic — force unblock…", systemImage: "exclamationmark.octagon.fill")
             }
             .tint(.red)
-            Text("Removes every dezhban firewall rule, even with no daemon running.")
+            Text("Removes every dezhban firewall rule, even with dezhban not running.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -187,9 +187,9 @@ struct OverviewView: View {
     private var notInstalled: some View {
         guided(
             symbol: "shield",
-            title: "Not protecting",
+            title: "Guard not installed",
             message: "The dezhban system service is not installed, so nothing is enforced — "
-                + "at boot or now. Installing it starts protection immediately and at every boot."
+                + "at boot or now. Installing it starts the guard immediately and at every boot."
         ) {
             Button("Install service…") {
                 busy = true
@@ -206,12 +206,12 @@ struct OverviewView: View {
     private var stopped: some View {
         guided(
             symbol: "shield",
-            title: "Protection stopped",
-            message: "The dezhban service is installed but the daemon isn’t running "
-                + "(or hasn’t reported recently). Egress is not being watched."
+            title: "Stopped",
+            message: "The dezhban service is installed but isn’t running "
+                + "(or hasn’t reported recently). Nothing is being watched."
         ) {
-            Button("Start kill switch") {
-                AppActions.privileged(["start"], "start the kill switch")
+            Button("Guard up") {
+                AppActions.privileged(["start"], "bring the guard up")
             }
             .buttonStyle(.borderedProminent)
         }

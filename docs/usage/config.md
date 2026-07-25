@@ -109,6 +109,8 @@ guard that someone deliberately turned off.
 | `vpn.reconnectWindow` | `vpn.redialWindow` |
 | `vpn.advanced.reconnectWindowMax` | `vpn.advanced.redialWindowMax` |
 | `vpn.advanced.reconnectMinUptime` | `vpn.advanced.redialMinUptime` |
+| `vpn.autodetect` | `vpn.autoDetect` |
+| `vpn.profiles[].ifaceHint` | `vpn.profiles[].tunnelHint` |
 
 #### Retired keys
 
@@ -161,10 +163,10 @@ and installs no rules at all.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `vpn.tunnelInterfaces` | `[]string` | `[]` | Tunnel interface names (e.g. `["utun4"]`). Leave empty to let `autodetect` find them. Run `dezhban detect-vpn` to see them. |
+| `vpn.tunnelInterfaces` | `[]string` | `[]` | Tunnel interface names (e.g. `["utun4"]`). Leave empty to let `autoDetect` find them. Run `dezhban detect-vpn` to see them. |
 | `vpn.endpoints` | `[]string` | `[]` | VPN server addresses reachable on the physical interface — kept open so the tunnel can stay up and redial. Each entry may be an **IP or a hostname** (hostnames are re-resolved at runtime). Not required to load — a config with none is valid and rests in STANDBY — but the guard will not arm until it knows at least one, from here, a profile, or `autoDiscoverEndpoints`. |
-| `vpn.autodetect` | bool | `true` | Discover the tunnel interface(s) at runtime via `netdetect`, growing/pruning the guard set as VPNs come and go. Explicit `tunnelInterfaces` always win (and are pinned — never pruned). **On by default** (2026-07-22 defaults review) — set `false` explicitly to rely solely on `tunnelInterfaces`. |
-| `vpn.profiles` | `[]object` | `[]` | Named VPNs whose server endpoints are always kept reachable (the guard passes the **union** of all profiles' endpoints), so switching between known VPNs needs no reconfiguration. Each: `{name, endpoints[], ifaceHint?}`. `ifaceHint` is display-only. Manage with `dezhban vpn add/remove/import`, not `config set`. |
+| `vpn.autoDetect` | bool | `true` | Discover the tunnel interface(s) at runtime via `netdetect`, growing/pruning the guard set as VPNs come and go. Explicit `tunnelInterfaces` always win (and are pinned — never pruned). **On by default** (2026-07-22 defaults review) — set `false` explicitly to rely solely on `tunnelInterfaces`. |
+| `vpn.profiles` | `[]object` | `[]` | Named VPNs whose server endpoints are always kept reachable (the guard passes the **union** of all profiles' endpoints), so switching between known VPNs needs no reconfiguration. Each: `{name, endpoints[], tunnelHint?}`. `tunnelHint` is display-only. Manage with `dezhban vpn add/remove/import`, not `config set`. |
 | `vpn.switchWindow` | duration | `5s` | Default length of a `dezhban switch` window — a bounded, explicitly-triggered relaxation for connecting a brand-new VPN whose server isn't known yet (it closes early on a confirmed good exit, so the duration only bounds the slow case; pass `--for` for a longer one-off). Set `"0"` to disable manual switch windows entirely — a *tightening*, at the cost of having to add a new VPN's server to `vpn.endpoints` by hand. Independent of `redialWindow`. No floor; validated to `(0, advanced.switchWindowMax]`, or exactly `"0"`. |
 | `vpn.redialWindow` | duration | `30s` | Length of the **automatic redial window**: a tunnel drop from healthy GUARD opens a switch-window relaxation for this long, so the VPN client can redial *any* server — including one dezhban has never seen — with zero interaction. Closes early (and learns the new endpoint) the moment a good exit is confirmed; on expiry the guard fail-closes and stays closed. Set `"0"` to disable and get the strict zero-relaxation behavior. No floor; validated to `(0, advanced.redialWindowMax]` — a cap kept **independent** of `advanced.switchWindowMax` so one trigger's budget can never silently truncate the other's. See [modes.md](../concepts/modes.md#automatic-redial-window). |
 | `vpn.pauseMax` | duration | `30m` | Cap on a `dezhban pause` — a deliberate, timed drop to the real ISP IP (e.g. to reach a domestic-only service), sharing the switch-window machinery as a **third** trigger with its own cap, never shared with `switchWindowMax`/`redialWindowMax`. The requested duration comes from the `pause` call itself (`dezhban pause 15m`), not a separate default key. Set `"0"` to disable pausing entirely. See [modes.md](../concepts/modes.md#pause--deliberately-using-your-real-ip). |
@@ -287,8 +289,8 @@ entirely to keep the defaults; set only the knobs you need.
 
 ## Sample configs
 
-- [`configs/dezhban.example.json`](../../configs/dezhban.example.json) — reference: fully automatic (autodetect + endpoint discovery).
+- [`configs/dezhban.example.json`](../../configs/dezhban.example.json) — reference: fully automatic (autoDetect + endpoint discovery).
 - [`configs/dezhban.vpn-guard.json`](../../configs/dezhban.vpn-guard.json) — explicitly pinned tunnel interface and endpoints.
-- [`configs/dezhban.profiles.json`](../../configs/dezhban.profiles.json) — autodetect + multiple VPN profiles + switch window.
+- [`configs/dezhban.profiles.json`](../../configs/dezhban.profiles.json) — autoDetect + multiple VPN profiles + switch window.
 - [`configs/dezhban.dev.json`](../../configs/dezhban.dev.json) — debug logging, fast poll, no blocking; for local dry-runs.
 - `configs/dezhban.local.json` — your private config (git-ignored; may hold a real endpoint IP).

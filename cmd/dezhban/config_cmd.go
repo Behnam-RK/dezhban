@@ -40,7 +40,7 @@ Flags:
 
 Keys (dotted; list values are comma-separated):
   pollInterval blockedCountries hysteresis providers providerQuorum logLevel
-  vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
+  vpn.tunnelInterfaces vpn.endpoints vpn.autoDetect
   vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.allowLocalNetwork
   vpn.autoArm vpn.armAtBoot vpn.switchWindow
   vpn.redialWindow vpn.pauseMax vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
@@ -97,9 +97,9 @@ var configFields = map[string]configField{
 		get: func(c *config.Config) string { return strings.Join(c.VPN.Endpoints, ",") },
 		set: func(c *config.Config, v string) error { c.VPN.Endpoints = splitList(v); return nil },
 	},
-	"vpn.autodetect": {
-		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.Autodetect) },
-		set: func(c *config.Config, v string) error { return setBool(&c.VPN.Autodetect, v) },
+	"vpn.autoDetect": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AutoDetect) },
+		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AutoDetect, v) },
 	},
 	"vpn.autoDiscoverEndpoints": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AutoDiscoverEndpoints) },

@@ -8,13 +8,13 @@
     "https://ifconfig.co/json"
   ],
   "vpn": {
-    "autodetect": true,
+    "autoDetect": true,
     "autoDiscoverEndpoints": true,
     "allowPhysicalDNS": true,
     "switchWindow": "2m",
     "profiles": [
       { "name": "proton", "endpoints": ["nl-free-01.protonvpn.net"] },
-      { "name": "home-wg", "endpoints": ["203.0.113.7"], "ifaceHint": "wg" }
+      { "name": "home-wg", "endpoints": ["203.0.113.7"], "tunnelHint": "wg" }
     ],
     "endpointRefresh": "5m",
     "tunnelWatch": "1s"

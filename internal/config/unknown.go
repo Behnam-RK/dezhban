@@ -28,6 +28,13 @@ var renamedKeys = map[string]string{
 	"vpn.reconnectWindow":             "vpn.redialWindow",
 	"vpn.advanced.reconnectWindowMax": "vpn.advanced.redialWindowMax",
 	"vpn.advanced.reconnectMinUptime": "vpn.advanced.redialMinUptime",
+	// Vocabulary sweep (docs/concepts/glossary.md): casing consistency with
+	// every other auto* key (autoDiscoverEndpoints, autoArm), and dropping the
+	// word *interface* from vpn.profiles[].ifaceHint per the glossary's
+	// "keep tunnel, drop interface" rule. describeUnknown normalises the "[N]"
+	// index away before this lookup, so this one entry covers every profile.
+	"vpn.autodetect":           "vpn.autoDetect",
+	"vpn.profiles[].ifaceHint": "vpn.profiles[].tunnelHint",
 }
 
 // unknownKeys reports dotted keys present in the raw config that the file schema

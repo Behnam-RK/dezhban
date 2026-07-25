@@ -41,9 +41,9 @@ type VPN struct {
 	// literal or a hostname (resolved and re-resolved at runtime) — hostnames let
 	// third-party VPNs that publish a server name rather than a fixed IP be used.
 	Endpoints []string
-	// Autodetect requests discovery of the tunnel interface (netdetect); explicit
+	// AutoDetect requests discovery of the tunnel interface (netdetect); explicit
 	// TunnelInterfaces always win.
-	Autodetect bool
+	AutoDetect bool
 	// AutoDiscoverEndpoints continuously learns the live VPN server IP from the
 	// active socket (macOS only) and keeps that egress open, so a rotating-pool
 	// VPN (NordVPN/ProtonVPN/…) needs no endpoint typed by hand. On other
@@ -169,11 +169,11 @@ type Profile struct {
 	Name string
 	// Endpoints are the profile's VPN server addresses (≥1 required).
 	Endpoints []string
-	// IfaceHint is an optional tunnel-interface name prefix (e.g. "wg",
+	// TunnelHint is an optional tunnel-interface name prefix (e.g. "wg",
 	// "nordlynx") shown in `vpn list` output to help identify a profile. It never
 	// gates enforcement — pinning an interface by name goes stale across
 	// redials, so the hint is advisory / display-only.
-	IfaceHint string
+	TunnelHint string
 }
 
 // Advanced holds tunables for VPN guard / switch-window / endpoint-learning
@@ -339,7 +339,7 @@ type fileVPN struct {
 	Endpoints        []string `json:"endpoints"`
 	// Pointers: all default to TRUE, so an explicit false must be
 	// distinguishable from an absent key (same convention as fileControl).
-	Autodetect            *bool         `json:"autodetect,omitempty"`
+	AutoDetect            *bool         `json:"autoDetect,omitempty"`
 	AutoDiscoverEndpoints *bool         `json:"autoDiscoverEndpoints,omitempty"`
 	AllowPhysicalDNS      *bool         `json:"allowPhysicalDNS,omitempty"`
 	AllowLocalNetwork     *bool         `json:"allowLocalNetwork,omitempty"`
@@ -356,9 +356,9 @@ type fileVPN struct {
 }
 
 type fileProfile struct {
-	Name      string   `json:"name"`
-	Endpoints []string `json:"endpoints"`
-	IfaceHint string   `json:"ifaceHint,omitempty"`
+	Name       string   `json:"name"`
+	Endpoints  []string `json:"endpoints"`
+	TunnelHint string   `json:"tunnelHint,omitempty"`
 }
 
 type fileAdvanced struct {
@@ -406,7 +406,7 @@ func Default() Config {
 		// defaults review; autodetect/auto-discover added 2026-07-22; armAtBoot
 		// added 2026-07-22). Keep the two in sync.
 		VPN: VPN{
-			Autodetect:            true,
+			AutoDetect:            true,
 			AutoDiscoverEndpoints: true,
 			AllowPhysicalDNS:      true,
 			AllowLocalNetwork:     true,
@@ -499,15 +499,15 @@ func apply(cfg *Config, fc fileConfig) error {
 		v := VPN{
 			TunnelInterfaces:      fc.VPN.TunnelInterfaces,
 			Endpoints:             fc.VPN.Endpoints,
-			Autodetect:            true, // default on; explicit false below
+			AutoDetect:            true, // default on; explicit false below
 			AutoDiscoverEndpoints: true, // default on; explicit false below
 			AllowPhysicalDNS:      true, // default on; explicit false below
 			AllowLocalNetwork:     true, // default on; explicit false below
 			AutoArm:               true, // default on; explicit false below
 			ArmAtBoot:             true, // default on; explicit false below
 		}
-		if fc.VPN.Autodetect != nil {
-			v.Autodetect = *fc.VPN.Autodetect
+		if fc.VPN.AutoDetect != nil {
+			v.AutoDetect = *fc.VPN.AutoDetect
 		}
 		if fc.VPN.AutoDiscoverEndpoints != nil {
 			v.AutoDiscoverEndpoints = *fc.VPN.AutoDiscoverEndpoints
@@ -597,9 +597,9 @@ func apply(cfg *Config, fc fileConfig) error {
 		}
 		for _, p := range fc.VPN.Profiles {
 			v.Profiles = append(v.Profiles, Profile{
-				Name:      p.Name,
-				Endpoints: p.Endpoints,
-				IfaceHint: p.IfaceHint,
+				Name:       p.Name,
+				Endpoints:  p.Endpoints,
+				TunnelHint: p.TunnelHint,
 			})
 		}
 		if fc.VPN.Advanced != nil {
@@ -703,7 +703,7 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 func toFileConfig(c *Config) fileConfig {
 	hysteresis := c.Hysteresis
 	quorum := c.ProviderQuorum
-	autodetect := c.VPN.Autodetect
+	autodetect := c.VPN.AutoDetect
 	autoDiscover := c.VPN.AutoDiscoverEndpoints
 	physDNS := c.VPN.AllowPhysicalDNS
 	localNet := c.VPN.AllowLocalNetwork
@@ -728,7 +728,7 @@ func toFileConfig(c *Config) fileConfig {
 		VPN: &fileVPN{
 			TunnelInterfaces:      c.VPN.TunnelInterfaces,
 			Endpoints:             c.VPN.Endpoints,
-			Autodetect:            &autodetect,
+			AutoDetect:            &autodetect,
 			AutoDiscoverEndpoints: &autoDiscover,
 			AllowPhysicalDNS:      &physDNS,
 			AllowLocalNetwork:     &localNet,
@@ -760,7 +760,7 @@ func toFileProfiles(ps []Profile) []fileProfile {
 	}
 	out := make([]fileProfile, len(ps))
 	for i, p := range ps {
-		out[i] = fileProfile{Name: p.Name, Endpoints: p.Endpoints, IfaceHint: p.IfaceHint}
+		out[i] = fileProfile{Name: p.Name, Endpoints: p.Endpoints, TunnelHint: p.TunnelHint}
 	}
 	return out
 }
@@ -945,7 +945,7 @@ func Normalize(cfg *Config) {
 	}
 	for pi := range cfg.VPN.Profiles {
 		cfg.VPN.Profiles[pi].Name = strings.TrimSpace(cfg.VPN.Profiles[pi].Name)
-		cfg.VPN.Profiles[pi].IfaceHint = strings.TrimSpace(cfg.VPN.Profiles[pi].IfaceHint)
+		cfg.VPN.Profiles[pi].TunnelHint = strings.TrimSpace(cfg.VPN.Profiles[pi].TunnelHint)
 		for ei := range cfg.VPN.Profiles[pi].Endpoints {
 			cfg.VPN.Profiles[pi].Endpoints[ei] = strings.TrimSpace(cfg.VPN.Profiles[pi].Endpoints[ei])
 		}

@@ -68,6 +68,27 @@ func TestRenamedKeysPointAtTheirReplacement(t *testing.T) {
 	}
 }
 
+// The vocabulary sweep renamed vpn.autodetect to vpn.autoDetect (casing
+// consistency with every other auto* key) — an old config using the old
+// casing must be told so, not silently reverted to the default.
+func TestRenamedAutodetectPointsAtItsReplacement(t *testing.T) {
+	cfg := loadFromJSON(t, `{"vpn": {"autodetect": true}}`)
+
+	var found bool
+	for _, r := range cfg.Retired {
+		if r.Key != "vpn.autodetect" {
+			continue
+		}
+		found = true
+		if want := "vpn.autoDetect"; !strings.Contains(r.Reason, want) {
+			t.Errorf("reason %q does not name the replacement %q", r.Reason, want)
+		}
+	}
+	if !found {
+		t.Errorf("the old vpn.autodetect was not reported; reported: %v", retiredKeys(cfg))
+	}
+}
+
 // The failure this guards against for array-valued keys: vpn.profiles is a
 // []object, and walkUnknown used to only recurse into map[string]any, so a
 // typo or a renamed key inside a profile was silently dropped — the very
@@ -77,7 +98,7 @@ func TestUnknownKeysInsideProfilesAreReported(t *testing.T) {
 	cfg := loadFromJSON(t, `{
 	  "vpn": {
 	    "profiles": [
-	      {"name": "a", "endpoints": ["1.1.1.1"], "ifaceHint": "wg"},
+	      {"name": "a", "endpoints": ["1.1.1.1"], "tunnelHint": "wg"},
 	      {"name": "b", "endpoints": ["2.2.2.2"], "bogusKey": true}
 	    ]
 	  }
@@ -87,8 +108,38 @@ func TestUnknownKeysInsideProfilesAreReported(t *testing.T) {
 	if !slices.Contains(got, "vpn.profiles[1].bogusKey") {
 		t.Errorf("unknown key inside a profile element was not reported (with its index); reported: %v", got)
 	}
-	if slices.Contains(got, "vpn.profiles[0].ifaceHint") {
+	if slices.Contains(got, "vpn.profiles[0].tunnelHint") {
 		t.Errorf("a known profile key was reported as unknown: %v", got)
+	}
+}
+
+// The real-world case the array-index normalisation (see
+// TestRenamedKeyInsideAnArrayElementIsNormalised) exists for: the vocabulary
+// sweep renamed vpn.profiles[].ifaceHint to tunnelHint, and an old config with
+// ifaceHint set on ANY profile must be told so, with the index that pinpoints
+// which entry.
+func TestOldIfaceHintInsideAProfileIsReportedAsRenamed(t *testing.T) {
+	cfg := loadFromJSON(t, `{
+	  "vpn": {
+	    "profiles": [
+	      {"name": "a", "endpoints": ["1.1.1.1"], "tunnelHint": "wg"},
+	      {"name": "b", "endpoints": ["2.2.2.2"], "ifaceHint": "tun"}
+	    ]
+	  }
+	}`)
+
+	var found bool
+	for _, r := range cfg.Retired {
+		if r.Key != "vpn.profiles[1].ifaceHint" {
+			continue
+		}
+		found = true
+		if want := "vpn.profiles[].tunnelHint"; !strings.Contains(r.Reason, want) {
+			t.Errorf("reason %q does not name the replacement %q", r.Reason, want)
+		}
+	}
+	if !found {
+		t.Errorf("the old vpn.profiles[1].ifaceHint was not reported; reported: %v", retiredKeys(cfg))
 	}
 }
 

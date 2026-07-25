@@ -59,7 +59,7 @@ current as you land changes.
     poll, so re-enabling a window left the root-owned path deaf until a restart.
     The poll is now always wired and every command re-checks the live value, so
     disabling still disables — a `"0"` window cannot be opened by any trigger.
-  - `vpn.autodetect` was never live at all (what autodetects is the tunnel
+  - `vpn.autoDetect` was never live at all (what autodetects is the tunnel
     watcher, built at startup) and is now reported as needing a restart, which is
     what it always needed.
 
@@ -225,6 +225,80 @@ current as you land changes.
   elevation call is already dispatched off-main — so they have to be caught in
   the act. Diagnostic only: it observes the main thread and never blocks it, and
   it touches neither the daemon nor the firewall.
+
+### Added
+
+- **A single renderer for posture prose.** Posture sentences used to be composed
+  independently in at least eight Go call sites and five Swift ones, with the
+  same fact worded differently every time — including three separate spellings
+  of the hysteresis-streak sentence ("agreeing readings" / "confirming checks" /
+  "good readings"). `internal/render` now composes the headline, the detail
+  sentence, and a stable machine key (`on`/`off`/`blocked`/`warning`/`paused`)
+  from a `state.Snapshot`; `status` prints it, the state file (and therefore
+  `status --json`) carries it, and the macOS app displays it instead of writing
+  its own copy.
+- **`status --json` gains `controlReachable`**, the machine-readable form of the
+  `daemon control:` line, so a consumer no longer has to scrape a human sentence
+  for a substring to learn whether routine ops need a password.
+
+### Changed
+
+- **`status` now leads with the rendered posture.** It previously never worded
+  the posture at all — printing a config dump plus three narrow live lines — so
+  guard, full block, standby, stopped, a lookup failure, and an enforcement
+  error were simply absent from its output. `vpn switch --status`, the switch
+  wait loop, and `vpn list`'s window line now render the same sentence instead
+  of composing three more variants of it (previously with two different clock
+  formats between them).
+- **The macOS app displays the daemon's rendered posture instead of composing
+  its own.** `PostureUI.humanPosture`, the icon's inline help text,
+  `OverviewView.postureBlurb`, `Snapshot.pendingSummary`, and the menubar's
+  notification-title map are gone; all five read `snapshot.display` now. The
+  notification classifier no longer parses the rendered sentence to tell
+  standby from stopped (both draw the same grey icon) — it reads the
+  snapshot's posture and liveness directly, so a wording change can no longer
+  misclassify a notification.
+- **One vocabulary, per [docs/concepts/glossary.md](docs/concepts/glossary.md).**
+  The glossary already existed and already ruled on most of this drift; this
+  release implements it: "Stop/Start kill switch" buttons become **Guard
+  down** / **Guard up**; "Not protecting" / "Protection stopped" become
+  "Standby — nothing is being blocked" / "Stopped"; "Autodetect tunnel
+  interface (vpn.autodetect)" becomes "Find my VPN tunnel automatically";
+  "Tunnel interfaces (comma-sep)" becomes "Your VPN tunnel (comma-sep)"; and
+  "the daemon" is gone from every user-facing sentence in the app and CLI
+  (technical register — logs, `--json`, docs — keeps it). The glossary also
+  gains an **Egress** entry: technical register only, never user-facing —
+  "Egress blocked" becomes "Traffic cut" everywhere, including the icon help
+  text and the getting-started guide's image alt text.
+
+### Changed — BREAKING
+
+- **Two config keys are renamed for casing/vocabulary consistency, with no
+  aliases** — same treatment the redial rename got: reported by name, with
+  their replacement, by `dezhban validate` and at daemon start.
+
+  | Old | New |
+  |---|---|
+  | `vpn.autodetect` | `vpn.autoDetect` |
+  | `vpn.profiles[].ifaceHint` | `vpn.profiles[].tunnelHint` |
+
+  `vpn.autoDetect` matches the casing of every sibling `auto*` key
+  (`autoDiscoverEndpoints`, `autoArm`). `tunnelHint` drops the word
+  *interface* per the glossary's "keep tunnel, drop interface" rule, matching
+  `vpn.tunnelInterfaces`. `dezhban vpn add`'s `--iface-hint` flag is renamed to
+  `--tunnel-hint` the same way (a CLI flag, so this one has no validate-time
+  report — an old invocation gets a plain "flag provided but not defined").
+
+### Fixed
+
+- **A typo or a renamed key inside `vpn.profiles` was silently dropped.** The
+  unknown-key scanner only recursed into JSON objects, so `vpn.profiles` (a
+  JSON array) was never walked — exactly the failure this mechanism exists to
+  catch, just one container type away from where it was already caught for
+  `vpn`/`vpn.advanced`/`control`. An unrecognised or renamed key inside any
+  profile is now reported with its index (e.g. `vpn.profiles[1].ifaceHint`),
+  and this is what makes the `ifaceHint` → `tunnelHint` rename above reportable
+  at all.
 
 ## [0.7.0] - 2026-07-22
 

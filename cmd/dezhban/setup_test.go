@@ -31,7 +31,7 @@ func TestApplyWizardAutoMode(t *testing.T) {
 	}
 	// Normalize (run on save) implies autodetect when no interfaces are pinned.
 	config.Normalize(&cfg)
-	if !cfg.VPN.Autodetect {
+	if !cfg.VPN.AutoDetect {
 		t.Error("autodetect should be implied for an auto-mode config")
 	}
 	if err := cfg.Validate(); err != nil {

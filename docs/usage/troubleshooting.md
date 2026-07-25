@@ -55,7 +55,7 @@ sudo dezhban config set vpn.armAtBoot=false
 ```
 
 If you need the real ISP IP for a domestic-only site rather than turning
-anything off, use a bounded [`pause`](cli.md#pause-protection-temporarily)
+anything off, use a bounded [`pause`](cli.md#pause-the-guard-temporarily)
 instead — it re-arms itself, so there's nothing to remember to undo.
 
 ## VPN guard: tunnel dies, DNS fails ("no such host"), country lookups time out

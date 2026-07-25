@@ -15,7 +15,7 @@ right now:
 
 | Posture | Rules installed | Means |
 |---|---|---|
-| [**STANDBY**](#standby) | none — network fully open | No tunnel has been observed yet. dezhban is **not protecting.** |
+| [**STANDBY**](#standby) | none — network fully open | No tunnel has been observed yet. Nothing is being blocked. |
 | [**GUARD**](#guard) | tunnel + endpoint pass, everything else blocked | The healthy resting state. A drop is cut instantly. |
 | [**FULL BLOCK**](#full-block) | endpoint pass only | The VPN's exit landed in a blocked country. All user traffic is cut. |
 | [**SWITCH WINDOW**](#switch-window--connecting-a-brand-new-vpn) | all outbound, bounded by a timer | The sanctioned relaxation, from one of exactly three triggers. |
@@ -66,7 +66,7 @@ whatever posture is current, so it never appears below as a transition:
 ## STANDBY
 
 The resting posture before any tunnel has been seen: **no rules at all, the
-network is fully open, dezhban is not protecting.** A fresh install sits here, as
+network is fully open, nothing is being blocked.** A fresh install sits here, as
 does a host whose VPN was uninstalled.
 
 This is deliberate, and it is the job `vpn.enabled: false` used to do. An
@@ -377,7 +377,7 @@ never take over each other's attribution, caps, or lifecycle.
 Because pause shares the switch window's rule shape, it also shares its
 early-close behavior: if a VPN happens to redial with a confirmed good exit
 while a pause is open, the guard may re-arm before your requested duration
-elapses. That is a tightening (protection resuming early), never a leak, so it
+elapses. That is a tightening (the guard re-arming early), never a leak, so it
 is accepted rather than engineered around — see
 [ADR-0008](../adr/0008-arm-at-boot.md).
 

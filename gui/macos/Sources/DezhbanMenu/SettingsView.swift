@@ -20,7 +20,7 @@ struct SettingsView: View {
     // seed() destructuring below.
     private static let keys = [
         "vpn.tunnelInterfaces", "vpn.endpoints",
-        "vpn.autodetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
+        "vpn.autoDetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
         "vpn.allowLocalNetwork",
         "blockedCountries", "pollInterval",
         "vpn.switchWindow", "vpn.redialWindow", "vpn.endpointGrace",
@@ -83,38 +83,38 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Form {
                 Section("Startup") {
-                    Toggle("Start protection at boot (install the system service)", isOn: bootBinding)
+                    Toggle("Start the guard at boot (install the system service)", isOn: bootBinding)
                         .disabled(bootBusy || !state.cliFound)
-                        .help("Installs dezhban as a launchd system daemon: enforcement starts at boot — "
+                        .help("Installs dezhban as a background system service: the guard starts at boot — "
                             + "before any login — and survives restarts and crashes. Unchecking uninstalls the "
                             + "service (rules are torn down first so nothing is left blocking).")
                     Toggle("Open this app at login", isOn: loginBinding)
                         .help("Registers the app as a login item (System Settings → General → Login Items). "
-                            + "This is only the status display — protection itself is the system service above.")
+                            + "This is only the status display — the guard itself is the system service above.")
                     Toggle("Notify on essential events", isOn: notifyBinding)
                         .help("macOS notifications for the transitions that matter: guard armed, egress "
                             + "blocked, warnings (enforcement error / switch window open), standby, stopped. "
                             + "Nothing else.")
                     Toggle("Check for updates automatically", isOn: checkUpdatesBinding)
                         .help("Checks GitHub for a newer release at launch and every ~24h — never from the "
-                            + "root daemon, only here, in this app, on this schedule. Turn off to stop this "
+                            + "background service, only here, in this app, on this schedule. Turn off to stop this "
                             + "host contacting GitHub about updates entirely; \"Check Now\" in About still "
                             + "works either way.")
                 }
                 Section("VPN guard") {
-                    TextField("Tunnel interfaces (comma-sep)", text: $tunnelInterfaces)
+                    TextField("Your VPN tunnel (comma-sep)", text: $tunnelInterfaces)
                         .disabled(!canApply)
                     TextField("Endpoints (comma-sep)", text: $endpoints)
                         .disabled(!canApply)
                 }
                 Section("Autodetection") {
-                    Toggle("Autodetect tunnel interface (vpn.autodetect)", isOn: $autodetect)
+                    Toggle("Find my VPN tunnel automatically", isOn: $autodetect)
                         .disabled(!canApply)
                     Toggle("Auto-discover endpoints (vpn.autoDiscoverEndpoints)", isOn: $autoDiscover)
                         .disabled(!canApply)
                     Toggle("Auto-arm when a VPN connects (vpn.autoArm)", isOn: $autoArm)
                         .disabled(!canApply)
-                        .help("With no VPN connected the daemon idles in standby (nothing blocked) and arms "
+                        .help("With no VPN connected dezhban idles in standby (nothing blocked) and arms "
                             + "the guard the moment a tunnel appears. It never disarms on a drop — that's the "
                             + "kill switch — only an explicit Unblock with the VPN off returns to standby.")
                 }
@@ -127,7 +127,7 @@ struct SettingsView: View {
                             + "stays blocked. The one cost is on untrusted Wi-Fi (a café, a hotel), where it "
                             + "also lets other devices on that network reach you.")
                 }
-                Section("Protection") {
+                Section("Blocking") {
                     TextField("Blocked countries (comma-sep, e.g. IR,RU,KP)", text: $blockedCountries)
                         .disabled(!canApply)
                     TextField("Geo IP lookup interval (e.g. 15s)", text: $pollInterval)
@@ -156,11 +156,11 @@ struct SettingsView: View {
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
                         .disabled(tokenBusy || !biometryAvailable)
-                        .help("Applying a change asks the running daemon to make it, authorised by a "
+                        .help("Applying a change asks dezhban to make it, authorised by a "
                             + "secret kept in your login keychain behind Touch ID — so saving costs a "
                             + "fingerprint instead of your password. Turning this on stores that secret "
                             + "(one password prompt, now); turning it off removes it from both the "
-                            + "keychain and the daemon. Nothing else about what dezhban enforces changes.")
+                            + "keychain and dezhban. Nothing else about what dezhban enforces changes.")
                     if !biometryAvailable {
                         Text("This Mac has no Touch ID, so settings changes ask for your password.")
                             .font(.callout)
@@ -276,7 +276,7 @@ struct SettingsView: View {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Uninstall the dezhban service?"
-            alert.informativeText = "Protection will stop and will no longer start at boot. "
+            alert.informativeText = "The guard will stop and will no longer start at boot. "
                 + "All dezhban firewall rules are removed first, so nothing is left blocking."
             alert.addButton(withTitle: "Uninstall")
             alert.addButton(withTitle: "Cancel")
@@ -432,7 +432,7 @@ struct SettingsView: View {
         let pairs = [
             "vpn.tunnelInterfaces=\(tunnelInterfaces)",
             "vpn.endpoints=\(endpoints)",
-            "vpn.autodetect=\(autodetect)",
+            "vpn.autoDetect=\(autodetect)",
             "vpn.autoDiscoverEndpoints=\(autoDiscover)",
             "vpn.autoArm=\(autoArm)",
             "vpn.allowLocalNetwork=\(allowLocalNetwork)",

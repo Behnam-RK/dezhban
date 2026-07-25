@@ -179,12 +179,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private static let essentialTitles: [String: String] = [
         "on": "Guard armed",
-        "blocked": "Egress blocked",
+        "blocked": "Traffic cut",
         "warning": "Warning",
         "paused": "Paused — using your real IP",
-        "standby": "Standby — not enforcing",
-        "stopped": "Protection stopped",
-        "off": "Not enforcing",
+        "standby": "Standby — nothing is being blocked",
+        "stopped": "Guard stopped",
+        // "off" is unreachable from essentialClass today (standby and stopped —
+        // the only sources of the "off" icon state — are classified separately
+        // above); kept for defensive completeness against the map lookup's
+        // `?? "Dezhban"` fallback.
+        "off": "Standby — nothing is being blocked",
     ]
 
     /// Menubar brand state images, loaded once from the app bundle's Resources
@@ -223,7 +227,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             addInfo(DezhbanCLI.binaryPath() == nil
                 ? "dezhban CLI not found — install it first"
-                : "Kill switch stopped")
+                : "Stopped")
         }
 
         menu.addItem(.separator())

@@ -29,7 +29,7 @@ Subcommands:
   import FILE [--name N]         Import a profile from a WG/OpenVPN/V2Ray config
                                   (--dry-run previews without saving)
 
-Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --iface-hint PREFIX,
+Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --tunnel-hint PREFIX,
        --as NAME, --name NAME, --dry-run, --all, --learned, --yes`
 
 // cmdSwitch opens (or cancels / inspects) a switch window on the running daemon
@@ -154,7 +154,7 @@ func cmdPause(args []string) int {
 	if !noDaemon() {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpPause, Duration: dur}); handled {
 			if code == 0 {
-				fmt.Println("paused — protection resumes automatically at the deadline. `dezhban status` shows the countdown.")
+				fmt.Println("paused — the guard re-arms automatically at the deadline. `dezhban status` shows the countdown.")
 			}
 			return code
 		}
@@ -167,7 +167,7 @@ func cmdPause(args []string) int {
 		fmt.Fprintln(os.Stderr, "pause:", err)
 		return 1
 	}
-	fmt.Println("pause requested — protection resumes automatically at the deadline.")
+	fmt.Println("pause requested — the guard re-arms automatically at the deadline.")
 	return 0
 }
 
@@ -180,7 +180,7 @@ func cmdResume(args []string) int {
 	if !noDaemon() {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpResume}); handled {
 			if code == 0 {
-				fmt.Println("resumed — protection is active again")
+				fmt.Println("resumed — the guard is active again")
 			}
 			return code
 		}
@@ -309,8 +309,8 @@ func cmdVPNList(args []string) int {
 	}
 	for _, p := range cfg.VPN.Profiles {
 		hint := ""
-		if p.IfaceHint != "" {
-			hint = "  [iface " + p.IfaceHint + "*]"
+		if p.TunnelHint != "" {
+			hint = "  [tunnel " + p.TunnelHint + "*]"
 		}
 		fmt.Printf("%-11s %s%s\n", p.Name, strings.Join(p.Endpoints, ", "), hint)
 	}
@@ -350,7 +350,7 @@ func cmdVPNAdd(args []string) int {
 	var eps multiFlag
 	fs.Var(&eps, "endpoint", "VPN server host or IP (repeatable)")
 	from := fs.String("from", "", "import endpoints from a WireGuard/OpenVPN/V2Ray config file")
-	hint := fs.String("iface-hint", "", "tunnel interface name prefix (display only)")
+	hint := fs.String("tunnel-hint", "", "tunnel interface name prefix (display only)")
 	yes := fs.Bool("yes", false, "don't print the endpoint preview before adding")
 	cfgPath, rest := stripConfigFlag(args)
 	pos := parseInterspersed(fs, rest)
@@ -386,7 +386,7 @@ func cmdVPNAdd(args []string) int {
 				return fmt.Errorf("profile %q already exists", name)
 			}
 		}
-		c.VPN.Profiles = append(c.VPN.Profiles, config.Profile{Name: name, Endpoints: endpoints, IfaceHint: *hint})
+		c.VPN.Profiles = append(c.VPN.Profiles, config.Profile{Name: name, Endpoints: endpoints, TunnelHint: *hint})
 		return nil
 	}, fmt.Sprintf("profile %q added", name))
 }

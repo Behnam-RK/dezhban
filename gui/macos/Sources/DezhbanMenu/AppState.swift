@@ -261,8 +261,8 @@ final class AppState: ObservableObject {
     /// (AppDelegate), which used to compose this byte-identically on their own.
     func routineHint(_ what: String) -> String {
         controlIsReachable
-            ? "\(what) No password needed — the running daemon handles it."
-            : "\(what) Will ask for your password (the daemon isn’t reachable)."
+            ? "\(what) No password needed — dezhban handles it while it's running."
+            : "\(what) Will ask for your password (dezhban isn’t reachable)."
     }
 
     /// Recomputes the installed/reachable caches off the main thread. Skips the

@@ -199,7 +199,7 @@ enum ConfigApply {
                 // refuses every config write.
                 DispatchQueue.main.async {
                     completion(Outcome(ok: false,
-                                       status: "The daemon enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
+                                       status: "dezhban enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
                                        transcriptTitle: "Enroll control token — keychain failed",
                                        transcript: err))
                 }
@@ -222,7 +222,7 @@ enum ConfigApply {
             DispatchQueue.main.async {
                 guard result.ok else {
                     completion(Outcome(ok: false,
-                                       status: "Removed the app's copy, but the daemon still has an enrollment — see output.",
+                                       status: "Removed the app's copy, but dezhban still has an enrollment — see output.",
                                        transcriptTitle: "Forget control token — failed",
                                        transcript: result.output))
                     return

@@ -260,7 +260,7 @@ sudo dezhban vpn forget <name>          # drop a learned endpoint
 window from the state file until it closes. See [modes.md](../concepts/modes.md#switch-window--connecting-a-brand-new-vpn)
 for the posture and the real-IP-exposure trade-off.
 
-## Pause protection temporarily
+## Pause the guard temporarily
 
 For the times the *correct* traffic is the one the guard blocks — a domestic-only
 service that refuses a foreign VPN exit:

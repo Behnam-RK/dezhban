@@ -61,8 +61,8 @@ Per-OS rule inspection:
 
 - [ ] **Fresh install, no VPN configured** → posture `standby`, **no rules
       installed** (the inspect command above shows nothing for the `dezhban`
-      table/anchor), network fully open, menubar icon grey, Overview says it is
-      not protecting.
+      table/anchor), network fully open, menubar icon grey, Overview says
+      nothing is being blocked.
 - [ ] **Arming.** Configure a tunnel and connect the VPN → the guard arms, icon
       goes green, and the GUARD ruleset appears.
 - [ ] **A pre-merge config still works.** Load a config carrying `vpn.enabled`,
@@ -467,7 +467,7 @@ task gui:build && open dist/Dezhban.app
       armed/blocked/warning/standby/stopped transitions each notify once; no
       notification at app launch or on routine country/endpoint updates.
 - [ ] **Staleness.** Kill the daemon → the icon goes gray after the 90 s staleness
-      window, and Overview switches to the guided "Protection stopped" state.
+      window, and Overview switches to the guided "Stopped" state.
 
 ### Actions
 
@@ -517,10 +517,10 @@ end up typing a password.
 
 - [ ] CLI binary moved aside → Overview explains "dezhban CLI not found" (and the
       menubar status line agrees); restore it → recovers on next refresh.
-- [ ] Service uninstalled → "Not protecting" with an inline **Install service…**
+- [ ] Service uninstalled → "Guard not installed" with an inline **Install service…**
       that installs + starts under one prompt and shows its transcript in Logs.
-- [ ] Service installed but stopped → "Protection stopped" with an inline
-      **Start kill switch**.
+- [ ] Service installed but stopped → "Stopped" with an inline
+      **Guard up**.
 
 ### Settings pane
 

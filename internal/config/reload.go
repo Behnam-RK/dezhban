@@ -45,7 +45,7 @@ func KeyValues(c *Config) map[string]string {
 
 		"vpn.tunnelInterfaces":      strings.Join(v.TunnelInterfaces, ","),
 		"vpn.endpoints":             strings.Join(v.Endpoints, ","),
-		"vpn.autodetect":            strconv.FormatBool(v.Autodetect),
+		"vpn.autoDetect":            strconv.FormatBool(v.AutoDetect),
 		"vpn.autoDiscoverEndpoints": strconv.FormatBool(v.AutoDiscoverEndpoints),
 		"vpn.allowPhysicalDNS":      strconv.FormatBool(v.AllowPhysicalDNS),
 		"vpn.allowLocalNetwork":     strconv.FormatBool(v.AllowLocalNetwork),
@@ -96,7 +96,7 @@ var restartReasons = map[string]string{
 	"control.group":   "the control socket's group ownership is set when it is bound",
 
 	"vpn.tunnelWatch":           "the tunnel watcher runs on its own interval, fixed when it starts",
-	"vpn.autodetect":            "the tunnel watcher's interface allowlist is fixed when it is built",
+	"vpn.autoDetect":            "the tunnel watcher's interface allowlist is fixed when it is built",
 	"vpn.armAtBoot":             "arm-at-boot is a startup decision; it has already been taken",
 	"vpn.endpoints":             "endpoint resolution is wired up at startup",
 	"vpn.autoDiscoverEndpoints": "endpoint resolution is wired up at startup",
