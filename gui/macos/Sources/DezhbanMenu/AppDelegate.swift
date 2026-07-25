@@ -252,7 +252,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         // Switch window: connect a brand-new VPN whose server isn't known yet.
         // Time-critical mid-flow, and the countdown is glanceable — so it stays.
-        if let sw = s?.switch, sw.open {
+        // `switch --cancel` refuses to touch an open PAUSE (see the glossary's
+        // Pause entry) — `resume` is the only way to end one early, so a pause
+        // gets its own item instead of the generic Cancel one.
+        if let sw = s?.switch, sw.open, sw.isPause {
+            let left = max(0, sw.until.timeIntervalSinceNow)
+            addAction("Resume now (\(PostureUI.mmss(left)) left)", #selector(resumeNow), enabled: isRunning)
+                .toolTip = AppState.shared.routineHint("Ends the pause early and re-arms the guard.")
+        } else if let sw = s?.switch, sw.open {
             let left = max(0, sw.until.timeIntervalSinceNow)
             addAction("Cancel VPN switch (\(PostureUI.mmss(left)) left)", #selector(cancelSwitch),
                       enabled: isRunning)
@@ -260,6 +267,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
                 .toolTip = AppState.shared.routineHint("Briefly relaxes the guard so a new VPN can connect.")
+            let pauseEnabled = isRunning && AppState.shared.pauseIsEnabled
+            addAction("Pause — use my real IP", #selector(pauseNow), enabled: pauseEnabled)
+                .toolTip = pauseEnabled
+                    ? AppState.shared.routineHint("Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
+                    : "Disabled — vpn.pauseMax is \"0\" in your config."
         }
 
         // Panic is the lockout escape hatch: it must never depend on the main
@@ -296,6 +308,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func unblockNow() { AppActions.routine(["unblock"], "unblock") }
     @objc private func openSwitch() { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
     @objc private func cancelSwitch() { AppActions.routine(["switch", "--cancel"], "cancel the switch window") }
+    @objc private func pauseNow() { AppActions.routine(["pause"], "pause the guard") }
+    @objc private func resumeNow() { AppActions.routine(["resume"], "resume the guard") }
 
     /// Menubar panic: confirmation, then a direct privileged run with the result
     /// in an NSAlert (scrollable transcript) — deliberately NOT routed through

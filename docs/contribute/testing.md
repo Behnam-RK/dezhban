@@ -481,6 +481,13 @@ task gui:build && open dist/Dezhban.app
       switch window complete over the control socket with **no** prompt, from both
       the menubar and Overview; the switch countdown ticks in both surfaces and
       matches.
+- [ ] **Pause and Resume, from both surfaces.** Pause opens with no password
+      (`control.allowPauseOps` default true); the app shows "Resume now (m:ss
+      left)" in place of the switch-window Cancel item, and the countdown agrees
+      between menubar and Overview. Resuming early re-arms the guard immediately.
+      Letting a pause expire re-arms it with no action needed. With
+      `vpn.pauseMax: "0"`, Pause is disabled in both surfaces with a reason
+      ("vpn.pauseMax is \"0\""), not just a silent no-op.
 - [ ] **Privileged actions.** Start/Stop raise a native admin prompt (Touch ID or
       password), run, and the state reflects the result.
 - [ ] **Menubar panic works without the window.** From a fresh launch (main window

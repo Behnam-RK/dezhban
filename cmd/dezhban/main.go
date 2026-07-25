@@ -1752,6 +1752,12 @@ func statusJSON(cfg *config.Config) int {
 		StateAge         string          `json:"stateAge,omitempty"` // wall-clock age of the snapshot
 		PollInterval     string          `json:"pollInterval"`
 		BlockedCountries []string        `json:"blockedCountries"`
+		// PauseEnabled is whether `dezhban pause`/the control-socket pause op
+		// will do anything (vpn.pauseMax > 0). A consumer (the macOS app) uses
+		// this to grey out its own Pause control with a reason, advisory only —
+		// same convention as ControlReachable — since the CLI/daemon still
+		// refuse for real regardless of what this said last.
+		PauseEnabled bool `json:"pauseEnabled"`
 		// No `vpnEnabled`: with one enforcement model it could only ever be true,
 		// and a constant field invites consumers to branch on nothing. Read
 		// `state.posture` instead — that is where the real distinction lives.
@@ -1765,6 +1771,7 @@ func statusJSON(cfg *config.Config) int {
 		StatePath:        statePath,
 		PollInterval:     cfg.PollInterval.String(),
 		BlockedCountries: cfg.BlockedCountries,
+		PauseEnabled:     cfg.VPN.PauseMax > 0,
 	}
 	if snap, err := state.Read(statePath); err == nil {
 		out.State = &snap

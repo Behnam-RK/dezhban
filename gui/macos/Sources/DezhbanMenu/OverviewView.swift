@@ -38,8 +38,15 @@ struct OverviewView: View {
                     // window this is and gives its absolute deadline; this banner's
                     // only job is the live, second-by-second countdown, which has to
                     // stay client-side — a string persisted to state.json goes stale
-                    // the instant it's written.
-                    banner("Closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now)))", color: .orange)
+                    // the instant it's written. Pause gets its own wording and color
+                    // (blue, not amber — it's deliberate, not a warning) so it never
+                    // reads as an accidental exposure.
+                    let left = PostureUI.mmss(sw.until.timeIntervalSince(state.now))
+                    if sw.isPause {
+                        banner("Guard re-arms in \(left)", color: .blue)
+                    } else {
+                        banner("Closes in \(left)", color: .orange)
+                    }
                 }
 
                 detailsGrid(s)
@@ -141,7 +148,14 @@ struct OverviewView: View {
             Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
                 .disabled(!(blocked || guardHolds))
                 .help(state.routineHint("Releases a manual block and resumes monitoring."))
-            if let sw = s.switch, sw.open {
+            if let sw = s.switch, sw.open, sw.isPause {
+                // `switch --cancel` deliberately refuses to touch a pause (see the
+                // glossary's Pause entry) — `resume` is the only way to end one early.
+                Button("Resume now (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
+                    AppActions.routine(["resume"], "resume the guard")
+                }
+                .help(state.routineHint("Ends the pause early and re-arms the guard."))
+            } else if let sw = s.switch, sw.open {
                 Button("\(sw.isAutoRedial ? "Cancel redial window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
                     AppActions.routine(["switch", "--cancel"], "cancel the switch window")
                 }
@@ -149,6 +163,11 @@ struct OverviewView: View {
             } else {
                 Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
                     .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
+                Button("Pause — use my real IP") { AppActions.routine(["pause"], "pause the guard") }
+                    .disabled(!state.pauseIsEnabled)
+                    .help(state.pauseIsEnabled
+                        ? state.routineHint("Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
+                        : "Disabled — vpn.pauseMax is \"0\" in your config.")
             }
             Spacer()
             Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }

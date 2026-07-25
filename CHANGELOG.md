@@ -314,6 +314,16 @@ current as you land changes.
   the guard-holds-a-downed-tunnel case with an empty tunnel list (previously
   uncovered), and the settings-field seed/pairs round trip. CI gains a `gui`
   job (`macos-latest`) running `swift build` and `swift test`.
+- **Pause and Resume in the macOS app**, using the same `control.allowPauseOps`
+  socket op the CLI already had — no new daemon behaviour. Overview's action
+  row gains a **Pause — use my real IP** button (disabled with a reason when
+  `vpn.pauseMax: "0"`), and the menubar dropdown gets the same pair. While a
+  pause is open both surfaces show **Resume now (m:ss left)** instead of the
+  switch-window Cancel item — `switch --cancel` refuses to touch a pause by
+  design — and the countdown banner reads "Guard re-arms in …" in blue rather
+  than the switch window's amber "Closes in …", since a pause is deliberate,
+  not a warning. `status --json` gains `pauseEnabled` so the app doesn't have
+  to shell out separately to read `vpn.pauseMax`.
 
 ## [0.7.0] - 2026-07-22
 

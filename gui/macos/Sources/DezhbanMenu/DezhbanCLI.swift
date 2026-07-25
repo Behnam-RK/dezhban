@@ -234,6 +234,7 @@ enum DezhbanCLI {
     private struct StatusJSON: Decodable {
         let service: String
         let controlReachable: Bool
+        let pauseEnabled: Bool
     }
 
     private static func readStatusJSON() -> StatusJSON? {
@@ -257,6 +258,14 @@ enum DezhbanCLI {
     /// that could drift from the CLI's.
     static func serviceInstalled() -> Bool {
         readStatusJSON()?.service.hasPrefix("installed") ?? false
+    }
+
+    /// Whether `dezhban pause` would do anything (`vpn.pauseMax` > 0), per
+    /// `status --json`'s `pauseEnabled`. Advisory only, same convention as
+    /// `daemonControlReachable`: the CLI/daemon still refuse for real if this
+    /// read is stale, so it only ever costs a wrong hint, never a wrong action.
+    static func pauseEnabled() -> Bool {
+        readStatusJSON()?.pauseEnabled ?? false
     }
 
     /// Memoization for `resolvedConfigPath()`. The resolved value is stable for the

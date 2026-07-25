@@ -105,6 +105,10 @@ final class AppState: ObservableObject {
     /// (tooltips/hints): the actions themselves probe for real, so a stale value
     /// can never cause a wrong action, just a wrong hint.
     @Published var controlIsReachable = false
+    /// Whether `vpn.pauseMax` is nonzero, i.e. whether Pause would do anything.
+    /// Advisory only, same convention as `controlIsReachable` — `dezhban pause`
+    /// still refuses for real if this cache is stale.
+    @Published var pauseIsEnabled = true
     @Published var selectedSection: SidebarSection? = .overview
     /// Last update check result (nil: none run yet, or the last one found
     /// nothing worth reporting — see UpdateChecker.check's doc comment on why
@@ -146,9 +150,11 @@ final class AppState: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let installed = DezhbanCLI.serviceInstalled()
             let control = DezhbanCLI.daemonControlReachable()
+            let pause = DezhbanCLI.pauseEnabled()
             DispatchQueue.main.async {
                 self?.serviceIsInstalled = installed
                 self?.controlIsReachable = control
+                self?.pauseIsEnabled = pause
             }
         }
     }
