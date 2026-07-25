@@ -259,6 +259,19 @@ func resolveConfigPath(flagVal string) string {
 	return ""
 }
 
+// stampAndRender finalizes a snapshot the way the daemon's publish closure
+// does: stamping the running build version and attaching the rendered
+// Display, so a state.json (and therefore status --json and the menubar app)
+// never carries a Display computed from a different Snapshot than the one it
+// sits beside. Factored out of the closure in cmdRun so it can be tested
+// without standing up the whole run loop.
+func stampAndRender(s state.Snapshot, version string) state.Snapshot {
+	s.Version = version
+	d := render.Text(s)
+	s.Display = &state.Display{Key: d.Key, Headline: d.Headline, Detail: d.Detail}
+	return s
+}
+
 func cmdRun(args []string) int {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
@@ -473,13 +486,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	// at debug and never affects enforcement.
 	statePath := defaultStatePath()
 	publish := func(s state.Snapshot) {
-		// Stamp the running version here rather than in runner: this closure is
-		// the single choke point every snapshot passes through (including the
-		// terminal publishStopped one), and the build identity belongs to the
-		// binary, not to the enforcement loop. `upgrade apply` reads it back to
-		// tell a still-pending activation from one that already landed — see
-		// state.Snapshot.Version.
-		s.Version = buildStamp.Version
+		s = stampAndRender(s, buildStamp.Version)
 		if err := state.Write(statePath, s); err != nil {
 			log.Debug("state publish failed", "path", statePath, "err", err)
 		}

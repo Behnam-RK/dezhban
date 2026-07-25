@@ -84,6 +84,28 @@ type Snapshot struct {
 	// Pending describes a posture change the daemon is counting toward but has
 	// not committed, present only while a hysteresis streak is running.
 	Pending *PendingFlip `json:"pending,omitempty"`
+	// Display is the rendered posture sentence — see internal/render, the
+	// package that composes it from this same Snapshot. Carried here for the
+	// one consumer that cannot call Go directly: the macOS menubar app reads
+	// it instead of composing its own prose, so the CLI, the state file, and
+	// the app always say the same thing. Additive field, like Version and
+	// Trigger: absent from a snapshot written before this field existed, or
+	// from one written by test code that built a Snapshot by hand — observers
+	// must treat a nil Display as unknown, not as "nothing to report".
+	Display *Display `json:"display,omitempty"`
+}
+
+// Display is the rendered form of a Snapshot: a short machine-readable key
+// (also a PNG filename component in the macOS app: menubar-state-<key>.png,
+// dock-state-<key>.png) alongside the headline and detail sentences.
+// internal/state cannot import internal/render (render already imports
+// state, to take a Snapshot as input), so this is a plain mirror of
+// render.Display that the daemon's Publish closure populates by converting
+// one into the other — see cmd/dezhban's publish func.
+type Display struct {
+	Key      string `json:"key"`
+	Headline string `json:"headline"`
+	Detail   string `json:"detail"`
 }
 
 // PendingFlip is a posture change under way: hysteresis requires Need
