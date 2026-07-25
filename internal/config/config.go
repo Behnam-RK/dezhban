@@ -355,6 +355,33 @@ type fileVPN struct {
 	Advanced              *fileAdvanced `json:"advanced,omitempty"`
 }
 
+// UnmarshalJSON honors the pre-rename "vpn.autodetect" key for one release as a
+// deprecated alias of AutoDetect, when the new key is absent. Without this, a
+// config written before the rename has its AutoDetect setting silently
+// discarded and replaced with the (relaxing, since it defaults true) shipped
+// default the moment it's loaded — exactly the "security setting accepted and
+// discarded" failure unknown.go's doc comment names as the worst this
+// codebase can have. unknownKeys/describeUnknown still report "vpn.autodetect"
+// as renamed (they walk the raw JSON independently of this method), so the
+// warning survives even though the value now also takes effect.
+func (v *fileVPN) UnmarshalJSON(data []byte) error {
+	type alias fileVPN
+	var a alias
+	if err := json.Unmarshal(data, &a); err != nil {
+		return err
+	}
+	*v = fileVPN(a)
+	if v.AutoDetect == nil {
+		var legacy struct {
+			Autodetect *bool `json:"autodetect"`
+		}
+		if err := json.Unmarshal(data, &legacy); err == nil {
+			v.AutoDetect = legacy.Autodetect
+		}
+	}
+	return nil
+}
+
 type fileProfile struct {
 	Name       string   `json:"name"`
 	Endpoints  []string `json:"endpoints"`

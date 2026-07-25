@@ -155,14 +155,15 @@ final class AppState: ObservableObject {
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let installed = DezhbanCLI.serviceInstalled()
-            let control = DezhbanCLI.daemonControlReachable()
-            let pause = DezhbanCLI.pauseEnabled()
+            // One `status --json` subprocess for all three fields, instead of
+            // one subprocess per field (each of which used to probe the
+            // control socket independently on top of that).
+            let status = DezhbanCLI.readStatusJSON()
             let profiles = DezhbanCLI.readProfiles()
             DispatchQueue.main.async {
-                self?.serviceIsInstalled = installed
-                self?.controlIsReachable = control
-                self?.pauseIsEnabled = pause
+                self?.serviceIsInstalled = status?.serviceInstalled ?? false
+                self?.controlIsReachable = status?.controlReachable ?? false
+                self?.pauseIsEnabled = status?.pauseEnabled ?? false
                 self?.profiles = profiles
             }
         }

@@ -189,3 +189,48 @@ func TestText(t *testing.T) {
 		})
 	}
 }
+
+// TestTextEnforcementErrWinsOverUnknownPosture pins that a snapshot carrying
+// EnforcementErr short-circuits before postureDisplay ever runs, even for a
+// posture string this package does not recognise — the error is more urgent
+// than any posture prose, recognised or not.
+func TestTextEnforcementErrWinsOverUnknownPosture(t *testing.T) {
+	got := Text(state.Snapshot{Posture: "some-future-posture", EnforcementErr: "backend refused"})
+	if got.Key != KeyWarning || got.Headline != "Enforcement failed" || got.Detail != "backend refused" {
+		t.Errorf("got %+v, want the enforcement-failed display regardless of posture", got)
+	}
+}
+
+func TestStaleThreshold(t *testing.T) {
+	cases := []struct {
+		name string
+		poll int
+		want time.Duration
+	}{
+		{"absent poll interval falls back to the floor", 0, StaleFloor},
+		{"short poll interval still floors at StaleFloor", 5, StaleFloor},
+		{"long poll interval scales 3x", 60, 180 * time.Second},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := StaleThreshold(state.Snapshot{PollIntervalSeconds: tc.poll})
+			if got != tc.want {
+				t.Errorf("StaleThreshold(poll=%d) = %v, want %v", tc.poll, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsStale(t *testing.T) {
+	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
+
+	fresh := state.Snapshot{Time: now.Add(-30 * time.Second), PollIntervalSeconds: 15}
+	if IsStale(fresh, now) {
+		t.Error("a snapshot well within its threshold should not read as stale")
+	}
+
+	dead := state.Snapshot{Time: now.Add(-time.Hour), PollIntervalSeconds: 15}
+	if !IsStale(dead, now) {
+		t.Error("a snapshot an hour old (crashed/SIGKILLed daemon) should read as stale")
+	}
+}

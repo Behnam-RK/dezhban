@@ -303,7 +303,16 @@ struct SettingsView: View {
         let alert = NSAlert()
         alert.alertStyle = .warning
         alert.messageText = "Apply the \(p.name.capitalized) preset?"
-        alert.informativeText = "\(p.summary)\n\nCost: \(p.cost)"
+        var text = "\(p.summary)\n\nCost: \(p.cost)"
+        if hasUnsavedEdits {
+            // Applying writes the preset's values to disk and then re-seeds
+            // from what actually landed (see below) — silently discarding
+            // whatever the user had typed into the fields but not yet saved.
+            // Name that loss here rather than only in the cost line, which
+            // talks about the preset's trade-offs, not the pane's own state.
+            text += "\n\nYou have unsaved changes in this pane — applying a preset will discard them."
+        }
+        alert.informativeText = text
         alert.addButton(withTitle: "Apply")
         alert.addButton(withTitle: "Cancel")
         guard alert.runModal() == .alertFirstButtonReturn else { return }

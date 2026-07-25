@@ -822,6 +822,15 @@ func configPreset(flagVal string, args []string, useToken bool) int {
 	case "diff":
 		return presetDiffCmd(flagVal, rest, jsonOut)
 	case "apply":
+		if jsonOut {
+			// --json is only meaningful for a command that prints something to
+			// format — apply's output is the ordinary "set k = v" lines `config
+			// set` already prints, not a JSON-able report. Rejecting a flag
+			// that would otherwise be silently ignored beats a script believing
+			// it asked for machine-readable output and got prose instead.
+			fmt.Fprintln(os.Stderr, "config preset apply does not support --json")
+			return 2
+		}
 		return presetApply(flagVal, rest, useToken)
 	case "-h", "--help", "help":
 		fmt.Println(presetUsage)

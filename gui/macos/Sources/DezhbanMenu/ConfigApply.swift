@@ -113,7 +113,7 @@ enum ConfigApply {
                                        transcriptTitle: nil, transcript: nil))
                     return
                 }
-                restartNow(awaitPosture: awaitPosture, title: title, completion: completion)
+                restartNow(awaitPosture: awaitPosture, title: title, savedFirst: true, completion: completion)
             }
         }
     }
@@ -225,7 +225,12 @@ enum ConfigApply {
     /// bundled into every config change. Internal (not private): also the entry
     /// point for the Settings pane's standalone "Restart dezhban" button, which
     /// calls this directly rather than only ever reaching it through `apply`.
-    static func restartNow(awaitPosture: Bool, title: String,
+    ///
+    /// `savedFirst` distinguishes those two callers in the failure message only:
+    /// `apply` already wrote the config before calling this, so its failure is
+    /// "saved, but the restart failed"; the standalone button wrote nothing, so
+    /// saying "Saved" there would claim a write that never happened.
+    static func restartNow(awaitPosture: Bool, title: String, savedFirst: Bool = false,
                            completion: @escaping (Outcome) -> Void) {
         // Marked BEFORE the restart: only a snapshot published after this instant
         // can have come from the new daemon.
@@ -236,8 +241,9 @@ enum ConfigApply {
             // path was baked in at install time.
             let result = DezhbanCLI.runPrivileged(batch: [["restart"]])
             guard result.ok else {
+                let status = savedFirst ? "Saved, but the restart failed — see output." : "Restart failed — see output."
                 DispatchQueue.main.async {
-                    completion(Outcome(ok: false, status: "Saved, but the restart failed — see output.",
+                    completion(Outcome(ok: false, status: status,
                                        transcriptTitle: "\(title) — restart failed", transcript: result.output))
                 }
                 return

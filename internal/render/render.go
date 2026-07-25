@@ -61,17 +61,49 @@ type Display struct {
 // a posture string it does not recognise (an older or newer daemon), so a
 // caller never needs its own fallback.
 func Text(s state.Snapshot) Display {
-	d := postureDisplay(s)
 	if s.EnforcementErr != "" {
 		// Wins over posture: the daemon tried to enforce and the backend
 		// refused, so posture/blocked describe the data plane truthfully but
 		// the intended posture was not achieved. That is more urgent than
-		// whatever the intended posture was.
+		// whatever the intended posture was, so there is no point deriving
+		// its display just to discard it.
 		return Display{Key: KeyWarning, Headline: "Enforcement failed", Detail: s.EnforcementErr}
 	}
+	d := postureDisplay(s)
 	d.Detail = joinSentences(d.Detail, lookupNote(s))
 	d.Detail = joinSentences(d.Detail, pendingNote(s.Pending))
 	return d
+}
+
+// StaleFloor is the minimum staleness budget, regardless of poll cadence.
+// Mirrors DezhbanCore's PostureUI.staleFloor (Swift) — 90s tolerates a couple
+// of missed default-cadence poll cycles without a live daemon reading as dead.
+const StaleFloor = 90 * time.Second
+
+// StaleThreshold is the age past which a Snapshot should be treated as no
+// longer trustworthy: 3x the daemon's own poll cadence (so a deliberately
+// long pollInterval doesn't make an enforcing daemon read as stopped between
+// polls), floored at StaleFloor, or StaleFloor alone when PollIntervalSeconds
+// is absent (an older daemon, or one that hasn't published yet). Mirrors
+// PostureUI.staleThreshold — kept as one implementation here rather than a
+// second copy in cmd/dezhban, since both need the identical rule to agree
+// with the GUI on what "the daemon looks alive" means.
+func StaleThreshold(s state.Snapshot) time.Duration {
+	if s.PollIntervalSeconds <= 0 {
+		return StaleFloor
+	}
+	if d := time.Duration(s.PollIntervalSeconds) * time.Second * 3; d > StaleFloor {
+		return d
+	}
+	return StaleFloor
+}
+
+// IsStale reports whether a Snapshot is older than its StaleThreshold as of
+// now — a crashed or SIGKILLed daemon leaves its last posture on disk
+// indefinitely, so a caller that only checks state.Read's error (as `status`
+// used to) will keep reporting "Guarding" long after enforcement stopped.
+func IsStale(s state.Snapshot, now time.Time) bool {
+	return now.Sub(s.Time) > StaleThreshold(s)
 }
 
 func postureDisplay(s state.Snapshot) Display {

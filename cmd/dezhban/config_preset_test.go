@@ -82,6 +82,20 @@ func TestConfigPresetApplyUnknownNameFails(t *testing.T) {
 	}
 }
 
+// apply's output is the ordinary "set k = v" lines `config set` prints, not a
+// JSON-able report — --json is rejected rather than silently ignored, so a
+// script can't believe it asked for machine-readable output and get prose.
+func TestConfigPresetApplyRejectsJSON(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if code := cmdConfig([]string{"preset", "apply", "strict", "--json", "--config", p}); code != 2 {
+		t.Fatalf("preset apply --json exited %d, want 2", code)
+	}
+}
+
 func TestConfigPresetListJSONReportsMatch(t *testing.T) {
 	p := filepath.Join(t.TempDir(), "c.json")
 	cfg := config.Default()
@@ -169,5 +183,39 @@ func TestConfigPresetDiffNamedPresetNoDriftWhenExact(t *testing.T) {
 	})
 	if !strings.Contains(out, "no drift from balanced") {
 		t.Errorf("expected no drift for a fresh default config against balanced:\n%s", out)
+	}
+}
+
+// This package's configFields setters and internal/config's presetSetters are
+// two independent implementations of the same eight keys (preset.go documents
+// the duplication as deliberate, to avoid a reverse dependency on cmd/dezhban).
+// Nothing else pins that they agree: if they drifted, `preset apply` would
+// write one set of values while `preset diff`/`preset list --json`'s `matched`
+// flag (what the GUI's preset picker checkmark reads) judged against another,
+// so a user could apply Strict and still see "Custom" with drift they have no
+// way to clear. Round-tripping every shipped preset through the real `preset
+// apply` command and asking config.MatchPreset whether it landed closes that
+// gap.
+func TestConfigPresetApplyMatchesItself(t *testing.T) {
+	for _, p := range config.Presets() {
+		t.Run(p.Name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "c.json")
+			cfg := config.Default()
+			cfg.VPN.Endpoints = []string{"203.0.113.9"}
+			if err := config.Save(path, &cfg); err != nil {
+				t.Fatal(err)
+			}
+			if code := cmdConfig([]string{"preset", "apply", p.Name, "--config", path}); code != 0 {
+				t.Fatalf("preset apply %s exited %d, want 0", p.Name, code)
+			}
+			got, err := config.Load(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name, exact := config.MatchPreset(got); !exact || name != p.Name {
+				t.Errorf("after applying %s, MatchPreset = (%q, %v); the CLI's setters and "+
+					"internal/config's presetSetters have drifted apart", p.Name, name, exact)
+			}
+		})
 	}
 }

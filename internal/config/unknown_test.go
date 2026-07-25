@@ -89,6 +89,38 @@ func TestRenamedAutodetectPointsAtItsReplacement(t *testing.T) {
 	}
 }
 
+// A rename with no compatibility shim silently reverts the setting to its
+// default the moment an old config is loaded — for vpn.autodetect that default
+// is true (relaxing), so an operator who deliberately wrote "autodetect": false
+// would have that turned back on without a word. fileVPN.UnmarshalJSON honors
+// the old key for one release when the new one is absent, so the value still
+// takes effect while the rename is still reported (pinned above).
+func TestLegacyAutodetectKeyStillTakesEffect(t *testing.T) {
+	cfg := loadFromJSON(t, `{"vpn": {"autodetect": false}}`)
+	if cfg.VPN.AutoDetect {
+		t.Error("the legacy vpn.autodetect=false was not honored; AutoDetect defaulted back to true")
+	}
+
+	var found bool
+	for _, r := range cfg.Retired {
+		if r.Key == "vpn.autodetect" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("vpn.autodetect should still be reported as renamed even though its value took effect; reported: %v", retiredKeys(cfg))
+	}
+}
+
+// The new key always wins when both are present — the alias is a fallback,
+// not a merge.
+func TestNewAutoDetectKeyWinsOverLegacyAlias(t *testing.T) {
+	cfg := loadFromJSON(t, `{"vpn": {"autodetect": true, "autoDetect": false}}`)
+	if cfg.VPN.AutoDetect {
+		t.Error("vpn.autoDetect=false should win over the legacy vpn.autodetect=true")
+	}
+}
+
 // The failure this guards against for array-valued keys: vpn.profiles is a
 // []object, and walkUnknown used to only recurse into map[string]any, so a
 // typo or a renamed key inside a profile was silently dropped — the very

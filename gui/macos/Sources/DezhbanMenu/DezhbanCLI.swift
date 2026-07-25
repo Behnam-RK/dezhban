@@ -144,11 +144,15 @@ enum DezhbanCLI {
         return elevate("out=$( { set -e; \(steps.joined(separator: "; ")); } 2>&1 )")
     }
 
-    /// Quotes tokens for `do shell script`. Defense in depth: the binary is a trusted
-    /// absolute path and the args are hardcoded literals, but this runs as root, so
-    /// refuse any token carrying a single quote or backslash rather than risk breaking
-    /// out of the quoting into an injection. (argv-without-a-shell isn't available
-    /// through NSAppleScript's `do shell script`.) Returns nil on a rejected token.
+    /// Quotes tokens for `do shell script`. Defense in depth: the binary is always a
+    /// trusted absolute path, but the args are no longer only hardcoded literals —
+    /// `SettingsFields.pairs()` routes user-typed values (profile names, config
+    /// values) through here too — and this runs as root, so refuse any token
+    /// carrying a single quote or backslash rather than risk breaking out of the
+    /// quoting into an injection. (argv-without-a-shell isn't available through
+    /// NSAppleScript's `do shell script`.) Returns nil on a rejected token, which
+    /// callers report as a refusal rather than attempting the command some other
+    /// way — a value containing a quote or backslash will not go through.
     private static func shellQuote(_ tokens: [String]) -> String? {
         guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else { return nil }
         return tokens.map { "'\($0)'" }.joined(separator: " ")
@@ -232,41 +236,29 @@ enum DezhbanCLI {
 
     /// Merged fields from `status --json` that the app needs but the daemon's
     /// Snapshot itself doesn't carry (those come from Snapshot/Display instead).
-    private struct StatusJSON: Decodable {
+    /// Not private: `AppState.refreshServiceState` reads it directly so a single
+    /// refresh spends one `status --json` subprocess instead of one per field.
+    struct StatusJSON: Decodable {
         let service: String
         let controlReachable: Bool
         let pauseEnabled: Bool
+
+        /// `installed`, derived from `service`'s merged field (itself
+        /// `internal/svc.Status()`) — the single source of truth, so the GUI
+        /// never invents its own notion of "installed" that could drift from
+        /// the CLI's.
+        var serviceInstalled: Bool { service.hasPrefix("installed") }
     }
 
-    private static func readStatusJSON() -> StatusJSON? {
+    /// Reads `status --json` once. Callers wanting more than one of its fields
+    /// (control reachability, service install state, pause availability)
+    /// should call this once and read every field off the result, rather than
+    /// each spending its own subprocess for the same command.
+    static func readStatusJSON() -> StatusJSON? {
         guard let bin = binaryPath() else { return nil }
         let r = exec(bin, ["status", "--json"])
         guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
         return try? JSONDecoder().decode(StatusJSON.self, from: data)
-    }
-
-    /// Whether the daemon's control socket is answering — i.e. whether routine ops
-    /// will go through without a password. Reads `status --json`'s
-    /// `controlReachable` field, so the GUI and the CLI agree on one source of
-    /// truth without the app scraping a human sentence for a substring.
-    static func daemonControlReachable() -> Bool {
-        readStatusJSON()?.controlReachable ?? false
-    }
-
-    /// Whether the OS service is currently registered, per `status --json`'s
-    /// merged service field (itself `internal/svc.Status()`) — the single
-    /// source of truth, so the GUI never invents its own notion of "installed"
-    /// that could drift from the CLI's.
-    static func serviceInstalled() -> Bool {
-        readStatusJSON()?.service.hasPrefix("installed") ?? false
-    }
-
-    /// Whether `dezhban pause` would do anything (`vpn.pauseMax` > 0), per
-    /// `status --json`'s `pauseEnabled`. Advisory only, same convention as
-    /// `daemonControlReachable`: the CLI/daemon still refuse for real if this
-    /// read is stale, so it only ever costs a wrong hint, never a wrong action.
-    static func pauseEnabled() -> Bool {
-        readStatusJSON()?.pauseEnabled ?? false
     }
 
     /// Reads the configured VPN profiles from `config show`'s `vpn` block —

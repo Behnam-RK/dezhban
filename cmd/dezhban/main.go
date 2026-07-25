@@ -1818,7 +1818,16 @@ func cmdStatus(args []string) int {
 
 	fmt.Println(buildStamp.line())
 	snap, staterr := state.Read(defaultStatePath())
-	if staterr != nil {
+	switch {
+	case staterr != nil:
+		snap = state.Snapshot{Posture: render.PostureStopped}
+	case render.IsStale(snap, time.Now()):
+		// A crashed or SIGKILLed daemon leaves its last posture on disk
+		// indefinitely — state.Read succeeding is not evidence anything is
+		// still enforcing. Same staleness rule the macOS app's PostureUI
+		// uses for its icon, so the CLI and the GUI agree on what "alive"
+		// means rather than this headline saying "Guarding" while the
+		// service line two rows down says otherwise.
 		snap = state.Snapshot{Posture: render.PostureStopped}
 	}
 	disp := render.Text(snap)

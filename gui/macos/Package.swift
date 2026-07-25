@@ -7,11 +7,14 @@ import PackageDescription
 // intentionally separate from the Go module so the Go binary stays 100%
 // dependency-free. `build-app.sh` wraps `swift build` and assembles Dezhban.app.
 //
-// DezhbanCore holds the pure, AppKit-free layer (Snapshot decoding,
+// DezhbanCore holds the app's testable logic layer (Snapshot decoding,
 // posture→icon derivation, settings-field batching, duration text) — split out
 // specifically so it can be unit-tested: an .executableTarget cannot be
-// `@testable import`ed. DezhbanMenu is the executable (AppKit/SwiftUI, CLI
-// shell-out, elevation) and imports DezhbanCore.
+// `@testable import`ed. It still imports AppKit/SwiftUI for the bits that are
+// pure functions of their input despite that (NSImage/Color lookups, no
+// subprocess or global state) — the split is about testability, not about
+// which frameworks a file may import. DezhbanMenu is the executable (CLI
+// shell-out, elevation, app lifecycle) and imports DezhbanCore.
 let package = Package(
     name: "DezhbanMenu",
     platforms: [.macOS(.v13)], // SMAppService (login item) needs macOS 13+
