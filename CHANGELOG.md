@@ -300,6 +300,21 @@ current as you land changes.
   and this is what makes the `ifaceHint` → `tunnelHint` rename above reportable
   at all.
 
+### Added
+
+- **`DezhbanCore`, a new Swift Package Manager library target** holding the
+  macOS app's pure, AppKit-free layer — Snapshot decoding, posture→icon
+  derivation, and settings-field batching — split out of the `DezhbanMenu`
+  executable specifically so it can be unit-tested (an `.executableTarget`
+  cannot be `@testable import`ed). `DezhbanMenu` is unchanged behaviourally;
+  it now imports `DezhbanCore` instead of defining these types itself.
+- **The macOS app's first automated tests**, in a new `DezhbanCoreTests`
+  target: Snapshot decoding (both RFC3339 date forms, an old daemon's
+  `display`-less snapshot, corrupt data), every posture→icon mapping including
+  the guard-holds-a-downed-tunnel case with an empty tunnel list (previously
+  uncovered), and the settings-field seed/pairs round trip. CI gains a `gui`
+  job (`macos-latest`) running `swift build` and `swift test`.
+
 ## [0.7.0] - 2026-07-22
 
 ### Added

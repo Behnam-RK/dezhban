@@ -1,4 +1,5 @@
 import SwiftUI
+import DezhbanCore
 
 /// Real-data About pane: version, resolved config path, binary path, the
 /// enforcement posture (from the shared snapshot), whether the OS service is

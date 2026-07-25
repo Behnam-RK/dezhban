@@ -21,7 +21,13 @@ These gate everything else and should be green before you touch a firewall:
 ```sh
 go build ./... && go vet ./... && go test ./...
 GOOS=linux go build ./... && GOOS=windows go build ./...
+swift build --package-path gui/macos && swift test --package-path gui/macos
 ```
+
+`swift test` covers `DezhbanCore` — the pure, AppKit-free layer (Snapshot
+decoding, posture→icon derivation, settings-field batching). `DezhbanMenu`
+itself (the AppKit/SwiftUI executable, elevation, CLI shell-out) has no test
+target — see Known gaps.
 
 ## Enforcement — all platforms
 
@@ -319,8 +325,8 @@ daemon's *behaviour* afterwards, never about what the file says.
       immediately (`pfctl -a dezhban -sr` / `nft list table inet dezhban`), not
       only after the next posture change.
 - [ ] **An unrelated edit does not reset a pending flip.** With a forbidden exit
-      and `hysteresis: 3`, wait for `status` to report `in progress: escalating to
-      full block (1 of 3 …)`, then `dezhban config set pollInterval 15s` → the
+      and `hysteresis: 3`, wait for `status` to report `Escalating to full block —
+      1 of 3 confirming checks.`, then `dezhban config set pollInterval 15s` → the
       count keeps climbing from where it was. Then change `blockedCountries` and
       confirm the count *does* restart, which is the one case where it should.
 - [ ] **No daemon running.** The write still succeeds and says so; the values are
@@ -333,8 +339,8 @@ Privileged, on a real host with a real VPN. The point of these checks is the
 
 - [ ] **Progress is visible.** Force FULL BLOCK (`--simulate-country IR`, or a
       real forbidden exit), then redial onto an allowed exit → `dezhban status`
-      shows "in progress: restoring the guard (1 of 2 agreeing readings)" and the
-      app's Overview shows the same count, before the posture changes.
+      shows "Restoring the guard — 1 of 2 confirming checks." and the app's
+      Overview shows the same count, before the posture changes.
 - [ ] **It is fast.** The guard comes back within seconds of the tunnel coming
       up, not after a full `pollInterval` × `hysteresis`.
 - [ ] **Hysteresis still gates it.** With `hysteresis: 3`, a single allowed
@@ -589,3 +595,7 @@ These are deliberate, not oversights:
   through Authorization Services instead (which does cache, so consecutive actions
   are usually silent).
 - **Offline mmdb country lookup.** Deferred — country resolution is online-only.
+- **The app's AppKit/SwiftUI layer (`DezhbanMenu`) is untested.** Only the pure
+  layer split into `DezhbanCore` (Snapshot decoding, posture→icon derivation,
+  settings-field batching) has a test target; the views, elevation, and CLI
+  shell-out are still verified only by the manual checklists above.

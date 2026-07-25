@@ -1,4 +1,5 @@
 import AppKit
+import DezhbanCore
 
 /// AppDelegate owns the menubar item — the safety/glance surface. A 1-second
 /// timer reads the daemon's state file (a tiny local read — no geo-API polling

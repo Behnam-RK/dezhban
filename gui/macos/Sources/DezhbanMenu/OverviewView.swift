@@ -1,4 +1,5 @@
 import SwiftUI
+import DezhbanCore
 
 /// The window's primary pane: a live status hero, the daily controls, and the
 /// panic escape hatch. Degraded states (CLI missing / service not installed /
