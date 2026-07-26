@@ -63,4 +63,58 @@ struct SnapshotTests {
         let json = "{ \"time\": \"2026-07-25T10:00:00Z\" }".data(using: .utf8)!
         #expect(StateReader.decode(json) == nil)
     }
+
+    /// The drop record is what lets the app report a VPN drop at all, so it has
+    /// to survive decoding — including across a window, which is precisely when
+    /// the posture alone says nothing about the drop.
+    @Test func decodesTheDropRecordCarriedThroughAWindow() {
+        let json = """
+        {
+          "time": "2026-07-25T10:00:05Z", "posture": "switch-window", "blocked": false,
+          "switch": { "open": true, "until": "2026-07-25T10:00:35Z", "trigger": "auto" },
+          "drop": { "at": "2026-07-25T10:00:00Z", "cut": true }
+        }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.drop?.cut == true)
+        #expect(s.switch?.isAutoRedial == true)
+        // The drop happened before the window it opened, and the two timestamps
+        // must not be confused for one another.
+        let dropAt = try! #require(s.drop?.at)
+        let until = try! #require(s.switch?.until)
+        #expect(dropAt < until)
+        #expect(dropAt < s.time)
+    }
+
+    /// A drop in standby is not a cut — nothing was being enforced — and the app
+    /// must not claim otherwise.
+    @Test func aStandbyDropIsNotACut() {
+        let json = """
+        { "time": "2026-07-25T10:00:05Z", "posture": "standby", "blocked": false,
+          "drop": { "at": "2026-07-25T10:00:00Z", "cut": false } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.drop?.cut == false)
+    }
+
+    @Test func decodesHoldTheLineArmed() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "hold": { "armed": true, "at": "2026-07-25T09:59:00Z" } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.holdArmed)
+    }
+
+    /// Both fields are additive: a daemon that predates them, or one where
+    /// nothing is armed and nothing has dropped, must still decode. Absent must
+    /// read as "not armed", never as a decode failure.
+    @Test func absentDropAndHoldAreNotAFailure() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.drop == nil)
+        #expect(!s.holdArmed)
+    }
 }

@@ -282,6 +282,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     return AppState.shared.routineHint(
                         "Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
                 }()
+
+            // The mirror image of Pause, and placed beside it so the pair reads
+            // as the two answers to "I am about to change my VPN situation":
+            // pause = let me use my real IP, hold the line = keep me cut.
+            // It only ever suppresses a relaxation, so it is safe to offer
+            // whenever the daemon is running.
+            if s?.holdArmed ?? false {
+                addAction("Don’t hold the line", #selector(cancelHold), enabled: isRunning)
+                    .toolTip = "Armed — the next VPN drop stays cut. Choose this to let it redial normally instead."
+            } else {
+                addAction("Hold the line — keep me cut", #selector(holdLine), enabled: isRunning)
+                    .toolTip = isRunning
+                        ? AppState.shared.routineHint(
+                            "For when YOU are disconnecting: the next VPN drop stays cut instead of "
+                                + "opening a window so it can redial.")
+                        : "Unavailable — dezhban isn’t running. Start it first."
+            }
         }
 
         // Panic is the lockout escape hatch: it must never depend on the main
@@ -320,6 +337,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func cancelSwitch() { AppActions.routine(["switch", "--cancel"], "cancel the switch window") }
     @objc private func pauseNow() { AppActions.routine(["pause"], "pause the guard") }
     @objc private func resumeNow() { AppActions.routine(["resume"], "resume the guard") }
+    @objc private func holdLine() { AppActions.routine(["hold"], "hold the line") }
+    @objc private func cancelHold() { AppActions.routine(["hold", "--cancel"], "cancel hold the line") }
 
     /// Menubar panic: confirmation, then a direct privileged run with the result
     /// in an NSAlert (scrollable transcript) — deliberately NOT routed through
