@@ -137,6 +137,19 @@ current as you land changes.
 
 ### Changed
 
+- **The macOS menubar is a glance and the actions that are urgent when you look
+  at it** — the posture line, the switch or pause countdown, hold the line, and
+  Open Dezhban. **Block now and Unblock have moved into the window's Overview**:
+  someone who wants to cut their own internet can turn off Wi-Fi, so blocking by
+  hand is a power-user and debugging affordance rather than part of the routine
+  flow.
+
+  **Panic now sits behind the Option key**, as the alternate to "Open Dezhban…" —
+  hold ⌥ and the item becomes "Panic — force unblock…", or press ⌘⌥O. It stays
+  in the menubar on purpose, because the moment it is needed is the moment the
+  main window may not open; it is one keystroke away rather than one slip away
+  in a menu people open to check a countdown.
+
 - **A pause longer than `vpn.pauseMax` is now refused and explained, instead of
   silently shortened to the cap.** Asking for an hour against a 30-minute cap
   used to grant thirty minutes and report success, which is indistinguishable

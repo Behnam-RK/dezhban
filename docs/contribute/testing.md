@@ -490,9 +490,14 @@ task gui:build && open dist/Dezhban.app
 
 ### Surfaces & window lifecycle
 
-- [ ] **Menubar is the safety core only.** The dropdown shows exactly: one status
-      line, Open Dezhban… (⌘O), Block now, Unblock, the switch item (VPN mode),
-      Panic — force unblock…, Quit. Nothing else.
+- [ ] **Menubar is a glance and the time-critical set only.** The dropdown shows
+      exactly: one status line, Open Dezhban… (⌘O), the switch/pause item with
+      its live countdown, hold the line, Quit. **No Block or Unblock** — those
+      live in the window's Overview.
+- [ ] **Panic is behind ⌥.** Holding Option swaps "Open Dezhban…" for "Panic —
+      force unblock…"; ⌘⌥O fires it; releasing Option restores the open item. It
+      still works with the daemon stopped and with the main window unable to
+      open.
 - [ ] **Window opening.** "Open Dezhban…" and a Dock-icon click both open/focus
       the main window; a fresh app launch opens **no** window (menubar + Dock
       only); closing the window (⌘W) leaves the app and icon running.
