@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -125,6 +126,41 @@ func cmdSwitch(args []string) int {
 // itself with no further action. For deliberately, temporarily using the real
 // ISP IP — e.g. a sanctioned-country-only service the VPN's exit can't reach —
 // without leaving protection off by mistake afterward.
+// pauseList prints the offered pause lengths. Options above vpn.pauseMax are
+// listed as unavailable with the reason rather than hidden: a user whose cap
+// forbids two hours should learn that from the list, not from a refusal after
+// they have chosen.
+func pauseList(cfgPath string, jsonOut bool) int {
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pause --list:", err)
+		return 1
+	}
+	opts := config.PauseOptions(cfg)
+
+	if jsonOut {
+		data, err := json.MarshalIndent(opts, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "pause --list json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	for _, o := range opts {
+		if o.Unavailable != "" {
+			fmt.Printf("  %-12s unavailable — %s\n", o.Label, o.Unavailable)
+			continue
+		}
+		fmt.Printf("  %-12s %-8s %s\n", o.Label, o.Value, o.Why)
+	}
+	if cfg.VPN.PauseMax > 0 {
+		fmt.Printf("\nAny duration up to %s works: dezhban pause 7m\n", cfg.VPN.PauseMax)
+	}
+	return 0
+}
+
 // cmdHold arms or disarms "hold the line": the next tunnel drop stays cut
 // instead of opening an automatic redial window.
 //
@@ -214,24 +250,39 @@ func holdStatus(cfgPath string) int {
 func cmdPause(args []string) int {
 	fs := flag.NewFlagSet("pause", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	list := fs.Bool("list", false, "print the offered pause lengths and stop")
+	jsonOut := fs.Bool("json", false, "with --list, print machine-readable JSON")
 	_ = fs.Parse(args)
+
+	if *list {
+		return pauseList(*cfgPath, *jsonOut)
+	}
+
 	dur := ""
 	if fs.NArg() > 0 {
 		dur = fs.Arg(0)
 	}
-	// Validate here rather than letting the daemon's clampPause silently fall
-	// back to its default on a typo — `dezhban pause 15x` must error, not
-	// quietly become a 15m exposure the operator never asked for.
+	// Validate here rather than letting the daemon fall back to its default on a
+	// typo — `dezhban pause 15x` must error, not quietly become a 15m exposure
+	// the operator never asked for.
+	var requested time.Duration
 	if dur != "" {
-		if d, err := time.ParseDuration(dur); err != nil || d <= 0 {
+		d, err := time.ParseDuration(dur)
+		if err != nil || d <= 0 {
 			fmt.Fprintf(os.Stderr, "pause: invalid duration %q (want e.g. \"15m\")\n", dur)
 			return 2
 		}
+		requested = d
 	}
 
-	if cfg, err := loadConfig(*cfgPath); err == nil && cfg.VPN.PauseMax <= 0 {
-		fmt.Fprintln(os.Stderr, "pause: disabled by vpn.pauseMax: \"0\". Set it to a duration (e.g. \"30m\") to enable.")
-		return 1
+	// Refused here and again in the daemon, and in both places explained rather
+	// than clamped. A pause quietly shortened to the cap is a pause the operator
+	// did not ask for, and they would have no way to know.
+	if cfg, err := loadConfig(*cfgPath); err == nil {
+		if refusal := config.PauseRefusal(cfg, requested); refusal != "" {
+			fmt.Fprintln(os.Stderr, "pause:", refusal)
+			return 1
+		}
 	}
 
 	// Passwordless path first: the daemon opens the pause itself when

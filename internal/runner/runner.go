@@ -1384,7 +1384,13 @@ func (o Options) runGuard(ctx context.Context) error {
 			if windowActive && windowTrigger != state.TriggerPause {
 				return reply(false, "a switch window is open — cancel it first")
 			}
-			openWindow(time.Now(), o.clampPause(req.Duration), "", state.TriggerPause)
+			// Refused, not shortened: see pauseDuration. A client that asked for
+			// an hour must not be handed thirty minutes and told it succeeded.
+			dur, refusal := o.pauseDuration(req.Duration)
+			if refusal != "" {
+				return reply(false, refusal)
+			}
+			openWindow(time.Now(), dur, "", state.TriggerPause)
 			if !windowActive {
 				return reply(false, "open pause failed")
 			}
@@ -2205,19 +2211,39 @@ const defaultPauseDuration = 15 * time.Minute
 // here means a future caller that skipped the gate can never turn "disabled"
 // into a real relaxation of the guard, whatever value req parses to.
 func (o Options) clampPause(req string) time.Duration {
-	if o.PauseMax <= 0 {
-		return 0
-	}
-	dur := defaultPauseDuration
-	if req != "" {
-		if d, err := time.ParseDuration(req); err == nil && d > 0 {
-			dur = d
-		}
-	}
-	if dur > o.PauseMax {
-		dur = o.PauseMax
-	}
+	dur, _ := o.pauseDuration(req)
 	return dur
+}
+
+// pauseDuration resolves a requested pause length, or explains why it cannot be
+// granted. The refusal string is empty when the duration is usable.
+//
+// An explicitly requested length longer than vpn.pauseMax is REFUSED, not
+// shortened. Quietly granting 30m to someone who asked for an hour is the same
+// class of bug as accepting a disabled window and restoring the default: the
+// operator asked for one thing, got another, and was never told. An unspecified
+// request is different — nobody asked for a particular length, so the built-in
+// default is clamped to the cap rather than refused.
+func (o Options) pauseDuration(req string) (time.Duration, string) {
+	if o.PauseMax <= 0 {
+		return 0, "pausing is disabled (vpn.pauseMax is \"0\")"
+	}
+	if req == "" {
+		dur := defaultPauseDuration
+		if dur > o.PauseMax {
+			dur = o.PauseMax
+		}
+		return dur, ""
+	}
+	d, err := time.ParseDuration(req)
+	if err != nil || d <= 0 {
+		return 0, fmt.Sprintf("invalid pause duration %q", req)
+	}
+	if d > o.PauseMax {
+		return 0, fmt.Sprintf("%s is longer than the %s cap (vpn.pauseMax); "+
+			"ask for %s or less, or raise the cap", d, o.PauseMax, o.PauseMax)
+	}
+	return d, ""
 }
 
 // configKeys is the sorted key list of a config-write request, for logging.

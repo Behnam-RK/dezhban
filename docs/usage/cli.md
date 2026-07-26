@@ -341,6 +341,7 @@ For the times the *correct* traffic is the one the guard blocks — a domestic-o
 service that refuses a foreign VPN exit:
 
 ```sh
+dezhban pause --list       # the offered lengths, and what each is for
 sudo dezhban pause 15m     # real IP for 15 minutes, capped by vpn.pauseMax
 sudo dezhban resume        # end it early
 ```
@@ -349,6 +350,17 @@ Unlike `switch`, this doesn't wait for a VPN — it just opens egress for the gi
 duration and re-arms the guard by itself at the deadline, so there's nothing to
 remember to turn back on. See
 [modes.md](../concepts/modes.md#pause--deliberately-using-your-real-ip).
+
+`--list` offers a short set of realistic lengths — the question is never "how
+many seconds" but "how long do I need my real IP for" — and any duration up to
+the cap still works if none of them fit. Lengths above `vpn.pauseMax` are shown
+as **unavailable with the cap as the reason**, not hidden: a cap you cannot see
+is a cap you will keep bumping into.
+
+A pause longer than the cap is **refused and explained, never shortened**. Asking
+for an hour against a 30-minute cap fails with the cap named, rather than quietly
+granting thirty minutes you did not ask for and cannot tell apart from the hour
+you wanted.
 
 ## Keep a deliberate disconnect cut
 
