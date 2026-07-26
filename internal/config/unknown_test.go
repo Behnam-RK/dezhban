@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -258,5 +259,37 @@ func TestKnownKeysAreNotReportedAsUnknown(t *testing.T) {
 
 	if len(cfg.Retired) != 0 {
 		t.Errorf("a valid config reported issues: %v", cfg.Retired)
+	}
+}
+
+// Reported keys are sorted so a human can scan them, and for array elements
+// that ordering has to be NUMERIC: a plain string sort puts "vpn.profiles[10]"
+// before "vpn.profiles[2]", so on a config with more than ten profiles the
+// report's line order stops matching the file's, and "the third one" no longer
+// means the third line. See sortKey.
+func TestArrayIndexedKeysSortNumerically(t *testing.T) {
+	var profiles []string
+	for i := range 12 {
+		profiles = append(profiles, `{"name":"p`+strconv.Itoa(i)+`","endpoints":["198.51.100.1"],"ifaceHint":"wg"}`)
+	}
+	cfg := loadFromJSON(t, `{"vpn":{"profiles":[`+strings.Join(profiles, ",")+`]}}`)
+
+	var got []int
+	for _, r := range cfg.Retired {
+		if !strings.HasSuffix(r.Key, ".ifaceHint") {
+			continue
+		}
+		idx := r.Key[strings.Index(r.Key, "[")+1 : strings.Index(r.Key, "]")]
+		n, err := strconv.Atoi(idx)
+		if err != nil {
+			t.Fatalf("unparsable index in %q: %v", r.Key, err)
+		}
+		got = append(got, n)
+	}
+	if len(got) != 12 {
+		t.Fatalf("reported %d ifaceHint keys, want 12: %v", len(got), retiredKeys(cfg))
+	}
+	if !slices.IsSorted(got) {
+		t.Errorf("indices reported in order %v, want ascending — array keys are sorting lexicographically", got)
 	}
 }

@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -79,8 +80,22 @@ func unknownKeys(data []byte) []unknownKey {
 	}
 	var out []unknownKey
 	walkUnknown(raw, reflect.TypeFor[fileConfig](), "", &out)
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	sort.Slice(out, func(i, j int) bool { return sortKey(out[i].Key) < sortKey(out[j].Key) })
 	return out
+}
+
+// sortKey renders a dotted key so a plain string sort orders array elements
+// numerically: "vpn.profiles[2].x" must come before "vpn.profiles[10].x", which
+// lexicographic order gets backwards. Zero-padding the index is enough — these
+// are report lines, so the widened form never leaves this comparison.
+func sortKey(key string) string {
+	return arrayIndexPattern.ReplaceAllStringFunc(key, func(m string) string {
+		n, err := strconv.Atoi(m[1 : len(m)-1])
+		if err != nil {
+			return m
+		}
+		return fmt.Sprintf("[%09d]", n)
+	})
 }
 
 func walkUnknown(raw map[string]any, t reflect.Type, prefix string, out *[]unknownKey) {

@@ -173,7 +173,10 @@ current as you land changes.
   on `state.posture` alone would report a host as protected indefinitely after
   enforcement stopped. The snapshot is still passed through unchanged (it is a
   stable contract, and the last known posture is worth having); `stateStale`
-  is how a consumer knows not to trust it.
+  is how a consumer knows not to trust it. Emitted unconditionally, like
+  `controlReachable` and `pauseEnabled` — `omitempty` on a safety flag would
+  make "the snapshot is fresh" and "this CLI predates the field" the same
+  absence on the wire.
 
 - **`DezhbanCore`, a new Swift Package Manager library target** holding the
   macOS app's testable logic layer — Snapshot decoding, posture→icon
@@ -298,7 +301,12 @@ current as you land changes.
   error were simply absent from its output. `vpn switch --status`, the switch
   wait loop, and `vpn list`'s window line now render the same sentence instead
   of composing three more variants of it (previously with two different clock
-  formats between them).
+  formats between them). `vpn switch --status` additionally prints an
+  `until: <RFC3339>` line: the rendered sentence dates a window to a bare
+  wall-clock time, which is the right register for prose and the wrong one for
+  the command whose entire job is "when does my exposure end" — it carries no
+  date and no seconds, and a window can outlive both (`vpn.pauseMax` has no cap
+  floor).
 - **The macOS app displays the daemon's rendered posture instead of composing
   its own.** `PostureUI.humanPosture`, the icon's inline help text,
   `OverviewView.postureBlurb`, `Snapshot.pendingSummary`, and the menubar's

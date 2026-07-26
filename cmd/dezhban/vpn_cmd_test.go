@@ -41,7 +41,8 @@ func TestPrintSwitchStatus(t *testing.T) {
 					Open: true, Until: until, Trigger: state.TriggerManual, Profile: "home-wg",
 				},
 			},
-			want: "Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM). (profile \"home-wg\")\n",
+			want: "Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM). (profile \"home-wg\")\n" +
+				"until: 2026-07-25T15:04:00Z\n",
 		},
 		{
 			name: "automatic redial window",
@@ -49,7 +50,8 @@ func TestPrintSwitchStatus(t *testing.T) {
 				Posture: "switch-window",
 				Switch:  &state.SwitchState{Open: true, Until: until, Trigger: state.TriggerAuto},
 			},
-			want: "Your VPN dropped. The guard is relaxed while it redials — your real IP may be exposed until it closes (3:04PM).\n",
+			want: "Your VPN dropped. The guard is relaxed while it redials — your real IP may be exposed until it closes (3:04PM).\n" +
+				"until: 2026-07-25T15:04:00Z\n",
 		},
 		{
 			name: "pause window",
@@ -57,7 +59,8 @@ func TestPrintSwitchStatus(t *testing.T) {
 				Posture: "switch-window",
 				Switch:  &state.SwitchState{Open: true, Until: until, Trigger: state.TriggerPause},
 			},
-			want: "Using your real IP at your request. The guard re-arms automatically at 3:04PM. (end early with `dezhban resume`)\n",
+			want: "Using your real IP at your request. The guard re-arms automatically at 3:04PM. (end early with `dezhban resume`)\n" +
+				"until: 2026-07-25T15:04:00Z\n",
 		},
 	}
 

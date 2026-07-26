@@ -165,14 +165,26 @@ enum AppActions {
     /// restarting through a block; an operator explicitly asking is a different
     /// act, and refusing it outright would remove a recovery tool rather than
     /// just asking them to confirm the exposure.
-    static func confirmRestart(exposedNow: Bool) -> Bool {
+    ///
+    /// `unsavedEdits` names the other thing a restart does NOT do: a restart is
+    /// a lifecycle action, not a write, so pending edits in the Settings pane
+    /// survive in the fields and stay unapplied. Saying so is the difference
+    /// between "the restart ignored my change" reading as a bug and reading as
+    /// what it is — the pane's own confirmation for applying a preset names the
+    /// same state for the same reason.
+    static func confirmRestart(exposedNow: Bool, unsavedEdits: Bool = false) -> Bool {
         let alert = NSAlert()
         alert.alertStyle = exposedNow ? .critical : .warning
         alert.messageText = "Restart dezhban?"
-        alert.informativeText = exposedNow
+        var text = exposedNow
             ? "dezhban is currently blocking traffic or running an open window. Restarting briefly stops "
                 + "enforcement — your real IP may be exposed for a few seconds while the service comes back up."
             : "This briefly stops network filtering, usually for under a few seconds, while the service restarts."
+        if unsavedEdits {
+            text += "\n\nYou have unsaved changes in this pane. Restarting doesn't save or apply them — "
+                + "they'll still be here, still unapplied, afterwards. Use Apply for that."
+        }
+        alert.informativeText = text
         alert.addButton(withTitle: "Restart")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn

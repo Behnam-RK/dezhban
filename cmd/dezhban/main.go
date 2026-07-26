@@ -1952,7 +1952,12 @@ func statusJSON(cfg *config.Config) int {
 		// — it is a stable contract, and the raw last-known posture is worth
 		// having — so this flag is how the prose `status` (which substitutes
 		// "Stopped" outright) and this one avoid contradicting each other.
-		StateStale       bool     `json:"stateStale,omitempty"`
+		// Always emitted, never omitempty: this is a safety-adjacent flag, and
+		// `omitempty` would make "the snapshot is fresh" and "this CLI is too
+		// old to have the field" the same absence on the wire. The sibling
+		// advisory bools (ControlReachable, PauseEnabled) are emitted
+		// unconditionally for the same reason.
+		StateStale       bool     `json:"stateStale"`
 		PollInterval     string   `json:"pollInterval"`
 		BlockedCountries []string `json:"blockedCountries"`
 		// PauseEnabled is whether `dezhban pause`/the control-socket pause op

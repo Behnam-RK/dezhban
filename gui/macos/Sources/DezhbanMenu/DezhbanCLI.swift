@@ -280,7 +280,7 @@ enum DezhbanCLI {
     static func readPresets() -> [PresetSummary]? {
         guard let bin = binaryPath() else { return nil }
         let r = exec(bin, ["config", "preset", "list", "--json", "--config", resolvedConfigPath()])
-        guard let data = r.out.data(using: .utf8) else { return nil }
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
         return PresetSummary.decodeList(data)
     }
 
@@ -293,7 +293,7 @@ enum DezhbanCLI {
         if let name { args.append(name) }
         args += ["--json", "--config", resolvedConfigPath()]
         let r = exec(bin, args)
-        guard let data = r.out.data(using: .utf8) else { return nil }
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
         return PresetDiff.decode(data)
     }
 

@@ -245,7 +245,7 @@ struct SettingsView: View {
     /// nothing pending.
     private func restartNow() {
         let exposedNow = state.snapshot?.posture == "full-block" || (state.snapshot?.switch?.open ?? false)
-        guard AppActions.confirmRestart(exposedNow: exposedNow) else { return }
+        guard AppActions.confirmRestart(exposedNow: exposedNow, unsavedEdits: hasUnsavedEdits) else { return }
         restartBusy = true
         status = "Restarting…"
         ConfigApply.restartNow(awaitPosture: true, title: "Restart") { outcome in

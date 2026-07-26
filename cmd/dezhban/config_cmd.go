@@ -990,24 +990,34 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 	fmt.Printf("applying %s: %s\n", p.Name, p.Summary)
 	fmt.Printf("cost: %s\n", p.Cost)
 
+	// Loaded ONCE, up front, and its error is fatal rather than swallowed: both
+	// the Strict warning below and the privileged write further down need it,
+	// and a config that cannot be read is not a condition either of them can do
+	// anything useful with. The token path is unaffected — tryConfigWrite loads
+	// the config itself and declines to handle the write when it can't, so
+	// reporting the failure here says the same thing one step earlier.
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+
 	// Strict disables vpn.allowPhysicalDNS. A VPN endpoint given as a hostname
 	// needs the physical link's DNS to re-resolve its server while the tunnel
 	// is down — without it, a redial after a drop can silently never find the
 	// server again. Warn rather than block: the operator may already know the
 	// server's IP never changes, or intend to pin a literal IP separately.
 	if p.Name == "strict" {
-		if cfg, err := loadConfig(flagVal); err == nil {
-			for _, ep := range config.EffectiveEndpoints(cfg, nil) {
-				if ep == "" {
-					continue
-				}
-				if _, err := netip.ParseAddr(strings.TrimSpace(ep)); err != nil {
-					fmt.Println("warning: a configured VPN endpoint is a hostname, and Strict turns off")
-					fmt.Println("         vpn.allowPhysicalDNS — it will not be able to re-resolve while the")
-					fmt.Println("         tunnel is down. Consider a literal IP for vpn.endpoints, or a preset")
-					fmt.Println("         other than Strict.")
-					break
-				}
+		for _, ep := range config.EffectiveEndpoints(cfg, nil) {
+			if ep == "" {
+				continue
+			}
+			if _, err := netip.ParseAddr(strings.TrimSpace(ep)); err != nil {
+				fmt.Println("warning: a configured VPN endpoint is a hostname, and Strict turns off")
+				fmt.Println("         vpn.allowPhysicalDNS — it will not be able to re-resolve while the")
+				fmt.Println("         tunnel is down. Consider a literal IP for vpn.endpoints, or a preset")
+				fmt.Println("         other than Strict.")
+				break
 			}
 		}
 	}
@@ -1023,11 +1033,6 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 		}
 	}
 
-	cfg, err := loadConfig(flagVal)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "config error:", err)
-		return 1
-	}
 	keys := make([]string, 0, len(p.Values))
 	for k := range p.Values {
 		keys = append(keys, k)

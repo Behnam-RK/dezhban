@@ -104,7 +104,9 @@ daemon leaves its last posture on disk indefinitely, so `state.posture` alone
 will report a host as protected long after enforcement stopped; `stateStale` is
 `true` once the snapshot ages past 3× the poll interval (floored at 90s), which
 is the same threshold the prose `status` uses to print "Stopped" instead and the
-menubar app uses to grey its icon.
+menubar app uses to grey its icon. It is always present, so its absence means
+you are reading something other than this CLI's output — never "the snapshot is
+fresh".
 
 ```sh
 dezhban status                                    # config + service + block state
@@ -292,6 +294,15 @@ sudo dezhban vpn forget <name>          # drop a learned endpoint
 `switch` writes a root-owned control file the daemon consumes, then narrates the
 window from the state file until it closes. See [modes.md](../concepts/modes.md#switch-window--connecting-a-brand-new-vpn)
 for the posture and the real-IP-exposure trade-off.
+
+`switch --status` prints the rendered window sentence followed by an
+`until: <RFC3339>` line — the exact deadline, since the sentence dates a window
+only to a wall-clock time and a window can outlive both its date and its minute:
+
+```
+Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM).
+until: 2026-07-25T15:04:00Z
+```
 
 ## Pause the guard temporarily
 

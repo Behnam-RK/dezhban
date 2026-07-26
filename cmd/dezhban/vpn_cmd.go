@@ -264,6 +264,14 @@ func printSwitchStatus(statePath string) int {
 		}
 		fmt.Printf("%s%s\n", detail, extra)
 	}
+	// The rendered sentence carries the deadline as a bare wall-clock time
+	// (render.untilFormat is time.Kitchen), which is the right register for
+	// prose and the wrong one for the CLI's dedicated readout of "when does my
+	// exposure end": no date, no seconds, and ambiguous once a window runs long
+	// enough to cross noon or midnight (vpn.pauseMax has no cap floor). This is
+	// the one command whose whole job is that answer, so it also prints the
+	// exact instant, in the same RFC3339 form state.json stores.
+	fmt.Printf("until: %s\n", snap.Switch.Until.Format(time.RFC3339))
 	return 0
 }
 
