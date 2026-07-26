@@ -155,10 +155,14 @@ func postureDisplay(s state.Snapshot) Display {
 
 func guardDisplay(s state.Snapshot) Display {
 	if GuardHoldsDownedTunnel(s) {
+		detail := "Guard active, but no tunnel is up — all traffic is cut until your VPN redials."
+		if at := dropTime(s); at != "" {
+			detail = "Your VPN dropped at " + at + ". " + detail
+		}
 		return Display{
 			Key:      KeyBlocked,
 			Headline: "VPN down — traffic cut",
-			Detail:   "Guard active, but no tunnel is up — all traffic is cut until your VPN redials.",
+			Detail:   detail,
 		}
 	}
 	return Display{
@@ -221,24 +225,29 @@ func windowDisplay(s state.Snapshot) Display {
 			until = s.Switch.Until.Format(untilFormat)
 		}
 	}
+	// The exposure and when it ends LEAD every one of these sentences. A relaxed
+	// guard is the one state where this tool is not protecting the user, so the
+	// copy must not open with machinery ("Guard relaxed so…") and leave the
+	// consequence trailing behind a dash.
 	switch trigger {
 	case state.TriggerPause:
 		return Display{
 			Key:      KeyPaused,
 			Headline: "Paused",
-			Detail:   "Using your real IP at your request. " + rearmSentence(until),
+			Detail:   joinSentences(pausedSentence(until), rearmSentence(until)),
 		}
 	case state.TriggerAuto:
 		return Display{
 			Key:      KeyWarning,
 			Headline: "Redial window open",
-			Detail:   "Your VPN dropped. The guard is relaxed while it redials — " + exposedSentence(until),
+			Detail:   joinSentences(exposedSentence(until), redialCause(s)),
 		}
 	default:
 		return Display{
 			Key:      KeyWarning,
 			Headline: "Switch window open",
-			Detail:   "Guard relaxed so a new VPN can connect — " + exposedSentence(until),
+			Detail: joinSentences(exposedSentence(until),
+				"The guard is relaxed so a new VPN can connect."),
 		}
 	}
 }
@@ -250,11 +259,41 @@ func rearmSentence(until string) string {
 	return "The guard re-arms automatically at " + until + "."
 }
 
+// pausedSentence leads with the fact that matters — the real IP is in use — and
+// says so as a present condition, not a risk: during a pause the exposure is the
+// point, not a side effect.
+func pausedSentence(until string) string {
+	if until == "" {
+		return "You are using your real IP at your request."
+	}
+	return "You are using your real IP at your request, until " + until + "."
+}
+
 func exposedSentence(until string) string {
 	if until == "" {
-		return "your real IP may be exposed until it closes."
+		return "Your real IP may be exposed until this window closes."
 	}
-	return "your real IP may be exposed until it closes (" + until + ")."
+	return "Your real IP may be exposed until " + until + "."
+}
+
+// redialCause explains why the guard relaxed, after the exposure has already
+// been stated. It names the drop time when the snapshot carries one — a drop is
+// the one thing a user can check against their own experience of the network
+// dying, and it is what turns "a window is open" into an account of what
+// happened.
+func redialCause(s state.Snapshot) string {
+	if at := dropTime(s); at != "" {
+		return "Your VPN dropped at " + at + " and the guard relaxed so it can redial."
+	}
+	return "Your VPN dropped and the guard relaxed so it can redial."
+}
+
+// dropTime renders the carried drop's time, or "" when no drop is being carried.
+func dropTime(s state.Snapshot) string {
+	if s.Drop == nil || s.Drop.At.IsZero() {
+		return ""
+	}
+	return s.Drop.At.Format(untilFormat)
 }
 
 // lookupNote surfaces a genuine exit-country lookup failure. ExitUnknown is

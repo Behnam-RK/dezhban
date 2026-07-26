@@ -30,6 +30,14 @@ current as you land changes.
   table, which itself derives the values from the shipped defaults, so the same
   drift cannot recur.
 
+- **A relaxed guard says so first, and names when your VPN dropped.** Every
+  window sentence now leads with the exposure and when it ends, instead of
+  opening with the machinery and leaving the consequence trailing after a dash:
+  *"Your real IP may be exposed until 3:04PM. Your VPN dropped at 3:03PM and the
+  guard relaxed so it can redial."* A guard holding a downed tunnel names the
+  drop time too. Both surfaces change together, because both display the same
+  rendered strings.
+
 - **The state file records when your VPN dropped.** `status --json` gains a
   `drop` object (`at`, `cut`) present from a tunnel drop until a tunnel is up
   again. Until now the moment the guard cut traffic was unobservable on the

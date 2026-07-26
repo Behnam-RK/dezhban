@@ -331,7 +331,7 @@ carries the exact deadline, since the sentence dates a window only to a
 wall-clock time and a window can outlive both its date and its minute:
 
 ```
-switch window: OPEN — Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM).
+switch window: OPEN — Your real IP may be exposed until 3:04PM. The guard is relaxed so a new VPN can connect.
 until: 2026-07-25T15:04:00Z
 ```
 
