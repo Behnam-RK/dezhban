@@ -293,7 +293,13 @@ The design depends on these invariants (rationale in
   lies about its own status is worse than none. A doc path cited from Go/Swift
   source (`grep -rn "docs/" --include="*.go" --include="*.swift"`) is load-bearing:
   moving or merging a doc means fixing every such reference, not just the ones in
-  other docs.
+  other docs. **A page listed in `internal/help.Pages` is load-bearing the same
+  way**: it ships inside the macOS app, rendered from the repo's markdown at
+  build time by `tools/helpgen`, so the app's help matches the version it
+  documents and works with egress cut. `go test ./internal/help` fails when a
+  bundled page is moved, renamed, or written with markdown the subset renderer
+  cannot show — and every `Tunable.DocAnchor` is checked to resolve against a
+  real heading, so a contextual help link cannot rot into a silent no-op.
 - **Every PR that changes user-visible behavior updates [CHANGELOG.md](CHANGELOG.md)'s
   `## [Unreleased]` section, in the same PR** — not as a follow-up. `[Unreleased]`
   *is* the next release's notes (see [docs/contribute/releasing.md](docs/contribute/releasing.md)); a PR
