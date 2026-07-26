@@ -197,6 +197,11 @@ struct SettingsView: View {
                     Button("Open Config File…") {
                         NSWorkspace.shared.open(URL(fileURLWithPath: configPath))
                     }
+                    // The wizard is not first-run-only: it is the guided way
+                    // back through the same decisions, for someone changing VPN
+                    // rather than someone starting out.
+                    Button("Run Setup Again…") { state.showFirstRun = true }
+                        .help("Walk through the setup questions again, seeded with your current settings.")
                 } footer: {
                     Text("Some advanced options (control socket, geo providers, allowlist) live only in the config file.")
                         .foregroundStyle(.secondary)

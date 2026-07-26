@@ -135,6 +135,10 @@ final class AppState: ObservableObject {
     /// pane consumes it and sets it back to nil, so selecting Help again later
     /// does not jump back to a link the reader has moved on from.
     @Published var helpTarget: HelpTarget?
+    /// Whether the first-run wizard is on screen. Presented as a sheet over the
+    /// main window, so there is one window and the wizard cannot be lost behind
+    /// it.
+    @Published var showFirstRun = false
     /// Last update check result (nil: none run yet, or the last one found
     /// nothing worth reporting — see UpdateChecker.check's doc comment on why
     /// a failure never surfaces as an error here).
@@ -143,6 +147,29 @@ final class AppState: ObservableObject {
     let console = Console()
 
     var isLive: Bool { PostureUI.isLive(snapshot) }
+
+    /// Offers the first-run wizard when this account has never completed it AND
+    /// nothing is configured yet.
+    ///
+    /// The check is "does dezhban know a VPN server yet", not "is there a config
+    /// file": someone who set dezhban up from the CLI has already answered these
+    /// questions, and asking again the first time they open the app would look
+    /// like it had forgotten. An endpoint or a profile is the signal, because
+    /// tunnel interfaces are legitimately empty on an autodetect config — the
+    /// recommended one. Opens the window too: a fresh install with nothing
+    /// configured is the one launch where a window is the point.
+    func offerFirstRunIfNeeded() {
+        guard !FirstRun.isComplete, cliFound else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let info = DezhbanCLI.readProfiles()
+            let configured = !(info?.defaultEndpoints.isEmpty ?? true) || !(info?.profiles.isEmpty ?? true)
+            DispatchQueue.main.async {
+                guard FirstRun.shouldOffer(vpnKnown: configured) else { return }
+                self?.showFirstRun = true
+                MainWindow.shared.open()
+            }
+        }
+    }
 
     /// Opens the Help pane at a specific place in the documentation, named the
     /// way a `Tunable`'s docAnchor writes it ("usage/config.md#fields").

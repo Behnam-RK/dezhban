@@ -123,6 +123,18 @@ current as you land changes.
   ask different questions or apply the same answer differently — the same reason
   the settings schema lives in one place.
 
+- **The macOS app has a setup wizard.** Launch it with nothing configured and it
+  walks the same questions `dezhban setup` asks — which countries to refuse, how
+  to find your VPN, whether to pin an interface — seeded from whatever config
+  you already have, with no terminal involved. It reads the question set from
+  the daemon rather than keeping its own, and saves through the same batched,
+  validated `config set` every other pane uses.
+
+  It is offered only when dezhban does not know a VPN yet: if you set it up from
+  the CLI, the app does not ask you to do it again. Settings → **Run Setup
+  Again…** reopens it whenever you want, which is the guided way through those
+  decisions when you change VPN.
+
 ### Changed
 
 - **A pause longer than `vpn.pauseMax` is now refused and explained, instead of

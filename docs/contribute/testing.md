@@ -461,6 +461,25 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
 - [ ] `dezhban setup --questions --json` runs with no TTY, no root, and no
       config file present, and lists the same questions the wizard asks.
 
+### First-run wizard (macOS app)
+
+- [ ] With no VPN configured and `defaults delete com.dezhban.menu
+      dezhban.firstRunCompleted`, launching the app opens the window **and** the
+      wizard. With a VPN already configured from the CLI, it does not — the
+      questions were already answered.
+- [ ] The questions, their order, and the gating match `dezhban setup` run in a
+      terminal on the same host. Declining "Configure your VPN now?" skips the
+      whole VPN branch in both.
+- [ ] Saving writes through one `config set` (one password prompt, or none with
+      a token enrolled) and the values land in `dezhban config show`. Choosing
+      automatic detection leaves `vpn.tunnelInterfaces` **empty**.
+- [ ] Cancelling with "Not now" writes nothing and offers the wizard again next
+      launch.
+- [ ] Naming VPN config files imports them as profiles (`dezhban vpn list`);
+      cancelling that second prompt leaves the config saved and only the import
+      undone.
+- [ ] Settings → "Run Setup Again…" reopens it seeded with current values.
+
 ## macOS app
 
 Build and launch:

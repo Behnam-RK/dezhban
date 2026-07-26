@@ -301,6 +301,20 @@ enum DezhbanCLI {
         return ConfigSchema.decode(data)
     }
 
+    /// Reads the setup wizard's questions — what it asks, in what order, gated
+    /// how, seeded from THIS host's config — via `setup --questions --json`.
+    /// Read-only, no root, and it asks nothing.
+    ///
+    /// Passes `--config` deliberately, unlike `readSchema`: the schema describes
+    /// keys in the abstract, but a wizard's job is to start from what is already
+    /// configured, so it must be seeded from the real file.
+    static func readSetupQuestions() -> [SetupQuestion]? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["setup", "--questions", "--json", "--config", resolvedConfigPath()])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return SetupQuestion.decodeList(data)
+    }
+
     /// Reads the offered pause lengths and which of them this host's
     /// vpn.pauseMax allows, via `pause --list --json`. Read-only, no root.
     static func readPauseOptions() -> [PauseOption]? {

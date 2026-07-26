@@ -60,6 +60,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         AppState.shared.refreshServiceState()
         AppState.shared.checkForUpdates()
+        AppState.shared.offerFirstRunIfNeeded()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.refresh()
         }

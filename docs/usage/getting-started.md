@@ -55,6 +55,11 @@ a VPN config file, import it instead of typing endpoints:
 dezhban vpn import ~/wg0.conf     # WireGuard .conf, OpenVPN .ovpn, or V2Ray JSON
 ```
 
+On macOS you can answer the same questions in the app instead: launch Dezhban
+with nothing configured and the setup wizard opens by itself, seeded from
+whatever config you already have. It is also in Settings → **Run Setup Again…**,
+for when you change VPN.
+
 Prefer to write the file yourself? Start from `configs/dezhban.example.json` and
 see the [config reference](config.md).
 

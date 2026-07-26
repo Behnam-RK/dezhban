@@ -25,5 +25,17 @@ struct MainView: View {
             case .about: AboutView()
             }
         }
+        // A sheet rather than a second window: the wizard is a step you are in,
+        // not a place you can leave open behind the thing it configures.
+        .sheet(isPresented: $state.showFirstRun) {
+            FirstRunView { saved in
+                state.showFirstRun = false
+                if saved {
+                    state.refreshServiceState()
+                    state.selectedSection = .overview
+                }
+            }
+            .environmentObject(state)
+        }
     }
 }
