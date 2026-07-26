@@ -410,8 +410,11 @@ struct SettingsView: View {
     /// the schema, and the cap is resolved against the values this pane is
     /// actually holding, so lowering a cap by hand narrows the menu.
     private func durationField(_ key: String, _ fallback: String, text: Binding<String>) -> some View {
-        DurationField(key: key, fallbackLabel: fallback, schema: schema,
-                      values: fields.currentValues, text: text, enabled: canApply)
+        HStack(spacing: 6) {
+            DurationField(key: key, fallbackLabel: fallback, schema: schema,
+                          values: fields.currentValues, text: text, enabled: canApply)
+            docLink(key)
+        }
     }
 
     /// A text field for one config key, labelled and explained from the schema.
@@ -422,10 +425,13 @@ struct SettingsView: View {
     @ViewBuilder
     private func schemaField(_ key: String, _ fallback: String, text: Binding<String>) -> some View {
         let field = TextField(hint(key, fallback), text: text).disabled(!canApply)
-        if let help = helpText(key) {
-            field.help(help)
-        } else {
-            field
+        HStack(spacing: 6) {
+            if let help = helpText(key) {
+                field.help(help)
+            } else {
+                field
+            }
+            docLink(key)
         }
     }
 
@@ -433,10 +439,39 @@ struct SettingsView: View {
     @ViewBuilder
     private func schemaToggle(_ key: String, _ fallback: String, isOn: Binding<Bool>) -> some View {
         let toggle = Toggle(schema?[key]?.label ?? fallback, isOn: isOn).disabled(!canApply)
-        if let help = helpText(key) {
-            toggle.help(help)
-        } else {
-            toggle
+        HStack(spacing: 6) {
+            if let help = helpText(key) {
+                toggle.help(help)
+            } else {
+                toggle
+            }
+            docLink(key)
+        }
+    }
+
+    /// Opens the Help pane at the section of the documentation that describes
+    /// this key.
+    ///
+    /// A tooltip has room for one sentence; the reason a setting exists, what it
+    /// costs, and what happens when it is off often needs a page. This is the
+    /// bridge between the two — and it lands on the *heading*, from the key's
+    /// own `docAnchor`, so the answer is on screen rather than somewhere in a
+    /// long reference page.
+    ///
+    /// Absent when the schema is unavailable (a CLI too old to know
+    /// `config schema`): a button that could only apologise is worse than none.
+    @ViewBuilder
+    private func docLink(_ key: String) -> some View {
+        if let tunable = schema?[key], !tunable.docAnchor.isEmpty {
+            Button {
+                state.openHelp(docAnchor: tunable.docAnchor)
+            } label: {
+                Image(systemName: "questionmark.circle")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Read about \(tunable.label) in the documentation")
+            .accessibilityLabel("Documentation for \(tunable.label)")
         }
     }
 

@@ -52,6 +52,12 @@ public struct ConfigTunable: Codable, Identifiable, Hashable {
     /// True when a change to this key takes effect without restarting the daemon.
     public var appliesLive: Bool { (restartReason ?? "").isEmpty }
 
+    /// Where the Help pane should land for this key. Nil only if the schema
+    /// carried no anchor at all — Go's TestEveryTunableDocAnchorResolves keeps
+    /// that from shipping, and a control simply offers no link rather than a
+    /// dead one.
+    public var docTarget: HelpTarget? { HelpTarget(docAnchor: docAnchor) }
+
     /// Placeholder text for a text field: the label, then the real default.
     ///
     /// It says "default", not "e.g.", because it now IS the default rather than

@@ -207,6 +207,17 @@ struct ConfigSchemaTests {
         #expect(schema.restartRequired(among: ["logLevel", "unknown"]) == ["logLevel"])
     }
 
+    /// Every control's help link is only as good as the anchor it carries. Go's
+    /// TestEveryTunableDocAnchorResolves proves the anchors exist in the
+    /// bundled pages; this proves the app turns them into a page and a heading
+    /// rather than dropping the fragment and landing at the top.
+    @Test func docAnchorBecomesADeepLink() {
+        let schema = testSchema()
+        let target = try! #require(schema["vpn.endpointRefresh"]?.docTarget)
+        #expect(target.source == "usage/config.md")
+        #expect(target.anchor == "fields")
+    }
+
     /// The placeholder states the real default, which is the whole point: the
     /// pane used to say "e.g. 30s" for a key whose default was 1m.
     @Test func placeholderStatesTheRealDefault() {

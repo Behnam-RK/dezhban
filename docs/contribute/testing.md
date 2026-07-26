@@ -635,6 +635,11 @@ traffic, so the check that matters is the one CI cannot run: with egress gone.
       in the pane and reported with a Copy link button — it must not navigate.
 - [ ] Built from a checkout whose `docs/` was renamed under it, `task gui:build`
       **fails** rather than producing an app whose Help pane is missing a page.
+- [ ] The **?** beside a Settings field opens Help scrolled to that key's own
+      heading — not the top of the configuration reference. Spot-check one field
+      per section, including one under Advanced.
+- [ ] Against a CLI too old to know `config schema`, the **?** buttons are absent
+      rather than present and inert.
 
 ### Logs pane
 

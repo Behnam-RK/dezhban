@@ -106,6 +106,12 @@ current as you land changes.
   match the version that documents them, and the pane refuses to follow any link
   that leaves the bundle.
 
+  Every setting in the Settings pane also carries a **?** button that opens Help
+  at that setting's own section. A tooltip has room for one sentence; why a
+  setting exists, what it costs, and what turning it off actually does often
+  needs a page — and each link lands on the heading, not the top of a long
+  reference.
+
 ### Changed
 
 - **A pause longer than `vpn.pauseMax` is now refused and explained, instead of
