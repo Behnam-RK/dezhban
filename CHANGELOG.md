@@ -59,6 +59,14 @@ current as you land changes.
   snapshot was replaced within microseconds while observers read the file about
   once a second — leaving both surfaces able to say only "a window is open".
 
+- **The macOS Settings pane is reorganised around what you are deciding**, not
+  around the shape of the config file. Sections are ordered which VPN to trust →
+  what gets blocked → when the guard may relax → local network → how closely it
+  watches → startup, each with a line saying why you would touch it. Headings say
+  the thing rather than the config block: "When the guard relaxes", not
+  "Windows". Autodetection is folded into "Your VPN", where those toggles were
+  always about the same decision.
+
 - **Duration settings in the macOS app are a menu of real choices**, not a text
   field demanding Go's duration syntax. Each offers lengths derived from that
   key's own default and its live cap, marks the recommended value, and provides

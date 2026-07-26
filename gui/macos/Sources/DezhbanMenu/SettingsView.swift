@@ -63,7 +63,64 @@ struct SettingsView: View {
                 Section("Strictness preset") {
                     presetPicker
                 }
-                Section("Startup") {
+                // Ordered by what a person is actually deciding: which VPN to
+                // trust, what to block, when the guard may relax, and only then
+                // the machinery. Headings say the thing rather than the config
+                // block it lives in, per docs/concepts/glossary.md.
+                Section {
+                    schemaField("vpn.tunnelInterfaces", "Your VPN tunnel (comma-separated)",
+                                text: $fields.tunnelInterfaces)
+                    schemaField("vpn.endpoints", "VPN server addresses (comma-separated)", text: $fields.endpoints)
+                    schemaToggle("vpn.autoDetect", "Find my VPN tunnel automatically", isOn: $fields.autoDetect)
+                    schemaToggle("vpn.autoDiscoverEndpoints", "Find the VPN server address automatically",
+                                 isOn: $fields.autoDiscover)
+                    schemaToggle("vpn.autoArm", "Arm the guard when a VPN connects", isOn: $fields.autoArm)
+                } header: {
+                    sectionHeader("Your VPN",
+                                  "Which tunnel the guard trusts. Leave the two fields empty and let "
+                                      + "dezhban find them — that is what most setups want.")
+                }
+
+                Section {
+                    schemaField("blockedCountries", "Blocked countries (comma-separated)",
+                                text: $fields.blockedCountries)
+                    durationField("pollInterval", "Exit country check interval", text: $fields.pollInterval)
+                } header: {
+                    sectionHeader("What gets blocked",
+                                  "If your VPN surfaces in one of these countries, everything is cut "
+                                      + "until it moves.")
+                }
+
+                Section {
+                    durationField("vpn.switchWindow", "Switch window", text: $fields.switchWindow)
+                    durationField("vpn.redialWindow", "Redial window", text: $fields.redialWindow)
+                    durationField("vpn.pauseMax", "Longest pause", text: $fields.pauseMax)
+                } header: {
+                    sectionHeader("When the guard relaxes",
+                                  "The only three ways traffic is ever let out around the guard. Each is "
+                                      + "bounded, re-arms itself, and can be turned Off entirely.")
+                }
+
+                Section {
+                    schemaToggle("vpn.allowLocalNetwork", "Keep local devices reachable",
+                                 isOn: $fields.allowLocalNetwork)
+                } header: {
+                    sectionHeader("Local network",
+                                  "Printers, NAS, your router — reachable while the guard is armed. Local "
+                                      + "destinations only, so nothing on the internet is opened.")
+                }
+
+                Section {
+                    durationField("vpn.endpointRefresh", "VPN server address refresh", text: $fields.endpointRefresh)
+                    durationField("vpn.endpointGrace", "VPN server address grace", text: $fields.endpointGrace)
+                    durationField("vpn.tunnelWatch", "Tunnel check interval", text: $fields.tunnelWatch)
+                } header: {
+                    sectionHeader("How closely dezhban watches",
+                                  "How quickly a dropped tunnel is noticed, and how long a known VPN "
+                                      + "server stays reachable so it can redial.")
+                }
+
+                Section {
                     Toggle("Start the guard at boot (install the system service)", isOn: bootBinding)
                         .disabled(bootBusy || !state.cliFound)
                         .help("Installs dezhban as a background system service: the guard starts at boot — "
@@ -73,45 +130,20 @@ struct SettingsView: View {
                         .help("Registers the app as a login item (System Settings → General → Login Items). "
                             + "This is only the status display — the guard itself is the system service above.")
                     Toggle("Notify on essential events", isOn: notifyBinding)
-                        .help("macOS notifications for the transitions that matter: guard armed, egress "
-                            + "blocked, warnings (enforcement error / switch window open), standby, stopped. "
+                        .help("macOS notifications for the transitions that matter: guard armed, traffic "
+                            + "cut, warnings (enforcement error / window open), standby, stopped. "
                             + "Nothing else.")
                     Toggle("Check for updates automatically", isOn: checkUpdatesBinding)
                         .help("Checks GitHub for a newer release at launch and every ~24h — never from the "
                             + "background service, only here, in this app, on this schedule. Turn off to stop this "
                             + "host contacting GitHub about updates entirely; \"Check Now\" in About still "
                             + "works either way.")
+                } header: {
+                    sectionHeader("Startup and updates",
+                                  "These take effect immediately — they are actions, not settings, so "
+                                      + "Apply does not touch them.")
                 }
-                Section("VPN guard") {
-                    schemaField("vpn.tunnelInterfaces", "Your VPN tunnel (comma-sep)",
-                                text: $fields.tunnelInterfaces)
-                    schemaField("vpn.endpoints", "VPN server addresses (comma-sep)", text: $fields.endpoints)
-                }
-                Section("Autodetection") {
-                    schemaToggle("vpn.autoDetect", "Find my VPN tunnel automatically", isOn: $fields.autoDetect)
-                    schemaToggle("vpn.autoDiscoverEndpoints", "Find the VPN server address automatically",
-                                 isOn: $fields.autoDiscover)
-                    schemaToggle("vpn.autoArm", "Arm the guard when a VPN connects", isOn: $fields.autoArm)
-                }
-                Section("Local network") {
-                    schemaToggle("vpn.allowLocalNetwork", "Keep local devices reachable",
-                                 isOn: $fields.allowLocalNetwork)
-                }
-                Section("Blocking") {
-                    schemaField("blockedCountries", "Blocked countries (comma-sep)",
-                                text: $fields.blockedCountries)
-                    durationField("pollInterval", "Exit country check interval", text: $fields.pollInterval)
-                }
-                Section("Windows") {
-                    durationField("vpn.switchWindow", "Switch window", text: $fields.switchWindow)
-                    durationField("vpn.redialWindow", "Redial window", text: $fields.redialWindow)
-                    durationField("vpn.pauseMax", "Longest pause", text: $fields.pauseMax)
-                    durationField("vpn.endpointGrace", "VPN server address grace", text: $fields.endpointGrace)
-                }
-                Section("Timing") {
-                    durationField("vpn.endpointRefresh", "VPN server address refresh", text: $fields.endpointRefresh)
-                    durationField("vpn.tunnelWatch", "Tunnel check interval", text: $fields.tunnelWatch)
-                }
+
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
                         .disabled(tokenBusy || !biometryAvailable)
@@ -128,7 +160,9 @@ struct SettingsView: View {
                 }
                 Section {
                     DisclosureGroup("Advanced") {
-                        Text("Touch only if you know why — these override recommended defaults.")
+                        Text("Touch only if you know why. These override recommended defaults, and the "
+                            + "three caps below bound how much exposure the settings above can ever "
+                            + "cause — lowering one narrows the choices they offer.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                         durationField("vpn.advanced.switchWindowMax", "Switch window cap", text: $fields.advSwitchWindowMax)
@@ -352,6 +386,24 @@ struct SettingsView: View {
 
     /// Help text for a field, from the daemon's schema.
     private func helpText(_ key: String) -> String? { schema?.help(for: key) }
+
+    /// A section heading with a line saying what the section is for.
+    ///
+    /// The headings name the thing rather than the config block it lives in —
+    /// "When the guard relaxes", not "Windows" — following
+    /// docs/concepts/glossary.md, which is the authority for user-facing words.
+    /// The description carries the part a tooltip cannot: why you would touch
+    /// this section at all.
+    private func sectionHeader(_ title: String, _ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text(description)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+        }
+        .padding(.bottom, 2)
+    }
 
     /// A duration setting as a menu of real choices rather than a text field
     /// that demands Go's duration syntax. Bounds and Off-availability come from
