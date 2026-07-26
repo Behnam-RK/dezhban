@@ -29,7 +29,7 @@ func TestSnapshotCarriesTheHysteresisStreak(t *testing.T) {
 		Interval: time.Minute,
 		Publish:  func(s state.Snapshot) { got = s },
 	}
-	o.publish(false, false, monitor.Reading{CountryCode: "IR"}, nil, nil, nil, nil, nil, "")
+	o.publish(false, false, monitor.Reading{CountryCode: "IR"}, nil, nil, nil, nil, nil, "", nil)
 
 	if got.Pending == nil {
 		t.Fatal("no pending flip published while a hysteresis streak was running")
@@ -47,7 +47,7 @@ func TestPublishingProgressDoesNotDisturbTheStreak(t *testing.T) {
 
 	o := Options{Decider: d, Interval: time.Minute, Publish: func(state.Snapshot) {}}
 	for range 5 {
-		o.publish(false, false, monitor.Reading{}, nil, nil, nil, nil, nil, "")
+		o.publish(false, false, monitor.Reading{}, nil, nil, nil, nil, nil, "", nil)
 	}
 	_, have, _ := d.Pending()
 	if have != 1 {

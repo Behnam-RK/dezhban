@@ -30,6 +30,13 @@ current as you land changes.
   table, which itself derives the values from the shipped defaults, so the same
   drift cannot recur.
 
+- **The state file records when your VPN dropped.** `status --json` gains a
+  `drop` object (`at`, `cut`) present from a tunnel drop until a tunnel is up
+  again. Until now the moment the guard cut traffic was unobservable on the
+  common path: the automatic redial window opens on the same edge, so the cut
+  snapshot was replaced within microseconds while observers read the file about
+  once a second — leaving both surfaces able to say only "a window is open".
+
 - **`vpn.pauseMax` has a control in the macOS app**, under Windows alongside the
   switch and redial windows. It was settable from the CLI and reachable by
   editing the file, but the app offered no way to see or change how long a pause

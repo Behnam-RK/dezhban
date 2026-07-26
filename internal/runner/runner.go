@@ -331,7 +331,7 @@ func anyTunnelUp(tunnels []state.Tunnel) bool {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string) {
+func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord) {
 	if o.Publish == nil {
 		return
 	}
@@ -348,6 +348,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		PID:                 os.Getpid(),
 		ActiveProfile:       profile,
 		Switch:              win,
+		Drop:                drop,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -742,8 +743,19 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		return &state.SwitchState{Open: true, Until: windowDeadline, Profile: windowProfile, Trigger: windowTrigger}
 	}
+	// lastDrop is the tunnel drop currently being lived through: set on the
+	// down edge, carried across whatever follows it (a redial window, a guard
+	// holding the line), and cleared once a tunnel is up again.
+	//
+	// It has to be carried rather than merely published once. The down edge
+	// opens the redial window in the same loop pass, so a snapshot showing the
+	// guard holding a downed tunnel is replaced within microseconds, and
+	// observers poll the state file about once a second — they would never see
+	// it. Carrying the record is what lets both surfaces say "your VPN dropped
+	// at 3:04PM" instead of only "a window is open".
+	var lastDrop *state.DropRecord
 	snapshot := func() {
-		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile)
+		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop)
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
 
@@ -1603,7 +1615,21 @@ func (o Options) runGuard(ctx context.Context) error {
 				tryAutoArm(st.Detail)
 			}
 			if wasUp && !st.Up {
+				// Record the cut, and publish it, BEFORE anything relaxes.
+				// maybeAutoWindow may open a redial window on this very line,
+				// which would otherwise make the guard-holding-a-downed-tunnel
+				// state unreachable on the common path. Cut is false in standby
+				// because nothing was being enforced, and saying traffic was cut
+				// would be a lie.
+				lastDrop = &state.DropRecord{At: time.Now(), Cut: !standby}
+				snapshot()
 				maybeAutoWindow(time.Now(), st.Detail)
+			}
+			if st.Up {
+				// The drop is over the moment a tunnel is back, whether or not
+				// the exit has been verified yet. Keeping it past that point
+				// would leave both surfaces narrating an event that has ended.
+				lastDrop = nil
 			}
 			// A tunnel coming back while blocked is the strongest hint available
 			// that the forbidden exit may be gone — it is exactly the moment the
