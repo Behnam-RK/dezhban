@@ -1,6 +1,8 @@
 package main
 
 import (
+	"io"
+	"log/slog"
 	"net/netip"
 	"strings"
 	"testing"
@@ -308,5 +310,53 @@ func TestPrintDoctorDegenerateDiscoverPrintsSummaryOnceAtTwoSpaces(t *testing.T)
 		if strings.Count(out, summary) != 1 {
 			t.Errorf("summary %q printed %d times, want exactly 1", summary, strings.Count(out, summary))
 		}
+	}
+}
+
+// printDoctor renders a fixed layout keyed by check name, so two checks sharing
+// a Name — or one whose name has no section — used to silently vanish. A
+// dropped check reads exactly like a check that passed, which is the worst way
+// for a diagnostic to be wrong, so both leftovers must reach stdout.
+func TestPrintDoctorDropsNoCheck(t *testing.T) {
+	r := doctorReport{
+		Checks: []doctorCheck{
+			{Name: "config", Status: checkOK, Summary: "first"},
+			{Name: "config", Status: checkFail, Summary: "second, same name"},
+			{Name: "tunnels", Status: checkOK, Details: []string{"utun4"}},
+			{Name: "endpoints", Status: checkOK, Details: []string{"1.2.3.4"}},
+			{Name: "brandNew", Status: checkWarn, Summary: "a check with no section yet",
+				Fixes: []string{"do the thing"}},
+		},
+	}
+	got := captureStdout(t, func() { printDoctor(r) })
+	for _, want := range []string{
+		"config:  first",                        // first wins the named section
+		"config: second, same name",             // the duplicate still prints
+		"brandNew: a check with no section yet", // an unknown name still prints
+		"do the thing",                          // and keeps its fixes
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("printDoctor output is missing %q\ngot:\n%s", want, got)
+		}
+	}
+}
+
+// The shipped checks must not collide in the first place — the leftover printer
+// above is a safety net, not the intended layout. Names are the report's
+// machine-readable identity (the macOS Diagnostics pane maps them to titles), so
+// a duplicate is a bug at the source.
+func TestDoctorChecksHaveUniqueNames(t *testing.T) {
+	cfg := config.Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun4"}
+	cfg.VPN.Endpoints = []string{"198.51.100.7"}
+	config.Normalize(&cfg)
+
+	r := runDoctor(&cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), false)
+	seen := map[string]bool{}
+	for _, c := range r.Checks {
+		if seen[c.Name] {
+			t.Errorf("two doctor checks share the name %q", c.Name)
+		}
+		seen[c.Name] = true
 	}
 }

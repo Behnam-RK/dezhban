@@ -304,6 +304,13 @@ loop constructs once at startup, or — for `windowProtocols`/`windowPorts` —
 only re-read when a switch window opens) need `dezhban restart` to take
 effect, which `config set` says so at the time.
 
+**`0` is not "off" here.** Only the three windows and `redialMinUptime` treat a
+`0` as an explicit opt-out; every other field in this table has no disabled
+state, so a non-positive value is replaced with the default shown below. That
+replacement is not silent — `config set` echoes the value actually stored and
+adds a `note: <key> was normalised on write: <typed> → <stored>` line whenever
+the two differ.
+
 | Field | Default | What it controls |
 |---|---|---|
 | `switchWindowMax` | `3m` | Hard cap on any MANUAL switch window (incl. `--for`). |
@@ -358,6 +365,15 @@ Each preset states its cost in plain words, never a bare "safe"/"strict" label
 - **Relaxed** — longer windows, slower checks, doesn't arm at boot. Cost: longer
   exposure per window; a forbidden exit takes longer to catch; a reboot before
   the VPN reconnects leaves the network open until you arm it by hand.
+
+A preset never touches `vpn.advanced.switchWindowMax` or
+`vpn.advanced.redialWindowMax`. Those are your own hard ceiling on two of the
+three relaxations, and a strictness macro that raised one would relax the guard
+past a limit you set by hand. The consequence is that lowering a cap can put a
+preset out of reach — Relaxed's `30s` switch window cannot be written under a
+`10s` `switchWindowMax`. `preset list` and `preset diff` mark such a preset
+`cannot apply:` with both values, `preset apply` refuses before writing
+anything, and the way forward is to raise the cap or pick another preset.
 
 See [cli.md](cli.md#create--manage-the-config) for `dezhban config preset
 list/show/diff/apply`.

@@ -2,9 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"io"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
 )
@@ -218,4 +221,130 @@ func TestConfigPresetApplyMatchesItself(t *testing.T) {
 			}
 		})
 	}
+}
+
+// A user who lowers vpn.advanced.switchWindowMax by hand puts Relaxed out of
+// reach. The write already failed safely — Validate rejects it, nothing is
+// persisted — but it failed naming the validation rule rather than the conflict,
+// leaving the user to work out that a preset the CLI offered can never apply.
+// Refuse up front, name both sides, and leave the file untouched.
+func TestConfigPresetApplyRefusesAgainstALoweredCap(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	cfg.VPN.Advanced.SwitchWindowMax = 10 * time.Second
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	msg := captureStderr(t, func() {
+		if code := cmdConfig([]string{"preset", "apply", "relaxed", "--config", p}); code != 1 {
+			t.Fatalf("preset apply exited %d, want 1", code)
+		}
+	})
+	for _, want := range []string{"cannot apply", "vpn.switchWindow", "vpn.advanced.switchWindowMax", "10s"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal %q does not mention %q", msg, want)
+		}
+	}
+
+	after, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(after) != string(before) {
+		t.Error("a refused preset apply rewrote the config file")
+	}
+	// And the preset must still be appliable once the cap allows it — the
+	// refusal is about this config, not about the preset.
+	cfg.VPN.Advanced.SwitchWindowMax = 3 * time.Minute
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	captureStdout(t, func() {
+		if code := cmdConfig([]string{"preset", "apply", "relaxed", "--config", p}); code != 0 {
+			t.Fatalf("preset apply exited %d under the default cap, want 0", code)
+		}
+	})
+}
+
+// `preset list` offers all three, so it must say which of them this config
+// cannot accept — discovering it at apply time is discovering it too late.
+func TestConfigPresetListFlagsAnInappliablePreset(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	cfg.VPN.Advanced.RedialWindowMax = time.Minute
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		if code := cmdConfig([]string{"preset", "list", "--config", p}); code != 0 {
+			t.Fatalf("preset list exited %d, want 0", code)
+		}
+	})
+	if !strings.Contains(out, "cannot apply") || !strings.Contains(out, "vpn.advanced.redialWindowMax") {
+		t.Errorf("preset list did not flag the inappliable preset:\n%s", out)
+	}
+}
+
+// Nine of the twelve advanced keys coerce a non-positive value back to their
+// shipped default (Normalize runs inside the write). The stored value was
+// already echoed truthfully, but silently: someone who typed `=0` meaning "off"
+// had to notice for themselves that a duration came back. Say it.
+func TestConfigSetReportsACoercedValue(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	out := captureStdout(t, func() {
+		if code := cmdConfig([]string{"set", "vpn.advanced.tunnelPruneAfter=0", "--config", p}); code != 0 {
+			t.Fatal("config set exited non-zero")
+		}
+	})
+	if !strings.Contains(out, "note: vpn.advanced.tunnelPruneAfter was normalised on write") {
+		t.Errorf("no coercion note for a value Normalize replaced:\n%s", out)
+	}
+
+	// The sentinel keys are NOT coerced, so they must not draw a note —
+	// reporting a change that did not happen is the same failure pointed the
+	// other way.
+	out = captureStdout(t, func() {
+		if code := cmdConfig([]string{"set", "vpn.advanced.redialMinUptime=0", "--config", p}); code != 0 {
+			t.Fatal("config set exited non-zero")
+		}
+	})
+	if strings.Contains(out, "was normalised on write") {
+		t.Errorf("redialMinUptime's disable sentinel was reported as coerced:\n%s", out)
+	}
+
+	// And an ordinary value stored exactly as typed stays quiet, whatever the
+	// formatting difference between "1h" and "1h0m0s".
+	out = captureStdout(t, func() {
+		if code := cmdConfig([]string{"set", "vpn.advanced.tunnelPruneAfter=1h", "--config", p}); code != 0 {
+			t.Fatal("config set exited non-zero")
+		}
+	})
+	if strings.Contains(out, "was normalised on write") {
+		t.Errorf("a value stored as typed was reported as coerced:\n%s", out)
+	}
+}
+
+func captureStderr(t *testing.T, fn func()) string {
+	t.Helper()
+	old := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stderr = w
+	defer func() { os.Stderr = old }()
+	fn()
+	_ = w.Close()
+	data, _ := io.ReadAll(r)
+	return string(data)
 }

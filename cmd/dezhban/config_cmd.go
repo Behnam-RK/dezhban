@@ -659,6 +659,11 @@ func configSet(flagVal string, args []string, useToken bool) int {
 			return 1
 		}
 	}
+	setKeys := make([]string, len(pairs))
+	for i, p := range pairs {
+		setKeys[i] = p.key
+	}
+	typed := renderKeys(cfg, setKeys)
 	path := writeTargetPath(flagVal)
 	if err := writeConfig(path, cfg); err != nil {
 		return saveError(path, err)
@@ -666,11 +671,51 @@ func configSet(flagVal string, args []string, useToken bool) int {
 	for _, p := range pairs {
 		fmt.Printf("set %s = %s  (%s)\n", p.key, configFields[p.key].get(cfg), path)
 	}
+	noteCoercions(cfg, typed)
 	// Writing the file used to be the whole story, which is why "I changed a
 	// setting and nothing happened" was the most common complaint: the daemon
 	// read its config once at startup and nobody ever told it to look again.
 	notifyReload(flagVal)
 	return 0
+}
+
+// renderKeys renders what the caller's input parsed to, BEFORE the write
+// normalises it — the input side of noteCoercions. Keys with no configFields
+// entry are skipped; every caller has already rejected those.
+func renderKeys(cfg *config.Config, keys []string) map[string]string {
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		if f, ok := configFields[k]; ok {
+			out[k] = f.get(cfg)
+		}
+	}
+	return out
+}
+
+// noteCoercions prints one line per key whose stored value is not what the
+// caller's input parsed to. writeConfig → config.Marshal runs Normalize in
+// place, so the "set k = v" echo already reports the value that was actually
+// stored — but it reports it silently, and a user who typed
+// `vpn.advanced.tunnelPruneAfter=0` meaning "off" has to notice for themselves
+// that `10m0s` came back. Nine of the twelve advanced keys coerce a
+// non-positive value to their shipped default like that (only
+// redialMinUptime carries the config.Disabled sentinel instead), so the
+// difference deserves a sentence rather than a stare.
+//
+// Both sides are rendered through the same field accessor, so a difference is
+// always a real change of value and never a formatting one ("1h" and "1h0m0s"
+// both render as "1h0m0s").
+func noteCoercions(cfg *config.Config, typed map[string]string) {
+	keys := make([]string, 0, len(typed))
+	for k := range typed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if now := configFields[k].get(cfg); now != typed[k] {
+			fmt.Printf("note: %s was normalised on write: %s → %s\n", k, typed[k], now)
+		}
+	}
 }
 
 // configReset restores config keys to their shipped defaults — the CLI twin of
@@ -757,12 +802,18 @@ identity (blockedCountries, tunnel interfaces, endpoints, profiles).`
 
 // presetJSON is the --json shape for 'preset list'/'preset show'. Values is
 // only populated by 'show' — 'list' omits it (a summary, not the full set).
+// Conflicts is likewise 'list'-only: it needs the current config to compute, and
+// 'show' describes a preset in the abstract.
 type presetJSON struct {
-	Name    string            `json:"name"`
-	Summary string            `json:"summary"`
-	Cost    string            `json:"cost"`
-	Matched bool              `json:"matched,omitempty"`
-	Values  map[string]string `json:"values,omitempty"`
+	Name    string `json:"name"`
+	Summary string `json:"summary"`
+	Cost    string `json:"cost"`
+	Matched bool   `json:"matched,omitempty"`
+	// Conflicts is empty for an appliable preset — see config.PresetConflicts.
+	// A picker should offer a preset with entries here as unavailable rather
+	// than let the user choose it and hit the failure at apply time.
+	Conflicts []string          `json:"conflicts,omitempty"`
+	Values    map[string]string `json:"values,omitempty"`
 }
 
 // changeJSON mirrors config.Change in the same lowerCamelCase convention the
@@ -863,7 +914,8 @@ func presetList(flagVal string, jsonOut bool) int {
 		for _, p := range config.Presets() {
 			out = append(out, presetJSON{
 				Name: p.Name, Summary: p.Summary, Cost: p.Cost,
-				Matched: exact && p.Name == matched,
+				Matched:   exact && p.Name == matched,
+				Conflicts: config.PresetConflicts(cfg, p),
 			})
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
@@ -882,6 +934,12 @@ func presetList(flagVal string, jsonOut bool) int {
 		}
 		fmt.Printf("%-9s %s%s\n", p.Name, p.Summary, marker)
 		fmt.Printf("          cost: %s\n", p.Cost)
+		// Listed but unavailable, said here rather than discovered at apply
+		// time: offering a preset that cannot be written is the part of this
+		// command a user would act on.
+		for _, c := range config.PresetConflicts(cfg, p) {
+			fmt.Printf("          cannot apply: %s\n", c)
+		}
 	}
 	if !exact {
 		near := nearestPreset(cfg)
@@ -949,6 +1007,7 @@ func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
 	}
 
 	changes := config.PresetDrift(cfg, target)
+	conflicts := config.PresetConflicts(cfg, target)
 
 	if jsonOut {
 		out := make([]changeJSON, 0, len(changes))
@@ -956,9 +1015,10 @@ func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
 			out = append(out, changeJSON{Key: c.Key, From: c.From, To: c.To, RestartReason: c.RestartReason})
 		}
 		data, err := json.MarshalIndent(struct {
-			Preset  string       `json:"preset"`
-			Changes []changeJSON `json:"changes"`
-		}{target.Name, out}, "", "  ")
+			Preset    string       `json:"preset"`
+			Changes   []changeJSON `json:"changes"`
+			Conflicts []string     `json:"conflicts,omitempty"`
+		}{target.Name, out, conflicts}, "", "  ")
 		if err != nil {
 			fmt.Fprintln(os.Stderr, "preset diff json:", err)
 			return 1
@@ -974,6 +1034,11 @@ func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
 	fmt.Printf("drift from %s:\n", target.Name)
 	for _, c := range changes {
 		fmt.Printf("  %s: %s → %s\n", c.Key, c.From, c.To)
+	}
+	// A diff that lists changes the corresponding apply would refuse is a diff
+	// the user cannot act on — say so here, in the same place they read it.
+	for _, c := range conflicts {
+		fmt.Printf("cannot apply: %s\n", c)
 	}
 	return 0
 }
@@ -1022,6 +1087,21 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 		}
 	}
 
+	// Pre-flight against the operator's own advanced caps, BEFORE either write
+	// path. Without it the write still fails safely — Validate rejects it and
+	// nothing is persisted — but the error names the validation rule
+	// ("vpn.switchWindow 30s exceeds vpn.advanced.switchWindowMax 10s") rather
+	// than the actual conflict, leaving the user to work out that a preset they
+	// were offered can never apply to their config. Same shape as the Strict
+	// warning above, but fatal: that one is a caveat, this one is a value the
+	// preset cannot legally write.
+	if conflicts := config.PresetConflicts(cfg, p); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			fmt.Fprintln(os.Stderr, "cannot apply:", c)
+		}
+		return 1
+	}
+
 	if useToken {
 		tok, terr := readTokenStdin()
 		if terr != nil {
@@ -1052,6 +1132,7 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 			return 1
 		}
 	}
+	typed := renderKeys(cfg, keys)
 	path := writeTargetPath(flagVal)
 	if err := writeConfig(path, cfg); err != nil {
 		return saveError(path, err)
@@ -1059,6 +1140,7 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 	for _, k := range keys {
 		fmt.Printf("set %s = %s  (%s)\n", k, configFields[k].get(cfg), path)
 	}
+	noteCoercions(cfg, typed)
 	notifyReload(flagVal)
 	return 0
 }

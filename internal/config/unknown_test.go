@@ -328,3 +328,46 @@ func TestArrayIndexedKeysSortNumerically(t *testing.T) {
 		t.Errorf("indices reported in order %v, want ascending — array keys are sorting lexicographically", got)
 	}
 }
+
+// The reported key keeps the FILE's spelling so the user can find the line, so a
+// miscased PARENT block ("VPN" rather than "vpn") reaches the renamedKeys lookup
+// with a path the map does not hold verbatim. The rename hint is the only part
+// of that line a reader can act on, and losing it over a parent's casing leaves
+// a truthful but useless "not a recognised config key". The value is dead in
+// both spellings — a renamed key has no struct field for the decoder's
+// case-insensitive fallback to land on — so the hint is right either way.
+func TestRenameHintSurvivesAMiscasedParentBlock(t *testing.T) {
+	cases := []string{
+		"vpn.profiles[1].ifaceHint", // exact
+		"VPN.profiles[1].ifaceHint", // parent miscased
+		"vpn.Profiles[1].IfaceHint", // parent and leaf miscased
+	}
+	for _, key := range cases {
+		got, tookEffect := describeUnknown(unknownKey{Key: key})
+		if want := "renamed to vpn.profiles[].tunnelHint"; !strings.Contains(got, want) {
+			t.Errorf("describeUnknown(%q) = %q, want it to mention %q", key, got, want)
+		}
+		if tookEffect {
+			t.Errorf("describeUnknown(%q) reported a renamed key as live", key)
+		}
+	}
+}
+
+// End to end through the loader: the note a user actually reads for a miscased
+// parent block must carry the replacement name.
+func TestMiscasedParentBlockStillReportsTheRename(t *testing.T) {
+	cfg := loadFromJSON(t, `{"VPN": {"profiles": [{"name":"a","endpoints":["1.2.3.4"],"ifaceHint":"wg"}]}}`)
+	var found bool
+	for _, r := range cfg.Retired {
+		if !strings.Contains(r.Key, "ifaceHint") {
+			continue
+		}
+		found = true
+		if want := "vpn.profiles[].tunnelHint"; !strings.Contains(r.Reason, want) {
+			t.Errorf("reason %q does not name the replacement %q", r.Reason, want)
+		}
+	}
+	if !found {
+		t.Errorf("the miscased-parent ifaceHint was not reported at all; reported: %v", retiredKeys(cfg))
+	}
+}

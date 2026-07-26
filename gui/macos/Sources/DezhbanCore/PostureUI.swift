@@ -121,18 +121,41 @@ public enum PostureUI {
         state == "blocked" ? "blocked" : "on"
     }
 
+    /// Lock-guarded image cache. This was a plain `private static var [String:
+    /// NSImage]`, which is mutable global state with no isolation — legal under
+    /// this package's swift-tools-version:5.9, a hard error the day it moves to
+    /// Swift 6 strict concurrency, and already a data race in principle.
+    ///
+    /// A lock rather than `@MainActor`: `dockIcon` is a pure lookup with no UI
+    /// side effects, and isolating it would force every caller onto the main
+    /// actor (or into an `await`) just to read an image. The load runs inside
+    /// the lock so two simultaneous first-lookups of the same state decode the
+    /// PNG once instead of racing to store two copies.
+    private final class ImageCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var images: [String: NSImage] = [:]
+
+        func image(_ key: String, load: () -> NSImage?) -> NSImage? {
+            lock.lock()
+            defer { lock.unlock() }
+            if let img = images[key] { return img }
+            guard let img = load() else { return nil }
+            images[key] = img
+            return img
+        }
+    }
+
     /// Dock-size brand state images from the app bundle's Resources (put there by
     /// build-app.sh from gui/artifacts/png), cached per state. Empty outside the bundle,
     /// where callers fall back to SF Symbols. Shared by the Dock tile and the
     /// Overview hero.
-    private static var dockIcons: [String: NSImage] = [:]
+    private static let dockIcons = ImageCache()
 
     public static func dockIcon(_ state: String) -> NSImage? {
-        if let img = dockIcons[state] { return img }
-        guard let url = Bundle.main.url(forResource: "dock-state-\(state)", withExtension: "png"),
-              let img = NSImage(contentsOf: url) else { return nil }
-        dockIcons[state] = img
-        return img
+        dockIcons.image(state) {
+            Bundle.main.url(forResource: "dock-state-\(state)", withExtension: "png")
+                .flatMap { NSImage(contentsOf: $0) }
+        }
     }
 
     public static func agoString(_ seconds: TimeInterval) -> String {

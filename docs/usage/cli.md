@@ -220,6 +220,13 @@ other write. It never touches identity (blocked countries, tunnel interfaces,
 endpoints, profiles); add `--json` to `list`/`show`/`diff` for machine-readable
 output.
 
+A preset also never raises `vpn.advanced.switchWindowMax`/`redialWindowMax`, so
+lowering one of those caps by hand can put a preset out of reach. `list` and
+`diff` mark it `cannot apply:` with both values (a `conflicts` array under
+`--json`), and `apply` refuses before writing anything rather than failing on a
+validation rule mid-write. See
+[config.md](config.md#presets) for the reasoning.
+
 ### Changing settings without a password
 
 Settings changes can also go over the control socket, so the macOS app's Settings
@@ -296,12 +303,15 @@ sudo dezhban vpn forget <name>          # drop a learned endpoint
 window from the state file until it closes. See [modes.md](../concepts/modes.md#switch-window--connecting-a-brand-new-vpn)
 for the posture and the real-IP-exposure trade-off.
 
-`switch --status` prints the rendered window sentence followed by an
-`until: <RFC3339>` line — the exact deadline, since the sentence dates a window
-only to a wall-clock time and a window can outlive both its date and its minute:
+`switch --status` leads with a fixed token — `switch window: OPEN`,
+`switch window: closed`, or `pause: OPEN` for a window opened by `dezhban pause`
+— then the rendered window sentence, then an `until: <RFC3339>` line. The token
+is what a script tests, and it does not move with the wording; the `until:` line
+carries the exact deadline, since the sentence dates a window only to a
+wall-clock time and a window can outlive both its date and its minute:
 
 ```
-Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM).
+switch window: OPEN — Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM).
 until: 2026-07-25T15:04:00Z
 ```
 

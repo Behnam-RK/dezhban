@@ -202,6 +202,46 @@ func PresetDrift(c *Config, p Preset) []Change {
 	return Changes(c, &target)
 }
 
+// PresetConflicts reports why p cannot be applied to c as things stand: one
+// entry per preset window that exceeds a cap the user has lowered in
+// vpn.advanced, naming both sides and what to do about it. Empty means p is
+// appliable.
+//
+// A preset never resolves this by widening the cap, which is why the two caps
+// are deliberately absent from presetKeys. vpn.advanced.switchWindowMax and
+// redialWindowMax are the operator's own hard ceiling on two of the three
+// sanctioned relaxations; a strictness macro that silently raised one would
+// relax the guard past a limit its owner set by hand — exactly what the caps
+// exist to prevent. So a conflicting preset is refused by name, up front,
+// instead of failing at Validate with an error that names only the rule.
+//
+// Only the two capped windows can conflict: vpn.pauseMax IS the pause cap (it
+// has none above it), and the remaining five preset keys have no ceiling.
+func PresetConflicts(c *Config, p Preset) []string {
+	target, err := p.apply(*c)
+	if err != nil {
+		// Malformed preset — same reasoning as PresetDrift's panic.
+		panic(err)
+	}
+	var out []string
+	check := func(key string, want, max time.Duration, capKey string, fallback time.Duration) {
+		if max <= 0 {
+			max = fallback
+		}
+		if want > 0 && want > max {
+			out = append(out, fmt.Sprintf(
+				"%s sets %s %s, above your %s %s — raise the cap (dezhban config set %s=%s) or pick another preset",
+				p.Name, key, want, capKey, max, capKey, want))
+		}
+	}
+	adv := c.VPN.Advanced
+	check("vpn.switchWindow", target.VPN.SwitchWindow, adv.SwitchWindowMax,
+		"vpn.advanced.switchWindowMax", defaultSwitchWindowMax)
+	check("vpn.redialWindow", target.VPN.RedialWindow, adv.RedialWindowMax,
+		"vpn.advanced.redialWindowMax", defaultRedialWindowMax)
+	return out
+}
+
 // MatchPreset reports which preset c currently matches exactly (checked in
 // Presets() order — Strict, Balanced, Relaxed), or ("", false) for a config
 // that has drifted from all three ("Custom").

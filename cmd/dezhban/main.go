@@ -1721,22 +1721,42 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 // (DiscoverEndpoints only errors on a non-macOS host or a failed netstat), so
 // it is normalised to two rather than reproduced.
 func printDoctor(r doctorReport) {
-	byName := map[string]doctorCheck{}
-	for _, c := range r.Checks {
-		byName[c.Name] = c
+	// Index by name, FIRST wins, and record which checks the fixed layout below
+	// actually consumes. That closes two silent-drop holes at once: a second
+	// check sharing a Name used to overwrite the first, and a check whose name
+	// has no section here (one added to runDoctor tomorrow) would never print
+	// at all. Both leftovers are printed generically at the end — a diagnostic
+	// that quietly omits a finding is the one bug this command cannot afford,
+	// since a dropped check reads exactly like a check that passed.
+	byName := map[string]int{}
+	shown := make([]bool, len(r.Checks))
+	for i, c := range r.Checks {
+		if _, dup := byName[c.Name]; !dup {
+			byName[c.Name] = i
+		}
+	}
+	get := func(name string) (doctorCheck, bool) {
+		i, ok := byName[name]
+		if !ok {
+			return doctorCheck{}, false
+		}
+		shown[i] = true
+		return r.Checks[i], true
 	}
 
 	fmt.Println("dezhban doctor")
 	fmt.Println()
-	fmt.Printf("config:  %s\n", byName["config"].Summary)
+	cfgCheck, _ := get("config")
+	fmt.Printf("config:  %s\n", cfgCheck.Summary)
 	fmt.Println()
 
 	fmt.Println("tunnels:")
-	printDetails(byName["tunnels"].Details)
+	tun, _ := get("tunnels")
+	printDetails(tun.Details)
 	fmt.Println()
 
 	fmt.Println("endpoints (resolved: literals + hostnames + discovery):")
-	ep := byName["endpoints"]
+	ep, _ := get("endpoints")
 	printDetails(ep.Details)
 	if len(ep.Fixes) > 0 {
 		fmt.Println()
@@ -1746,7 +1766,7 @@ func printDoctor(r doctorReport) {
 		}
 	}
 
-	if lockout, ok := byName["lockout"]; ok {
+	if lockout, ok := get("lockout"); ok {
 		fmt.Println()
 		fmt.Printf("LOCKOUT RISK — %s:\n", lockout.Summary)
 		printDetails(lockout.Details)
@@ -1757,7 +1777,7 @@ func printDoctor(r doctorReport) {
 	}
 	fmt.Println()
 
-	if touchID, ok := byName["touchID"]; ok {
+	if touchID, ok := get("touchID"); ok {
 		fmt.Printf("touch id: %s\n", touchID.Summary)
 		printDetails(touchID.Details)
 		fmt.Println()
@@ -1767,7 +1787,7 @@ func printDoctor(r doctorReport) {
 		fmt.Println()
 	}
 
-	if discover, ok := byName["discover"]; ok {
+	if discover, ok := get("discover"); ok {
 		fmt.Println("discover (best-effort, macOS):")
 		// A degenerate discover run (an error, or nothing found) carries its one
 		// line as Summary rather than duplicating it into Details, so print that
@@ -1779,6 +1799,23 @@ func printDoctor(r doctorReport) {
 		for _, f := range discover.Fixes {
 			fmt.Printf("  %s\n", f)
 		}
+	}
+
+	// Whatever the layout above did not consume, in the order runDoctor emitted
+	// it. Normally empty — TestDoctorChecksHaveUniqueNames pins that the shipped
+	// checks are unique and this function has a section for each — so reaching
+	// this loop means a check was added without a home here, and it prints
+	// plainly rather than vanishing.
+	for i, c := range r.Checks {
+		if shown[i] {
+			continue
+		}
+		fmt.Printf("%s: %s\n", c.Name, c.Summary)
+		printDetails(c.Details)
+		for _, f := range c.Fixes {
+			fmt.Printf("    %s\n", f)
+		}
+		fmt.Println()
 	}
 }
 

@@ -67,6 +67,31 @@ var renamedKeys = map[string]string{
 	"vpn.profiles[].ifaceHint": "vpn.profiles[].tunnelHint",
 }
 
+// lookupRenamed resolves a reported key to its replacement, ignoring letter
+// case. The fold matters because the reported path keeps the FILE's own
+// spelling, so the user can find the line to fix: `"VPN": {"profiles":
+// [{"ifaceHint": …}]}` is reported as "VPN.profiles[0].ifaceHint", and an
+// exact-match lookup would lose the rename hint over the parent block's casing
+// alone — leaving a truthful but useless "not a recognised config key" that
+// sends the reader hunting for a key that simply moved.
+//
+// Folding is safe precisely because these keys are dead: the decoder's
+// case-insensitive fallback can only land a value on a field that EXISTS, and a
+// renamed key by definition has none — so no spelling of it takes effect and
+// the hint is right for every one of them.
+//
+// A linear scan, not a precomputed folded index: renamedKeys holds a handful of
+// entries and this runs once per unknown key at load time, so the index would
+// buy nothing and could go stale against the map it mirrors.
+func lookupRenamed(key string) (string, bool) {
+	for from, to := range renamedKeys {
+		if strings.EqualFold(from, key) {
+			return to, true
+		}
+	}
+	return "", false
+}
+
 // unknownKey is one key from the file that is not spelled the way the schema
 // spells it, and the schema key (if any) the decoder folded it onto.
 type unknownKey struct {
@@ -247,7 +272,9 @@ var arrayIndexPattern = regexp.MustCompile(`\[\d+\]`)
 // "vpn.profiles[2].ifaceHint") keeps its index for the user — it says exactly
 // which entry to fix — but is normalised to "vpn.profiles[].ifaceHint" before
 // consulting renamedKeys, so one map entry covers a rename inside every element
-// rather than needing one per index.
+// rather than needing one per index. The lookup is likewise case-folded (see
+// lookupRenamed), so a miscased parent block does not cost the reader the one
+// part of this line they can act on.
 func describeUnknown(u unknownKey) (reason string, tookEffect bool) {
 	if u.Canonical != "" {
 		if why, retired := retiredReasons[u.Canonical]; retired {
@@ -260,7 +287,7 @@ func describeUnknown(u unknownKey) (reason string, tookEffect bool) {
 			"in effect — rename it to match so the file says what it does", u.Canonical), true
 	}
 	lookupKey := arrayIndexPattern.ReplaceAllString(u.Key, "[]")
-	if to, ok := renamedKeys[lookupKey]; ok {
+	if to, ok := lookupRenamed(lookupKey); ok {
 		return "renamed to " + to + "; the old name has no effect", false
 	}
 	return "not a recognised config key; it has no effect", false

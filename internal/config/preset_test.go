@@ -1,6 +1,10 @@
 package config
 
-import "testing"
+import (
+	"strings"
+	"testing"
+	"time"
+)
 
 func TestPresetsAreWellFormed(t *testing.T) {
 	for _, p := range Presets() {
@@ -145,4 +149,64 @@ func TestPresetByNameIsCaseInsensitive(t *testing.T) {
 	if _, ok := PresetByName("nonexistent"); ok {
 		t.Error("PresetByName(\"nonexistent\") unexpectedly found")
 	}
+}
+
+// A user who lowers vpn.advanced.switchWindowMax by hand puts some presets out
+// of reach — Relaxed's 30s switch window cannot be written under a 10s cap.
+// PresetConflicts must say so up front, naming both sides, rather than leaving
+// the user to decode Validate's "exceeds vpn.advanced.switchWindowMax" at apply
+// time. And the preset must NOT resolve it by raising the cap: the cap is the
+// operator's own ceiling on a sanctioned relaxation of the guard.
+func TestPresetConflictsAgainstLoweredAdvancedCaps(t *testing.T) {
+	base := Default()
+	Normalize(&base)
+	if got := PresetConflicts(&base, mustPreset(t, "relaxed")); len(got) != 0 {
+		t.Fatalf("relaxed conflicts at shipped defaults: %v", got)
+	}
+
+	lowered := base
+	lowered.VPN.Advanced.SwitchWindowMax = 10 * time.Second
+	got := PresetConflicts(&lowered, mustPreset(t, "relaxed"))
+	if len(got) != 1 {
+		t.Fatalf("PresetConflicts = %v, want exactly one conflict", got)
+	}
+	for _, want := range []string{"vpn.switchWindow", "vpn.advanced.switchWindowMax", "30s", "10s"} {
+		if !strings.Contains(got[0], want) {
+			t.Errorf("conflict %q does not name %q", got[0], want)
+		}
+	}
+	// Strict disables the windows outright, which no cap can forbid — a
+	// tightening is always appliable.
+	if c := PresetConflicts(&lowered, mustPreset(t, "strict")); len(c) != 0 {
+		t.Errorf("strict conflicts under a lowered cap: %v", c)
+	}
+
+	// The redial cap is separate and must be reported separately — the two
+	// windows deliberately never share a ceiling.
+	lowered2 := base
+	lowered2.VPN.Advanced.RedialWindowMax = time.Minute
+	got2 := PresetConflicts(&lowered2, mustPreset(t, "relaxed"))
+	if len(got2) != 1 || !strings.Contains(got2[0], "vpn.advanced.redialWindowMax") {
+		t.Errorf("PresetConflicts = %v, want one redialWindowMax conflict", got2)
+	}
+}
+
+// A preset never widens a cap: neither advanced cap may appear in presetKeys,
+// or applying a "strictness" macro would silently raise a ceiling the operator
+// set by hand.
+func TestPresetsNeverSetTheAdvancedCaps(t *testing.T) {
+	for _, k := range presetKeys {
+		if k == "vpn.advanced.switchWindowMax" || k == "vpn.advanced.redialWindowMax" {
+			t.Errorf("presetKeys contains %q — a preset must never widen a cap the operator set", k)
+		}
+	}
+}
+
+func mustPreset(t *testing.T, name string) Preset {
+	t.Helper()
+	p, ok := PresetByName(name)
+	if !ok {
+		t.Fatalf("preset %q not found", name)
+	}
+	return p
 }

@@ -492,6 +492,49 @@ current as you land changes.
   landed, silently overwriting anything typed but not yet saved. The
   confirmation now says so when there is something to lose.
 
+- **A preset that your own advanced caps forbid is now refused by name, before
+  anything is written.** `vpn.advanced.switchWindowMax`/`redialWindowMax` are
+  deliberately not preset keys — a strictness macro must never raise a ceiling
+  you set by hand — so lowering one can put a preset out of reach. `config
+  preset apply relaxed` under a `10s` `switchWindowMax` used to fail with
+  `vpn.switchWindow 30s exceeds vpn.advanced.switchWindowMax 10s`, which names
+  the validation rule rather than the conflict, while `preset list` and `preset
+  diff` went on offering and diffing a preset that could never apply. All three
+  now say `cannot apply:` with both values and the way forward (`--json` gets a
+  `conflicts` array); the write is refused up front rather than part-way
+  through validation. Nothing was ever persisted in either case. The macOS
+  app's preset picker reads the same field and greys such a preset out with
+  the reason beside it, instead of offering a button that fails when pressed.
+
+- **A renamed config key nested under a miscased parent block keeps its rename
+  hint.** The report shows a key with the spelling your file uses, so it can be
+  found and fixed — but that meant `{"VPN": {"profiles": [{"ifaceHint": …}]}}`
+  reached the rename table as `VPN.profiles[0].ifaceHint` and missed, degrading
+  "renamed to `vpn.profiles[].tunnelHint`" to a bare "not a recognised config
+  key". Both were truthful that the value is dead; only one told you what to
+  change it to. The lookup now ignores letter case.
+
+- **`dezhban switch --status` leads with a stable token again.** Growing a
+  rendered prose sentence left the open branch with no fixed string, while the
+  closed branch still printed `switch window: closed` — so a script testing for
+  `OPEN` silently stopped matching and read an open exposure window as closed.
+  Output is now `switch window: OPEN — <sentence>` (or `pause: OPEN — …`),
+  keeping the sentence and the `until: <RFC3339>` line.
+
+- **`config set` now says when it stored something other than what you typed.**
+  Nine of the twelve `vpn.advanced.*` keys have no disabled state, so a `0`
+  meant as "off" is replaced by the shipped default. The echoed value was
+  already honest, but silently so; a `note: <key> was normalised on write:
+  <typed> → <stored>` line now appears whenever the two differ. The three
+  windows and `redialMinUptime`, whose `0` is a real opt-out, are unaffected
+  and draw no note.
+
+- **`dezhban doctor` can no longer drop a check on the floor.** The text layout
+  indexed checks by name, so two checks sharing a name — or one whose name the
+  layout has no section for — never printed, and a missing check reads exactly
+  like a check that passed. Both cases now print; the shipped checks are also
+  pinned unique by a test.
+
 ## [0.7.0] - 2026-07-22
 
 ### Added

@@ -259,17 +259,22 @@ func printSwitchStatus(statePath string) int {
 	// not take the sentence's place (see render.Posture). `status` still shows
 	// that failure, which is where a general readout belongs.
 	detail := render.Posture(snap).Detail
+	// Every branch leads with a fixed `<what>: OPEN` token, symmetric with the
+	// `switch window: closed` above and unchanged from before this readout grew
+	// its prose sentence. The prose is for a person; the token is the contract a
+	// script tests, and it must not move with the wording — a `grep -q OPEN`
+	// that silently stops matching reports an open exposure window as closed.
 	switch snap.Switch.Trigger {
 	case state.TriggerPause:
 		// A pause shares the window machinery but is not a switch window —
-		// name the extra hint accordingly.
-		fmt.Printf("%s (end early with `dezhban resume`)\n", detail)
+		// name it, and its hint, accordingly.
+		fmt.Printf("pause: OPEN — %s (end early with `dezhban resume`)\n", detail)
 	default:
 		extra := ""
 		if snap.Switch.Profile != "" {
 			extra = fmt.Sprintf(" (profile %q)", snap.Switch.Profile)
 		}
-		fmt.Printf("%s%s\n", detail, extra)
+		fmt.Printf("switch window: OPEN — %s%s\n", detail, extra)
 	}
 	// The rendered sentence carries the deadline as a bare wall-clock time
 	// (render.untilFormat is time.Kitchen), which is the right register for

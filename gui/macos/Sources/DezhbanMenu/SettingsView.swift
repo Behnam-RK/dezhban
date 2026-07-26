@@ -274,7 +274,22 @@ struct SettingsView: View {
                     }
                     .buttonStyle(.bordered)
                     .tint((p.matched ?? false) ? Color.accentColor : Color.secondary)
-                    .disabled(presetBusy || !canApply)
+                    // A preset the CLI would refuse (its window exceeds a cap
+                    // lowered in Advanced) is offered as unavailable, with the
+                    // reason on hover — letting it be clicked would trade a
+                    // greyed button for an error sheet after the fact.
+                    .disabled(presetBusy || !canApply || !p.isAppliable)
+                    .help(p.isAppliable ? p.summary : (p.conflicts ?? []).joined(separator: "\n"))
+                }
+            }
+            // Said in the pane, not only on hover: the reason names a value the
+            // user set themselves in Advanced, and raising it is the fix.
+            ForEach(presets.filter { !$0.isAppliable }) { p in
+                ForEach(p.conflicts ?? [], id: \.self) { c in
+                    Label("Can't apply \(c)", systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
                 }
             }
             if let matched = presets.first(where: { $0.matched ?? false }) {
