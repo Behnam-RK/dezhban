@@ -1201,6 +1201,145 @@ func TestDropRecordClearsWhenTheTunnelReturns(t *testing.T) {
 	}
 }
 
+// Hold the line must suppress the automatic redial window for exactly one drop:
+// a deliberate disconnect stays cut instead of being handed a relaxation nobody
+// asked for. It never opens anything — the three sanctioned triggers are
+// unchanged — so the assertion is the absence of a switch window.
+func TestHoldTheLineSuppressesTheRedialWindow(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	// Arm it over the command file before the tunnel drops.
+	cmds := []command.Command{{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "hold-1"}}
+	sent := 0
+	o := Options{
+		Monitor:      steadyMonitor{cc: "US"},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      edgeWatcher(8),
+		RedialWindow: 50 * time.Millisecond,
+		CommandPoll:  time.Millisecond,
+		PollCommand: func() (command.Command, bool) {
+			if sent < len(cmds) {
+				c := cmds[sent]
+				sent++
+				return c, true
+			}
+			return command.Command{}, false
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			t.Fatalf("a redial window opened despite hold the line being armed; calls = %v", be.calls)
+		}
+	}
+}
+
+// Without the arm, the very same fixture must open a window — otherwise the
+// test above would pass for the wrong reason (a fixture that never drops).
+func TestWithoutHoldTheSameDropOpensAWindow(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	o := Options{
+		Monitor:      steadyMonitor{cc: "US"},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      edgeWatcher(8),
+		RedialWindow: 50 * time.Millisecond,
+		CommandPoll:  time.Millisecond,
+		PollCommand:  func() (command.Command, bool) { return command.Command{}, false },
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	opened := false
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			opened = true
+		}
+	}
+	if !opened {
+		t.Fatalf("the control fixture never opened a window, so the hold test proves nothing; calls = %v", be.calls)
+	}
+}
+
+// It is one-shot. Arming must not silently persist and cut a LATER, accidental
+// drop off from the redial help it should have had.
+func TestHoldTheLineIsSpentByTheDropItCovers(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+
+	// up, up, DOWN (hold spends here), up, up, DOWN (must open a window).
+	n := 0
+	watcher := &netdetect.Watcher{
+		Interval: 2 * time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			n++
+			up := netdetect.TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+			switch {
+			case n <= 3:
+				return up
+			case n <= 6:
+				return netdetect.TunnelState{}
+			case n <= 10:
+				return up
+			default:
+				return netdetect.TunnelState{}
+			}
+		},
+	}
+
+	cmds := []command.Command{{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "hold-1"}}
+	sent := 0
+	o := Options{
+		Monitor:      steadyMonitor{cc: "US"},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      watcher,
+		RedialWindow: 30 * time.Millisecond,
+		CommandPoll:  time.Millisecond,
+		PollCommand: func() (command.Command, bool) {
+			if sent < len(cmds) {
+				c := cmds[sent]
+				sent++
+				return c, true
+			}
+			return command.Command{}, false
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	switches := 0
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			switches++
+		}
+	}
+	if switches == 0 {
+		t.Fatalf("the second drop opened no window — hold the line outlived the drop it covered; calls = %v", be.calls)
+	}
+}
+
 // postures summarizes a snapshot run for failure messages.
 func postures(snaps []state.Snapshot) []string {
 	out := make([]string, 0, len(snaps))
@@ -1390,7 +1529,7 @@ func TestLookupFailureClassification(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var got state.Snapshot
 			o := Options{Publish: func(s state.Snapshot) { got = s }}
-			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil)
+			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil, nil)
 
 			if hasErr := got.LookupErr != ""; hasErr != c.wantLookupErr {
 				t.Errorf("LookupErr set = %v, want %v (got %q)", hasErr, c.wantLookupErr, got.LookupErr)
@@ -1412,7 +1551,7 @@ func TestSuccessfulLookupSetsNoErrorFields(t *testing.T) {
 	var got state.Snapshot
 	o := Options{Publish: func(s state.Snapshot) { got = s }}
 	o.publish(false, false, monitor.Reading{CountryCode: "NL"}, nil, nil,
-		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil)
+		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil, nil)
 	if got.LookupErr != "" || got.ExitUnknown != "" {
 		t.Errorf("a successful lookup set LookupErr=%q ExitUnknown=%q, want both empty", got.LookupErr, got.ExitUnknown)
 	}

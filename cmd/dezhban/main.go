@@ -77,6 +77,7 @@ Commands:
   switch      Open a bounded window to connect a brand-new VPN (learns its server)
   pause       Open a bounded pause: real ISP IP for a while, then re-arms itself
   resume      End an open pause early
+  hold        Keep the next VPN drop cut: no automatic redial window
   vpn         Manage VPN profiles and learned endpoints (list/add/remove/import/…)
   setup       Interactive wizard to create or update the config
   config      Inspect or change the config without hand-editing JSON
@@ -90,11 +91,12 @@ Global flags:
   --no-sudo       Don't auto-elevate; print the root error instead
   --no-daemon     Don't use the daemon's control socket; act on the firewall directly
 
-block, unblock, switch, pause and resume ask the running daemon over its control
-socket, which needs no password (see the "daemon control" line in dezhban
-status). With no daemon listening, block/unblock fall back to acting on the
-firewall directly; switch/pause/resume fall back to the root-owned command file,
-which needs a running daemon to consume it — either way, needing root.
+block, unblock, switch, pause, resume and hold ask the running daemon over its
+control socket, which needs no password (see the "daemon control" line in
+dezhban status). With no daemon listening, block/unblock fall back to acting on
+the firewall directly; switch/pause/resume/hold fall back to the root-owned
+command file, which needs a running daemon to consume it — either way, needing
+root.
 
 Privileged commands re-run themselves under sudo automatically when not root
 (unix, interactive terminal). Use --no-sudo (or DEZHBAN_NO_SUDO=1) to opt out.
@@ -147,6 +149,8 @@ func run(args []string) int {
 		return cmdPause(rest)
 	case "resume":
 		return cmdResume(rest)
+	case "hold":
+		return cmdHold(rest)
 	case "vpn":
 		return cmdVPN(rest)
 	case "setup":

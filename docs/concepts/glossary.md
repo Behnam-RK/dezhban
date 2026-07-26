@@ -102,6 +102,17 @@ gate (`control.allowPauseOps`), and `switch --cancel` refuses to touch it (use
 `resume`). See [ADR-0008](../adr/0008-arm-at-boot.md). User-facing: "Paused —
 the guard re-arms automatically at «time»."
 
+**Hold the line** — an armed intent that the NEXT tunnel drop stays cut: no
+redial window opens, so a deliberate disconnect does not get a relaxation nobody
+asked for. **Not a fourth trigger.** It is the only thing in this section that
+*removes* a relaxation rather than granting one, which is also why it has no
+`control.allow*` gate — there is no authority to withhold. One-shot: spent by the
+drop it covers, disarmed when a tunnel returns, and gone on restart, so a
+forgotten flag can never leave a later accidental drop without redial help.
+`dezhban hold` / `hold --cancel` / `hold --status`. User-facing: "The next VPN
+drop stays cut." Contrast with Pause, which is its opposite in both directions:
+pause means "let me use my real IP", hold the line means "keep me cut".
+
 ## Network concepts
 
 **Tunnel interface** — the virtual network interface the VPN creates (`utun4`, `tun0`).

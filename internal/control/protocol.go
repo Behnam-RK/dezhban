@@ -64,6 +64,19 @@ const (
 	// additionally governed by control.allowConfigOps. A client that cannot
 	// prove it holds the enrolled token is refused, whatever its group.
 	OpConfigWrite Op = "config-write"
+	// OpHoldArm arms "hold the line": the next tunnel drop stays cut instead of
+	// opening an automatic redial window, so a deliberate disconnect does not
+	// get a relaxation the operator never asked for.
+	//
+	// Ungated, and deliberately so. Every other gate exists to withhold an
+	// authority; this op grants none — it only ever SUPPRESSES a relaxation, so
+	// the worst an unwanted call can do is leave the host more protected than it
+	// would otherwise be. Adding a control.allow* flag would imply there is
+	// something here to protect against, and would give an operator a way to
+	// switch off the safer behaviour.
+	OpHoldArm Op = "hold-arm"
+	// OpHoldCancel disarms it, so the next drop opens a redial window normally.
+	OpHoldCancel Op = "hold-cancel"
 	// OpReload makes the daemon re-read its own config file and adopt whatever
 	// it can without restarting. Ungated, and deliberately so: the config file
 	// is root-owned, so this op grants no authority its caller did not already

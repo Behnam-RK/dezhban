@@ -30,6 +30,20 @@ current as you land changes.
   table, which itself derives the values from the shipped defaults, so the same
   drift cannot recur.
 
+- **`dezhban hold` keeps a deliberate disconnect cut.** dezhban cannot tell a VPN
+  you turned off from a VPN that fell over, so it treats every drop the same way
+  and opens a redial window — a relaxation you never asked for when you are the
+  one disconnecting. Arm hold the line first and the next drop stays cut, with
+  the icon red because traffic really is cut. `hold --status` reports it,
+  `hold --cancel` disarms it.
+
+  It only ever **removes** a relaxation, so the three sanctioned triggers are
+  unchanged and there is no fourth — and it carries no `control.allow*` gate,
+  because there is no authority to withhold. One-shot on purpose: spent by the
+  drop it covers, disarmed once a tunnel is back, and forgotten if the daemon
+  restarts, so a flag left armed can never cost a later *accidental* drop the
+  redial help it should have had. `status --json` gains a `hold` object.
+
 - **A relaxed guard says so first, and names when your VPN dropped.** Every
   window sentence now leads with the exposure and when it ends, instead of
   opening with the machinery and leaving the consequence trailing after a dash:

@@ -90,6 +90,10 @@ type Snapshot struct {
 	// Additive field: absent from older snapshots, so nil means "no drop is
 	// being carried", never "no drop has ever happened".
 	Drop *DropRecord `json:"drop,omitempty"`
+	// Hold reports that the next tunnel drop will stay cut instead of opening
+	// an automatic redial window. Present only while armed. Additive field:
+	// absent from older snapshots, so nil means "not armed".
+	Hold *HoldState `json:"hold,omitempty"`
 	// Display is the rendered posture sentence — see internal/render, the
 	// package that composes it from this same Snapshot. Carried here for the
 	// one consumer that cannot call Go directly: the macOS menubar app reads
@@ -165,6 +169,26 @@ type DropRecord struct {
 	// happened in a posture that was not cutting (standby), where saying
 	// "traffic was cut" would be a lie.
 	Cut bool `json:"cut"`
+}
+
+// HoldState reports that "hold the line" is armed: the next tunnel drop will
+// NOT open an automatic redial window, so a deliberate disconnect stays cut.
+//
+// dezhban cannot tell an intentional disconnect from an accidental drop, and
+// that ambiguity is the whole reason this exists — disconnecting by hand
+// otherwise opens a redial window the user never wanted. Arming says which kind
+// of drop the next one will be.
+//
+// It only ever SUPPRESSES. It removes an automatic relaxation for one drop and
+// grants nothing, so the three sanctioned relaxation triggers are unchanged and
+// there is no fourth. Being strictly more restrictive is also why it needs no
+// config gate of its own: there is no setting to protect.
+type HoldState struct {
+	// Armed is true from the moment it is armed until the drop it covers, an
+	// explicit cancel, or a tunnel coming back up.
+	Armed bool `json:"armed"`
+	// At is when it was armed.
+	At time.Time `json:"at"`
 }
 
 // Trigger values for SwitchState.Trigger. Stable identifiers — status --json

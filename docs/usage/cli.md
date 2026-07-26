@@ -350,6 +350,29 @@ duration and re-arms the guard by itself at the deadline, so there's nothing to
 remember to turn back on. See
 [modes.md](../concepts/modes.md#pause--deliberately-using-your-real-ip).
 
+## Keep a deliberate disconnect cut
+
+dezhban cannot tell a VPN you turned off from a VPN that fell over, so by default
+it treats every drop the same way: it opens a redial window so the client can get
+back. When you are the one disconnecting, that is a relaxation you never asked
+for. Arm **hold the line** first and the next drop stays cut:
+
+```sh
+dezhban hold               # the next VPN drop stays cut — no redial window
+dezhban hold --status      # armed or not
+dezhban hold --cancel      # back to the usual behaviour
+```
+
+It is the opposite of `pause` in both directions: pause says *let me use my real
+IP*, hold the line says *keep me cut*. It only ever **removes** a relaxation, so
+the three sanctioned triggers are unchanged and there is no fourth — which is
+also why it needs no `control.allow*` gate of its own.
+
+It is one-shot on purpose: spent by the drop it covers, disarmed as soon as a
+tunnel is up again, and forgotten if the daemon restarts. A flag that survived a
+reboot would eventually cut an *accidental* drop off from the redial help it
+should have had.
+
 ## Shell completion
 
 ```sh

@@ -331,7 +331,7 @@ func anyTunnelUp(tunnels []state.Tunnel) bool {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord) {
+func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord, hold *state.HoldState) {
 	if o.Publish == nil {
 		return
 	}
@@ -349,6 +349,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		ActiveProfile:       profile,
 		Switch:              win,
 		Drop:                drop,
+		Hold:                hold,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -754,8 +755,23 @@ func (o Options) runGuard(ctx context.Context) error {
 	// it. Carrying the record is what lets both surfaces say "your VPN dropped
 	// at 3:04PM" instead of only "a window is open".
 	var lastDrop *state.DropRecord
+	// holdArmed suppresses the NEXT automatic redial window, so a deliberate
+	// disconnect stays cut instead of being handed a relaxation nobody asked
+	// for. It only ever suppresses — there is still no fourth relaxation
+	// trigger — and it is one-shot: spent by the drop it covers, cleared by a
+	// tunnel coming back, and gone on restart. Not persisted on purpose, since
+	// a forgotten armed flag surviving a reboot would leave a later accidental
+	// drop cut with no redial help.
+	holdArmed := false
+	holdArmedAt := time.Time{}
+	holdState := func() *state.HoldState {
+		if !holdArmed {
+			return nil
+		}
+		return &state.HoldState{Armed: true, At: holdArmedAt}
+	}
 	snapshot := func() {
-		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop)
+		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState())
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
 
@@ -970,6 +986,17 @@ func (o Options) runGuard(ctx context.Context) error {
 	// up. The anti-flap gate keeps a flapping VPN from chaining windows.
 	maybeAutoWindow := func(now time.Time, detail string) {
 		if o.RedialWindow <= 0 || windowActive || standby || blocked || !sawTunnelUp {
+			return
+		}
+		// Hold the line, checked before the flap guard: an operator who said
+		// this drop is deliberate has answered the only question the window
+		// exists to guess at. One-shot — spent here, whether or not anything
+		// else would have suppressed the window anyway, so "armed" never
+		// silently carries over to a later accidental drop.
+		if holdArmed {
+			holdArmed = false
+			o.Log.Warn("vpn tunnel down — redial window suppressed (hold the line was armed); "+
+				"guard holds, traffic stays cut", "detail", detail)
 			return
 		}
 		if minUp := o.RedialMinUptime; minUp > 0 && !goodExitThisUp &&
@@ -1378,6 +1405,32 @@ func (o Options) runGuard(ctx context.Context) error {
 				return reply(false, "resume failed — pause held open, revert is being retried")
 			}
 			return reply(true, "")
+
+		// Hold the line is ungated on purpose: every control.allow* flag exists
+		// to withhold an authority, and these two grant none — they only ever
+		// suppress a relaxation. A gate would imply there is something to
+		// protect against, and would hand an operator a way to switch off the
+		// safer behaviour.
+		case control.OpHoldArm:
+			if o.RedialWindow <= 0 {
+				// Nothing to suppress. Saying so beats reporting success for an
+				// action that cannot have an effect.
+				return reply(false, "the automatic redial window is already disabled (vpn.redialWindow is \"0\"), so there is nothing to hold")
+			}
+			if !holdArmed {
+				holdArmed = true
+				holdArmedAt = time.Now()
+				o.Log.Info("hold the line armed — the next tunnel drop will stay cut")
+			}
+			snapshot()
+			return reply(true, "")
+		case control.OpHoldCancel:
+			if holdArmed {
+				holdArmed = false
+				o.Log.Info("hold the line disarmed (control socket)")
+			}
+			snapshot()
+			return reply(true, "")
 		}
 		return reply(false, fmt.Sprintf("unsupported op %q", req.Op))
 	}
@@ -1630,6 +1683,14 @@ func (o Options) runGuard(ctx context.Context) error {
 				// the exit has been verified yet. Keeping it past that point
 				// would leave both surfaces narrating an event that has ended.
 				lastDrop = nil
+				// A tunnel coming back also ends the intent behind "hold the
+				// line": the deliberate disconnect it was armed for is over.
+				// Leaving it armed would silently cut a LATER, accidental drop
+				// off from the redial help it should have had.
+				if holdArmed {
+					holdArmed = false
+					o.Log.Info("hold the line disarmed — a tunnel is up again")
+				}
 			}
 			// A tunnel coming back while blocked is the strongest hint available
 			// that the forbidden exit may be gone — it is exactly the moment the
@@ -1707,6 +1768,19 @@ func (o Options) runGuard(ctx context.Context) error {
 				if windowActive && windowTrigger == state.TriggerPause {
 					closeWindowRevert("resumed")
 				}
+			case command.OpHoldArm:
+				if o.RedialWindow > 0 && !holdArmed {
+					holdArmed = true
+					holdArmedAt = time.Now()
+					o.Log.Info("hold the line armed — the next tunnel drop will stay cut")
+				}
+				snapshot()
+			case command.OpHoldCancel:
+				if holdArmed {
+					holdArmed = false
+					o.Log.Info("hold the line disarmed")
+				}
+				snapshot()
 			default:
 				o.Log.Debug("ignoring unsupported command", "op", cmd.Op)
 			}

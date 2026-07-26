@@ -76,6 +76,10 @@ something to describe — absent in STANDBY, before any tunnel is known.
   "drop": {                              // (vpn) present from a tunnel drop until a tunnel is up again
     "at": "2026-07-01T12:01:30Z",
     "cut": true                          // the guard was enforcing at that moment, so traffic really was cut
+  },
+  "hold": {                              // (vpn) present only while "hold the line" is armed
+    "armed": true,                       // the NEXT tunnel drop stays cut — no automatic redial window
+    "at": "2026-07-01T12:00:00Z"
   }
 }
 ```

@@ -66,7 +66,7 @@ dev tooling only, never the daemon path); non-TTY prints the grouped menu
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
-`switch`, `pause`, `resume`, `vpn`, `setup`, `config`, `token`, `completion`,
+`switch`, `pause`, `resume`, `hold`, `vpn`, `setup`, `config`, `token`, `completion`,
 `upgrade`, `version`, `help` (also `--help`/`-h`; `--version` aliases `version`),
 plus three globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation),
 `--no-daemon` (skip the control socket, act on the firewall directly).
@@ -182,6 +182,18 @@ The design depends on these invariants (rationale in
   trigger at first open (`Run`'s `openWindow` closure) exist for exactly this
   reason. Never widen a window past its own cap, never add a FOURTH trigger
   without a new ADR, never let any of the three outlive its deadline.
+- **"Hold the line" SUPPRESSES trigger 2; it is not a fourth trigger.**
+  `dezhban hold` arms a one-shot flag that makes the next tunnel drop stay cut
+  instead of opening the automatic redial window — it answers the one thing the
+  daemon cannot infer, whether a disconnect was deliberate. It only ever
+  *removes* a relaxation, which is why it needs no ADR and carries **no
+  `control.allow*` gate**: every such gate exists to withhold an authority, this
+  op grants none, and adding one would only hand an operator a way to switch off
+  the safer behaviour. Keep it one-shot and un-persisted — spent by the drop it
+  covers (`maybeAutoWindow`), disarmed on a tunnel-up edge, gone on restart. An
+  armed flag surviving a reboot would leave a later *accidental* drop with no
+  redial help, which is the one failure this feature must never cause. Anything
+  added here must likewise only subtract.
 - **All three windows are independently disableable, and "disabled" must
   survive `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
   `vpn.redialWindow: "0"` removes trigger (2); `vpn.pauseMax: "0"` removes

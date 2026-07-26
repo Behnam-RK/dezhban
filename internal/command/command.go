@@ -36,6 +36,12 @@ const (
 	// PauseMax/AllowPauseOps doc comments.
 	OpPause  Op = "pause"
 	OpResume Op = "resume"
+	// OpHoldArm arms "hold the line" so the next tunnel drop stays cut instead
+	// of opening an automatic redial window; OpHoldCancel disarms it. Mirror
+	// control.OpHoldArm/OpHoldCancel for the root-owned command-file path, which
+	// stays available when no daemon answers the socket.
+	OpHoldArm    Op = "hold-arm"
+	OpHoldCancel Op = "hold-cancel"
 )
 
 // Command is one control message. Duration/Profile/Name are op-specific.
