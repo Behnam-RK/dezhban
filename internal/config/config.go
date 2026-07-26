@@ -932,7 +932,7 @@ func Normalize(cfg *Config) {
 		// defaults review). An explicit "blockedCountries": [] is a deliberate
 		// choice to block nothing and must stay that way — see the len>0 branch
 		// below, which never fires for a genuinely empty, non-nil slice.
-		cfg.BlockedCountries = []string{"IR", "RU", "KP"}
+		cfg.BlockedCountries = defaultBlockedCountries()
 	case len(cfg.BlockedCountries) > 0:
 		seen := make(map[string]bool, len(cfg.BlockedCountries))
 		out := make([]string, 0, len(cfg.BlockedCountries))
@@ -963,13 +963,13 @@ func Normalize(cfg *Config) {
 	// VPN guard cadence defaults. Set unconditionally — these are only read in
 	// VPN mode, but defaulting here keeps Validate and the runner simple.
 	if cfg.VPN.EndpointRefresh <= 0 {
-		cfg.VPN.EndpointRefresh = time.Minute
+		cfg.VPN.EndpointRefresh = defaultEndpointRefresh
 	}
 	if cfg.VPN.EndpointGrace <= 0 {
 		cfg.VPN.EndpointGrace = defaultEndpointGrace
 	}
 	if cfg.VPN.TunnelWatch <= 0 {
-		cfg.VPN.TunnelWatch = 1 * time.Second
+		cfg.VPN.TunnelWatch = defaultTunnelWatch
 	}
 	if cfg.VPN.SwitchWindow == 0 {
 		cfg.VPN.SwitchWindow = defaultSwitchWindow
@@ -1024,8 +1024,19 @@ func normalizeAdvanced(a *Advanced) {
 	}
 }
 
+// defaultBlockedCountries is the recommended starting blocklist, returned fresh
+// each call because Normalize hands it straight to the caller's config, which is
+// then free to sort, extend, or de-duplicate it in place.
+func defaultBlockedCountries() []string { return []string{"IR", "RU", "KP"} }
+
 // Switch-window / learning defaults. These are the recommended values; the
 // vpn.advanced config block overrides any of them.
+//
+// This block is the ONLY place a default number is written down. Every surface
+// that shows a default — the macOS app's hints and slider bounds, `dezhban config
+// schema`, the tables in docs/usage/config.md — derives it from here via
+// config.Defaults(), and a test fails the build when the docs or the example
+// configs disagree. See schema.go for why.
 const (
 	defaultSwitchWindow            = 5 * time.Second // 2026-07-22 defaults review: windows exist to be closed fast
 	defaultSwitchWindowMax         = 3 * time.Minute
@@ -1036,6 +1047,9 @@ const (
 	defaultLearnedMaxPerProfile    = 16
 	defaultPromoteAfterRefreshes   = 3
 	defaultEndpointWarnThreshold   = 256
+
+	defaultEndpointRefresh = 1 * time.Minute
+	defaultTunnelWatch     = 1 * time.Second // how fast a tunnel drop is noticed
 
 	defaultRedialWindow    = 30 * time.Second
 	defaultRedialWindowMax = 10 * time.Minute
