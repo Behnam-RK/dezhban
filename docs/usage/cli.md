@@ -54,7 +54,7 @@ daemon** over its control socket and need no password at all:
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
 | `setup`, `config set`/`edit`, `config preset apply` | Yes, but only for the config write itself. `preset apply` is a write like any other — see [Presets](#presets). |
-| `config show`/`path`, `config preset list`/`show`/`diff` | **No** — read-only; they report the config, they don't change it. |
+| `config show`/`path`/`schema`, `config preset list`/`show`/`diff` | **No** — read-only; they report the config, they don't change it. |
 | `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
 | `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
 | `upgrade check` | **No** — read-only, no root. |
@@ -163,6 +163,7 @@ sudo dezhban setup                 # interactive wizard — builds/updates the c
                                    # detects tunnels, previews the ruleset, then writes it
 dezhban config path                # print the resolved config path
 dezhban config show                # print the effective config as JSON
+dezhban config schema              # describe every settable key (add --json for machine output)
 dezhban config get blockedCountries
 sudo dezhban config set blockedCountries IR,RU   # set, validate, save
 sudo dezhban config reset vpn.switchWindow       # restore a shipped default (--all: every tunable)
@@ -198,6 +199,25 @@ succeeds and says so; the new values are read the next time it starts.
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+### Asking what a key is
+
+`config schema` describes the keys themselves rather than your values: for each
+one, its default, what bounds it, whether `"0"` turns it off, whether a preset
+writes it, whether the running daemon can adopt it without a restart, and which
+part of [config.md](config.md) documents it.
+
+```sh
+dezhban config schema              # every key, explained
+dezhban config schema --json       # the same, for tools
+```
+
+It reads no config file — the schema is what the keys *are*, not what this host
+has set — so it answers the same on a machine that has never been configured.
+That is what lets the macOS app label its settings, bound its sliders, and know
+where an explicit **Off** is a real choice instead of hardcoding any of it. The
+defaults it prints are derived from the shipped defaults themselves, so this
+output cannot drift from what you actually get by setting nothing.
 
 ### Presets
 

@@ -82,7 +82,7 @@ over its control socket first (gated by `control.allowSwitchOps`/
 `control.allowPauseOps` respectively) and only fall back to the root-owned
 command file when no daemon answers. Everything else — `status`, `detect-vpn`,
 `validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
-`config show`/`path`/`preset list`/`preset show`/`preset diff`, `token status`,
+`config show`/`path`/`schema`/`preset list`/`preset show`/`preset diff`, `token status`,
 `completion`, `upgrade check`, `version`,
 `help` — is read-only: no root, no firewall effects. Full reference:
 [docs/usage/cli.md](docs/usage/cli.md); the upgrade design in full:

@@ -12,6 +12,24 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`dezhban config schema` describes every setting**, so you can ask what a key
+  is instead of reading source. For each one it prints the label, its default,
+  what bounds it, whether `"0"` turns it off, whether a strictness preset writes
+  it, whether a running daemon adopts it without a restart, and where it is
+  documented. `--json` for tools; read-only, no root, and it reads no config file
+  — the schema is what the keys *are*, not what this host has set, so it answers
+  the same on a machine that has never been configured.
+
+  Behind it, defaults are now data rather than prose. They used to be written
+  down in four places — the Go constants, the macOS app's placeholder hints, the
+  documentation tables, and the example configs — and they had already come
+  apart: the app advertised a 30s endpoint refresh and a 5s tunnel watch while
+  the shipped defaults were 1m and 1s. Every surface now derives them from one
+  table, which itself derives the values from the shipped defaults, so the same
+  drift cannot recur.
+
 ### Changed — BREAKING
 
 - **"reconnect" is now "redial" everywhere.** The codebase used both words for the
