@@ -74,7 +74,8 @@ plus three globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation),
 The **privileged set** — requires root/admin — is exactly: `run`, `block`,
 `unblock`, `panic`, `install`, `uninstall`, `start`, `stop`, `restart`, `switch`,
 `pause`, `resume`, `vpn add`/`remove`/`promote`/`forget`/`import` (but not
-`vpn list`/`show`), `setup`, `config set`/`edit`/`preset apply`, `token enroll`/`forget` (but not
+`vpn list`/`show`), `setup` (but not `setup --questions`, which asks nothing and only reports what
+the wizard would ask), `config set`/`edit`/`preset apply`, `token enroll`/`forget` (but not
 `token status`), and `upgrade download`/`upgrade apply` (macOS only — `download`'s staging directory is root-owned so a local user
 can't swap the verified `.pkg` before `apply` installs it). `switch`, `pause`,
 and `resume` are usually passwordless in practice: they ask the running daemon

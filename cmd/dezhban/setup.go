@@ -1,15 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
-	"net/netip"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/charmbracelet/x/term"
@@ -17,34 +16,25 @@ import (
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/setup"
 	"github.com/behnam-rk/dezhban/internal/vpnimport"
 )
-
-// commonBlocked are the codes offered as checkboxes in the wizard; any others can
-// be typed in the free-text field.
-var commonBlocked = []struct{ label, code string }{
-	{"Iran (IR)", "IR"},
-	{"Russia (RU)", "RU"},
-	{"China (CN)", "CN"},
-	{"North Korea (KP)", "KP"},
-	{"Syria (SY)", "SY"},
-	{"Cuba (CU)", "CU"},
-	{"Belarus (BY)", "BY"},
-}
 
 // cmdSetup runs an interactive wizard that builds a config and writes it, so the
 // user never hand-edits JSON. It reuses the same detection/validation/preview
 // helpers as detect-vpn, validate and print-rules. Requires a TTY.
+//
+// WHAT it asks — the questions, their order, and which answers unlock which
+// follow-ups — lives in internal/setup, not here. This file is presentation:
+// huh fields, the ruleset preview, and the save/install prompts. The macOS
+// app's own first-run wizard reads the same question set over
+// `setup --questions --json`, so the two cannot drift apart.
 func cmdSetup(args []string) int {
 	fs := flag.NewFlagSet("setup", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to write the config (default: canonical system path)")
+	questions := fs.Bool("questions", false, "print the wizard's questions and exit (read-only, no TTY needed)")
+	asJSON := fs.Bool("json", false, "with --questions, print them as JSON")
 	_ = fs.Parse(args)
-
-	if !isInteractive() {
-		fmt.Fprintln(os.Stderr, "dezhban setup needs an interactive terminal.")
-		fmt.Fprintln(os.Stderr, "Non-interactive? Use 'dezhban config set <key> <value>' or edit the file directly.")
-		return 1
-	}
 
 	// Seed from the current config so setup edits rather than clobbers; fall back
 	// to defaults if none exists or the current file is unreadable/invalid.
@@ -55,121 +45,50 @@ func cmdSetup(args []string) int {
 		cfg = &d
 	}
 
-	// --- wizard state (huh binds to string/bool/[]string) ---
-	pollInterval := cfg.PollInterval.String()
-	hysteresis := strconv.Itoa(cfg.Hysteresis)
-	logLevel := cfg.LogLevel
-	quorum := cfg.ProviderQuorum
-	configureVPN := true
+	detected, _ := netdetect.TunnelInterfaces()
+	qs := setup.Questions(setup.Options{
+		Config: cfg, ConfigExisted: configExisted,
+		GOOS: runtime.GOOS, DetectedTunnels: detected,
+	})
 
-	blockedSet := map[string]bool{}
-	for _, c := range cfg.BlockedCountries {
-		blockedSet[strings.ToUpper(c)] = true
+	// --questions is read-only and needs no terminal: it is how another surface
+	// (the macOS first-run wizard) asks what this wizard would ask.
+	if *questions {
+		return printQuestions(qs, *asJSON)
 	}
-	var checkedCountries []string
-	countryOpts := make([]huh.Option[string], 0, len(commonBlocked))
-	for _, cc := range commonBlocked {
-		opt := huh.NewOption(cc.label, cc.code)
-		if blockedSet[cc.code] {
-			opt = opt.Selected(true)
-			delete(blockedSet, cc.code)
+
+	if !isInteractive() {
+		fmt.Fprintln(os.Stderr, "dezhban setup needs an interactive terminal.")
+		fmt.Fprintln(os.Stderr, "Non-interactive? Use 'dezhban config set <key> <value>' or edit the file directly.")
+		return 1
+	}
+
+	answers := setup.NewAnswers(qs)
+	// Asked a screenful at a time, in Group order, so a gate can be evaluated
+	// against answers already given — which is exactly what makes the VPN
+	// branch a branch.
+	for _, group := range groupsOf(qs) {
+		var fields []huh.Field
+		for _, q := range qs {
+			if q.Group != group || !answers.ShouldAsk(q) {
+				continue
+			}
+			fields = append(fields, field(q, answers))
 		}
-		countryOpts = append(countryOpts, opt)
-	}
-	// Any configured codes not in the common list seed the free-text field.
-	var extraCodes []string
-	for code := range blockedSet {
-		extraCodes = append(extraCodes, code)
-	}
-	otherCountries := strings.Join(extraCodes, ",")
-
-	basics := huh.NewForm(huh.NewGroup(
-		huh.NewInput().Title("Poll interval").Description("How often the country is checked, e.g. 30s.").
-			Value(&pollInterval).Validate(validDuration),
-		huh.NewMultiSelect[string]().Title("Blocked countries").
-			Description("Traffic is cut when the detected country matches.").
-			Options(countryOpts...).Value(&checkedCountries),
-		huh.NewInput().Title("Other country codes").Description("Comma-separated ISO codes not listed above (optional).").
-			Value(&otherCountries),
-		huh.NewSelect[string]().Title("Log level").
-			Options(huh.NewOptions("debug", "info", "warn", "error")...).Value(&logLevel),
-		huh.NewConfirm().Title("Require provider quorum?").Description("Only act when a majority of providers agree.").
-			Value(&quorum),
-		huh.NewConfirm().Title("Configure your VPN now?").
-			Description("dezhban only enforces once it knows your VPN's tunnel and server. Say no and it starts in standby — fully open, nothing blocked — until you run 'dezhban setup' again or edit the config.").
-			Value(&configureVPN),
-	))
-	if err := runForm(basics); err != nil {
-		return formExit(err)
+		if len(fields) == 0 {
+			continue
+		}
+		if err := runForm(huh.NewForm(huh.NewGroup(fields...))); err != nil {
+			return formExit(err)
+		}
 	}
 
-	// --- VPN branch ---
-	var tunnels []string
-	autoMode := true
-	endpoints := strings.Join(cfg.VPN.Endpoints, ",")
-	profileFiles := ""
-	macOS := runtime.GOOS == "darwin"
-	// Preserve an existing config's choice; only default ON for a brand-new macOS
-	// config (the recommended path). Re-running setup must never silently flip a
-	// user's explicit autoDiscoverEndpoints=false back to true — the confirm below
-	// (macOS only) makes it an explicit, seeded decision.
-	autoDiscover := cfg.VPN.AutoDiscoverEndpoints
-	if macOS && !configExisted {
-		autoDiscover = true
-	}
-	allowPhysicalDNS := cfg.VPN.AllowPhysicalDNS
+	// Import any named config files into profiles (best-effort; a bad file is
+	// reported but doesn't abort the wizard). Reading files is the caller's job,
+	// not internal/setup's.
 	var profiles []config.Profile
-	if configureVPN {
-		// Recommended path: automatic detection (no pinned interface names that go
-		// stale across redials). The old pin-specific-interfaces flow survives
-		// behind an advanced opt-out.
-		if err := runForm(huh.NewForm(huh.NewGroup(
-			huh.NewConfirm().Title("Use automatic VPN detection? (recommended)").
-				Description("dezhban finds your tunnel and, on macOS, learns the server address itself — works with any VPN and survives redials.").
-				Value(&autoMode),
-		))); err != nil {
-			return formExit(err)
-		}
-		if !autoMode {
-			detected, _ := netdetect.TunnelInterfaces()
-			if err := runForm(huh.NewForm(huh.NewGroup(
-				tunnelSelector(detected, cfg.VPN.TunnelInterfaces, &tunnels),
-			))); err != nil {
-				return formExit(err)
-			}
-		}
-		// Profiles + endpoints + redial DNS. On Linux/Windows (no live
-		// discovery) at least one profile/endpoint is the reliable path.
-		epTitle := "VPN endpoint(s)"
-		epDesc := "Server IP(s)/hostname(s), comma-separated. Optional on macOS (auto-discovered); needed elsewhere."
-		if !macOS {
-			epDesc = "Server IP(s)/hostname(s), comma-separated. Required on this platform (no live discovery)."
-		}
-		if err := runForm(huh.NewForm(huh.NewGroup(
-			huh.NewInput().Title("Self-hosted VPN config files").
-				Description("Comma-separated paths to WireGuard/.conf, OpenVPN/.ovpn, or V2Ray JSON to import as profiles (optional).").
-				Value(&profileFiles),
-			huh.NewInput().Title(epTitle).Description(epDesc).Value(&endpoints),
-			huh.NewConfirm().Title("Allow DNS on the physical link while the tunnel is down?").
-				Description("Lets a VPN client re-resolve its server hostname to redial. Leaks only DNS-query metadata; your traffic stays blocked. Recommended if any endpoint is a hostname.").
-				Value(&allowPhysicalDNS),
-		))); err != nil {
-			return formExit(err)
-		}
-		// Live endpoint discovery is macOS-only. Make it an explicit, seeded choice
-		// so re-running setup never silently flips an existing preference.
-		if macOS {
-			if err := runForm(huh.NewForm(huh.NewGroup(
-				huh.NewConfirm().Title("Auto-discover the VPN server address? (recommended)").
-					Description("dezhban watches the live tunnel socket to learn the server IP, so you don't pin one that changes. macOS only.").
-					Value(&autoDiscover),
-			))); err != nil {
-				return formExit(err)
-			}
-		}
-		// Import any named config files into profiles (best-effort; a bad file is
-		// reported but doesn't abort the wizard).
-		for _, f := range splitList(profileFiles) {
+	if answers.Bool("configureVPN") {
+		for _, f := range setup.SplitList(answers.Text("profileFiles")) {
 			eps, format, ierr := vpnimport.Extract(f)
 			if ierr != nil {
 				fmt.Fprintf(os.Stderr, "  skipping %s: %v\n", f, ierr)
@@ -181,15 +100,7 @@ func cmdSetup(args []string) int {
 		}
 	}
 
-	// --- assemble into the config ---
-	applyWizard(cfg, wizardInput{
-		pollInterval: pollInterval, hysteresis: hysteresis, logLevel: logLevel,
-		quorum:       quorum,
-		countries:    append(checkedCountries, splitList(otherCountries)...),
-		configureVPN: configureVPN, autoMode: autoMode, tunnels: tunnels,
-		endpoints: splitList(endpoints), profiles: profiles,
-		autoDiscover: autoDiscover && macOS, allowPhysicalDNS: allowPhysicalDNS,
-	})
+	setup.Apply(cfg, answers.Input(strconv.Itoa(cfg.Hysteresis), profiles))
 
 	config.Normalize(cfg)
 	if err := cfg.Validate(); err != nil {
@@ -199,8 +110,8 @@ func cmdSetup(args []string) int {
 	}
 
 	// --- lockout guard: warn if an endpoint sits inside a tunnel subnet ---
-	if configureVPN {
-		if warn := endpointLockoutWarning(cfg); warn != "" {
+	if answers.Bool("configureVPN") {
+		if warn := setup.EndpointLockoutWarning(cfg); warn != "" {
 			var proceed bool
 			fmt.Fprintln(os.Stderr, warn)
 			if err := runForm(huh.NewForm(huh.NewGroup(
@@ -263,104 +174,107 @@ func cmdSetup(args []string) int {
 	} else {
 		fmt.Println("later, enable it with: sudo dezhban install && sudo dezhban start")
 	}
-	if configureVPN {
+	if answers.Bool("configureVPN") {
 		fmt.Println("to connect a brand-new VPN whose server isn't known yet: sudo dezhban switch, then connect it.")
 	}
 	return 0
 }
 
-// tunnelSelector returns a MultiSelect over detected tunnels (preselecting the
-// configured ones), or a free-text Input when nothing was detected.
-func tunnelSelector(detected, configured []string, dst *[]string) huh.Field {
-	if len(detected) == 0 {
-		// No live tunnels — fall back to comma-separated entry via a shim.
-		joined := strings.Join(configured, ",")
-		return huh.NewInput().Title("Tunnel interface(s)").
-			Description("None detected. Enter comma-separated names (e.g. utun4).").
-			Value(&joined).Validate(func(string) error {
-			*dst = splitList(joined)
-			return nil
-		})
-	}
-	cfgSet := map[string]bool{}
-	for _, t := range configured {
-		cfgSet[t] = true
-	}
-	opts := make([]huh.Option[string], 0, len(detected))
-	for _, t := range detected {
-		opt := huh.NewOption(t, t)
-		if cfgSet[t] {
-			opt = opt.Selected(true)
+// field renders one question as a huh field bound to its answer.
+//
+// The mapping is deliberately total over setup's kinds: a kind this does not
+// know falls through to a text input, which is wrong-looking but still
+// answerable — better than a question silently disappearing from the wizard.
+func field(q setup.Question, a *setup.Answers) huh.Field {
+	switch q.Kind {
+	case setup.KindBool:
+		return huh.NewConfirm().Title(q.Title).Description(q.Description).Value(a.BoolPtr(q.ID))
+	case setup.KindSelect:
+		opts := make([]huh.Option[string], 0, len(q.Options))
+		for _, o := range q.Options {
+			opts = append(opts, huh.NewOption(o.Label, o.Value))
 		}
-		opts = append(opts, opt)
-	}
-	return huh.NewMultiSelect[string]().Title("Tunnel interface(s)").
-		Description("Detected tunnels — pick the VPN's.").Options(opts...).Value(dst)
-}
-
-// wizardInput carries the collected answers into the config.
-type wizardInput struct {
-	pollInterval, hysteresis, logLevel string
-	quorum                             bool
-	countries                          []string
-	configureVPN                       bool
-	autoMode                           bool // automatic tunnel detection (no pinned interfaces)
-	tunnels, endpoints                 []string
-	profiles                           []config.Profile
-	autoDiscover                       bool
-	allowPhysicalDNS                   bool
-}
-
-// applyWizard writes collected answers onto cfg. Validation happens after.
-func applyWizard(cfg *config.Config, in wizardInput) {
-	if d, err := time.ParseDuration(in.pollInterval); err == nil {
-		cfg.PollInterval = d
-	}
-	if n, err := strconv.Atoi(strings.TrimSpace(in.hysteresis)); err == nil {
-		cfg.Hysteresis = n
-	}
-	cfg.LogLevel = in.logLevel
-	cfg.ProviderQuorum = in.quorum
-	cfg.BlockedCountries = in.countries // config.Normalize upper-cases + de-dupes on save
-
-	if in.configureVPN {
-		if in.autoMode {
-			// Automatic detection: no pinned interface names (Normalize implies
-			// autodetect), plus live discovery where supported.
-			cfg.VPN.TunnelInterfaces = nil
-		} else {
-			cfg.VPN.TunnelInterfaces = in.tunnels
+		return huh.NewSelect[string]().Title(q.Title).Description(q.Description).
+			Options(opts...).Value(a.TextPtr(q.ID))
+	case setup.KindMultiSelect:
+		selected := map[string]bool{}
+		for _, v := range q.Selected {
+			selected[v] = true
 		}
-		cfg.VPN.Endpoints = in.endpoints
-		cfg.VPN.Profiles = in.profiles
-		cfg.VPN.AutoDiscoverEndpoints = in.autoDiscover
-		cfg.VPN.AllowPhysicalDNS = in.allowPhysicalDNS
+		opts := make([]huh.Option[string], 0, len(q.Options))
+		for _, o := range q.Options {
+			opt := huh.NewOption(o.Label, o.Value)
+			if selected[o.Value] {
+				opt = opt.Selected(true)
+			}
+			opts = append(opts, opt)
+		}
+		return huh.NewMultiSelect[string]().Title(q.Title).Description(q.Description).
+			Options(opts...).Value(a.ListPtr(q.ID))
+	case setup.KindDuration:
+		return huh.NewInput().Title(q.Title).Description(q.Description).
+			Value(a.TextPtr(q.ID)).Validate(setup.ValidDuration)
+	default:
+		return huh.NewInput().Title(q.Title).Description(q.Description).Value(a.TextPtr(q.ID))
 	}
 }
 
-// endpointLockoutWarning returns a non-empty message if any IP endpoint sits
-// inside a tunnel's own subnet — the #1 lockout cause.
-func endpointLockoutWarning(cfg *config.Config) string {
-	var addrs []netip.Addr
-	for _, ep := range config.EffectiveEndpoints(cfg, nil) {
-		if a, err := netip.ParseAddr(ep); err == nil {
-			addrs = append(addrs, a)
+// groupsOf lists the question groups in ascending order.
+func groupsOf(qs []setup.Question) []int {
+	var out []int
+	seen := map[int]bool{}
+	for _, q := range qs {
+		if !seen[q.Group] {
+			seen[q.Group] = true
+			out = append(out, q.Group)
 		}
 	}
-	if len(addrs) == 0 {
-		return ""
+	for i := 1; i < len(out); i++ {
+		for j := i; j > 0 && out[j] < out[j-1]; j-- {
+			out[j], out[j-1] = out[j-1], out[j]
+		}
 	}
-	bad, err := netdetect.CheckEndpointRouting(addrs, cfg.VPN.TunnelInterfaces)
-	if err != nil || len(bad) == 0 {
-		return ""
+	return out
+}
+
+// printQuestions answers "what would setup ask me?" without asking anything —
+// read-only, no root, no terminal needed. `--json` is what another wizard reads.
+func printQuestions(qs []setup.Question, asJSON bool) int {
+	if asJSON {
+		out, err := json.MarshalIndent(qs, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "encode questions:", err)
+			return 1
+		}
+		fmt.Println(string(out))
+		return 0
 	}
-	var b strings.Builder
-	b.WriteString("\n⚠  WARNING: endpoint(s) sit inside a tunnel subnet — this will likely lock you out:\n")
-	for _, r := range bad {
-		fmt.Fprintf(&b, "     %s is within %s (%s)\n", r.Endpoint, r.Subnet, r.Iface)
+	for _, q := range qs {
+		fmt.Printf("%s (%s)\n", q.Title, q.Kind)
+		if q.Description != "" {
+			fmt.Printf("    %s\n", q.Description)
+		}
+		if q.Key != "" {
+			fmt.Printf("    writes: %s\n", q.Key)
+		}
+		if q.Default != "" {
+			fmt.Printf("    default: %s\n", q.Default)
+		}
+		if len(q.Selected) > 0 {
+			fmt.Printf("    selected: %s\n", strings.Join(q.Selected, ", "))
+		}
+		if len(q.Options) > 0 {
+			vals := make([]string, 0, len(q.Options))
+			for _, o := range q.Options {
+				vals = append(vals, o.Value)
+			}
+			fmt.Printf("    options: %s\n", strings.Join(vals, ", "))
+		}
+		if q.Gated() {
+			fmt.Printf("    asked only when %s is %s\n", q.RequiresID, q.RequiresValue)
+		}
 	}
-	b.WriteString("   Set the VPN server's PHYSICAL (public) address instead — see 'dezhban doctor --discover'.")
-	return b.String()
+	return 0
 }
 
 // runForm runs a huh form with a consistent theme.
@@ -376,18 +290,6 @@ func formExit(err error) int {
 	}
 	fmt.Fprintln(os.Stderr, "setup error:", err)
 	return 1
-}
-
-// validDuration validates a huh Input holding a positive Go duration.
-func validDuration(s string) error {
-	d, err := time.ParseDuration(strings.TrimSpace(s))
-	if err != nil {
-		return errors.New("enter a duration like 30s or 5m")
-	}
-	if d <= 0 {
-		return errors.New("must be greater than zero")
-	}
-	return nil
 }
 
 // isInteractive reports whether both stdin and stdout are terminals.

@@ -451,6 +451,15 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
 - [ ] A fresh `dezhban setup` on macOS produces an autodetect + auto-discovery
       config with **zero** concrete interface names, and offers to install and
       start the service.
+- [ ] Re-running it on a configured host seeds every question with what the
+      config already says, and pressing Enter through the whole wizard writes a
+      config identical to the one you started from (`dezhban config show` before
+      and after). `internal/setup` pins this, but only the real run proves the
+      forms are bound to the same answers.
+- [ ] Re-running it **without** naming profile files keeps the profiles already
+      imported (`dezhban vpn list`).
+- [ ] `dezhban setup --questions --json` runs with no TTY, no root, and no
+      config file present, and lists the same questions the wizard asks.
 
 ## macOS app
 

@@ -112,6 +112,17 @@ current as you land changes.
   needs a page — and each link lands on the heading, not the top of a long
   reference.
 
+- **`dezhban setup --questions` says what the wizard would ask** — each question,
+  what it writes, its seeded answer, and which earlier answer unlocks it —
+  without asking anything. Read-only, no root, no terminal needed; `--json` is
+  the machine form.
+
+  Behind it, the wizard's decisions moved out of the CLI into `internal/setup`,
+  which now owns the question set, the branching, and how answers become a
+  config. The CLI keeps only the presentation. A second wizard therefore cannot
+  ask different questions or apply the same answer differently — the same reason
+  the settings schema lives in one place.
+
 ### Changed
 
 - **A pause longer than `vpn.pauseMax` is now refused and explained, instead of
@@ -124,6 +135,13 @@ current as you land changes.
   still clamped to the cap.
 
 ### Fixed
+
+- **Re-running `dezhban setup` no longer deletes your saved VPN profiles.** The
+  wizard collects profiles by importing config files you name, and it wrote that
+  list over the configured one — so running setup again to change, say, your log
+  level, and not naming those files a second time, silently dropped every
+  profile you had imported. Imported profiles are now merged into the saved
+  ones, replacing by name.
 
 - **The macOS app's Settings pane no longer advertises wrong defaults.** Its
   field hints were literal strings that had drifted from the shipped values — it

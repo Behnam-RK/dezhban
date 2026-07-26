@@ -54,7 +54,7 @@ daemon** over its control socket and need no password at all:
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
 | `setup`, `config set`/`edit`, `config preset apply` | Yes, but only for the config write itself. `preset apply` is a write like any other — see [Presets](#presets). |
-| `config show`/`path`/`schema`, `config preset list`/`show`/`diff` | **No** — read-only; they report the config, they don't change it. |
+| `config show`/`path`/`schema`, `config preset list`/`show`/`diff`, `setup --questions` | **No** — read-only; they report the config (or what the wizard would ask), they don't change it. |
 | `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
 | `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
 | `upgrade check` | **No** — read-only, no root. |
@@ -199,6 +199,17 @@ succeeds and says so; the new values are read the next time it starts.
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+`setup --questions` is the exception: it prints what the wizard *would* ask —
+each question, what it writes, its seeded answer, and which earlier answer
+unlocks it — and asks nothing. Read-only, no root, no terminal needed.
+`--json` is the machine form, and is how the macOS app's own first-run wizard
+gets the question set instead of keeping a second copy of it.
+
+```sh
+dezhban setup --questions          # what would you ask me?
+dezhban setup --questions --json   # the same, for another surface to render
+```
 
 ### Asking what a key is
 
