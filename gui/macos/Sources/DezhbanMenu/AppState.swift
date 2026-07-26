@@ -4,7 +4,7 @@ import DezhbanCore
 
 /// The main window's sidebar sections.
 enum SidebarSection: String, CaseIterable, Identifiable {
-    case overview, diagnostics, settings, logs, about
+    case overview, diagnostics, settings, help, logs, about
 
     var id: String { rawValue }
 
@@ -13,6 +13,10 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "Overview"
         case .diagnostics: return "Diagnostics"
         case .settings: return "Settings"
+        // The repo's own docs, rendered into the app at build time — see
+        // internal/help. Sits next to Settings because that is where a reader
+        // asking "what does this setting cost me?" is standing.
+        case .help: return "Help"
         // Structured findings moved to the Diagnostics pane above; this pane
         // is transcripts only now (panic, install, config apply, `log` output).
         case .logs: return "Logs"
@@ -25,6 +29,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "shield.lefthalf.filled"
         case .diagnostics: return "stethoscope"
         case .settings: return "gearshape"
+        case .help: return "book"
         case .logs: return "text.alignleft"
         case .about: return "info.circle"
         }
@@ -125,6 +130,11 @@ final class AppState: ObservableObject {
     /// Lives in config, not the daemon's Snapshot — see DezhbanCLI.readProfiles.
     @Published var profiles: ProfilesInfo?
     @Published var selectedSection: SidebarSection? = .overview
+    /// A page (and optionally a heading) the Help pane should open next —
+    /// how a contextual link from Settings names where it wants to land. The
+    /// pane consumes it and sets it back to nil, so selecting Help again later
+    /// does not jump back to a link the reader has moved on from.
+    @Published var helpTarget: HelpTarget?
     /// Last update check result (nil: none run yet, or the last one found
     /// nothing worth reporting — see UpdateChecker.check's doc comment on why
     /// a failure never surfaces as an error here).
@@ -133,6 +143,15 @@ final class AppState: ObservableObject {
     let console = Console()
 
     var isLive: Bool { PostureUI.isLive(snapshot) }
+
+    /// Opens the Help pane at a specific place in the documentation, named the
+    /// way a `Tunable`'s docAnchor writes it ("usage/config.md#fields").
+    /// A docAnchor that names nothing bundled still opens the pane — better a
+    /// reader lands in the documentation than on a dead control.
+    func openHelp(docAnchor: String) {
+        helpTarget = HelpTarget(docAnchor: docAnchor)
+        selectedSection = .help
+    }
 
     /// Routes a finished transcript into the Logs pane and
     /// navigates there — the window-side output surface for long actions.

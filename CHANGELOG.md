@@ -92,6 +92,20 @@ current as you land changes.
   cap as the reason rather than hidden — a cap you cannot see is one you keep
   bumping into. Any duration up to the cap still works.
 
+- **The macOS app carries dezhban's documentation inside it.** A new Help pane
+  in the main window shows the same pages as the repository's `docs/` — quick
+  start, how the guard works, the postures, troubleshooting, and the full
+  configuration and command references — with a search box and a first-time
+  reading order.
+
+  It reads them from inside the app bundle and never touches the network, which
+  is the entire point: the moment you most need to know what the guard is doing
+  to your traffic is often the moment it has cut all of it, and a help pane that
+  needed a working connection would be blank exactly then. The pages are
+  rendered from the repository's markdown when the app is built, so they always
+  match the version that documents them, and the pane refuses to follow any link
+  that leaves the bundle.
+
 ### Changed
 
 - **A pause longer than `vpn.pauseMax` is now refused and explained, instead of

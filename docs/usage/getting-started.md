@@ -188,6 +188,11 @@ you need it — the full runbook is in
 
 ## Where to go next
 
+Everything below also ships **inside the macOS app** — open the main window and
+pick **Help**. Those pages are rendered into the app when it is built, so they
+match the version you are running and they work with every byte of egress cut,
+which is exactly when you are most likely to need them.
+
 | If you want to… | Read |
 |---|---|
 | Understand how the machine actually works | [how-it-works.md](../concepts/how-it-works.md) |

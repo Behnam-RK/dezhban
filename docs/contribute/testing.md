@@ -620,6 +620,22 @@ end up typing a password.
       `dezhban doctor` prints in a terminal.
 - [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
 
+### Help pane
+
+The pane's whole reason for existing is that it works while the guard has cut
+traffic, so the check that matters is the one CI cannot run: with egress gone.
+
+- [ ] With **FULL BLOCK active** (or the tunnel down and no window open), open
+      Help: pages render fully, the sidebar and search work, and nothing is
+      blank or spinning. Confirm no request leaves the machine — Little Snitch,
+      or `tcpdump`/`pfctl -s state` showing nothing new from `DezhbanMenu`.
+- [ ] A link in a page to another bundled page moves the sidebar selection with
+      it, so the highlighted row is the page being read.
+- [ ] A link that points off the bundle (an `https://` one in a doc) is refused
+      in the pane and reported with a Copy link button — it must not navigate.
+- [ ] Built from a checkout whose `docs/` was renamed under it, `task gui:build`
+      **fails** rather than producing an app whose Help pane is missing a page.
+
 ### Logs pane
 
 - [ ] "Show last hour" matches a hand-run `log show --last 1h --predicate
