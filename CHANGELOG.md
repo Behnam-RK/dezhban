@@ -64,9 +64,10 @@ current as you land changes.
   editing the file, but the app offered no way to see or change how long a pause
   may last.
 
-- **`dezhban pause --list` offers realistic pause lengths**, each saying what it
-  is for, defined once in the config core so the CLI and the macOS app offer the
-  same choices. Lengths above `vpn.pauseMax` are listed as unavailable with the
+- **Pause offers realistic lengths, in both surfaces.** `dezhban pause --list`
+  prints them with what each one is for, and the macOS app's Pause item gains a
+  submenu of the same choices. They are defined once in the config core and read
+  from the daemon, so the two cannot drift apart. Lengths above `vpn.pauseMax` are listed as unavailable with the
   cap as the reason rather than hidden — a cap you cannot see is one you keep
   bumping into. Any duration up to the cap still works.
 

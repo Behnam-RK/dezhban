@@ -301,6 +301,15 @@ enum DezhbanCLI {
         return ConfigSchema.decode(data)
     }
 
+    /// Reads the offered pause lengths and which of them this host's
+    /// vpn.pauseMax allows, via `pause --list --json`. Read-only, no root.
+    static func readPauseOptions() -> [PauseOption]? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["pause", "--list", "--json", "--config", resolvedConfigPath()])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return PauseOption.decodeList(data)
+    }
+
     /// Reads the keys that differ from `name` (or, if nil, the
     /// matched-or-nearest preset — the same default `preset diff` uses),
     /// via `config preset diff [name] --json`.

@@ -275,13 +275,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // down, so pauseIsEnabled is true in exactly that case.
             let pauseAllowed = AppState.shared.pauseIsEnabled
             let pauseEnabled = isRunning && pauseAllowed
-            addAction("Pause — use my real IP", #selector(pauseNow), enabled: pauseEnabled)
-                .toolTip = {
-                    if !pauseAllowed { return "Disabled — vpn.pauseMax is \"0\" in your config." }
-                    if !isRunning { return "Unavailable — dezhban isn’t running. Start it first." }
-                    return AppState.shared.routineHint(
-                        "Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
-                }()
+            let pauseItem = addAction("Pause — use my real IP", #selector(pauseNow), enabled: pauseEnabled)
+            pauseItem.toolTip = {
+                if !pauseAllowed { return "Disabled — vpn.pauseMax is \"0\" in your config." }
+                if !isRunning { return "Unavailable — dezhban isn’t running. Start it first." }
+                return AppState.shared.routineHint(
+                    "Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
+            }()
+            // The offered lengths come from the daemon (`pause --list --json`),
+            // so this menu and `dezhban pause --list` can never offer different
+            // choices. Clicking the parent still pauses for the built-in
+            // default; the submenu is for picking deliberately.
+            if pauseEnabled, let options = AppState.shared.pauseOptions, !options.isEmpty {
+                let submenu = NSMenu()
+                for option in options {
+                    let item = NSMenuItem(title: option.label,
+                                          action: #selector(pauseForOption(_:)),
+                                          keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = option.value
+                    // An over-cap length is shown disabled with the reason,
+                    // never hidden and never quietly shortened — a cap you
+                    // cannot see is one you keep bumping into.
+                    item.isEnabled = option.isAvailable
+                    item.toolTip = option.isAvailable ? option.why : option.unavailable
+                    submenu.addItem(item)
+                }
+                submenu.autoenablesItems = false
+                pauseItem.submenu = submenu
+            }
 
             // The mirror image of Pause, and placed beside it so the pair reads
             // as the two answers to "I am about to change my VPN situation":
@@ -337,6 +359,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func cancelSwitch() { AppActions.routine(["switch", "--cancel"], "cancel the switch window") }
     @objc private func pauseNow() { AppActions.routine(["pause"], "pause the guard") }
     @objc private func resumeNow() { AppActions.routine(["resume"], "resume the guard") }
+    /// Pauses for a length chosen from the submenu. The value travels verbatim
+    /// from the daemon's own list, so the app never formats a duration itself.
+    @objc private func pauseForOption(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String else { return }
+        AppActions.routine(["pause", value], "pause the guard for \(sender.title)")
+    }
     @objc private func holdLine() { AppActions.routine(["hold"], "hold the line") }
     @objc private func cancelHold() { AppActions.routine(["hold", "--cancel"], "cancel hold the line") }
 

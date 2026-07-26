@@ -113,6 +113,14 @@ final class AppState: ObservableObject {
     /// Advisory only, same convention as `controlIsReachable` — `dezhban pause`
     /// still refuses for real if this cache is stale.
     @Published var pauseIsEnabled = true
+    /// The pause lengths the daemon offers, and which of them this host's
+    /// vpn.pauseMax allows (nil: not yet read, or the CLI is too old to know
+    /// `pause --list`). Cached so building the menu never shells out — a
+    /// shell-out while the menu is opening would stall it.
+    ///
+    /// Read from the daemon rather than listed here so the menu and
+    /// `dezhban pause --list` cannot offer different choices.
+    @Published var pauseOptions: [PauseOption]?
     /// The configured VPN profiles (nil: not yet read, or config unreadable).
     /// Lives in config, not the daemon's Snapshot — see DezhbanCLI.readProfiles.
     @Published var profiles: ProfilesInfo?
@@ -160,11 +168,15 @@ final class AppState: ObservableObject {
             // control socket independently on top of that).
             let status = DezhbanCLI.readStatusJSON()
             let profiles = DezhbanCLI.readProfiles()
+            // Read here, with the rest, so the menu can build from a cache
+            // instead of shelling out while it is opening.
+            let pauseOptions = DezhbanCLI.readPauseOptions()
             DispatchQueue.main.async {
                 self?.serviceIsInstalled = status?.serviceInstalled ?? false
                 self?.controlIsReachable = status?.controlReachable ?? false
                 self?.pauseIsEnabled = status?.pauseEnabled ?? false
                 self?.profiles = profiles
+                self?.pauseOptions = pauseOptions
             }
         }
     }
