@@ -30,6 +30,26 @@ current as you land changes.
   table, which itself derives the values from the shipped defaults, so the same
   drift cannot recur.
 
+- **`vpn.pauseMax` has a control in the macOS app**, under Windows alongside the
+  switch and redial windows. It was settable from the CLI and reachable by
+  editing the file, but the app offered no way to see or change how long a pause
+  may last.
+
+### Fixed
+
+- **The macOS app's Settings pane no longer advertises wrong defaults.** Its
+  field hints were literal strings that had drifted from the shipped values — it
+  suggested a 30s endpoint refresh and a 5s tunnel watch when the defaults are
+  1m and 1s. Labels, hints, and help text now come from the daemon's own schema,
+  so the pane says what dezhban actually does. Against a CLI too old to report a
+  schema the pane falls back to a plainer label rather than a stale value: less
+  helpful, never wrong.
+
+- **A settings value can no longer be written under the wrong key.** The pane
+  staged its twenty-five values as an array destructured by position, with only
+  a count check — so inserting or reordering a key would have silently applied
+  one field's value to another setting. Values are now keyed throughout.
+
 ### Changed — BREAKING
 
 - **"reconnect" is now "redial" everywhere.** The codebase used both words for the

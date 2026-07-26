@@ -11,11 +11,16 @@ enum ConfigApply {
     /// on-disk file is the source of truth, never a cached second-schema mirror.
     /// Short-circuits on the first failure so an error string can never be seeded
     /// into a field (and later written back as a value by Apply). Calls back on
-    /// the main queue with the resolved path, the values (in key order), or nil
-    /// plus the failure text — the one resolution done here is also the one the
-    /// caller needs for display, so it never has to resolve a second time itself.
+    /// the main queue with the resolved path, the values **keyed by the key each
+    /// was read for**, or nil plus the failure text — the one resolution done
+    /// here is also the one the caller needs for display, so it never has to
+    /// resolve a second time itself.
+    ///
+    /// Keyed rather than in key order: a positional result is only correct while
+    /// every consumer agrees on the ordering, and that agreement is exactly what
+    /// used to be able to break silently.
     static func seed(keys: [String],
-                     completion: @escaping (_ path: String, _ values: [String]?, _ error: String?) -> Void) {
+                     completion: @escaping (_ path: String, _ values: [String: String]?, _ error: String?) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
             // Resolved HERE, not on the caller's main thread: resolving shells out,
             // and a shell-out on the main thread spins the run loop (DezhbanCLI.exec).
@@ -27,7 +32,10 @@ enum ConfigApply {
                     completion(cfgPath, nil, "Failed to read \(failed.key): \(detail)")
                     return
                 }
-                completion(cfgPath, results.map { $0.result.output.trimmingCharacters(in: .whitespacesAndNewlines) }, nil)
+                let values = Dictionary(uniqueKeysWithValues: results.map {
+                    ($0.key, $0.result.output.trimmingCharacters(in: .whitespacesAndNewlines))
+                })
+                completion(cfgPath, values, nil)
             }
         }
     }

@@ -1,21 +1,30 @@
 import Foundation
 
 /// The staged values for the Settings pane's batched `config set`, and the
-/// dotted keys they correspond to. Pulled out of SettingsView so the
-/// seed→pairs round trip — the exact place a silent index mismatch would write
-/// one field's value under another field's key — can be unit-tested without
-/// standing up SwiftUI state.
+/// dotted keys they correspond to.
+///
+/// Values are stored **keyed by dotted key**, not positionally. They used to be
+/// twenty-five stored properties destructured out of an array by literal index,
+/// with a `precondition` on the count alone — so inserting a key anywhere but the
+/// end, or reordering two of them, silently wrote one field's value under another
+/// field's key and passed every check. Keying the storage makes that
+/// unrepresentable: a value can only ever be read back under the key it was
+/// stored against.
+///
+/// The named properties survive as computed accessors so the SwiftUI bindings
+/// (`$fields.switchWindow`) keep working; they are now views onto the dictionary
+/// rather than a second copy of it.
 public struct SettingsFields {
-    // Dotted keys from configFields (cmd/dezhban/config_cmd.go), in the same
-    // order `seed()`/`pairs()` destructure and rebuild them. The last twelve are
-    // the vpn.advanced.* block, staged into the same batch and shown behind the
-    // Settings pane's Advanced disclosure.
+    // Dotted keys from configFields (cmd/dezhban/config_cmd.go). This is the set
+    // the pane stages — a deliberate subset of every settable key, since identity
+    // data (profiles) and the control socket are managed elsewhere. Order is
+    // presentation order only; nothing correctness-bearing depends on it now.
     public static let keys = [
         "vpn.tunnelInterfaces", "vpn.endpoints",
         "vpn.autoDetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
         "vpn.allowLocalNetwork",
         "blockedCountries", "pollInterval",
-        "vpn.switchWindow", "vpn.redialWindow", "vpn.endpointGrace",
+        "vpn.switchWindow", "vpn.redialWindow", "vpn.pauseMax", "vpn.endpointGrace",
         "vpn.endpointRefresh", "vpn.tunnelWatch",
         "vpn.advanced.switchWindowMax", "vpn.advanced.redialWindowMax", "vpn.advanced.redialMinUptime",
         "vpn.advanced.commandFreshness", "vpn.advanced.windowDiscoveryInterval", "vpn.advanced.tunnelPruneAfter",
@@ -23,140 +32,167 @@ public struct SettingsFields {
         "vpn.advanced.endpointWarnThreshold", "vpn.advanced.windowProtocols", "vpn.advanced.windowPorts",
     ]
 
-    public var tunnelInterfaces = ""
-    public var endpoints = ""
-    public var autoDetect = false
-    public var autoDiscover = false
-    public var autoArm = false
-    public var allowLocalNetwork = true
-    public var blockedCountries = ""
-    public var pollInterval = ""
-    public var switchWindow = ""
-    public var redialWindow = ""
-    public var endpointGrace = ""
-    public var endpointRefresh = ""
-    public var tunnelWatch = ""
+    /// Raw staged values, exactly as `config get` returned them and exactly as
+    /// `config set` will receive them. Bools travel as "true"/"false" because
+    /// that is what both ends of the round trip use.
+    private var values: [String: String]
 
-    public var advSwitchWindowMax = ""
-    public var advRedialWindowMax = ""
-    public var advRedialMinUptime = ""
-    public var advCommandFreshness = ""
-    public var advWindowDiscoveryInterval = ""
-    public var advTunnelPruneAfter = ""
-    public var advLearnedEndpointTTL = ""
-    public var advLearnedMaxPerProfile = ""
-    public var advPromoteAfterRefreshes = ""
-    public var advEndpointWarnThreshold = ""
-    public var advWindowProtocols = ""
-    public var advWindowPorts = ""
-
-    public init() {}
-
-    /// Rebuilds a SettingsFields from `keys`-ordered values, as returned by a
-    /// batch of `config get` calls (ConfigApply.seed). Out-of-range access is a
-    /// programmer error (a caller passing the wrong key list), so this traps
-    /// rather than silently seeding partial/wrong fields.
-    public init(seeded values: [String]) {
-        precondition(values.count == Self.keys.count,
-                     "SettingsFields.init(seeded:) got \(values.count) values, want \(Self.keys.count)")
-        tunnelInterfaces = values[0]
-        endpoints = values[1]
-        autoDetect = (values[2] == "true")
-        autoDiscover = (values[3] == "true")
-        autoArm = (values[4] == "true")
-        allowLocalNetwork = (values[5] == "true")
-        blockedCountries = values[6]
-        pollInterval = values[7]
-        switchWindow = values[8]
-        redialWindow = values[9]
-        endpointGrace = values[10]
-        endpointRefresh = values[11]
-        tunnelWatch = values[12]
-
-        advSwitchWindowMax = values[13]
-        advRedialWindowMax = values[14]
-        advRedialMinUptime = values[15]
-        advCommandFreshness = values[16]
-        advWindowDiscoveryInterval = values[17]
-        advTunnelPruneAfter = values[18]
-        advLearnedEndpointTTL = values[19]
-        advLearnedMaxPerProfile = values[20]
-        advPromoteAfterRefreshes = values[21]
-        advEndpointWarnThreshold = values[22]
-        advWindowProtocols = values[23]
-        advWindowPorts = values[24]
+    public init() {
+        values = Dictionary(uniqueKeysWithValues: Self.keys.map { ($0, "") })
+        // Only bools need a non-empty resting value; an empty string would be
+        // written back as an invalid bool if the pane were applied unseeded.
+        for key in Self.boolKeys { values[key] = "false" }
+        values["vpn.allowLocalNetwork"] = "true"
     }
 
-    /// The current values in `keys` order — the dirtiness check compares this
-    /// against what the pane was last seeded with.
-    public var currentValues: [String] {
-        [tunnelInterfaces, endpoints,
-         String(autoDetect), String(autoDiscover), String(autoArm),
-         String(allowLocalNetwork),
-         blockedCountries, pollInterval,
-         switchWindow, redialWindow, endpointGrace,
-         endpointRefresh, tunnelWatch,
-         advSwitchWindowMax, advRedialWindowMax, advRedialMinUptime,
-         advCommandFreshness, advWindowDiscoveryInterval, advTunnelPruneAfter,
-         advLearnedEndpointTTL, advLearnedMaxPerProfile, advPromoteAfterRefreshes,
-         advEndpointWarnThreshold, advWindowProtocols, advWindowPorts]
+    /// Rebuilds a SettingsFields from what `config get` returned, keyed by the
+    /// key each value was read for. A key the caller did not read keeps its
+    /// resting value rather than silently taking a neighbour's.
+    public init(seeded: [String: String]) {
+        self.init()
+        for (key, value) in seeded where values[key] != nil {
+            values[key] = value
+        }
     }
 
-    /// Renders `key=value` pairs for one batched `config set`. Durations are
-    /// trimmed (whitespace typed into a text field is not part of the value);
-    /// everything else travels as-is — `config set`/Normalize (Go) does the
-    /// canonicalisation (upper-casing country codes, etc.), not this layer.
+    /// The keys whose values are booleans, so accessors and seeding agree on the
+    /// representation.
+    static let boolKeys: Set<String> = [
+        "vpn.autoDetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm", "vpn.allowLocalNetwork",
+    ]
+
+    /// Reads one staged value by key. Returns "" for a key this pane does not
+    /// stage, which is the same thing an unset field looks like.
+    public func value(for key: String) -> String { values[key] ?? "" }
+
+    /// Stages one value by key. Ignores keys the pane does not carry, so a
+    /// schema-driven control cannot invent storage by writing to it.
+    public mutating func setValue(_ value: String, for key: String) {
+        guard values[key] != nil else { return }
+        values[key] = value
+    }
+
+    /// Every staged value, keyed. The dirtiness check compares this against what
+    /// the pane was last seeded with.
+    public var currentValues: [String: String] { values }
+
+    /// Renders `key=value` pairs for one batched `config set`, in `keys` order so
+    /// the resulting command line is stable and diffable. Durations are trimmed
+    /// (whitespace typed into a text field is not part of the value); everything
+    /// else travels as-is — `config set`/Normalize (Go) does the canonicalisation
+    /// (upper-casing country codes, etc.), not this layer.
     public func pairs() -> [String] {
-        [
-            "vpn.tunnelInterfaces=\(tunnelInterfaces)",
-            "vpn.endpoints=\(endpoints)",
-            "vpn.autoDetect=\(autoDetect)",
-            "vpn.autoDiscoverEndpoints=\(autoDiscover)",
-            "vpn.autoArm=\(autoArm)",
-            "vpn.allowLocalNetwork=\(allowLocalNetwork)",
-            "blockedCountries=\(blockedCountries.trimmingCharacters(in: .whitespaces))",
-            "pollInterval=\(pollInterval.trimmingCharacters(in: .whitespaces))",
-            "vpn.switchWindow=\(switchWindow.trimmingCharacters(in: .whitespaces))",
-            "vpn.redialWindow=\(redialWindow.trimmingCharacters(in: .whitespaces))",
-            "vpn.endpointGrace=\(endpointGrace.trimmingCharacters(in: .whitespaces))",
-            "vpn.endpointRefresh=\(endpointRefresh.trimmingCharacters(in: .whitespaces))",
-            "vpn.tunnelWatch=\(tunnelWatch.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.switchWindowMax=\(advSwitchWindowMax.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.redialWindowMax=\(advRedialWindowMax.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.redialMinUptime=\(advRedialMinUptime.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.commandFreshness=\(advCommandFreshness.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.windowDiscoveryInterval=\(advWindowDiscoveryInterval.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.tunnelPruneAfter=\(advTunnelPruneAfter.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.learnedEndpointTTL=\(advLearnedEndpointTTL.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.learnedMaxPerProfile=\(advLearnedMaxPerProfile.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.promoteAfterRefreshes=\(advPromoteAfterRefreshes.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.endpointWarnThreshold=\(advEndpointWarnThreshold.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.windowProtocols=\(advWindowProtocols.trimmingCharacters(in: .whitespaces))",
-            "vpn.advanced.windowPorts=\(advWindowPorts.trimmingCharacters(in: .whitespaces))",
-        ]
+        Self.keys.map { key in
+            "\(key)=\(value(for: key).trimmingCharacters(in: .whitespaces))"
+        }
     }
 
-    /// The duration-valued fields that must pass `looksLikeGoDuration` before
-    /// Apply spends a privileged round trip — label, then the trimmed value.
-    /// The three int-valued and two list-valued advanced fields aren't duration
-    /// strings, so (matching the existing precedent for `hysteresis`, which was
-    /// never validated this way either) they're left to the daemon's own
-    /// rejection if malformed.
-    public var durationFieldsForValidation: [(label: String, value: String)] {
-        [
-            ("Geo IP lookup interval", pollInterval.trimmingCharacters(in: .whitespaces)),
-            ("Switch window", switchWindow.trimmingCharacters(in: .whitespaces)),
-            ("Redial window", redialWindow.trimmingCharacters(in: .whitespaces)),
-            ("Endpoint grace", endpointGrace.trimmingCharacters(in: .whitespaces)),
-            ("Endpoint refresh", endpointRefresh.trimmingCharacters(in: .whitespaces)),
-            ("Tunnel watch", tunnelWatch.trimmingCharacters(in: .whitespaces)),
-            ("Manual switch window cap", advSwitchWindowMax.trimmingCharacters(in: .whitespaces)),
-            ("Redial window cap", advRedialWindowMax.trimmingCharacters(in: .whitespaces)),
-            ("Redial anti-flap uptime", advRedialMinUptime.trimmingCharacters(in: .whitespaces)),
-            ("Command freshness", advCommandFreshness.trimmingCharacters(in: .whitespaces)),
-            ("Window discovery interval", advWindowDiscoveryInterval.trimmingCharacters(in: .whitespaces)),
-            ("Tunnel prune delay", advTunnelPruneAfter.trimmingCharacters(in: .whitespaces)),
-            ("Learned endpoint TTL", advLearnedEndpointTTL.trimmingCharacters(in: .whitespaces)),
-        ]
+    /// The duration-valued fields that must parse before Apply spends a
+    /// privileged round trip, as (label, trimmed value) pairs.
+    ///
+    /// Both which fields these are and what they are called now come from the
+    /// daemon's schema instead of a hand-kept list that had to be updated in
+    /// lockstep with the pane. Without a schema this returns nothing: refusing to
+    /// pre-validate is safe (the daemon still rejects a malformed duration and
+    /// says so), whereas guessing the field set would either miss one or invent
+    /// labels that disagree with the ones on screen.
+    public func durationFieldsForValidation(schema: ConfigSchema) -> [(label: String, value: String)] {
+        Self.keys.compactMap { key in
+            guard let tunable = schema[key], tunable.kind == "duration" else { return nil }
+            return (tunable.label, value(for: key).trimmingCharacters(in: .whitespaces))
+        }
+    }
+
+    // MARK: - Named accessors
+    //
+    // Views onto `values`, so SwiftUI bindings keep their existing spelling.
+
+    private func string(_ key: String) -> String { values[key] ?? "" }
+    private mutating func setString(_ key: String, _ newValue: String) { values[key] = newValue }
+    private func bool(_ key: String) -> Bool { values[key] == "true" }
+    private mutating func setBool(_ key: String, _ newValue: Bool) { values[key] = String(newValue) }
+
+    public var tunnelInterfaces: String {
+        get { string("vpn.tunnelInterfaces") } set { setString("vpn.tunnelInterfaces", newValue) }
+    }
+    public var endpoints: String {
+        get { string("vpn.endpoints") } set { setString("vpn.endpoints", newValue) }
+    }
+    public var autoDetect: Bool {
+        get { bool("vpn.autoDetect") } set { setBool("vpn.autoDetect", newValue) }
+    }
+    public var autoDiscover: Bool {
+        get { bool("vpn.autoDiscoverEndpoints") } set { setBool("vpn.autoDiscoverEndpoints", newValue) }
+    }
+    public var autoArm: Bool {
+        get { bool("vpn.autoArm") } set { setBool("vpn.autoArm", newValue) }
+    }
+    public var allowLocalNetwork: Bool {
+        get { bool("vpn.allowLocalNetwork") } set { setBool("vpn.allowLocalNetwork", newValue) }
+    }
+    public var blockedCountries: String {
+        get { string("blockedCountries") } set { setString("blockedCountries", newValue) }
+    }
+    public var pollInterval: String {
+        get { string("pollInterval") } set { setString("pollInterval", newValue) }
+    }
+    public var switchWindow: String {
+        get { string("vpn.switchWindow") } set { setString("vpn.switchWindow", newValue) }
+    }
+    public var redialWindow: String {
+        get { string("vpn.redialWindow") } set { setString("vpn.redialWindow", newValue) }
+    }
+    public var pauseMax: String {
+        get { string("vpn.pauseMax") } set { setString("vpn.pauseMax", newValue) }
+    }
+    public var endpointGrace: String {
+        get { string("vpn.endpointGrace") } set { setString("vpn.endpointGrace", newValue) }
+    }
+    public var endpointRefresh: String {
+        get { string("vpn.endpointRefresh") } set { setString("vpn.endpointRefresh", newValue) }
+    }
+    public var tunnelWatch: String {
+        get { string("vpn.tunnelWatch") } set { setString("vpn.tunnelWatch", newValue) }
+    }
+
+    public var advSwitchWindowMax: String {
+        get { string("vpn.advanced.switchWindowMax") } set { setString("vpn.advanced.switchWindowMax", newValue) }
+    }
+    public var advRedialWindowMax: String {
+        get { string("vpn.advanced.redialWindowMax") } set { setString("vpn.advanced.redialWindowMax", newValue) }
+    }
+    public var advRedialMinUptime: String {
+        get { string("vpn.advanced.redialMinUptime") } set { setString("vpn.advanced.redialMinUptime", newValue) }
+    }
+    public var advCommandFreshness: String {
+        get { string("vpn.advanced.commandFreshness") } set { setString("vpn.advanced.commandFreshness", newValue) }
+    }
+    public var advWindowDiscoveryInterval: String {
+        get { string("vpn.advanced.windowDiscoveryInterval") }
+        set { setString("vpn.advanced.windowDiscoveryInterval", newValue) }
+    }
+    public var advTunnelPruneAfter: String {
+        get { string("vpn.advanced.tunnelPruneAfter") } set { setString("vpn.advanced.tunnelPruneAfter", newValue) }
+    }
+    public var advLearnedEndpointTTL: String {
+        get { string("vpn.advanced.learnedEndpointTTL") } set { setString("vpn.advanced.learnedEndpointTTL", newValue) }
+    }
+    public var advLearnedMaxPerProfile: String {
+        get { string("vpn.advanced.learnedMaxPerProfile") }
+        set { setString("vpn.advanced.learnedMaxPerProfile", newValue) }
+    }
+    public var advPromoteAfterRefreshes: String {
+        get { string("vpn.advanced.promoteAfterRefreshes") }
+        set { setString("vpn.advanced.promoteAfterRefreshes", newValue) }
+    }
+    public var advEndpointWarnThreshold: String {
+        get { string("vpn.advanced.endpointWarnThreshold") }
+        set { setString("vpn.advanced.endpointWarnThreshold", newValue) }
+    }
+    public var advWindowProtocols: String {
+        get { string("vpn.advanced.windowProtocols") } set { setString("vpn.advanced.windowProtocols", newValue) }
+    }
+    public var advWindowPorts: String {
+        get { string("vpn.advanced.windowPorts") } set { setString("vpn.advanced.windowPorts", newValue) }
     }
 }

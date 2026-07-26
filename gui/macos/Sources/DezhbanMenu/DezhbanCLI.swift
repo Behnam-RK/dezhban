@@ -284,6 +284,23 @@ enum DezhbanCLI {
         return PresetSummary.decodeList(data)
     }
 
+    /// Reads what every settable key IS — its label, default, cap, whether it
+    /// can be turned off — via `config schema --json`.
+    ///
+    /// Deliberately passes no `--config`: the schema describes the keys, not this
+    /// host's values, so it answers the same before anything is configured. That
+    /// is what lets a first-run surface label its fields.
+    ///
+    /// Returns nil against a CLI too old to know the subcommand, which callers
+    /// must degrade gracefully for — a missing schema means less helpful hints,
+    /// never wrong ones.
+    static func readSchema() -> ConfigSchema? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["config", "schema", "--json"])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return ConfigSchema.decode(data)
+    }
+
     /// Reads the keys that differ from `name` (or, if nil, the
     /// matched-or-nearest preset — the same default `preset diff` uses),
     /// via `config preset diff [name] --json`.
