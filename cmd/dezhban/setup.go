@@ -96,7 +96,7 @@ func cmdSetup(args []string) int {
 		huh.NewConfirm().Title("Require provider quorum?").Description("Only act when a majority of providers agree.").
 			Value(&quorum),
 		huh.NewConfirm().Title("Configure your VPN now?").
-			Description("dezhban only enforces once it knows your VPN's tunnel and server. Say no and it starts in standby — fully open, not protecting — until you run 'dezhban setup' again or edit the config.").
+			Description("dezhban only enforces once it knows your VPN's tunnel and server. Say no and it starts in standby — fully open, nothing blocked — until you run 'dezhban setup' again or edit the config.").
 			Value(&configureVPN),
 	))
 	if err := runForm(basics); err != nil {

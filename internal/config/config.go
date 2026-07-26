@@ -41,9 +41,9 @@ type VPN struct {
 	// literal or a hostname (resolved and re-resolved at runtime) — hostnames let
 	// third-party VPNs that publish a server name rather than a fixed IP be used.
 	Endpoints []string
-	// Autodetect requests discovery of the tunnel interface (netdetect); explicit
+	// AutoDetect requests discovery of the tunnel interface (netdetect); explicit
 	// TunnelInterfaces always win.
-	Autodetect bool
+	AutoDetect bool
 	// AutoDiscoverEndpoints continuously learns the live VPN server IP from the
 	// active socket (macOS only) and keeps that egress open, so a rotating-pool
 	// VPN (NordVPN/ProtonVPN/…) needs no endpoint typed by hand. On other
@@ -152,12 +152,19 @@ type VPN struct {
 	Advanced Advanced
 }
 
-// Retired names a config key that no longer does anything, so the loader can
-// report it instead of ignoring it silently. A setting that is accepted and
+// Retired names a config key that is not what the schema calls it, so the loader
+// can report it instead of ignoring it silently. A setting that is accepted and
 // discarded without a word is the worst failure mode a security tool has.
 type Retired struct {
 	Key    string
 	Reason string
+	// TookEffect marks the one category here whose value is NOT inert: a key
+	// misspelled only in letter case, which encoding/json honors anyway (see
+	// unknownKey.Canonical). "has no effect" is the correct warning for a
+	// retired, renamed, or unrecognised key and a false one here, so the two
+	// report sites pick their framing from this rather than saying it of every
+	// entry.
+	TookEffect bool
 }
 
 // Profile is a named VPN whose server endpoint(s) dezhban keeps reachable on the
@@ -169,11 +176,11 @@ type Profile struct {
 	Name string
 	// Endpoints are the profile's VPN server addresses (≥1 required).
 	Endpoints []string
-	// IfaceHint is an optional tunnel-interface name prefix (e.g. "wg",
+	// TunnelHint is an optional tunnel-interface name prefix (e.g. "wg",
 	// "nordlynx") shown in `vpn list` output to help identify a profile. It never
 	// gates enforcement — pinning an interface by name goes stale across
 	// redials, so the hint is advisory / display-only.
-	IfaceHint string
+	TunnelHint string
 }
 
 // Advanced holds tunables for VPN guard / switch-window / endpoint-learning
@@ -339,7 +346,14 @@ type fileVPN struct {
 	Endpoints        []string `json:"endpoints"`
 	// Pointers: all default to TRUE, so an explicit false must be
 	// distinguishable from an absent key (same convention as fileControl).
-	Autodetect            *bool         `json:"autodetect,omitempty"`
+	//
+	// AutoDetect needs no compatibility alias for its pre-rename "autodetect"
+	// spelling, and must not grow one: encoding/json matches tags
+	// case-insensitively, so the old casing already lands here and an explicit
+	// `"autodetect": false` still takes effect. unknown.go reports it as a
+	// misspelling that worked. A hand-written UnmarshalJSON for it would be
+	// unreachable code claiming to be a safeguard.
+	AutoDetect            *bool         `json:"autoDetect,omitempty"`
 	AutoDiscoverEndpoints *bool         `json:"autoDiscoverEndpoints,omitempty"`
 	AllowPhysicalDNS      *bool         `json:"allowPhysicalDNS,omitempty"`
 	AllowLocalNetwork     *bool         `json:"allowLocalNetwork,omitempty"`
@@ -356,9 +370,9 @@ type fileVPN struct {
 }
 
 type fileProfile struct {
-	Name      string   `json:"name"`
-	Endpoints []string `json:"endpoints"`
-	IfaceHint string   `json:"ifaceHint,omitempty"`
+	Name       string   `json:"name"`
+	Endpoints  []string `json:"endpoints"`
+	TunnelHint string   `json:"tunnelHint,omitempty"`
 }
 
 type fileAdvanced struct {
@@ -406,7 +420,7 @@ func Default() Config {
 		// defaults review; autodetect/auto-discover added 2026-07-22; armAtBoot
 		// added 2026-07-22). Keep the two in sync.
 		VPN: VPN{
-			Autodetect:            true,
+			AutoDetect:            true,
 			AutoDiscoverEndpoints: true,
 			AllowPhysicalDNS:      true,
 			AllowLocalNetwork:     true,
@@ -446,8 +460,13 @@ func Load(path string) (*Config, error) {
 			}
 			// Anything the schema does not recognise is recorded rather than
 			// ignored — see unknown.go for why silence is the wrong default here.
-			for _, key := range unknownKeys(data) {
-				cfg.Retired = append(cfg.Retired, Retired{Key: key, Reason: describeUnknown(key)})
+			for _, u := range unknownKeys(data) {
+				reason, tookEffect := describeUnknown(u)
+				cfg.Retired = append(cfg.Retired, Retired{
+					Key:        u.Key,
+					Reason:     reason,
+					TookEffect: tookEffect,
+				})
 			}
 		}
 	}
@@ -472,10 +491,7 @@ func apply(cfg *Config, fc fileConfig) error {
 		cfg.BlockedCountries = fc.BlockedCountries
 	}
 	if fc.FailClosed != nil {
-		cfg.Retired = append(cfg.Retired, Retired{
-			Key:    "failClosed",
-			Reason: "belonged to the retired country-blocklist model; the guard's standing rules are the fail-closed block now (docs/adr/0001, docs/adr/0006)",
-		})
+		cfg.Retired = append(cfg.Retired, Retired{Key: "failClosed", Reason: retiredReasons["failClosed"]})
 	}
 	if fc.Hysteresis != nil {
 		cfg.Hysteresis = *fc.Hysteresis
@@ -484,10 +500,7 @@ func apply(cfg *Config, fc fileConfig) error {
 		cfg.Providers = fc.Providers
 	}
 	if fc.Allowlist != nil {
-		cfg.Retired = append(cfg.Retired, Retired{
-			Key:    "allowlist",
-			Reason: "belonged to the retired country-blocklist model; a VPN posture opens the tunnel endpoint, not a physical destination allowlist (docs/adr/0001)",
-		})
+		cfg.Retired = append(cfg.Retired, Retired{Key: "allowlist", Reason: retiredReasons["allowlist"]})
 	}
 	if fc.ProviderQuorum != nil {
 		cfg.ProviderQuorum = *fc.ProviderQuorum
@@ -499,15 +512,15 @@ func apply(cfg *Config, fc fileConfig) error {
 		v := VPN{
 			TunnelInterfaces:      fc.VPN.TunnelInterfaces,
 			Endpoints:             fc.VPN.Endpoints,
-			Autodetect:            true, // default on; explicit false below
+			AutoDetect:            true, // default on; explicit false below
 			AutoDiscoverEndpoints: true, // default on; explicit false below
 			AllowPhysicalDNS:      true, // default on; explicit false below
 			AllowLocalNetwork:     true, // default on; explicit false below
 			AutoArm:               true, // default on; explicit false below
 			ArmAtBoot:             true, // default on; explicit false below
 		}
-		if fc.VPN.Autodetect != nil {
-			v.Autodetect = *fc.VPN.Autodetect
+		if fc.VPN.AutoDetect != nil {
+			v.AutoDetect = *fc.VPN.AutoDetect
 		}
 		if fc.VPN.AutoDiscoverEndpoints != nil {
 			v.AutoDiscoverEndpoints = *fc.VPN.AutoDiscoverEndpoints
@@ -597,9 +610,9 @@ func apply(cfg *Config, fc fileConfig) error {
 		}
 		for _, p := range fc.VPN.Profiles {
 			v.Profiles = append(v.Profiles, Profile{
-				Name:      p.Name,
-				Endpoints: p.Endpoints,
-				IfaceHint: p.IfaceHint,
+				Name:       p.Name,
+				Endpoints:  p.Endpoints,
+				TunnelHint: p.TunnelHint,
 			})
 		}
 		if fc.VPN.Advanced != nil {
@@ -610,10 +623,7 @@ func apply(cfg *Config, fc fileConfig) error {
 			v.Advanced = adv
 		}
 		if fc.VPN.Enabled != nil {
-			cfg.Retired = append(cfg.Retired, Retired{
-				Key:    "vpn.enabled",
-				Reason: "dezhban now has a single guard state machine; with no tunnel it rests in standby rather than enforcing (docs/adr/0001, 0002)",
-			})
+			cfg.Retired = append(cfg.Retired, Retired{Key: "vpn.enabled", Reason: retiredReasons["vpn.enabled"]})
 		}
 		cfg.VPN = v
 	}
@@ -703,7 +713,7 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 func toFileConfig(c *Config) fileConfig {
 	hysteresis := c.Hysteresis
 	quorum := c.ProviderQuorum
-	autodetect := c.VPN.Autodetect
+	autodetect := c.VPN.AutoDetect
 	autoDiscover := c.VPN.AutoDiscoverEndpoints
 	physDNS := c.VPN.AllowPhysicalDNS
 	localNet := c.VPN.AllowLocalNetwork
@@ -728,7 +738,7 @@ func toFileConfig(c *Config) fileConfig {
 		VPN: &fileVPN{
 			TunnelInterfaces:      c.VPN.TunnelInterfaces,
 			Endpoints:             c.VPN.Endpoints,
-			Autodetect:            &autodetect,
+			AutoDetect:            &autodetect,
 			AutoDiscoverEndpoints: &autoDiscover,
 			AllowPhysicalDNS:      &physDNS,
 			AllowLocalNetwork:     &localNet,
@@ -760,7 +770,7 @@ func toFileProfiles(ps []Profile) []fileProfile {
 	}
 	out := make([]fileProfile, len(ps))
 	for i, p := range ps {
-		out[i] = fileProfile{Name: p.Name, Endpoints: p.Endpoints, IfaceHint: p.IfaceHint}
+		out[i] = fileProfile{Name: p.Name, Endpoints: p.Endpoints, TunnelHint: p.TunnelHint}
 	}
 	return out
 }
@@ -945,7 +955,7 @@ func Normalize(cfg *Config) {
 	}
 	for pi := range cfg.VPN.Profiles {
 		cfg.VPN.Profiles[pi].Name = strings.TrimSpace(cfg.VPN.Profiles[pi].Name)
-		cfg.VPN.Profiles[pi].IfaceHint = strings.TrimSpace(cfg.VPN.Profiles[pi].IfaceHint)
+		cfg.VPN.Profiles[pi].TunnelHint = strings.TrimSpace(cfg.VPN.Profiles[pi].TunnelHint)
 		for ei := range cfg.VPN.Profiles[pi].Endpoints {
 			cfg.VPN.Profiles[pi].Endpoints[ei] = strings.TrimSpace(cfg.VPN.Profiles[pi].Endpoints[ei])
 		}

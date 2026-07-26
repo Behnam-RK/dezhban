@@ -75,7 +75,7 @@ func TestConfigSetAppliesAllPairsInOneWrite(t *testing.T) {
 	code := cmdConfig([]string{
 		"set",
 		"vpn.tunnelInterfaces=utun4",
-		"vpn.autodetect=true",
+		"vpn.autoDetect=true",
 		"vpn.autoDiscoverEndpoints=true",
 		"logLevel=debug",
 		"--config", p,
@@ -88,7 +88,7 @@ func TestConfigSetAppliesAllPairsInOneWrite(t *testing.T) {
 	if err != nil {
 		t.Fatalf("load: %v", err)
 	}
-	if !got.VPN.Autodetect ||
+	if !got.VPN.AutoDetect ||
 		len(got.VPN.TunnelInterfaces) != 1 || got.VPN.TunnelInterfaces[0] != "utun4" ||
 		got.LogLevel != "debug" {
 		t.Fatalf("not every pair was applied: %+v", got.VPN)

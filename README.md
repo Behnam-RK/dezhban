@@ -106,8 +106,8 @@ One enforcement model — the guard. What changes is the posture:
                                                     (bounded, self-closing)
 ```
 
-- **STANDBY** — no rules, network fully open, **not protecting.** The resting
-  state before any tunnel has been observed. Arms itself when a VPN connects.
+- **STANDBY** — no rules, network fully open, **nothing is being blocked.** The
+  resting state before any tunnel has been observed. Arms itself when a VPN connects.
 - **GUARD** — the healthy state. Only the tunnel may carry traffic off the
   machine, so a drop is cut instantly (zero leak window with
   `vpn.redialWindow: "0"`; by default a bounded redial window follows the

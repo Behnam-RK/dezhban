@@ -58,7 +58,7 @@ func TestLoadVPNBlock(t *testing.T) {
 			"enabled": true,
 			"tunnelInterfaces": [" utun4 "],
 			"endpoints": ["203.0.113.5"],
-			"autodetect": true
+			"autoDetect": true
 		}
 	}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -74,8 +74,8 @@ func TestLoadVPNBlock(t *testing.T) {
 	if got := cfg.VPN.Endpoints; len(got) != 1 || got[0] != "203.0.113.5" {
 		t.Errorf("VPN.Endpoints = %v, want [203.0.113.5]", got)
 	}
-	if !cfg.VPN.Autodetect {
-		t.Error("VPN.Autodetect = false, want true")
+	if !cfg.VPN.AutoDetect {
+		t.Error("VPN.AutoDetect = false, want true")
 	}
 }
 
@@ -225,12 +225,12 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 		"profiles": `{
 			"vpn": {
 				"enabled": true,
-				"autodetect": true,
+				"autoDetect": true,
 				"autoDiscoverEndpoints": true,
 				"switchWindow": "90s",
 				"profiles": [
 					{"name": "proton", "endpoints": ["nl.proton.me"]},
-					{"name": "home-wg", "endpoints": ["203.0.113.7"], "ifaceHint": "wg"}
+					{"name": "home-wg", "endpoints": ["203.0.113.7"], "tunnelHint": "wg"}
 				]
 			}
 		}`,
@@ -288,7 +288,7 @@ func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
 	cfg.VPN = VPN{
 		TunnelInterfaces: []string{"utun4"},
 		Endpoints:        []string{"203.0.113.5"},
-		Autodetect:       true,
+		AutoDetect:       true,
 	}
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	if err := Save(path, &cfg); err != nil {
@@ -304,8 +304,8 @@ func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
 	if g := got.VPN.Endpoints; len(g) != 1 || g[0] != "203.0.113.5" {
 		t.Errorf("VPN.Endpoints = %v, want [203.0.113.5]", g)
 	}
-	if !got.VPN.Autodetect {
-		t.Error("VPN.Autodetect = false, want true")
+	if !got.VPN.AutoDetect {
+		t.Error("VPN.AutoDetect = false, want true")
 	}
 }
 
@@ -356,7 +356,7 @@ func TestLoadVPNProfilesAndSwitchWindow(t *testing.T) {
 			"switchWindow": "90s",
 			"profiles": [
 				{"name": "proton", "endpoints": [" nl.proton.me "]},
-				{"name": "home-wg", "endpoints": ["203.0.113.7"], "ifaceHint": "wg"}
+				{"name": "home-wg", "endpoints": ["203.0.113.7"], "tunnelHint": "wg"}
 			]
 		}
 	}`
@@ -373,15 +373,15 @@ func TestLoadVPNProfilesAndSwitchWindow(t *testing.T) {
 	if got := cfg.VPN.Profiles[0].Endpoints[0]; got != "nl.proton.me" {
 		t.Errorf("profile endpoint = %q, want trimmed nl.proton.me", got)
 	}
-	if cfg.VPN.Profiles[1].IfaceHint != "wg" {
-		t.Errorf("ifaceHint = %q, want wg", cfg.VPN.Profiles[1].IfaceHint)
+	if cfg.VPN.Profiles[1].TunnelHint != "wg" {
+		t.Errorf("tunnelHint = %q, want wg", cfg.VPN.Profiles[1].TunnelHint)
 	}
 	if cfg.VPN.SwitchWindow != 90*time.Second {
 		t.Errorf("switchWindow = %s, want 90s", cfg.VPN.SwitchWindow)
 	}
 	// No explicit tunnelInterfaces → autodetect implied by Normalize.
-	if !cfg.VPN.Autodetect {
-		t.Error("autodetect should be implied when enabled with no tunnelInterfaces")
+	if !cfg.VPN.AutoDetect {
+		t.Error("autoDetect should be implied when enabled with no tunnelInterfaces")
 	}
 }
 

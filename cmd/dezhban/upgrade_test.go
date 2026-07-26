@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/render"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/update"
 )
@@ -66,19 +67,19 @@ func TestWaitForHealthySnapshotFreshHealthy(t *testing.T) {
 	}
 }
 
-// TestWaitForHealthySnapshotStoppedPosture pins postureStopped: a fresh
-// snapshot in the terminal "stopped" posture (the daemon published one final
-// snapshot on its way down — see internal/runner.Run) must not read as
+// TestWaitForHealthySnapshotStoppedPosture pins render.PostureStopped: a
+// fresh snapshot in the terminal "stopped" posture (the daemon published one
+// final snapshot on its way down — see internal/runner.Run) must not read as
 // healthy even though it postdates the restart and carries no
-// EnforcementErr. Regression guard for the postureStopped rename — a typo'd
-// literal here would silently defeat this check.
+// EnforcementErr. Regression guard against a typo'd literal silently
+// defeating this check.
 func TestWaitForHealthySnapshotStoppedPosture(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "state.json")
 	restartedAt := time.Now()
 
 	stopped := state.Snapshot{
 		Time:    restartedAt.Add(1 * time.Second),
-		Posture: postureStopped,
+		Posture: render.PostureStopped,
 	}
 	if err := state.Write(path, stopped); err != nil {
 		t.Fatalf("state.Write: %v", err)

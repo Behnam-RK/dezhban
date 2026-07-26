@@ -64,11 +64,12 @@ ran `download` five minutes ago:
 
 | Posture | Allowed to activate? | Why |
 |---|---|---|
-| **guard**, healthy | ✅ | Routing still carries your traffic through the tunnel during the gap — nothing is trying to use the physical link in the first place |
+| **guard**, with a tunnel up | ✅ | Routing still carries your traffic through the tunnel during the gap — nothing is trying to use the physical link in the first place |
 | **standby** | ✅ | No rules are installed at all. Nothing to interrupt |
+| **guard**, no tunnel up | ❌ | The posture string is the same, the situation is the opposite: with the tunnel down, the guard's rules are the *only* thing keeping traffic off the physical link (`status` calls it "VPN down — traffic cut"), so removing them for the length of a restart is a real leak — and with `vpn.armAtBoot: false` the host stays open afterwards instead of re-arming |
 | **full-block** | ❌ | Tearing this down would unblock a host sitting on a forbidden-country exit — the one thing this entire tool exists to prevent, caused by the updater |
 | **switch-window** (open) | ❌ | A restart would cancel it mid-use rather than let it close on its own terms |
-| missing / stale / unreadable snapshot | ❌ | Unknown is not assumed safe — same rule `decision.Evaluate` already applies to an undeterminable country reading: hold, never escalate on a guess |
+| missing / stale / unreadable snapshot | ❌ | Unknown is not assumed safe — same rule `decision.Evaluate` already applies to an undeterminable country reading: hold, never escalate on a guess. "Stale" is the same threshold `status` and the menubar app use (3× the poll interval, floored at 90s), so the gate never trusts a snapshot they already show as "Stopped" |
 
 If the gate refuses, `apply` still succeeds — the new files are already on
 disk from phase 1 — it just doesn't restart. You'll see this:

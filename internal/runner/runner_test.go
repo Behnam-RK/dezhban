@@ -656,7 +656,7 @@ func TestVPNNewTunnelReappliesGuard(t *testing.T) {
 		Backend:    be,
 		Log:        discardLog(),
 		Interval:   time.Hour, // suppress geoTick during the test
-		Autodetect: true,
+		AutoDetect: true,
 		Tunnels:    []string{"utun4"},
 		Endpoints:  []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 		Watcher:    growWatcher(),
@@ -693,7 +693,7 @@ func TestVPNZeroTunnelStandingPosture(t *testing.T) {
 		Backend:    be,
 		Log:        discardLog(),
 		Interval:   time.Millisecond, // geoTick would fire fast — must be suppressed
-		Autodetect: true,
+		AutoDetect: true,
 		Tunnels:    nil, // no tunnels
 		Endpoints:  []netip.Addr{netip.MustParseAddr("203.0.113.7")},
 	}
@@ -933,7 +933,7 @@ func TestVPNRefusesToArmGuardThatWouldCutTheTunnelsOwnTransport(t *testing.T) {
 		Tunnels:  []string{"utun4"}, // tunnel is up
 		// Endpoints: none — discovery found nothing (WireGuard's unconnected UDP
 		// socket never shows up as a connected flow).
-		Autodetect: true, // "relaxed" — must not rescue this
+		AutoDetect: true, // "relaxed" — must not rescue this
 	}
 	var snaps []state.Snapshot
 	o.Publish = func(s state.Snapshot) { snaps = append(snaps, s) }
@@ -980,7 +980,7 @@ func TestVPNArmsStandingPostureWithNoTunnelAndNoEndpoint(t *testing.T) {
 		Backend:    be,
 		Log:        discardLog(),
 		Interval:   time.Millisecond,
-		Autodetect: true,
+		AutoDetect: true,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatalf("refused to start with no tunnel and no endpoint; that is the legal standing-cut case: %v", err)

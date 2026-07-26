@@ -102,6 +102,33 @@ one setting at its default — but silence would be worse still, because a
 disabled window quietly returning to its default re-enables a relaxation of the
 guard that someone deliberately turned off.
 
+### Keys that do something, under the wrong name
+
+One category is **not** inert, and is reported differently for that reason: a
+key whose spelling differs from the real one only by **letter case**. JSON key
+matching ignores case, so these are honored in full —
+
+```
+  note: "vpn.pausemax" is not the schema's spelling, but it TOOK EFFECT.
+        the schema spells it "vpn.pauseMax"; JSON key matching ignores case, so this
+        value IS in effect — rename it to match so the file says what it does
+```
+
+— and the report says so, because telling you a live setting has no effect is
+the same failure as silently discarding one, pointed the other way: you would
+stop looking while a 2-hour pause window was in force. Fix the casing so the
+file says what it does; nothing changes about enforcement when you do.
+
+The key on the left is spelled the way **your file** spells it, so you can find
+the line; the one the note tells you to change *to* is always the schema's own
+spelling at **every** level. Miscase a whole block and you get one note per
+level — `"VPN"` → `"vpn"`, then `"VPN.Profiles"` → `"vpn.profiles"` — rather
+than a single hybrid that matches neither.
+
+If **both** spellings are present, which one wins is document order (the
+decoder assigns each key as it reads it), which is why the report flags the
+miscased one rather than trying to pick a winner. Delete it.
+
 #### Renamed keys
 
 | Old name | New name |
@@ -109,6 +136,11 @@ guard that someone deliberately turned off.
 | `vpn.reconnectWindow` | `vpn.redialWindow` |
 | `vpn.advanced.reconnectWindowMax` | `vpn.advanced.redialWindowMax` |
 | `vpn.advanced.reconnectMinUptime` | `vpn.advanced.redialMinUptime` |
+| `vpn.profiles[].ifaceHint` | `vpn.profiles[].tunnelHint` |
+
+`vpn.autodetect` → `vpn.autoDetect` is **not** in this table: that rename
+changed only casing, so the old spelling still takes effect and is reported as
+a misspelling (above) rather than as a name with no effect.
 
 #### Retired keys
 
@@ -161,10 +193,10 @@ and installs no rules at all.
 
 | Field | Type | Default | Notes |
 |---|---|---|---|
-| `vpn.tunnelInterfaces` | `[]string` | `[]` | Tunnel interface names (e.g. `["utun4"]`). Leave empty to let `autodetect` find them. Run `dezhban detect-vpn` to see them. |
+| `vpn.tunnelInterfaces` | `[]string` | `[]` | Tunnel interface names (e.g. `["utun4"]`). Leave empty to let `autoDetect` find them. Run `dezhban detect-vpn` to see them. |
 | `vpn.endpoints` | `[]string` | `[]` | VPN server addresses reachable on the physical interface — kept open so the tunnel can stay up and redial. Each entry may be an **IP or a hostname** (hostnames are re-resolved at runtime). Not required to load — a config with none is valid and rests in STANDBY — but the guard will not arm until it knows at least one, from here, a profile, or `autoDiscoverEndpoints`. |
-| `vpn.autodetect` | bool | `true` | Discover the tunnel interface(s) at runtime via `netdetect`, growing/pruning the guard set as VPNs come and go. Explicit `tunnelInterfaces` always win (and are pinned — never pruned). **On by default** (2026-07-22 defaults review) — set `false` explicitly to rely solely on `tunnelInterfaces`. |
-| `vpn.profiles` | `[]object` | `[]` | Named VPNs whose server endpoints are always kept reachable (the guard passes the **union** of all profiles' endpoints), so switching between known VPNs needs no reconfiguration. Each: `{name, endpoints[], ifaceHint?}`. `ifaceHint` is display-only. Manage with `dezhban vpn add/remove/import`, not `config set`. |
+| `vpn.autoDetect` | bool | `true` | Discover the tunnel interface(s) at runtime via `netdetect`, growing/pruning the guard set as VPNs come and go. Explicit `tunnelInterfaces` always win (and are pinned — never pruned). **On by default** (2026-07-22 defaults review) — set `false` explicitly to rely solely on `tunnelInterfaces`. |
+| `vpn.profiles` | `[]object` | `[]` | Named VPNs whose server endpoints are always kept reachable (the guard passes the **union** of all profiles' endpoints), so switching between known VPNs needs no reconfiguration. Each: `{name, endpoints[], tunnelHint?}`. `tunnelHint` is display-only. Manage with `dezhban vpn add/remove/import`, not `config set`. |
 | `vpn.switchWindow` | duration | `5s` | Default length of a `dezhban switch` window — a bounded, explicitly-triggered relaxation for connecting a brand-new VPN whose server isn't known yet (it closes early on a confirmed good exit, so the duration only bounds the slow case; pass `--for` for a longer one-off). Set `"0"` to disable manual switch windows entirely — a *tightening*, at the cost of having to add a new VPN's server to `vpn.endpoints` by hand. Independent of `redialWindow`. No floor; validated to `(0, advanced.switchWindowMax]`, or exactly `"0"`. |
 | `vpn.redialWindow` | duration | `30s` | Length of the **automatic redial window**: a tunnel drop from healthy GUARD opens a switch-window relaxation for this long, so the VPN client can redial *any* server — including one dezhban has never seen — with zero interaction. Closes early (and learns the new endpoint) the moment a good exit is confirmed; on expiry the guard fail-closes and stays closed. Set `"0"` to disable and get the strict zero-relaxation behavior. No floor; validated to `(0, advanced.redialWindowMax]` — a cap kept **independent** of `advanced.switchWindowMax` so one trigger's budget can never silently truncate the other's. See [modes.md](../concepts/modes.md#automatic-redial-window). |
 | `vpn.pauseMax` | duration | `30m` | Cap on a `dezhban pause` — a deliberate, timed drop to the real ISP IP (e.g. to reach a domestic-only service), sharing the switch-window machinery as a **third** trigger with its own cap, never shared with `switchWindowMax`/`redialWindowMax`. The requested duration comes from the `pause` call itself (`dezhban pause 15m`), not a separate default key. Set `"0"` to disable pausing entirely. See [modes.md](../concepts/modes.md#pause--deliberately-using-your-real-ip). |
@@ -269,7 +301,21 @@ config so the daemon never rewrites user intent. `dezhban vpn forget` clears the
 ## Advanced tunables (`vpn.advanced`)
 
 An optional block for behaviors that are otherwise recommended defaults. Omit it
-entirely to keep the defaults; set only the knobs you need.
+entirely to keep the defaults; set only the knobs you need. Every field below is
+reachable with `dezhban config set vpn.advanced.<field>=<value>` — the same
+validated write-and-reload path as any other key — not just by hand-editing the
+file. `switchWindowMax`, `redialWindowMax`, `redialMinUptime`, and
+`windowDiscoveryInterval` apply live; the rest (built into something the run
+loop constructs once at startup, or — for `windowProtocols`/`windowPorts` —
+only re-read when a switch window opens) need `dezhban restart` to take
+effect, which `config set` says so at the time.
+
+**`0` is not "off" here.** Only the three windows and `redialMinUptime` treat a
+`0` as an explicit opt-out; every other field in this table has no disabled
+state, so a non-positive value is replaced with the default shown below. That
+replacement is not silent — `config set` echoes the value actually stored and
+adds a `note: <key> was normalised on write: <typed> → <stored>` line whenever
+the two differ, on both write paths (elevated and `--token-stdin`).
 
 | Field | Default | What it controls |
 |---|---|---|
@@ -285,10 +331,63 @@ entirely to keep the defaults; set only the knobs you need.
 | `endpointWarnThreshold` | `256` | Union size at which `doctor` warns about rule-list bloat. |
 | `windowProtocols` / `windowPorts` | (empty = allow all) | Restrict the switch window to these protocols/ports instead of all outbound — only useful when every VPN you switch to uses a fixed port set (e.g. WireGuard on 51820). |
 
+## Presets
+
+A **preset** is a named bundle of values for the keys that answer "how strict am
+I" — a write-time macro, not runtime state. Applying one writes those keys
+through the ordinary config path (same validation, same live-reload/restart
+reporting as `config set`); the daemon never knows a preset was applied, only the
+resulting values. A config that has since drifted from all three shows as
+**Custom** rather than silently keeping a stale label.
+
+Presets never touch identity — blocked countries, tunnel interfaces, endpoints,
+profiles — the same carve-out `config reset --all` uses, which is what keeps
+`vpn.profiles` (VPN identities) cleanly distinct from presets (strictness
+strategies).
+
+| Key | Strict | Balanced (shipped default) | Relaxed |
+|---|---|---|---|
+| `vpn.switchWindow` | `0` (disabled) | `5s` | `30s` |
+| `vpn.redialWindow` | `0` (disabled) | `30s` | `2m` |
+| `vpn.pauseMax` | `0` (disabled) | `30m` | `2h` |
+| `pollInterval` | `10s` | `15s` | `30s` |
+| `hysteresis` | `1` | `2` | `3` |
+| `vpn.allowLocalNetwork` | `false` | `true` | `true` |
+| `vpn.allowPhysicalDNS` | `false` | `true` | `true` |
+| `vpn.armAtBoot` | `true` | `true` | `false` |
+
+Each preset states its cost in plain words, never a bare "safe"/"strict" label
+(see [glossary.md](../concepts/glossary.md)'s "Words we do not use"):
+
+- **Strict** — zero relaxation, fastest exit checks. Cost: connecting a new VPN
+  or reconnecting after a drop needs the server's address in `vpn.endpoints`
+  ahead of time (no window to redial or switch through); pausing to use your
+  real IP is unavailable; a VPN endpoint given as a hostname can't re-resolve
+  while the tunnel is down (`allowPhysicalDNS` off); faster polling means more
+  geo-provider requests.
+- **Balanced** — the shipped defaults. Cost: a brief, bounded exposure window
+  whenever the VPN redials or a new one connects; local devices stay reachable,
+  which also lets them reach you on an untrusted network.
+- **Relaxed** — longer windows, slower checks, doesn't arm at boot. Cost: longer
+  exposure per window; a forbidden exit takes longer to catch; a reboot before
+  the VPN reconnects leaves the network open until you arm it by hand.
+
+A preset never touches `vpn.advanced.switchWindowMax` or
+`vpn.advanced.redialWindowMax`. Those are your own hard ceiling on two of the
+three relaxations, and a strictness macro that raised one would relax the guard
+past a limit you set by hand. The consequence is that lowering a cap can put a
+preset out of reach — Relaxed's `30s` switch window cannot be written under a
+`10s` `switchWindowMax`. `preset list` and `preset diff` mark such a preset
+`cannot apply:` with both values, `preset apply` refuses before writing
+anything, and the way forward is to raise the cap or pick another preset.
+
+See [cli.md](cli.md#create--manage-the-config) for `dezhban config preset
+list/show/diff/apply`.
+
 ## Sample configs
 
-- [`configs/dezhban.example.json`](../../configs/dezhban.example.json) — reference: fully automatic (autodetect + endpoint discovery).
+- [`configs/dezhban.example.json`](../../configs/dezhban.example.json) — reference: fully automatic (autoDetect + endpoint discovery).
 - [`configs/dezhban.vpn-guard.json`](../../configs/dezhban.vpn-guard.json) — explicitly pinned tunnel interface and endpoints.
-- [`configs/dezhban.profiles.json`](../../configs/dezhban.profiles.json) — autodetect + multiple VPN profiles + switch window.
+- [`configs/dezhban.profiles.json`](../../configs/dezhban.profiles.json) — autoDetect + multiple VPN profiles + switch window.
 - [`configs/dezhban.dev.json`](../../configs/dezhban.dev.json) — debug logging, fast poll, no blocking; for local dry-runs.
 - `configs/dezhban.local.json` — your private config (git-ignored; may hold a real endpoint IP).

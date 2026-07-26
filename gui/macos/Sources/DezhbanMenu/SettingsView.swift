@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import DezhbanCore
 
 /// The Settings pane — SwiftUI port of the retired SettingsPanel, merged with the
 /// former VPN Guard pane (VPNGuardView, retired 2026-07-22: the two sections split
@@ -16,17 +17,6 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var state: AppState
 
-    // Dotted keys from configFields (cmd/dezhban/config_cmd.go). Order matches the
-    // seed() destructuring below.
-    private static let keys = [
-        "vpn.tunnelInterfaces", "vpn.endpoints",
-        "vpn.autodetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm",
-        "vpn.allowLocalNetwork",
-        "blockedCountries", "pollInterval",
-        "vpn.switchWindow", "vpn.redialWindow", "vpn.endpointGrace",
-        "vpn.endpointRefresh", "vpn.tunnelWatch",
-    ]
-
     @State private var loginEnabled = false
     @State private var notifyEnabled = true
     @State private var checkUpdatesEnabled = true
@@ -36,43 +26,25 @@ struct SettingsView: View {
     /// `seed()`, so neither the body nor a button action ever shells out.
     @State private var configPath = DezhbanCLI.displayConfigPath
 
-    @State private var tunnelInterfaces = ""
-    @State private var endpoints = ""
-    @State private var autodetect = false
-    @State private var autoDiscover = false
-    @State private var autoArm = false
-    @State private var allowLocalNetwork = true
-    @State private var blockedCountries = ""
-    @State private var pollInterval = ""
-    @State private var switchWindow = ""
-    @State private var redialWindow = ""
-    @State private var endpointGrace = ""
-    @State private var endpointRefresh = ""
-    @State private var tunnelWatch = ""
+    @State private var fields = SettingsFields()
 
-    /// The values this pane was last seeded with, in `keys` order. Comparing the
-    /// live fields against these is how an unsaved edit is told from a pane that
-    /// is merely displaying what is on disk — which decides whether it is safe to
-    /// re-read the file underneath the user.
+    /// The values this pane was last seeded with, in `SettingsFields.keys` order.
+    /// Comparing the live fields against these is how an unsaved edit is told
+    /// from a pane that is merely displaying what is on disk — which decides
+    /// whether it is safe to re-read the file underneath the user.
     @State private var seededValues: [String] = []
 
-    /// Field values in `keys` order, for the dirtiness check above.
-    private var currentValues: [String] {
-        [tunnelInterfaces, endpoints,
-         String(autodetect), String(autoDiscover), String(autoArm),
-         String(allowLocalNetwork),
-         blockedCountries, pollInterval,
-         switchWindow, redialWindow, endpointGrace,
-         endpointRefresh, tunnelWatch]
-    }
-
     private var hasUnsavedEdits: Bool {
-        !seededValues.isEmpty && currentValues != seededValues
+        !seededValues.isEmpty && fields.currentValues != seededValues
     }
 
     @State private var status = ""
     @State private var canApply = false
     @State private var bootBusy = false
+    @State private var restartBusy = false
+    @State private var presets: [PresetSummary] = []
+    @State private var presetDrift: PresetDiff?
+    @State private var presetBusy = false
     @State private var tokenBusy = false
     @State private var tokenEnrolled = ControlToken.isStored
     /// Evaluated once rather than in `body`: whether this Mac has biometry cannot
@@ -82,44 +54,47 @@ struct SettingsView: View {
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                Section("Strictness preset") {
+                    presetPicker
+                }
                 Section("Startup") {
-                    Toggle("Start protection at boot (install the system service)", isOn: bootBinding)
+                    Toggle("Start the guard at boot (install the system service)", isOn: bootBinding)
                         .disabled(bootBusy || !state.cliFound)
-                        .help("Installs dezhban as a launchd system daemon: enforcement starts at boot — "
+                        .help("Installs dezhban as a background system service: the guard starts at boot — "
                             + "before any login — and survives restarts and crashes. Unchecking uninstalls the "
                             + "service (rules are torn down first so nothing is left blocking).")
                     Toggle("Open this app at login", isOn: loginBinding)
                         .help("Registers the app as a login item (System Settings → General → Login Items). "
-                            + "This is only the status display — protection itself is the system service above.")
+                            + "This is only the status display — the guard itself is the system service above.")
                     Toggle("Notify on essential events", isOn: notifyBinding)
                         .help("macOS notifications for the transitions that matter: guard armed, egress "
                             + "blocked, warnings (enforcement error / switch window open), standby, stopped. "
                             + "Nothing else.")
                     Toggle("Check for updates automatically", isOn: checkUpdatesBinding)
                         .help("Checks GitHub for a newer release at launch and every ~24h — never from the "
-                            + "root daemon, only here, in this app, on this schedule. Turn off to stop this "
+                            + "background service, only here, in this app, on this schedule. Turn off to stop this "
                             + "host contacting GitHub about updates entirely; \"Check Now\" in About still "
                             + "works either way.")
                 }
                 Section("VPN guard") {
-                    TextField("Tunnel interfaces (comma-sep)", text: $tunnelInterfaces)
+                    TextField("Your VPN tunnel (comma-sep)", text: $fields.tunnelInterfaces)
                         .disabled(!canApply)
-                    TextField("Endpoints (comma-sep)", text: $endpoints)
+                    TextField("Endpoints (comma-sep)", text: $fields.endpoints)
                         .disabled(!canApply)
                 }
                 Section("Autodetection") {
-                    Toggle("Autodetect tunnel interface (vpn.autodetect)", isOn: $autodetect)
+                    Toggle("Find my VPN tunnel automatically", isOn: $fields.autoDetect)
                         .disabled(!canApply)
-                    Toggle("Auto-discover endpoints (vpn.autoDiscoverEndpoints)", isOn: $autoDiscover)
+                    Toggle("Auto-discover endpoints (vpn.autoDiscoverEndpoints)", isOn: $fields.autoDiscover)
                         .disabled(!canApply)
-                    Toggle("Auto-arm when a VPN connects (vpn.autoArm)", isOn: $autoArm)
+                    Toggle("Auto-arm when a VPN connects (vpn.autoArm)", isOn: $fields.autoArm)
                         .disabled(!canApply)
-                        .help("With no VPN connected the daemon idles in standby (nothing blocked) and arms "
+                        .help("With no VPN connected dezhban idles in standby (nothing blocked) and arms "
                             + "the guard the moment a tunnel appears. It never disarms on a drop — that's the "
                             + "kill switch — only an explicit Unblock with the VPN off returns to standby.")
                 }
                 Section("Local network") {
-                    Toggle("Keep local devices reachable", isOn: $allowLocalNetwork)
+                    Toggle("Keep local devices reachable", isOn: $fields.allowLocalNetwork)
                         .disabled(!canApply)
                         .help("Printers, NAS, your router's admin page, AirPlay and Chromecast, and local "
                             + "dev servers keep working while the guard is armed. This is not a hole in the "
@@ -127,44 +102,82 @@ struct SettingsView: View {
                             + "stays blocked. The one cost is on untrusted Wi-Fi (a café, a hotel), where it "
                             + "also lets other devices on that network reach you.")
                 }
-                Section("Protection") {
-                    TextField("Blocked countries (comma-sep, e.g. IR,RU,KP)", text: $blockedCountries)
+                Section("Blocking") {
+                    TextField("Blocked countries (comma-sep, e.g. IR,RU,KP)", text: $fields.blockedCountries)
                         .disabled(!canApply)
-                    TextField("Geo IP lookup interval (e.g. 15s)", text: $pollInterval)
+                    TextField("Geo IP lookup interval (e.g. 15s)", text: $fields.pollInterval)
                         .disabled(!canApply)
                         .help("How often the current VPN exit's country is checked.")
                 }
                 Section("Windows") {
-                    TextField("Switch window (e.g. 5s)", text: $switchWindow)
+                    TextField("Switch window (e.g. 5s)", text: $fields.switchWindow)
                         .disabled(!canApply)
                         .help("Manual switch window (`dezhban switch`): 0 disables it, otherwise up to 3m.")
-                    TextField("Redial window (e.g. 30s)", text: $redialWindow)
+                    TextField("Redial window (e.g. 30s)", text: $fields.redialWindow)
                         .disabled(!canApply)
                         .help("Automatic window opened when a healthy tunnel drops, so the VPN client can "
                             + "redial: 0 disables it, otherwise up to 10m.")
-                    TextField("Endpoint grace (e.g. 15m)", text: $endpointGrace)
+                    TextField("Endpoint grace (e.g. 15m)", text: $fields.endpointGrace)
                         .disabled(!canApply)
                         .help("How long a discovered VPN server stays reachable after its connection "
                             + "disappears, so a dropped VPN can redial the same server.")
                 }
                 Section("Timing") {
-                    TextField("Endpoint refresh (e.g. 30s)", text: $endpointRefresh)
+                    TextField("Endpoint refresh (e.g. 30s)", text: $fields.endpointRefresh)
                         .disabled(!canApply)
-                    TextField("Tunnel watch (e.g. 5s)", text: $tunnelWatch)
+                    TextField("Tunnel watch (e.g. 5s)", text: $fields.tunnelWatch)
                         .disabled(!canApply)
                 }
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
                         .disabled(tokenBusy || !biometryAvailable)
-                        .help("Applying a change asks the running daemon to make it, authorised by a "
+                        .help("Applying a change asks dezhban to make it, authorised by a "
                             + "secret kept in your login keychain behind Touch ID — so saving costs a "
                             + "fingerprint instead of your password. Turning this on stores that secret "
                             + "(one password prompt, now); turning it off removes it from both the "
-                            + "keychain and the daemon. Nothing else about what dezhban enforces changes.")
+                            + "keychain and dezhban. Nothing else about what dezhban enforces changes.")
                     if !biometryAvailable {
                         Text("This Mac has no Touch ID, so settings changes ask for your password.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
+                    }
+                }
+                Section {
+                    DisclosureGroup("Advanced") {
+                        Text("Touch only if you know why — these override recommended defaults.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        TextField("Manual switch window cap (e.g. 3m)", text: $fields.advSwitchWindowMax)
+                            .disabled(!canApply)
+                        TextField("Redial window cap (e.g. 10m)", text: $fields.advRedialWindowMax)
+                            .disabled(!canApply)
+                        TextField("Redial anti-flap uptime (e.g. 15s; 0 disables the gate)", text: $fields.advRedialMinUptime)
+                            .disabled(!canApply)
+                        TextField("Command freshness (e.g. 30s)", text: $fields.advCommandFreshness)
+                            .disabled(!canApply)
+                            .help("How recent a control command must be to be acted on (replay guard).")
+                        TextField("Window discovery interval (e.g. 1s)", text: $fields.advWindowDiscoveryInterval)
+                            .disabled(!canApply)
+                            .help("How often a new VPN server is looked for while a switch window is open.")
+                        TextField("Tunnel prune delay (e.g. 60s)", text: $fields.advTunnelPruneAfter)
+                            .disabled(!canApply)
+                            .help("How long a dynamically-detected tunnel must be gone before it's dropped.")
+                        TextField("Learned endpoint lifetime (e.g. 720h)", text: $fields.advLearnedEndpointTTL)
+                            .disabled(!canApply)
+                            .help("How long an unused learned endpoint is kept.")
+                        TextField("Learned endpoints per profile (e.g. 16)", text: $fields.advLearnedMaxPerProfile)
+                            .disabled(!canApply)
+                        TextField("Promote after N sightings (e.g. 3)", text: $fields.advPromoteAfterRefreshes)
+                            .disabled(!canApply)
+                            .help("Consecutive sightings before a discovered endpoint is learned under normal guard.")
+                        TextField("Endpoint-bloat warning threshold (e.g. 256)", text: $fields.advEndpointWarnThreshold)
+                            .disabled(!canApply)
+                        TextField("Switch-window protocols (comma-sep, e.g. udp,tcp)", text: $fields.advWindowProtocols)
+                            .disabled(!canApply)
+                            .help("Restricts a switch window to these protocols instead of allowing all outbound. Needs a restart to take effect.")
+                        TextField("Switch-window ports (comma-sep, e.g. 51820,443)", text: $fields.advWindowPorts)
+                            .disabled(!canApply)
+                            .help("Restricts a switch window to these ports instead of allowing all outbound. Needs a restart to take effect.")
                     }
                 }
                 Section {
@@ -212,6 +225,8 @@ struct SettingsView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
             Spacer()
+            Button("Restart dezhban…", action: restartNow)
+                .disabled(restartBusy || !state.cliFound)
             Button("Reset to Defaults…", action: resetToDefaults)
                 .disabled(!canApply)
             Button("Reload", action: seed)
@@ -220,6 +235,128 @@ struct SettingsView: View {
                 .disabled(!canApply)
         }
         .padding(12)
+    }
+
+    // MARK: - explicit restart
+
+    /// Restart is a lifecycle action about the running daemon, not a settings
+    /// change — no keys are written here — so it lives beside Apply rather than
+    /// inside it, and it is the one place a restart can be asked for with
+    /// nothing pending.
+    private func restartNow() {
+        let exposedNow = state.snapshot?.posture == "full-block" || (state.snapshot?.switch?.open ?? false)
+        guard AppActions.confirmRestart(exposedNow: exposedNow, unsavedEdits: hasUnsavedEdits) else { return }
+        restartBusy = true
+        status = "Restarting…"
+        ConfigApply.restartNow(awaitPosture: true, title: "Restart") { outcome in
+            restartBusy = false
+            status = outcome.status
+            if let title = outcome.transcriptTitle, let text = outcome.transcript {
+                state.showInLogs(title: title, text: text)
+            }
+        }
+    }
+
+    // MARK: - preset picker
+
+    /// One button per preset (a segmented control would apply on selection with
+    /// no chance to confirm the cost first) plus a summary/cost line for
+    /// whichever one is current, or the drift from the nearest one when the
+    /// config is Custom.
+    private var presetPicker: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 8) {
+                ForEach(presets) { p in
+                    Button {
+                        confirmAndApplyPreset(p)
+                    } label: {
+                        Label(p.name.capitalized, systemImage: (p.matched ?? false) ? "checkmark.circle.fill" : "circle")
+                    }
+                    .buttonStyle(.bordered)
+                    .tint((p.matched ?? false) ? Color.accentColor : Color.secondary)
+                    // A preset the CLI would refuse (its window exceeds a cap
+                    // lowered in Advanced) is offered as unavailable, with the
+                    // reason on hover — letting it be clicked would trade a
+                    // greyed button for an error sheet after the fact.
+                    .disabled(presetBusy || !canApply || !p.isAppliable)
+                    .help(p.isAppliable ? p.summary : (p.conflicts ?? []).joined(separator: "\n"))
+                }
+            }
+            // Said in the pane, not only on hover: the reason names a value the
+            // user set themselves in Advanced, and raising it is the fix.
+            ForEach(presets.filter { !$0.isAppliable }) { p in
+                ForEach(p.conflicts ?? [], id: \.self) { c in
+                    Label("Can't apply \(c)", systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                }
+            }
+            if let matched = presets.first(where: { $0.matched ?? false }) {
+                Text(matched.summary).font(.callout).foregroundStyle(.secondary)
+                Text("Cost: \(matched.cost)").font(.callout).foregroundStyle(.secondary)
+            } else if !presets.isEmpty {
+                Text("Custom — doesn't match any preset.").font(.callout).foregroundStyle(.secondary)
+                if let drift = presetDrift, !drift.changes.isEmpty {
+                    DisclosureGroup("\(drift.changes.count) key(s) differ from \(drift.preset.capitalized)") {
+                        ForEach(drift.changes) { c in
+                            Text("\(c.key): \(c.from) → \(c.to)")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Names the cost before writing, then applies through the same batched
+    /// write/reload/restart path Apply and Reset to Defaults use — a preset is
+    /// a write-time macro over ordinary keys, not a separate kind of change.
+    private func confirmAndApplyPreset(_ p: PresetSummary) {
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Apply the \(p.name.capitalized) preset?"
+        var text = "\(p.summary)\n\nCost: \(p.cost)"
+        if hasUnsavedEdits {
+            // Applying writes the preset's values to disk and then re-seeds
+            // from what actually landed (see below) — silently discarding
+            // whatever the user had typed into the fields but not yet saved.
+            // Name that loss here rather than only in the cost line, which
+            // talks about the preset's trade-offs, not the pane's own state.
+            text += "\n\nYou have unsaved changes in this pane — applying a preset will discard them."
+        }
+        alert.informativeText = text
+        alert.addButton(withTitle: "Apply")
+        alert.addButton(withTitle: "Cancel")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        presetBusy = true
+        status = "Applying \(p.name)…"
+        ConfigApply.applyPreset(p.name, awaitPosture: true, title: "Preset") { outcome in
+            presetBusy = false
+            status = outcome.status
+            if let title = outcome.transcriptTitle, let text = outcome.transcript {
+                state.showInLogs(title: title, text: text)
+            }
+            // Re-seed so the preset picker (and every field) reflects what
+            // actually landed, including the daemon's own normalisation.
+            if outcome.ok { seed() }
+        }
+    }
+
+    /// Reads presets and (only when the config is Custom) the drift from the
+    /// nearest one, off the main thread — both shell out.
+    private func refreshPresets() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let list = DezhbanCLI.readPresets() ?? []
+            let diff = list.contains { $0.matched ?? false } ? nil : DezhbanCLI.readPresetDiff()
+            DispatchQueue.main.async {
+                presets = list
+                presetDrift = diff
+            }
+        }
     }
 
     // MARK: - reset to defaults
@@ -276,7 +413,7 @@ struct SettingsView: View {
             let alert = NSAlert()
             alert.alertStyle = .warning
             alert.messageText = "Uninstall the dezhban service?"
-            alert.informativeText = "Protection will stop and will no longer start at boot. "
+            alert.informativeText = "The guard will stop and will no longer start at boot. "
                 + "All dezhban firewall rules are removed first, so nothing is left blocking."
             alert.addButton(withTitle: "Uninstall")
             alert.addButton(withTitle: "Cancel")
@@ -368,39 +505,24 @@ struct SettingsView: View {
         loginEnabled = LoginItem.isEnabled
         notifyEnabled = NotificationManager.isEnabled
         checkUpdatesEnabled = UpdateChecker.isEnabled
-        tunnelInterfaces = ""; endpoints = ""
-        autodetect = false; autoDiscover = false; autoArm = false; allowLocalNetwork = true
-        blockedCountries = ""; pollInterval = ""
-        switchWindow = ""; redialWindow = ""; endpointGrace = ""
-        endpointRefresh = ""; tunnelWatch = ""
+        fields = SettingsFields()
         state.refreshServiceState()
+        refreshPresets()
         // `path` is the same resolution ConfigApply.seed already did for the
         // `config get` calls — reusing it here means configPath never needs its
         // own second background resolve, so there's nothing to race.
-        ConfigApply.seed(keys: Self.keys) { path, values, error in
+        ConfigApply.seed(keys: SettingsFields.keys) { path, values, error in
             configPath = path
             if let error = error {
                 status = error
                 return
             }
             guard let v = values else { return }
-            tunnelInterfaces = v[0]
-            endpoints = v[1]
-            autodetect = (v[2] == "true")
-            autoDiscover = (v[3] == "true")
-            autoArm = (v[4] == "true")
-            allowLocalNetwork = (v[5] == "true")
-            blockedCountries = v[6]
-            pollInterval = v[7]
-            switchWindow = v[8]
-            redialWindow = v[9]
-            endpointGrace = v[10]
-            endpointRefresh = v[11]
-            tunnelWatch = v[12]
+            fields = SettingsFields(seeded: v)
             // Recorded AFTER the fields are populated, so `currentValues` and the
             // seeded snapshot are the same thing at this instant and the pane
             // starts out clean.
-            seededValues = currentValues
+            seededValues = fields.currentValues
             status = "Seeded from \(path)"
             canApply = true
         }
@@ -409,41 +531,14 @@ struct SettingsView: View {
     // MARK: - apply (staged fields)
 
     private func apply() {
-        let poll = pollInterval.trimmingCharacters(in: .whitespaces)
-        let window = switchWindow.trimmingCharacters(in: .whitespaces)
-        let redial = redialWindow.trimmingCharacters(in: .whitespaces)
-        let grace = endpointGrace.trimmingCharacters(in: .whitespaces)
-        let refresh = endpointRefresh.trimmingCharacters(in: .whitespaces)
-        let watch = tunnelWatch.trimmingCharacters(in: .whitespaces)
-        for (label, value) in [
-            ("Geo IP lookup interval", poll),
-            ("Switch window", window),
-            ("Redial window", redial),
-            ("Endpoint grace", grace),
-            ("Endpoint refresh", refresh),
-            ("Tunnel watch", watch),
-        ] {
-            guard ConfigApply.looksLikeGoDuration(value) else {
+        for (label, value) in fields.durationFieldsForValidation {
+            guard DurationText.looksLikeGoDuration(value) else {
                 ConfigApply.invalidDurationAlert(label, value)
                 return
             }
         }
 
-        let pairs = [
-            "vpn.tunnelInterfaces=\(tunnelInterfaces)",
-            "vpn.endpoints=\(endpoints)",
-            "vpn.autodetect=\(autodetect)",
-            "vpn.autoDiscoverEndpoints=\(autoDiscover)",
-            "vpn.autoArm=\(autoArm)",
-            "vpn.allowLocalNetwork=\(allowLocalNetwork)",
-            "blockedCountries=\(blockedCountries.trimmingCharacters(in: .whitespaces))",
-            "pollInterval=\(poll)",
-            "vpn.switchWindow=\(window)",
-            "vpn.redialWindow=\(redial)",
-            "vpn.endpointGrace=\(grace)",
-            "vpn.endpointRefresh=\(refresh)",
-            "vpn.tunnelWatch=\(watch)",
-        ]
+        let pairs = fields.pairs()
         canApply = false
         status = "Applying…"
         // awaitPosture: true — this pane now carries guard-affecting keys (it used

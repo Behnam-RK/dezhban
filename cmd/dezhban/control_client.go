@@ -59,6 +59,31 @@ func noDaemon() bool {
 	return false
 }
 
+// probeControl pings the control socket once. Factored out of controlStatus so
+// controlReachable can report the same probe as a plain bool for status --json,
+// rather than a caller (the macOS app used to) scraping the human sentence for
+// a substring.
+//
+// Do, not Ping: control.Ping collapses every failure into false, which would
+// report the daemon as "not running" to the one user who most needs a real
+// answer — a caller outside control.group, for whom the socket is right there
+// and simply not openable. ErrForbidden is modeled precisely so this case can
+// be named.
+func probeControl(cfg *config.Config) (control.Response, error) {
+	return control.Do(controlSocketPath(cfg), control.Request{Op: control.OpPing})
+}
+
+// controlReachable reports whether routine ops (block/unblock/switch) will
+// reach the daemon with no password prompt. The bool counterpart of
+// controlStatus's sentence — see status --json's controlReachable field.
+func controlReachable(cfg *config.Config) bool {
+	if !cfg.Control.Enabled {
+		return false
+	}
+	resp, err := probeControl(cfg)
+	return err == nil && resp.OK
+}
+
 // controlStatus is the human-readable answer to "will routine ops ask me for a
 // password?" — the whole point of the socket, so `status` says it plainly.
 func controlStatus(cfg *config.Config) string {
@@ -66,11 +91,7 @@ func controlStatus(cfg *config.Config) string {
 		return "disabled (control.enabled=false) — routine ops need sudo"
 	}
 	path := controlSocketPath(cfg)
-	// Do, not Ping: Ping collapses every failure into false, which would report the
-	// daemon as "not running" to the one user who most needs a real answer — a caller
-	// outside control.group, for whom the socket is right there and simply not
-	// openable. ErrForbidden is modeled precisely so this case can be named.
-	resp, err := control.Do(path, control.Request{Op: control.OpPing})
+	resp, err := probeControl(cfg)
 	switch {
 	case errors.Is(err, control.ErrForbidden):
 		return fmt.Sprintf("forbidden (%s) — socket exists but you are not in the %q group; routine ops need sudo", path, cfg.Control.Group)

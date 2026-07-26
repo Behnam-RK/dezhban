@@ -21,7 +21,13 @@ These gate everything else and should be green before you touch a firewall:
 ```sh
 go build ./... && go vet ./... && go test ./...
 GOOS=linux go build ./... && GOOS=windows go build ./...
+swift build --package-path gui/macos && swift test --package-path gui/macos
 ```
+
+`swift test` covers `DezhbanCore` — the pure, AppKit-free layer (Snapshot
+decoding, posture→icon derivation, settings-field batching). `DezhbanMenu`
+itself (the AppKit/SwiftUI executable, elevation, CLI shell-out) has no test
+target — see Known gaps.
 
 ## Enforcement — all platforms
 
@@ -61,8 +67,8 @@ Per-OS rule inspection:
 
 - [ ] **Fresh install, no VPN configured** → posture `standby`, **no rules
       installed** (the inspect command above shows nothing for the `dezhban`
-      table/anchor), network fully open, menubar icon grey, Overview says it is
-      not protecting.
+      table/anchor), network fully open, menubar icon grey, Overview says
+      nothing is being blocked.
 - [ ] **Arming.** Configure a tunnel and connect the VPN → the guard arms, icon
       goes green, and the GUARD ruleset appears.
 - [ ] **A pre-merge config still works.** Load a config carrying `vpn.enabled`,
@@ -319,8 +325,8 @@ daemon's *behaviour* afterwards, never about what the file says.
       immediately (`pfctl -a dezhban -sr` / `nft list table inet dezhban`), not
       only after the next posture change.
 - [ ] **An unrelated edit does not reset a pending flip.** With a forbidden exit
-      and `hysteresis: 3`, wait for `status` to report `in progress: escalating to
-      full block (1 of 3 …)`, then `dezhban config set pollInterval 15s` → the
+      and `hysteresis: 3`, wait for `status` to report `Escalating to full block —
+      1 of 3 confirming checks.`, then `dezhban config set pollInterval 15s` → the
       count keeps climbing from where it was. Then change `blockedCountries` and
       confirm the count *does* restart, which is the one case where it should.
 - [ ] **No daemon running.** The write still succeeds and says so; the values are
@@ -333,8 +339,8 @@ Privileged, on a real host with a real VPN. The point of these checks is the
 
 - [ ] **Progress is visible.** Force FULL BLOCK (`--simulate-country IR`, or a
       real forbidden exit), then redial onto an allowed exit → `dezhban status`
-      shows "in progress: restoring the guard (1 of 2 agreeing readings)" and the
-      app's Overview shows the same count, before the posture changes.
+      shows "Restoring the guard — 1 of 2 confirming checks." and the app's
+      Overview shows the same count, before the posture changes.
 - [ ] **It is fast.** The guard comes back within seconds of the tunnel coming
       up, not after a full `pollInterval` × `hysteresis`.
 - [ ] **Hysteresis still gates it.** With `hysteresis: 3`, a single allowed
@@ -399,6 +405,14 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
 - [ ] **Deferred activation during FULL BLOCK.** With the guard in FULL
       BLOCK, `dezhban upgrade apply` installs the payload, refuses to
       activate, and leaves the old daemon enforcing normally.
+- [ ] **Deferred activation while the guard holds a downed tunnel.** With a
+      healthy guard, disconnect the VPN and wait for the redial window to
+      expire, so `status` reads "VPN down — traffic cut" at posture `guard`.
+      `dezhban upgrade apply` must install the payload and REFUSE to activate,
+      naming the downed tunnel — the posture string is `guard`, but the rules
+      about to be torn down are the only thing cutting egress. Then reconnect
+      the VPN and retry: the same command must now activate. The refusal is the
+      half that cannot be caught in CI, since it needs a real tunnel to drop.
 - [ ] **A deferred stash is NOT cleared before activation.** From the state
       above (payload applied, activation refused, stash present), run
       `upgrade apply` again WITHOUT restarting first. It must refuse with the
@@ -467,7 +481,7 @@ task gui:build && open dist/Dezhban.app
       armed/blocked/warning/standby/stopped transitions each notify once; no
       notification at app launch or on routine country/endpoint updates.
 - [ ] **Staleness.** Kill the daemon → the icon goes gray after the 90 s staleness
-      window, and Overview switches to the guided "Protection stopped" state.
+      window, and Overview switches to the guided "Stopped" state.
 
 ### Actions
 
@@ -475,12 +489,26 @@ task gui:build && open dist/Dezhban.app
       switch window complete over the control socket with **no** prompt, from both
       the menubar and Overview; the switch countdown ticks in both surfaces and
       matches.
+- [ ] **Pause and Resume, from both surfaces.** Pause opens with no password
+      (`control.allowPauseOps` default true); the app shows "Resume now (m:ss
+      left)" in place of the switch-window Cancel item, and the countdown agrees
+      between menubar and Overview. Resuming early re-arms the guard immediately.
+      Letting a pause expire re-arms it with no action needed. With
+      `vpn.pauseMax: "0"`, Pause is disabled in both surfaces with a reason
+      ("vpn.pauseMax is \"0\""), not just a silent no-op.
+- [ ] **Profile picker.** With `configs/dezhban.profiles.json`, Overview's
+      details grid lists every configured profile and marks the one that
+      matched (`(active)`), matching `dezhban vpn list`; "Switching VPN…"
+      becomes a menu with "Any known VPN" plus one item per profile, and
+      picking a profile passes `--name <profile>` (`dezhban vpn list` shows the
+      learned endpoint attributed to it afterward). With no profiles
+      configured, it's a plain button, not a one-item menu.
 - [ ] **Privileged actions.** Start/Stop raise a native admin prompt (Touch ID or
       password), run, and the state reflects the result.
 - [ ] **Menubar panic works without the window.** From a fresh launch (main window
       never opened): Panic shows a confirmation, confirming removes the rules and
       the transcript appears in an alert; cancelling does nothing.
-- [ ] **Window panic** routes its transcript to the Logs & Diagnostics pane and
+- [ ] **Window panic** routes its transcript to the Logs pane and
       navigates there.
 - [ ] **Failures are visible, not silent.** Move the CLI binary aside (or invalidate
       the config), then trigger Start/Stop → the alert shows real stderr.
@@ -517,10 +545,10 @@ end up typing a password.
 
 - [ ] CLI binary moved aside → Overview explains "dezhban CLI not found" (and the
       menubar status line agrees); restore it → recovers on next refresh.
-- [ ] Service uninstalled → "Not protecting" with an inline **Install service…**
+- [ ] Service uninstalled → "Guard not installed" with an inline **Install service…**
       that installs + starts under one prompt and shows its transcript in Logs.
-- [ ] Service installed but stopped → "Protection stopped" with an inline
-      **Start kill switch**.
+- [ ] Service installed but stopped → "Stopped" with an inline
+      **Guard up**.
 
 ### Settings pane
 
@@ -531,7 +559,22 @@ end up typing a password.
       the app relaunches after a logout/login cycle.
 - [ ] Protection fields seed from `dezhban config show` values; Apply raises the
       restart-warning choice; "Save only" writes without restarting.
+- [ ] **Restart dezhban…** works with nothing else pending: a plain "are you
+      sure?" during GUARD or STANDBY, but a stronger, `.critical` warning during
+      FULL BLOCK or an open switch/redial/pause window that says enforcement is
+      briefly lifted and your real IP may be exposed. Cancelling changes nothing.
 - [ ] **Open Config File…** opens the resolved config path.
+- [ ] **Preset picker.** With a freshly-installed (default) config, Balanced
+      shows checked and its summary/cost text; clicking Strict shows the cost
+      in the confirmation, and after applying, Strict is checked and Balanced
+      is not. Hand-edit one key afterward (e.g. `pollInterval`) and reopen the
+      pane — no preset is checked, "Custom" shows, and the disclosure lists
+      exactly the keys that differ from the nearest preset (matches `dezhban
+      config preset diff`).
+- [ ] **Advanced disclosure.** Collapsed by default; expanding it seeds from
+      `dezhban config show`'s `vpn.advanced` block, and Apply writes changes
+      there through the same batched write as every other field (one prompt,
+      not a second one for Advanced).
 
 #### Use Touch ID for settings changes
 
@@ -569,9 +612,16 @@ end up typing a password.
 - [ ] Killing the daemon mid-restart makes the pane report failure, not success.
 - [ ] One prompt per apply — not one per field.
 
-### Logs & Diagnostics pane
+### Diagnostics pane
 
-- [ ] **Diagnostics** match a hand-run `dezhban doctor --config …`.
+- [ ] Rows and their statuses match a hand-run `dezhban doctor --config …`;
+      checking "Find my VPN's server" matches `dezhban doctor --discover`.
+- [ ] A `fail`/`warn` row's fix text is readable and matches the fix text
+      `dezhban doctor` prints in a terminal.
+- [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
+
+### Logs pane
+
 - [ ] "Show last hour" matches a hand-run `log show --last 1h --predicate
       'process == "dezhban"'`. "Stream live" updates live; Stop — or closing the
       window mid-stream — ends the child process (no orphaned `log stream` in `ps`).
@@ -589,3 +639,7 @@ These are deliberate, not oversights:
   through Authorization Services instead (which does cache, so consecutive actions
   are usually silent).
 - **Offline mmdb country lookup.** Deferred — country resolution is online-only.
+- **The app's AppKit/SwiftUI layer (`DezhbanMenu`) is untested.** Only the pure
+  layer split into `DezhbanCore` (Snapshot decoding, posture→icon derivation,
+  settings-field batching) has a test target; the views, elevation, and CLI
+  shell-out are still verified only by the manual checklists above.

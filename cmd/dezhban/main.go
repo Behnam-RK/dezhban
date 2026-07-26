@@ -35,6 +35,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
 	"github.com/behnam-rk/dezhban/internal/privilege"
+	"github.com/behnam-rk/dezhban/internal/render"
 	"github.com/behnam-rk/dezhban/internal/runner"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/svc"
@@ -220,13 +221,20 @@ func requireRoot(cmd string) bool {
 	return false
 }
 
-// reportRetired warns once per inert key found in the config file: keys that
-// were retired, keys that were renamed, and keys the schema simply does not
-// recognise. All three share one property — the operator wrote a setting and it
-// is doing nothing — and this is the only signal they get. Silence would let
-// someone believe a discarded security setting took effect.
+// reportRetired warns once per config key that is not what the schema calls it:
+// keys that were retired, keys that were renamed, keys the schema does not
+// recognise at all, and keys misspelled only in letter case. The first three
+// share one property — the operator wrote a setting and it is doing nothing —
+// and this is the only signal they get; silence would let someone believe a
+// discarded security setting took effect. The fourth is the opposite and gets
+// the opposite wording: its value IS live, so warning that it "has no effect"
+// would be the same lie in reverse.
 func reportRetired(cfg *config.Config, log *slog.Logger) {
 	for _, r := range cfg.Retired {
+		if r.TookEffect {
+			log.Warn("config key is misspelled but took effect", "key", r.Key, "why", r.Reason)
+			continue
+		}
 		log.Warn("config key has no effect", "key", r.Key, "why", r.Reason)
 	}
 }
@@ -256,6 +264,19 @@ func resolveConfigPath(flagVal string) string {
 		}
 	}
 	return ""
+}
+
+// stampAndRender finalizes a snapshot the way the daemon's publish closure
+// does: stamping the running build version and attaching the rendered
+// Display, so a state.json (and therefore status --json and the menubar app)
+// never carries a Display computed from a different Snapshot than the one it
+// sits beside. Factored out of the closure in cmdRun so it can be tested
+// without standing up the whole run loop.
+func stampAndRender(s state.Snapshot, version string) state.Snapshot {
+	s.Version = version
+	d := render.Text(s)
+	s.Display = &state.Display{Key: d.Key, Headline: d.Headline, Detail: d.Detail}
+	return s
 }
 
 func cmdRun(args []string) int {
@@ -472,13 +493,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	// at debug and never affects enforcement.
 	statePath := defaultStatePath()
 	publish := func(s state.Snapshot) {
-		// Stamp the running version here rather than in runner: this closure is
-		// the single choke point every snapshot passes through (including the
-		// terminal publishStopped one), and the build identity belongs to the
-		// binary, not to the enforcement loop. `upgrade apply` reads it back to
-		// tell a still-pending activation from one that already landed — see
-		// state.Snapshot.Version.
-		s.Version = buildStamp.Version
+		s = stampAndRender(s, buildStamp.Version)
 		if err := state.Write(statePath, s); err != nil {
 			log.Debug("state publish failed", "path", statePath, "err", err)
 		}
@@ -589,7 +604,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		PauseMax:          cfg.VPN.PauseMax,
 		AllowPauseOps:     cfg.Control.AllowPauseOps,
 		Tunnels:           tunnels,
-		Autodetect:        cfg.VPN.Autodetect,
+		AutoDetect:        cfg.VPN.AutoDetect,
 		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
 		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
 		ResolveEndpoints:  func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
@@ -686,7 +701,7 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 // its up/down samples are what drive the guard's posture decisions — or when a
 // tunnel-drop simulation is requested.
 func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov runOverrides) *netdetect.Watcher {
-	if len(tunnels) == 0 && !cfg.VPN.Autodetect && !ov.tunnelDownSet {
+	if len(tunnels) == 0 && !cfg.VPN.AutoDetect && !ov.tunnelDownSet {
 		return nil
 	}
 	// In autodetect mode the watcher must sample ALL tunnel-like interfaces, not
@@ -697,7 +712,7 @@ func buildWatcher(cfg *config.Config, log *slog.Logger, tunnels []string, ov run
 	// liveSample consider every interface; the runner still starts from `tunnels`.
 	// With autodetect off, explicit pins keep their allowlist semantics.
 	watchTunnels := tunnels
-	if cfg.VPN.Autodetect {
+	if cfg.VPN.AutoDetect {
 		watchTunnels = nil
 	}
 	w := &netdetect.Watcher{Tunnels: watchTunnels, Interval: cfg.VPN.TunnelWatch, Log: log}
@@ -815,7 +830,7 @@ func cmdBlock(args []string) int {
 		// opens the tunnel endpoint, never a destination allowlist.
 		tunnels := resolveTunnels(cfg, log)
 		if len(tunnels) == 0 {
-			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autodetect)")
+			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autoDetect)")
 			return 1
 		}
 		endpoints := resolveEndpointsOnce(cfg, log, tunnels)
@@ -849,7 +864,7 @@ func cmdBlock(args []string) int {
 }
 
 // resolveTunnels returns the VPN tunnel interface names to guard. Explicit
-// config values always win; when none are set and vpn.autodetect is enabled, it
+// config values always win; when none are set and vpn.autoDetect is enabled, it
 // discovers them via netdetect. It may return empty (autodetect found nothing) —
 // callers must treat an empty guard set as a hard error, never proceed (an empty
 // guard would be a total lockout).
@@ -857,7 +872,7 @@ func resolveTunnels(cfg *config.Config, log *slog.Logger) []string {
 	if len(cfg.VPN.TunnelInterfaces) > 0 {
 		return cfg.VPN.TunnelInterfaces
 	}
-	if !cfg.VPN.Autodetect {
+	if !cfg.VPN.AutoDetect {
 		return nil
 	}
 	tun, err := netdetect.TunnelInterfaces()
@@ -1240,10 +1255,10 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println("interfaces; guarding the wrong one would not protect you.")
 	fmt.Println()
 	fmt.Println()
-	fmt.Println("recommended config (autodetect handles interface renumbering across redials):")
+	fmt.Println("recommended config (autoDetect handles interface renumbering across redials):")
 	fmt.Println(`  "vpn": {`)
 	fmt.Println(`    "enabled": true,`)
-	fmt.Println(`    "autodetect": true,`)
+	fmt.Println(`    "autoDetect": true,`)
 	fmt.Println(`    "autoDiscoverEndpoints": true`)
 	fmt.Println(`  }`)
 	fmt.Println()
@@ -1284,8 +1299,14 @@ func cmdValidate(args []string) int {
 	// Inert keys — retired, renamed, or simply unrecognised — are not an error;
 	// the config is valid and will run. But `validate` is exactly where someone
 	// checks whether their file says what they think it says, so a key that does
-	// nothing belongs here more than anywhere.
+	// nothing belongs here more than anywhere. A key misspelled only in letter
+	// case belongs here for the opposite reason: it is doing something, under a
+	// name the file does not admit to.
 	for _, r := range cfg.Retired {
+		if r.TookEffect {
+			fmt.Printf("\n  note: %q is not the schema's spelling, but it TOOK EFFECT.\n        %s\n", r.Key, r.Reason)
+			continue
+		}
 		fmt.Printf("\n  note: %q has no effect.\n        %s\n", r.Key, r.Reason)
 	}
 	return 0
@@ -1475,15 +1496,349 @@ func cmdPrintRules(args []string) int {
 	return 0
 }
 
-// cmdDoctor diagnoses the VPN guard configuration without root or side effects:
-// it validates config, lists tunnel interfaces and their subnets, and flags any
-// endpoint that sits inside a tunnel's own subnet (a guaranteed lockout). With
-// --discover it additionally runs the macOS-only best-effort hunt for the
-// connected VPN's real server IP, automating the manual netstat/scutil dance.
+// checkStatus classifies one doctorReport check for a machine consumer (the
+// macOS Diagnostics pane) without it having to parse Summary/Details prose.
+type checkStatus string
+
+const (
+	checkOK   checkStatus = "ok"
+	checkWarn checkStatus = "warn"
+	checkFail checkStatus = "fail"
+)
+
+// doctorCheck is one section of `doctor`'s output, structured. Details/Fixes
+// are the exact lines printDoctor prints under the check's header — kept as
+// data so a second renderer (the GUI's Diagnostics pane, over --json) never
+// has to reparse human prose to find out what's wrong.
+type doctorCheck struct {
+	Name    string      `json:"name"`
+	Status  checkStatus `json:"status"`
+	Summary string      `json:"summary"`
+	// Details are the check's findings, one line each. An EMPTY string is a
+	// paragraph break, not a finding — the only piece of layout this contract
+	// carries, and it is here because both renderers need it: printDoctor emits
+	// a blank line, and the GUI's checkRow emits vertical space. A renderer that
+	// treats it as an ordinary line gets a stray empty row, so new consumers
+	// must handle it. Anything more elaborate than a break belongs in Fixes.
+	Details []string `json:"details,omitempty"`
+	// Fixes are the commands or actions that resolve the check, never prose
+	// about them — the GUI badges each one, so a sentence dressed as a fix
+	// reads as a command the user should run.
+	Fixes []string `json:"fixes,omitempty"`
+}
+
+// doctorReport is `doctor`'s complete findings, machine-readable via
+// `doctor --json` and human-readable via printDoctor — the same data render
+// two ways, so the CLI and the GUI can never disagree about what doctor found.
+type doctorReport struct {
+	Checks []doctorCheck `json:"checks"`
+	OK     bool          `json:"ok"`
+}
+
+// buildTunnelsCheck formats the resolved tunnel set and their subnets (already
+// looked up by the caller — this function does no I/O) into a doctorCheck.
+// Pure, so the "no subnet" and "has a subnet" branches are directly testable
+// without a real OS network interface.
+func buildTunnelsCheck(tunnels []string, nets []netdetect.TunnelNet) doctorCheck {
+	c := doctorCheck{Name: "tunnels", Status: checkOK}
+	if len(tunnels) == 0 {
+		c.Status = checkWarn
+		c.Details = []string{"(none — set vpn.tunnelInterfaces or vpn.autoDetect)"}
+		return c
+	}
+	subsByIface := map[string][]string{}
+	for _, tn := range nets {
+		subsByIface[tn.Iface] = append(subsByIface[tn.Iface], tn.Subnet.String())
+	}
+	for _, t := range tunnels {
+		if subs := subsByIface[t]; len(subs) > 0 {
+			c.Details = append(c.Details, fmt.Sprintf("%s — %s", t, strings.Join(subs, ", ")))
+		} else {
+			c.Details = append(c.Details, fmt.Sprintf("%s — no subnet (interface down or absent?)", t))
+		}
+	}
+	return c
+}
+
+// buildEndpointsCheck formats the resolved endpoint set and any misrouted
+// ("bad") ones (already computed by the caller) into a doctorCheck. Pure, so
+// the MISCONFIGURED/fix-text formatting is directly testable with a synthetic
+// `bad` slice — real subnet containment needs a live OS tunnel interface,
+// which a portable unit test cannot depend on.
+func buildEndpointsCheck(endpoints []netip.Addr, bad []netdetect.EndpointRoute) doctorCheck {
+	c := doctorCheck{Name: "endpoints", Status: checkOK}
+	if len(endpoints) == 0 {
+		c.Status = checkWarn
+		c.Details = []string{"(none resolved)"}
+		return c
+	}
+	internal := map[string]netdetect.EndpointRoute{}
+	for _, b := range bad {
+		internal[b.Endpoint.String()] = b
+	}
+	for _, ep := range endpoints {
+		if b, ok := internal[ep.String()]; ok {
+			c.Details = append(c.Details, fmt.Sprintf("%s — MISCONFIGURED: inside %s's subnet %s", ep, b.Iface, b.Subnet))
+		} else {
+			c.Details = append(c.Details, fmt.Sprintf("%s — ok (assumed reachable on the physical interface)", ep))
+		}
+	}
+	if len(bad) > 0 {
+		c.Status = checkFail
+		for _, b := range bad {
+			c.Fixes = append(c.Fixes,
+				fmt.Sprintf("%s is a tunnel-internal address (inside %s %s); set vpn.endpoints to\n"+
+					"    your VPN server's PUBLIC IP from your VPN client config.", b.Endpoint, b.Iface, b.Subnet))
+		}
+	}
+	return c
+}
+
+// buildLockoutCheck formats the "guard would block its own tunnel's transport"
+// warning. Pure — the caller decides whether the lockout condition holds.
+func buildLockoutCheck(tunnels []string) doctorCheck {
+	return doctorCheck{
+		Name:    "lockout",
+		Status:  checkFail,
+		Summary: "dezhban will refuse to start",
+		Details: []string{
+			fmt.Sprintf("The VPN guard is on and %s is up, but no server address is known.", strings.Join(tunnels, ", ")),
+			"The guard would block the tunnel's own transport and cut ALL traffic.",
+			"",
+			"Auto-discovery reads CONNECTED sockets. WireGuard (and other",
+			"NetworkExtension clients) send from an UNCONNECTED UDP socket, so they",
+			"never appear as a connected flow — discovery cannot find them. Name the",
+			"server explicitly:",
+		},
+		Fixes: []string{
+			"dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it",
+			"dezhban vpn add <name> --endpoint <host-or-ip>",
+			"sudo dezhban config set vpn.endpoints=<server-ip>",
+		},
+	}
+}
+
+// runDoctor builds the report: validates config, lists tunnel interfaces and
+// their subnets, and flags any endpoint that sits inside a tunnel's own subnet
+// (a guaranteed lockout). With discover=true it additionally runs the
+// macOS-only best-effort hunt for the connected VPN's real server IP,
+// automating the manual netstat/scutil dance. No I/O of its own beyond what
+// resolveTunnels/resolveEndpointsOnce/netdetect already do — no printing.
+func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport {
+	var checks []doctorCheck
+
+	checks = append(checks, doctorCheck{
+		Name: "config", Status: checkOK, Summary: "OK (loaded and validated)",
+	})
+
+	tunnels := resolveTunnels(cfg, log)
+	nets, _ := netdetect.TunnelSubnets(tunnels)
+	checks = append(checks, buildTunnelsCheck(tunnels, nets))
+
+	endpoints := resolveEndpointsOnce(cfg, log, tunnels)
+	var bad []netdetect.EndpointRoute
+	if len(endpoints) > 0 {
+		bad, _ = netdetect.CheckEndpointRouting(endpoints, tunnels)
+	}
+	checks = append(checks, buildEndpointsCheck(endpoints, bad))
+
+	// The guard blocks ALL egress on the physical link — which is what carries the
+	// tunnel's own encrypted transport. With a tunnel up and no known server address,
+	// arming it cuts every packet, kills the VPN, and leaves no socket for discovery to
+	// learn from: an unrecoverable blackout, not a kill switch. The daemon refuses to
+	// start in this state; doctor's whole job is to say so BEFORE you find out.
+	lockout := len(tunnels) > 0 && len(endpoints) == 0
+	if lockout {
+		checks = append(checks, buildLockoutCheck(tunnels))
+	}
+
+	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI
+	// actions) authenticate through sudo, and sudo only offers Touch ID when
+	// pam_tid is opted in via /etc/pam.d/sudo_local. Informational only — never
+	// affects the exit code; password auth is degraded UX, not a lockout risk.
+	if runtime.GOOS == "darwin" && !sudoTouchIDConfigured() {
+		checks = append(checks, doctorCheck{
+			Name:    "touchID",
+			Status:  checkWarn,
+			Summary: "not configured for sudo — privileged ops will ask for a password.",
+			Details: []string{"To authenticate with a fingerprint instead (survives OS updates):"},
+			// The command is a Fix, not a Detail: it is the thing to run, so it
+			// belongs where every other runnable line lives (and where the GUI
+			// badges it) rather than as a detail line the CLI had to indent
+			// differently from its siblings to make it look like one.
+			Fixes: []string{"echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local"},
+		})
+	}
+
+	if discover {
+		discoverCheck := doctorCheck{Name: "discover", Status: checkOK}
+		cands, err := netdetect.DiscoverEndpoints()
+		switch {
+		// Summary only, never also as a Detail: the GUI renders Summary in the
+		// row's title and Details beneath it, so setting both printed the same
+		// sentence twice.
+		case err != nil:
+			discoverCheck.Status = checkWarn
+			discoverCheck.Summary = err.Error()
+		case len(cands) == 0:
+			discoverCheck.Status = checkWarn
+			discoverCheck.Summary = "no physical-side public transport sockets found — is the VPN connected?"
+		default:
+			configured := map[string]bool{}
+			for _, ep := range endpoints {
+				configured[ep.String()] = true
+			}
+			for _, c := range cands {
+				line := fmt.Sprintf("%s:%d", c.Server, c.Port)
+				if c.VPN != "" {
+					line += " [" + c.VPN + "]"
+				}
+				if !configured[c.Server.String()] {
+					line += "  <- not in vpn.endpoints"
+				}
+				discoverCheck.Details = append(discoverCheck.Details, line)
+			}
+			discoverCheck.Fixes = []string{"add any missing server IP to vpn.endpoints and drop stale entries."}
+		}
+		checks = append(checks, discoverCheck)
+	}
+
+	// A diagnostic that reports a guaranteed blackout and still exits 0 is one
+	// `make doctor` in a script away from being ignored — and these are exactly
+	// the two conditions the daemon refuses to start on, so doctor must agree
+	// with it.
+	return doctorReport{Checks: checks, OK: !(lockout || len(bad) > 0)}
+}
+
+// printDoctor renders a doctorReport in the text layout `doctor` has always
+// printed — this function's job is to keep that layout, not to reinterpret it.
+//
+// It is byte-identical to the pre-doctorReport version with ONE deliberate
+// exception: `--discover`'s error line used to be printed as
+// `fmt.Println("  ", err)`, and Println's operand separator made that THREE
+// spaces where every one of its sibling lines used two. That was a typo, not a
+// layout, and it is the one branch the byte-for-byte comparison could not cover
+// (DiscoverEndpoints only errors on a non-macOS host or a failed netstat), so
+// it is normalised to two rather than reproduced.
+func printDoctor(r doctorReport) {
+	// Index by name, FIRST wins, and record which checks the fixed layout below
+	// actually consumes. That closes two silent-drop holes at once: a second
+	// check sharing a Name used to overwrite the first, and a check whose name
+	// has no section here (one added to runDoctor tomorrow) would never print
+	// at all. Both leftovers are printed generically at the end — a diagnostic
+	// that quietly omits a finding is the one bug this command cannot afford,
+	// since a dropped check reads exactly like a check that passed.
+	byName := map[string]int{}
+	shown := make([]bool, len(r.Checks))
+	for i, c := range r.Checks {
+		if _, dup := byName[c.Name]; !dup {
+			byName[c.Name] = i
+		}
+	}
+	get := func(name string) (doctorCheck, bool) {
+		i, ok := byName[name]
+		if !ok {
+			return doctorCheck{}, false
+		}
+		shown[i] = true
+		return r.Checks[i], true
+	}
+
+	fmt.Println("dezhban doctor")
+	fmt.Println()
+	cfgCheck, _ := get("config")
+	fmt.Printf("config:  %s\n", cfgCheck.Summary)
+	fmt.Println()
+
+	fmt.Println("tunnels:")
+	tun, _ := get("tunnels")
+	printDetails(tun.Details)
+	fmt.Println()
+
+	fmt.Println("endpoints (resolved: literals + hostnames + discovery):")
+	ep, _ := get("endpoints")
+	printDetails(ep.Details)
+	if len(ep.Fixes) > 0 {
+		fmt.Println()
+		fmt.Println("fixes:")
+		for _, f := range ep.Fixes {
+			fmt.Printf("  - %s\n", f)
+		}
+	}
+
+	if lockout, ok := get("lockout"); ok {
+		fmt.Println()
+		fmt.Printf("LOCKOUT RISK — %s:\n", lockout.Summary)
+		printDetails(lockout.Details)
+		fmt.Println()
+		for _, f := range lockout.Fixes {
+			fmt.Printf("    %s\n", f)
+		}
+	}
+	fmt.Println()
+
+	if touchID, ok := get("touchID"); ok {
+		fmt.Printf("touch id: %s\n", touchID.Summary)
+		printDetails(touchID.Details)
+		fmt.Println()
+		for _, f := range touchID.Fixes {
+			fmt.Printf("    %s\n", f)
+		}
+		fmt.Println()
+	}
+
+	if discover, ok := get("discover"); ok {
+		fmt.Println("discover (best-effort, macOS):")
+		// A degenerate discover run (an error, or nothing found) carries its one
+		// line as Summary rather than duplicating it into Details, so print that
+		// where the detail lines would have gone.
+		if len(discover.Details) == 0 && discover.Summary != "" {
+			fmt.Printf("  %s\n", discover.Summary)
+		}
+		printDetails(discover.Details)
+		for _, f := range discover.Fixes {
+			fmt.Printf("  %s\n", f)
+		}
+	}
+
+	// Whatever the layout above did not consume, in the order runDoctor emitted
+	// it. Normally empty — TestDoctorChecksHaveUniqueNames pins that the shipped
+	// checks are unique and this function has a section for each — so reaching
+	// this loop means a check was added without a home here, and it prints
+	// plainly rather than vanishing.
+	for i, c := range r.Checks {
+		if shown[i] {
+			continue
+		}
+		fmt.Printf("%s: %s\n", c.Name, c.Summary)
+		printDetails(c.Details)
+		for _, f := range c.Fixes {
+			fmt.Printf("    %s\n", f)
+		}
+		fmt.Println()
+	}
+}
+
+// printDetails prints a check's Details at the standard two-space indent,
+// honouring the empty-string paragraph break (see doctorCheck.Details).
+func printDetails(details []string) {
+	for _, line := range details {
+		if line == "" {
+			fmt.Println()
+			continue
+		}
+		fmt.Printf("  %s\n", line)
+	}
+}
+
+// cmdDoctor diagnoses the VPN guard configuration without root or side effects.
+// See runDoctor for what it checks; --json prints the same findings as
+// doctorReport instead of the human layout, for the macOS Diagnostics pane.
 func cmdDoctor(args []string) int {
 	fs := flag.NewFlagSet("doctor", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	discover := fs.Bool("discover", false, "best-effort: find the connected VPN's real server IP (macOS only)")
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON instead of the human report")
 	_ = fs.Parse(args)
 
 	cfg, err := loadConfig(*cfgPath)
@@ -1493,126 +1848,18 @@ func cmdDoctor(args []string) int {
 	}
 	log := newLogger(cfg)
 
-	fmt.Println("dezhban doctor")
-	fmt.Println()
-	fmt.Println("config:  OK (loaded and validated)")
-	fmt.Println()
-
-	tunnels := resolveTunnels(cfg, log)
-	fmt.Println("tunnels:")
-	if len(tunnels) == 0 {
-		fmt.Println("  (none — set vpn.tunnelInterfaces or vpn.autodetect)")
+	report := runDoctor(cfg, log, *discover)
+	if *jsonOut {
+		data, err := json.MarshalIndent(report, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "doctor json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
 	} else {
-		nets, _ := netdetect.TunnelSubnets(tunnels)
-		subsByIface := map[string][]string{}
-		for _, tn := range nets {
-			subsByIface[tn.Iface] = append(subsByIface[tn.Iface], tn.Subnet.String())
-		}
-		for _, t := range tunnels {
-			if subs := subsByIface[t]; len(subs) > 0 {
-				fmt.Printf("  %s — %s\n", t, strings.Join(subs, ", "))
-			} else {
-				fmt.Printf("  %s — no subnet (interface down or absent?)\n", t)
-			}
-		}
+		printDoctor(report)
 	}
-	fmt.Println()
-
-	endpoints := resolveEndpointsOnce(cfg, log, tunnels)
-	fmt.Println("endpoints (resolved: literals + hostnames + discovery):")
-	var bad []netdetect.EndpointRoute
-	if len(endpoints) == 0 {
-		fmt.Println("  (none resolved)")
-	} else {
-		bad, _ = netdetect.CheckEndpointRouting(endpoints, tunnels)
-		internal := map[string]netdetect.EndpointRoute{}
-		for _, b := range bad {
-			internal[b.Endpoint.String()] = b
-		}
-		for _, ep := range endpoints {
-			if b, ok := internal[ep.String()]; ok {
-				fmt.Printf("  %s — MISCONFIGURED: inside %s's subnet %s\n", ep, b.Iface, b.Subnet)
-			} else {
-				fmt.Printf("  %s — ok (assumed reachable on the physical interface)\n", ep)
-			}
-		}
-	}
-	if len(bad) > 0 {
-		fmt.Println()
-		fmt.Println("fixes:")
-		for _, b := range bad {
-			fmt.Printf("  - %s is a tunnel-internal address (inside %s %s); set vpn.endpoints to\n", b.Endpoint, b.Iface, b.Subnet)
-			fmt.Println("    your VPN server's PUBLIC IP from your VPN client config.")
-		}
-	}
-
-	// The guard blocks ALL egress on the physical link — which is what carries the
-	// tunnel's own encrypted transport. With a tunnel up and no known server address,
-	// arming it cuts every packet, kills the VPN, and leaves no socket for discovery to
-	// learn from: an unrecoverable blackout, not a kill switch. The daemon refuses to
-	// start in this state; doctor's whole job is to say so BEFORE you find out.
-	lockout := len(tunnels) > 0 && len(endpoints) == 0
-	if lockout {
-		fmt.Println()
-		fmt.Println("LOCKOUT RISK — dezhban will refuse to start:")
-		fmt.Printf("  The VPN guard is on and %s is up, but no server address is known.\n", strings.Join(tunnels, ", "))
-		fmt.Println("  The guard would block the tunnel's own transport and cut ALL traffic.")
-		fmt.Println()
-		fmt.Println("  Auto-discovery reads CONNECTED sockets. WireGuard (and other")
-		fmt.Println("  NetworkExtension clients) send from an UNCONNECTED UDP socket, so they")
-		fmt.Println("  never appear as a connected flow — discovery cannot find them. Name the")
-		fmt.Println("  server explicitly:")
-		fmt.Println()
-		fmt.Println("    dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it")
-		fmt.Println("    dezhban vpn add <name> --endpoint <host-or-ip>")
-		fmt.Println("    sudo dezhban config set vpn.endpoints=<server-ip>")
-	}
-	fmt.Println()
-
-	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI
-	// actions) authenticate through sudo, and sudo only offers Touch ID when
-	// pam_tid is opted in via /etc/pam.d/sudo_local. Informational only — never
-	// affects the exit code; password auth is degraded UX, not a lockout risk.
-	if runtime.GOOS == "darwin" && !sudoTouchIDConfigured() {
-		fmt.Println("touch id: not configured for sudo — privileged ops will ask for a password.")
-		fmt.Println("  To authenticate with a fingerprint instead (survives OS updates):")
-		fmt.Println()
-		fmt.Println("    echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local")
-		fmt.Println()
-	}
-
-	if *discover {
-		fmt.Println("discover (best-effort, macOS):")
-		cands, err := netdetect.DiscoverEndpoints()
-		switch {
-		case err != nil:
-			fmt.Println("  ", err)
-		case len(cands) == 0:
-			fmt.Println("  no physical-side public transport sockets found — is the VPN connected?")
-		default:
-			configured := map[string]bool{}
-			for _, ep := range endpoints {
-				configured[ep.String()] = true
-			}
-			for _, c := range cands {
-				line := fmt.Sprintf("  %s:%d", c.Server, c.Port)
-				if c.VPN != "" {
-					line += " [" + c.VPN + "]"
-				}
-				if !configured[c.Server.String()] {
-					line += "  <- not in vpn.endpoints"
-				}
-				fmt.Println(line)
-			}
-			fmt.Println("  add any missing server IP to vpn.endpoints and drop stale entries.")
-		}
-	}
-
-	// Exit non-zero when a real lockout risk was found. A diagnostic that reports a
-	// guaranteed blackout and still exits 0 is one `make doctor` in a script away from
-	// being ignored — and these are exactly the two conditions the daemon refuses to
-	// start on, so doctor must agree with it.
-	if lockout || len(bad) > 0 {
+	if !report.OK {
 		return 1
 	}
 	return 0
@@ -1640,6 +1887,21 @@ func cmdStatus(args []string) int {
 	}
 
 	fmt.Println(buildStamp.line())
+	snap, staterr := state.Read(defaultStatePath())
+	switch {
+	case staterr != nil:
+		snap = state.Snapshot{Posture: render.PostureStopped}
+	case render.IsStale(snap, time.Now()):
+		// A crashed or SIGKILLed daemon leaves its last posture on disk
+		// indefinitely — state.Read succeeding is not evidence anything is
+		// still enforcing. Same staleness rule the macOS app's PostureUI
+		// uses for its icon, so the CLI and the GUI agree on what "alive"
+		// means rather than this headline saying "Guarding" while the
+		// service line two rows down says otherwise.
+		snap = state.Snapshot{Posture: render.PostureStopped}
+	}
+	disp := render.Text(snap)
+	fmt.Printf("%s — %s\n", disp.Headline, disp.Detail)
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
 	fmt.Println("service:         ", svc.Status())
 	fmt.Println("daemon control:  ", controlStatus(cfg))
@@ -1668,7 +1930,7 @@ func cmdStatus(args []string) int {
 
 	{
 		tunnels := cfg.VPN.TunnelInterfaces
-		if len(tunnels) == 0 && cfg.VPN.Autodetect {
+		if len(tunnels) == 0 && cfg.VPN.AutoDetect {
 			tunnels = []string{"(autodetect)"}
 		}
 		fmt.Println("vpn tunnels:     ", strings.Join(tunnels, ", "))
@@ -1696,28 +1958,12 @@ func cmdStatus(args []string) int {
 		} else {
 			fmt.Println("pause max:        off")
 		}
-		// Live switch-window / active-profile state from the daemon's snapshot.
-		if snap, err := state.Read(defaultStatePath()); err == nil {
-			if snap.Switch != nil && snap.Switch.Open {
-				kind := "switch state:    "
-				switch snap.Switch.Trigger {
-				case state.TriggerAuto:
-					kind = "redial state: " // auto window opened by a tunnel drop
-				case state.TriggerPause:
-					kind = "pause state:     " // operator pause (dezhban pause)
-				}
-				fmt.Printf("%s OPEN until %s\n", kind, snap.Switch.Until.Format(time.Kitchen))
-			}
-			if snap.ActiveProfile != "" {
-				fmt.Println("active profile:  ", snap.ActiveProfile)
-			}
-			// A posture change under way. Without this, the wait between a VPN
-			// redialing and the guard coming back looks identical to nothing
-			// happening at all.
-			if p := snap.Pending; p != nil {
-				fmt.Printf("in progress:      %s (%d of %d agreeing readings)\n",
-					pendingLabel(p.To), p.Have, p.Need)
-			}
+		// Live active-profile state from the daemon's snapshot. Window state and
+		// the pending hysteresis streak are already in the headline/detail
+		// printed above — repeating them here would be the same duplicated
+		// rendering this command used to have.
+		if staterr == nil && snap.ActiveProfile != "" {
+			fmt.Println("active profile:  ", snap.ActiveProfile)
 		}
 	}
 
@@ -1732,20 +1978,6 @@ func cmdStatus(args []string) int {
 	return 0
 }
 
-// pendingLabel turns a pending posture into what the daemon is doing about it.
-// The posture strings themselves are stable identifiers, not prose, so they are
-// translated here rather than printed raw.
-func pendingLabel(to string) string {
-	switch to {
-	case "full-block":
-		return "escalating to full block"
-	case "guard":
-		return "restoring the guard"
-	default:
-		return "changing posture to " + to
-	}
-}
-
 // statusJSON prints a machine-readable status: the live posture from the state
 // file (if the daemon is running and has published one) merged with service and
 // config status. It is the stable contract for tooling and scripts that want
@@ -1753,16 +1985,44 @@ func pendingLabel(to string) string {
 func statusJSON(cfg *config.Config) int {
 	statePath := defaultStatePath()
 	out := struct {
-		Version          string          `json:"version"`
-		Commit           string          `json:"commit,omitempty"`    // build stamp; empty outside a git tree
-		BuildDate        string          `json:"buildDate,omitempty"` // RFC3339
-		Privileged       bool            `json:"privileged"`
-		Service          string          `json:"service"`
+		Version    string `json:"version"`
+		Commit     string `json:"commit,omitempty"`    // build stamp; empty outside a git tree
+		BuildDate  string `json:"buildDate,omitempty"` // RFC3339
+		Privileged bool   `json:"privileged"`
+		Service    string `json:"service"`
+		// ControlReachable is the machine-readable form of controlStatus's
+		// sentence: whether routine ops will reach the daemon with no password
+		// prompt. Added so a consumer (the macOS app) doesn't have to scrape the
+		// human "daemon control:" status line for a substring.
+		ControlReachable bool            `json:"controlReachable"`
 		StatePath        string          `json:"statePath"`
 		State            *state.Snapshot `json:"state,omitempty"`    // nil when no snapshot has been published yet
 		StateAge         string          `json:"stateAge,omitempty"` // wall-clock age of the snapshot
-		PollInterval     string          `json:"pollInterval"`
-		BlockedCountries []string        `json:"blockedCountries"`
+		// StateStale is render.IsStale applied to State: the snapshot is too old
+		// to trust, so its posture (and its embedded display sentences) describe
+		// what a daemon was doing, not what one is doing now. A crashed or
+		// SIGKILLed daemon leaves "guard"/"Guarding" on disk forever, so a
+		// consumer that branches on `state.posture` alone will report a host as
+		// protected indefinitely after enforcement stopped.
+		//
+		// The snapshot itself is passed through verbatim rather than overwritten
+		// — it is a stable contract, and the raw last-known posture is worth
+		// having — so this flag is how the prose `status` (which substitutes
+		// "Stopped" outright) and this one avoid contradicting each other.
+		// Always emitted, never omitempty: this is a safety-adjacent flag, and
+		// `omitempty` would make "the snapshot is fresh" and "this CLI is too
+		// old to have the field" the same absence on the wire. The sibling
+		// advisory bools (ControlReachable, PauseEnabled) are emitted
+		// unconditionally for the same reason.
+		StateStale       bool     `json:"stateStale"`
+		PollInterval     string   `json:"pollInterval"`
+		BlockedCountries []string `json:"blockedCountries"`
+		// PauseEnabled is whether `dezhban pause`/the control-socket pause op
+		// will do anything (vpn.pauseMax > 0). A consumer (the macOS app) uses
+		// this to grey out its own Pause control with a reason, advisory only —
+		// same convention as ControlReachable — since the CLI/daemon still
+		// refuse for real regardless of what this said last.
+		PauseEnabled bool `json:"pauseEnabled"`
 		// No `vpnEnabled`: with one enforcement model it could only ever be true,
 		// and a constant field invites consumers to branch on nothing. Read
 		// `state.posture` instead — that is where the real distinction lives.
@@ -1772,13 +2032,16 @@ func statusJSON(cfg *config.Config) int {
 		BuildDate:        buildStamp.Date,
 		Privileged:       privilege.IsPrivileged(),
 		Service:          svc.Status(),
+		ControlReachable: controlReachable(cfg),
 		StatePath:        statePath,
 		PollInterval:     cfg.PollInterval.String(),
 		BlockedCountries: cfg.BlockedCountries,
+		PauseEnabled:     cfg.VPN.PauseMax > 0,
 	}
 	if snap, err := state.Read(statePath); err == nil {
 		out.State = &snap
 		out.StateAge = time.Since(snap.Time).Round(time.Second).String()
+		out.StateStale = render.IsStale(snap, time.Now())
 	}
 	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

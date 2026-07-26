@@ -229,3 +229,36 @@ func TestControlConfigRoundTrips(t *testing.T) {
 		t.Fatalf("control block did not round-trip: %+v", cfg2.Control)
 	}
 }
+
+// TestControlReachableMirrorsControlStatus pins controlReachable as the plain
+// bool this package now exposes through status --json's controlReachable
+// field, so the macOS app can read it instead of scraping controlStatus's
+// human sentence for a substring (see DezhbanCLI.daemonControlReachable).
+func TestControlReachableMirrorsControlStatus(t *testing.T) {
+	t.Run("disabled", func(t *testing.T) {
+		cfg := &config.Config{}
+		cfg.Control.Enabled = false
+		if controlReachable(cfg) {
+			t.Error("controlReachable = true, want false when control.enabled=false")
+		}
+	})
+
+	t.Run("no daemon listening", func(t *testing.T) {
+		cfg := &config.Config{}
+		cfg.Control.Enabled = true
+		cfg.Control.Socket = filepath.Join(t.TempDir(), "nonexistent.sock")
+		if controlReachable(cfg) {
+			t.Error("controlReachable = true, want false with no daemon listening")
+		}
+	})
+
+	t.Run("daemon answers OK", func(t *testing.T) {
+		sock, _ := stubDaemon(t, control.Response{OK: true})
+		cfg := &config.Config{}
+		cfg.Control.Enabled = true
+		cfg.Control.Socket = sock
+		if !controlReachable(cfg) {
+			t.Error("controlReachable = false, want true with a daemon answering OK")
+		}
+	})
+}

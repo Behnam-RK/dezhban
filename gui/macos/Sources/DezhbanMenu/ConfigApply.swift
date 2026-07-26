@@ -1,4 +1,5 @@
 import AppKit
+import DezhbanCore
 
 /// Shared machinery for the Settings pane: raw-file seeding via `config get`,
 /// batched writes via one `config set`, reset-to-defaults via `config reset
@@ -64,27 +65,13 @@ enum ConfigApply {
                  awaitPosture: awaitPosture, title: title, completion: completion)
     }
 
-    /// The keys the daemon could not adopt live, read from `config set`'s own
-    /// report. Reading the CLI's answer rather than re-deriving it keeps the
-    /// live/restart classification in exactly one place — the daemon, which is
-    /// the only thing that knows what it actually built at startup. A GUI-side
-    /// copy would be a second source of truth, and the one guaranteed to drift.
-    ///
-    /// `marker` below is therefore a contract, not a display string: it must stay
-    /// identical to `restartMarker` in cmd/dezhban/config_cmd.go, which is pinned
-    /// there by TestRestartMarkerIsTheContractTheAppScrapes so a reword cannot
-    /// silently stop this scan from matching — which would report a key that is
-    /// still waiting on a restart as fully applied.
-    static func pendingRestartKeys(in output: String) -> [String] {
-        let marker = "Restart dezhban to apply:"
-        for line in output.split(separator: "\n") {
-            guard let r = line.range(of: marker) else { continue }
-            return line[r.upperBound...]
-                .split(separator: ",")
-                .map { $0.trimmingCharacters(in: .whitespaces) }
-                .filter { !$0.isEmpty }
-        }
-        return []
+    /// Applies a named preset (`dezhban config preset apply <name>`) through the
+    /// exact same batched write/reload/restart-prompt path as `apply`/`resetAll` —
+    /// a preset is a write-time macro over ordinary keys, not a separate op.
+    static func applyPreset(_ name: String, awaitPosture: Bool, title: String,
+                            completion: @escaping (Outcome) -> Void) {
+        runBatch(["config", "preset", "apply", name],
+                 awaitPosture: awaitPosture, title: title, completion: completion)
     }
 
     /// `write` arrives WITHOUT `--config`; this appends it from the resolved path.
@@ -108,7 +95,7 @@ enum ConfigApply {
             }
             // The write already asked the daemon to reload, so the common case ends
             // here with the change in force and nothing interrupted.
-            let pending = pendingRestartKeys(in: result.output)
+            let pending = DurationText.pendingRestartKeys(in: result.output)
             guard !pending.isEmpty else {
                 DispatchQueue.main.async {
                     completion(Outcome(ok: true, status: "Saved and applied.",
@@ -126,7 +113,7 @@ enum ConfigApply {
                                        transcriptTitle: nil, transcript: nil))
                     return
                 }
-                restartNow(awaitPosture: awaitPosture, title: title, completion: completion)
+                restartNow(awaitPosture: awaitPosture, title: title, savedFirst: true, completion: completion)
             }
         }
     }
@@ -199,7 +186,7 @@ enum ConfigApply {
                 // refuses every config write.
                 DispatchQueue.main.async {
                     completion(Outcome(ok: false,
-                                       status: "The daemon enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
+                                       status: "dezhban enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
                                        transcriptTitle: "Enroll control token — keychain failed",
                                        transcript: err))
                 }
@@ -222,7 +209,7 @@ enum ConfigApply {
             DispatchQueue.main.async {
                 guard result.ok else {
                     completion(Outcome(ok: false,
-                                       status: "Removed the app's copy, but the daemon still has an enrollment — see output.",
+                                       status: "Removed the app's copy, but dezhban still has an enrollment — see output.",
                                        transcriptTitle: "Forget control token — failed",
                                        transcript: result.output))
                     return
@@ -235,9 +222,16 @@ enum ConfigApply {
 
     /// Restarts the service so restart-required keys take effect. Split out of the
     /// write because it is now a separate, opt-in step rather than something
-    /// bundled into every config change.
-    private static func restartNow(awaitPosture: Bool, title: String,
-                                   completion: @escaping (Outcome) -> Void) {
+    /// bundled into every config change. Internal (not private): also the entry
+    /// point for the Settings pane's standalone "Restart dezhban" button, which
+    /// calls this directly rather than only ever reaching it through `apply`.
+    ///
+    /// `savedFirst` distinguishes those two callers in the failure message only:
+    /// `apply` already wrote the config before calling this, so its failure is
+    /// "saved, but the restart failed"; the standalone button wrote nothing, so
+    /// saying "Saved" there would claim a write that never happened.
+    static func restartNow(awaitPosture: Bool, title: String, savedFirst: Bool = false,
+                           completion: @escaping (Outcome) -> Void) {
         // Marked BEFORE the restart: only a snapshot published after this instant
         // can have come from the new daemon.
         let mark = Date()
@@ -247,8 +241,9 @@ enum ConfigApply {
             // path was baked in at install time.
             let result = DezhbanCLI.runPrivileged(batch: [["restart"]])
             guard result.ok else {
+                let status = savedFirst ? "Saved, but the restart failed — see output." : "Restart failed — see output."
                 DispatchQueue.main.async {
-                    completion(Outcome(ok: false, status: "Saved, but the restart failed — see output.",
+                    completion(Outcome(ok: false, status: status,
                                        transcriptTitle: "\(title) — restart failed", transcript: result.output))
                 }
                 return
@@ -337,21 +332,5 @@ enum ConfigApply {
         alert.messageText = "Invalid duration"
         alert.informativeText = "\(label) doesn't look like a Go duration string (e.g. \"30s\", \"5m\", \"1h30m\"): \"\(value)\""
         alert.runModal()
-    }
-
-    /// Superficial "looks like a Go duration" check: an optional sign, then
-    /// either a bare "0" or one or more number(.number)?unit chunks, e.g. "30s",
-    /// "5m", "1h30m", "500ms", "-1.5h", "0". Not a full parser — time.ParseDuration
-    /// (via `config set`) remains the authority, so this errs permissive (it
-    /// accepts everything ParseDuration does) and only exists to catch obviously
-    /// wrong input before spending a privileged round trip.
-    static func looksLikeGoDuration(_ s: String) -> Bool {
-        guard !s.isEmpty else { return false }
-        // Mirror ParseDuration: optional [-+], the special bare "0", or repeated
-        // chunks of (number + unit). Each number needs at least one digit (before
-        // or after the dot) so a bare unit like "s"/"ms" is rejected. Units: ns,
-        // us/µs/μs, ms, s, m, h.
-        let pattern = #"^[-+]?(0|(([0-9]+(\.[0-9]*)?|\.[0-9]+)(ns|us|µs|μs|ms|s|m|h))+)$"#
-        return s.range(of: pattern, options: .regularExpression) != nil
     }
 }

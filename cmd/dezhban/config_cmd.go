@@ -1,10 +1,12 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"io/fs"
+	"net/netip"
 	"os"
 	"os/exec"
 	"runtime"
@@ -29,6 +31,14 @@ Subcommands:
   reset --all       Reset every tunable to defaults, preserving identity data
                     (blockedCountries, vpn.tunnelInterfaces/endpoints/profiles).
                     Delete the config file for a true wipe.
+  preset list       List strict/balanced/relaxed, their cost, and which (if any)
+                    matches the current config
+  preset show <name>       Print one preset's key/value set
+  preset diff [<name>]     Show keys that differ from a preset (default: the
+                    matched-or-nearest one)
+  preset apply <name>      Write a preset's values, validate, and save — same
+                    path as 'set', so it applies live where it can and reports
+                    what needs a restart
   edit              Open the config in $EDITOR (created from defaults if missing)
 
 Flags:
@@ -37,15 +47,21 @@ Flags:
                     Falls back to a privileged write if no daemon answers; a
                     daemon that REFUSES is reported, never routed around.
                     See 'dezhban token'.
+  --json            ('preset list'/'preset show'/'preset diff' only) print
+                    machine-readable JSON instead of prose
 
 Keys (dotted; list values are comma-separated):
   pollInterval blockedCountries hysteresis providers providerQuorum logLevel
-  vpn.tunnelInterfaces vpn.endpoints vpn.autodetect
+  vpn.tunnelInterfaces vpn.endpoints vpn.autoDetect
   vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.allowLocalNetwork
   vpn.autoArm vpn.armAtBoot vpn.switchWindow
   vpn.redialWindow vpn.pauseMax vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
   control.enabled control.socket control.group control.allowSwitchOps
   control.allowPauseOps control.allowConfigOps
+  vpn.advanced.switchWindowMax vpn.advanced.redialWindowMax vpn.advanced.redialMinUptime
+  vpn.advanced.commandFreshness vpn.advanced.windowDiscoveryInterval vpn.advanced.tunnelPruneAfter
+  vpn.advanced.learnedEndpointTTL vpn.advanced.learnedMaxPerProfile vpn.advanced.promoteAfterRefreshes
+  vpn.advanced.endpointWarnThreshold vpn.advanced.windowProtocols vpn.advanced.windowPorts
   (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
 
 // configField is a get/set pair for one dotted config key.
@@ -97,9 +113,9 @@ var configFields = map[string]configField{
 		get: func(c *config.Config) string { return strings.Join(c.VPN.Endpoints, ",") },
 		set: func(c *config.Config, v string) error { c.VPN.Endpoints = splitList(v); return nil },
 	},
-	"vpn.autodetect": {
-		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.Autodetect) },
-		set: func(c *config.Config, v string) error { return setBool(&c.VPN.Autodetect, v) },
+	"vpn.autoDetect": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AutoDetect) },
+		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AutoDetect, v) },
 	},
 	"vpn.autoDiscoverEndpoints": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AutoDiscoverEndpoints) },
@@ -213,6 +229,129 @@ var configFields = map[string]configField{
 		get: func(c *config.Config) string { return strconv.FormatBool(c.Control.AllowPauseOps) },
 		set: func(c *config.Config, v string) error { return setBool(&c.Control.AllowPauseOps, v) },
 	},
+	"vpn.advanced.switchWindowMax": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.SwitchWindowMax.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.SwitchWindowMax, v) },
+	},
+	"vpn.advanced.redialWindowMax": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.RedialWindowMax.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.RedialWindowMax, v) },
+	},
+	"vpn.advanced.redialMinUptime": {
+		get: func(c *config.Config) string {
+			if c.VPN.Advanced.RedialMinUptime < 0 {
+				return "0s" // explicitly disabled
+			}
+			return c.VPN.Advanced.RedialMinUptime.String()
+		},
+		set: func(c *config.Config, v string) error {
+			if err := setDuration(&c.VPN.Advanced.RedialMinUptime, v); err != nil {
+				return err
+			}
+			if c.VPN.Advanced.RedialMinUptime == 0 {
+				// "0" means the anti-flap gate is off, not "reset to default" — same
+				// explicit-opt-out sentinel as the three windows.
+				c.VPN.Advanced.RedialMinUptime = config.Disabled
+			}
+			return nil
+		},
+	},
+	"vpn.advanced.commandFreshness": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.CommandFreshness.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.CommandFreshness, v) },
+	},
+	"vpn.advanced.windowDiscoveryInterval": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.WindowDiscoveryInterval.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.WindowDiscoveryInterval, v) },
+	},
+	"vpn.advanced.tunnelPruneAfter": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.TunnelPruneAfter.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.TunnelPruneAfter, v) },
+	},
+	"vpn.advanced.learnedEndpointTTL": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.LearnedEndpointTTL.String() },
+		set: func(c *config.Config, v string) error { return setDuration(&c.VPN.Advanced.LearnedEndpointTTL, v) },
+	},
+	"vpn.advanced.learnedMaxPerProfile": {
+		get: func(c *config.Config) string { return strconv.Itoa(c.VPN.Advanced.LearnedMaxPerProfile) },
+		set: func(c *config.Config, v string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return fmt.Errorf("learnedMaxPerProfile: %w", err)
+			}
+			c.VPN.Advanced.LearnedMaxPerProfile = n
+			return nil
+		},
+	},
+	"vpn.advanced.promoteAfterRefreshes": {
+		get: func(c *config.Config) string { return strconv.Itoa(c.VPN.Advanced.PromoteAfterRefreshes) },
+		set: func(c *config.Config, v string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return fmt.Errorf("promoteAfterRefreshes: %w", err)
+			}
+			c.VPN.Advanced.PromoteAfterRefreshes = n
+			return nil
+		},
+	},
+	"vpn.advanced.endpointWarnThreshold": {
+		get: func(c *config.Config) string { return strconv.Itoa(c.VPN.Advanced.EndpointWarnThreshold) },
+		set: func(c *config.Config, v string) error {
+			n, err := strconv.Atoi(strings.TrimSpace(v))
+			if err != nil {
+				return fmt.Errorf("endpointWarnThreshold: %w", err)
+			}
+			c.VPN.Advanced.EndpointWarnThreshold = n
+			return nil
+		},
+	},
+	"vpn.advanced.windowProtocols": {
+		get: func(c *config.Config) string { return strings.Join(c.VPN.Advanced.WindowProtocols, ",") },
+		set: func(c *config.Config, v string) error { c.VPN.Advanced.WindowProtocols = splitList(v); return nil },
+	},
+	"vpn.advanced.windowPorts": {
+		get: func(c *config.Config) string { return joinInts(c.VPN.Advanced.WindowPorts) },
+		set: func(c *config.Config, v string) error {
+			ports, err := splitInts(v)
+			if err != nil {
+				return fmt.Errorf("windowPorts: %w", err)
+			}
+			c.VPN.Advanced.WindowPorts = ports
+			return nil
+		},
+	},
+}
+
+// joinInts renders an int slice the same way splitInts parses it back —
+// comma-separated, no spaces.
+func joinInts(ns []int) string {
+	if len(ns) == 0 {
+		return ""
+	}
+	parts := make([]string, len(ns))
+	for i, n := range ns {
+		parts[i] = strconv.Itoa(n)
+	}
+	return strings.Join(parts, ",")
+}
+
+// splitInts parses a comma-separated list of integers (e.g. a port list).
+// Empty input is an empty (nil) list, not an error.
+func splitInts(v string) ([]int, error) {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return nil, nil
+	}
+	parts := strings.Split(v, ",")
+	out := make([]int, 0, len(parts))
+	for _, p := range parts {
+		n, err := strconv.Atoi(strings.TrimSpace(p))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, nil
 }
 
 func cmdConfig(args []string) int {
@@ -237,6 +376,8 @@ func cmdConfig(args []string) int {
 		return configSet(cfgPath, rest, useToken)
 	case "reset":
 		return configReset(cfgPath, rest, useToken)
+	case "preset":
+		return configPreset(cfgPath, rest, useToken)
 	case "edit":
 		return configEdit(cfgPath)
 	case "-h", "--help", "help":
@@ -323,6 +464,13 @@ func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code
 	if err != nil || !cfg.Control.Enabled {
 		return 0, false
 	}
+	// What the caller's input parses to, computed from the pre-write config —
+	// the same "before" side noteCoercions gets for free on the privileged path,
+	// which holds the config across the write. Here the DAEMON writes, so this
+	// process never sees the normalised result and has to take both readings
+	// itself: this one now, and the stored one off disk after the reply. cfg is
+	// mutated in the process and is not read again below.
+	typed := typedValues(cfg, pairs)
 	resp, err := control.Do(controlSocketPath(cfg), control.Request{
 		Op:     control.OpConfigWrite,
 		Token:  token,
@@ -341,7 +489,38 @@ func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code
 		return ExitDaemonRefused, true
 	}
 	reportWriteOutcome(resp.Applied, resp.NeedsRestart)
+	// A coercion note is owed on THIS path too, and it used to be missing here:
+	// `Saved and applied: vpn.advanced.tunnelPruneAfter` is a true report of a
+	// value the operator did not type, and the token path is the one the macOS
+	// app and any script prefer. Read back from disk because that is where the
+	// daemon put it.
+	if saved, serr := loadConfig(cfgPath); serr == nil {
+		noteCoercions(saved, typed)
+	}
 	return 0, true
+}
+
+// typedValues renders what pairs parse to, applying them to cfg the way the
+// write path will and reading them back through the same accessors — the input
+// side of noteCoercions for a caller that will not hold the written config.
+// Mutates cfg.
+//
+// A key the accessors reject is skipped rather than reported: the write itself
+// refuses an unknown key by name and an invalid value entire, so there is no
+// stored value for it to differ from and nothing to note.
+func typedValues(cfg *config.Config, pairs map[string]string) map[string]string {
+	keys := make([]string, 0, len(pairs))
+	for k, v := range pairs {
+		f, ok := configFields[k]
+		if !ok {
+			continue
+		}
+		if err := f.set(cfg, v); err != nil {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	return renderKeys(cfg, keys)
 }
 
 // restartMarker introduces the list of keys the running daemon could not adopt.
@@ -518,6 +697,11 @@ func configSet(flagVal string, args []string, useToken bool) int {
 			return 1
 		}
 	}
+	setKeys := make([]string, len(pairs))
+	for i, p := range pairs {
+		setKeys[i] = p.key
+	}
+	typed := renderKeys(cfg, setKeys)
 	path := writeTargetPath(flagVal)
 	if err := writeConfig(path, cfg); err != nil {
 		return saveError(path, err)
@@ -525,11 +709,51 @@ func configSet(flagVal string, args []string, useToken bool) int {
 	for _, p := range pairs {
 		fmt.Printf("set %s = %s  (%s)\n", p.key, configFields[p.key].get(cfg), path)
 	}
+	noteCoercions(cfg, typed)
 	// Writing the file used to be the whole story, which is why "I changed a
 	// setting and nothing happened" was the most common complaint: the daemon
 	// read its config once at startup and nobody ever told it to look again.
 	notifyReload(flagVal)
 	return 0
+}
+
+// renderKeys renders what the caller's input parsed to, BEFORE the write
+// normalises it — the input side of noteCoercions. Keys with no configFields
+// entry are skipped; every caller has already rejected those.
+func renderKeys(cfg *config.Config, keys []string) map[string]string {
+	out := make(map[string]string, len(keys))
+	for _, k := range keys {
+		if f, ok := configFields[k]; ok {
+			out[k] = f.get(cfg)
+		}
+	}
+	return out
+}
+
+// noteCoercions prints one line per key whose stored value is not what the
+// caller's input parsed to. writeConfig → config.Marshal runs Normalize in
+// place, so the "set k = v" echo already reports the value that was actually
+// stored — but it reports it silently, and a user who typed
+// `vpn.advanced.tunnelPruneAfter=0` meaning "off" has to notice for themselves
+// that `10m0s` came back. Nine of the twelve advanced keys coerce a
+// non-positive value to their shipped default like that (only
+// redialMinUptime carries the config.Disabled sentinel instead), so the
+// difference deserves a sentence rather than a stare.
+//
+// Both sides are rendered through the same field accessor, so a difference is
+// always a real change of value and never a formatting one ("1h" and "1h0m0s"
+// both render as "1h0m0s").
+func noteCoercions(cfg *config.Config, typed map[string]string) {
+	keys := make([]string, 0, len(typed))
+	for k := range typed {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		if now := configFields[k].get(cfg); now != typed[k] {
+			fmt.Printf("note: %s was normalised on write: %s → %s\n", k, typed[k], now)
+		}
+	}
 }
 
 // configReset restores config keys to their shipped defaults — the CLI twin of
@@ -598,15 +822,382 @@ func configReset(flagVal string, args []string, useToken bool) int {
 	return 0
 }
 
+const presetUsage = `usage: dezhban config preset <subcommand>
+
+Subcommands:
+  list              List strict/balanced/relaxed, their cost, and which (if
+                    any) matches the current config
+  show <name>       Print one preset's key/value set
+  diff [<name>]     Show keys that differ from a preset (default: the
+                    matched-or-nearest one)
+  apply <name>      Write a preset's values, validate, and save — the same
+                    path 'config set' uses, so it applies live where it can
+                    and reports what needs a restart
+
+A preset is a write-time macro over the keys that answer "how strict am I" —
+applying one changes ordinary config values, nothing else. It never touches
+identity (blockedCountries, tunnel interfaces, endpoints, profiles).`
+
+// presetJSON is the --json shape for 'preset list'/'preset show'. Values is
+// only populated by 'show' — 'list' omits it (a summary, not the full set).
+// Conflicts is likewise 'list'-only: it needs the current config to compute, and
+// 'show' describes a preset in the abstract.
+type presetJSON struct {
+	Name    string `json:"name"`
+	Summary string `json:"summary"`
+	Cost    string `json:"cost"`
+	Matched bool   `json:"matched,omitempty"`
+	// Conflicts is empty for an appliable preset — see config.PresetConflicts.
+	// A picker should offer a preset with entries here as unavailable rather
+	// than let the user choose it and hit the failure at apply time.
+	Conflicts []string          `json:"conflicts,omitempty"`
+	Values    map[string]string `json:"values,omitempty"`
+}
+
+// changeJSON mirrors config.Change in the same lowerCamelCase convention the
+// rest of the CLI's --json output uses, rather than marshaling the Go type
+// (whose exported fields would serialize capitalized) directly.
+type changeJSON struct {
+	Key           string `json:"key"`
+	From          string `json:"from"`
+	To            string `json:"to"`
+	RestartReason string `json:"restartReason,omitempty"`
+}
+
+// stripJSONFlag extracts --json from anywhere in args, the same whole-list
+// scan stripConfigFlag/stripTokenStdin use.
+func stripJSONFlag(args []string) ([]string, bool) {
+	out := make([]string, 0, len(args))
+	found := false
+	for _, a := range args {
+		if a == "--json" || a == "-json" {
+			found = true
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, found
+}
+
+// nearestPreset picks the preset with the fewest drifted keys from cfg —
+// used as 'preset diff's default target when the config matches none exactly,
+// so the diff always has something concrete to show against. Ties (equal
+// drift count) favor the earlier preset in config.Presets' Strict → Balanced →
+// Relaxed order.
+func nearestPreset(cfg *config.Config) config.Preset {
+	presets := config.Presets()
+	best := presets[0]
+	bestDrift := len(config.PresetDrift(cfg, best))
+	for _, p := range presets[1:] {
+		if n := len(config.PresetDrift(cfg, p)); n < bestDrift {
+			best, bestDrift = p, n
+		}
+	}
+	return best
+}
+
+func configPreset(flagVal string, args []string, useToken bool) int {
+	args, jsonOut := stripJSONFlag(args)
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, presetUsage)
+		return 2
+	}
+	sub, rest := args[0], args[1:]
+	switch sub {
+	case "list":
+		return presetList(flagVal, jsonOut)
+	case "show":
+		return presetShow(rest, jsonOut)
+	case "diff":
+		return presetDiffCmd(flagVal, rest, jsonOut)
+	case "apply":
+		if jsonOut {
+			// --json is only meaningful for a command that prints something to
+			// format — apply's output is the ordinary "set k = v" lines `config
+			// set` already prints, not a JSON-able report. Rejecting a flag
+			// that would otherwise be silently ignored beats a script believing
+			// it asked for machine-readable output and got prose instead.
+			fmt.Fprintln(os.Stderr, "config preset apply does not support --json")
+			return 2
+		}
+		return presetApply(flagVal, rest, useToken)
+	case "-h", "--help", "help":
+		fmt.Println(presetUsage)
+		return 0
+	default:
+		fmt.Fprintf(os.Stderr, "unknown config preset subcommand %q\n\n%s\n", sub, presetUsage)
+		return 2
+	}
+}
+
+func presetByNameOrUsage(name, usage string) (config.Preset, int) {
+	p, ok := config.PresetByName(name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "unknown preset %q (want strict, balanced, or relaxed)\n%s\n", name, usage)
+		return config.Preset{}, 2
+	}
+	return p, 0
+}
+
+func presetList(flagVal string, jsonOut bool) int {
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+	matched, exact := config.MatchPreset(cfg)
+
+	if jsonOut {
+		out := make([]presetJSON, 0, 3)
+		for _, p := range config.Presets() {
+			out = append(out, presetJSON{
+				Name: p.Name, Summary: p.Summary, Cost: p.Cost,
+				Matched:   exact && p.Name == matched,
+				Conflicts: config.PresetConflicts(cfg, p),
+			})
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "preset list json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	for _, p := range config.Presets() {
+		marker := ""
+		if exact && p.Name == matched {
+			marker = "  (current)"
+		}
+		fmt.Printf("%-9s %s%s\n", p.Name, p.Summary, marker)
+		fmt.Printf("          cost: %s\n", p.Cost)
+		// Listed but unavailable, said here rather than discovered at apply
+		// time: offering a preset that cannot be written is the part of this
+		// command a user would act on.
+		for _, c := range config.PresetConflicts(cfg, p) {
+			fmt.Printf("          cannot apply: %s\n", c)
+		}
+	}
+	if !exact {
+		near := nearestPreset(cfg)
+		drift := config.PresetDrift(cfg, near)
+		fmt.Printf("\ncurrent: Custom (%d key(s) differ from %s)\n", len(drift), near.Name)
+	}
+	return 0
+}
+
+func presetShow(rest []string, jsonOut bool) int {
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset show <strict|balanced|relaxed>")
+		return 2
+	}
+	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset show <strict|balanced|relaxed>")
+	if code != 0 {
+		return code
+	}
+
+	if jsonOut {
+		data, err := json.MarshalIndent(presetJSON{Name: p.Name, Summary: p.Summary, Cost: p.Cost, Values: p.Values}, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "preset show json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	fmt.Printf("%s — %s\n", p.Name, p.Summary)
+	fmt.Printf("cost: %s\n\n", p.Cost)
+	keys := make([]string, 0, len(p.Values))
+	for k := range p.Values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Printf("  %s = %s\n", k, p.Values[k])
+	}
+	return 0
+}
+
+func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
+	if len(rest) > 1 {
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset diff [<strict|balanced|relaxed>]")
+		return 2
+	}
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+
+	var target config.Preset
+	if len(rest) == 1 {
+		var code int
+		target, code = presetByNameOrUsage(rest[0], "usage: dezhban config preset diff [<strict|balanced|relaxed>]")
+		if code != 0 {
+			return code
+		}
+	} else if name, exact := config.MatchPreset(cfg); exact {
+		target, _ = config.PresetByName(name)
+	} else {
+		target = nearestPreset(cfg)
+	}
+
+	changes := config.PresetDrift(cfg, target)
+	conflicts := config.PresetConflicts(cfg, target)
+
+	if jsonOut {
+		out := make([]changeJSON, 0, len(changes))
+		for _, c := range changes {
+			out = append(out, changeJSON{Key: c.Key, From: c.From, To: c.To, RestartReason: c.RestartReason})
+		}
+		data, err := json.MarshalIndent(struct {
+			Preset    string       `json:"preset"`
+			Changes   []changeJSON `json:"changes"`
+			Conflicts []string     `json:"conflicts,omitempty"`
+		}{target.Name, out, conflicts}, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "preset diff json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	if len(changes) == 0 {
+		fmt.Printf("no drift from %s\n", target.Name)
+		return 0
+	}
+	fmt.Printf("drift from %s:\n", target.Name)
+	for _, c := range changes {
+		fmt.Printf("  %s: %s → %s\n", c.Key, c.From, c.To)
+	}
+	// A diff that lists changes the corresponding apply would refuse is a diff
+	// the user cannot act on — say so here, in the same place they read it.
+	for _, c := range conflicts {
+		fmt.Printf("cannot apply: %s\n", c)
+	}
+	return 0
+}
+
+func presetApply(flagVal string, rest []string, useToken bool) int {
+	if len(rest) != 1 {
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset apply <strict|balanced|relaxed>")
+		return 2
+	}
+	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset apply <strict|balanced|relaxed>")
+	if code != 0 {
+		return code
+	}
+	// Loaded ONCE, up front, and its error is fatal rather than swallowed: the
+	// conflict pre-flight, the Strict warning, and the privileged write further
+	// down all need it, and a config that cannot be read is not a condition any
+	// of them can do anything useful with. The token path is unaffected —
+	// tryConfigWrite loads the config itself and declines to handle the write
+	// when it can't, so reporting the failure here says the same thing one step
+	// earlier.
+	cfg, err := loadConfig(flagVal)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "config error:", err)
+		return 1
+	}
+
+	// Pre-flight against the operator's own advanced caps, BEFORE either write
+	// path AND before the banner below. Without it the write still fails safely
+	// — Validate rejects it and nothing is persisted — but the error names the
+	// validation rule ("vpn.switchWindow 30s exceeds
+	// vpn.advanced.switchWindowMax 10s") rather than the actual conflict,
+	// leaving the user to work out that a preset they were offered can never
+	// apply to their config. It runs ahead of the banner because "applying
+	// relaxed: …" followed by a full cost paragraph is a report of a write that
+	// is about to be refused — and a cost the user never paid.
+	if conflicts := config.PresetConflicts(cfg, p); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			fmt.Fprintln(os.Stderr, "cannot apply:", c)
+		}
+		return 1
+	}
+
+	fmt.Printf("applying %s: %s\n", p.Name, p.Summary)
+	fmt.Printf("cost: %s\n", p.Cost)
+
+	// Strict disables vpn.allowPhysicalDNS. A VPN endpoint given as a hostname
+	// needs the physical link's DNS to re-resolve its server while the tunnel
+	// is down — without it, a redial after a drop can silently never find the
+	// server again. Warn rather than block: the operator may already know the
+	// server's IP never changes, or intend to pin a literal IP separately.
+	if p.Name == "strict" {
+		for _, ep := range config.EffectiveEndpoints(cfg, nil) {
+			if ep == "" {
+				continue
+			}
+			if _, err := netip.ParseAddr(strings.TrimSpace(ep)); err != nil {
+				fmt.Println("warning: a configured VPN endpoint is a hostname, and Strict turns off")
+				fmt.Println("         vpn.allowPhysicalDNS — it will not be able to re-resolve while the")
+				fmt.Println("         tunnel is down. Consider a literal IP for vpn.endpoints, or a preset")
+				fmt.Println("         other than Strict.")
+				break
+			}
+		}
+	}
+
+	if useToken {
+		tok, terr := readTokenStdin()
+		if terr != nil {
+			fmt.Fprintln(os.Stderr, terr)
+			return 2
+		}
+		if code, handled := tryConfigWrite(flagVal, p.Values, tok); handled {
+			return code
+		}
+	}
+
+	keys := make([]string, 0, len(p.Values))
+	for k := range p.Values {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		field, ok := configFields[k]
+		if !ok {
+			// Every preset key is a real configFields entry — pinned by
+			// internal/config's TestPresetsAreWellFormed and this package's
+			// TestSettableKeysAndReloadKeysAgree. Reaching this is a bug.
+			fmt.Fprintf(os.Stderr, "preset %s: %q has no way to set it (this is a bug)\n", p.Name, k)
+			return 1
+		}
+		if err := field.set(cfg, p.Values[k]); err != nil {
+			fmt.Fprintf(os.Stderr, "invalid value for %s: %v\n", k, err)
+			return 1
+		}
+	}
+	typed := renderKeys(cfg, keys)
+	path := writeTargetPath(flagVal)
+	if err := writeConfig(path, cfg); err != nil {
+		return saveError(path, err)
+	}
+	for _, k := range keys {
+		fmt.Printf("set %s = %s  (%s)\n", k, configFields[k].get(cfg), path)
+	}
+	noteCoercions(cfg, typed)
+	notifyReload(flagVal)
+	return 0
+}
+
 // resetViaToken sends a reset as an ordinary config-write of the shipped default
 // values — a reset is a write like any other, and routing it through the same op
 // keeps one validated path instead of two.
 //
-// `--all` is deliberately NOT offered here. The local `--all` resets everything
-// including the keys `config set` cannot yet reach (vpn.advanced.*), so serving
-// it over an op that can only express settable keys would silently reset less
-// than it claims. Refusing sends the caller to the privileged path, which does
-// the whole job.
+// `--all` is deliberately NOT offered here, and the reason survives every key
+// becoming settable (vpn.advanced.* now is; that gap is closed). The local
+// `--all` is `*cfg = config.Default()` with identity preserved — it resets
+// whatever the struct holds, including a field added tomorrow. The socket op
+// can only carry an ENUMERATION of key=value pairs, so it resets whatever
+// configFields currently remembers, which is the same thing only for as long as
+// nobody adds a field without a configFields entry. "Reset everything" is
+// exactly the command that must not quietly mean "reset the part we listed", so
+// refusing sends the caller to the privileged path, which does the whole job.
 func resetViaToken(flagVal string, args []string) (code int, handled bool) {
 	if len(args) == 1 && args[0] == "--all" {
 		fmt.Fprintln(os.Stderr, "config reset --all cannot go over the control socket (it resets keys the socket op cannot express)")

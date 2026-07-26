@@ -1,4 +1,5 @@
 import Foundation
+import DezhbanCore
 
 /// The outcome of a CLI invocation: whether it succeeded and everything it
 /// printed (stdout + stderr combined), so callers can show the user what
@@ -143,11 +144,15 @@ enum DezhbanCLI {
         return elevate("out=$( { set -e; \(steps.joined(separator: "; ")); } 2>&1 )")
     }
 
-    /// Quotes tokens for `do shell script`. Defense in depth: the binary is a trusted
-    /// absolute path and the args are hardcoded literals, but this runs as root, so
-    /// refuse any token carrying a single quote or backslash rather than risk breaking
-    /// out of the quoting into an injection. (argv-without-a-shell isn't available
-    /// through NSAppleScript's `do shell script`.) Returns nil on a rejected token.
+    /// Quotes tokens for `do shell script`. Defense in depth: the binary is always a
+    /// trusted absolute path, but the args are no longer only hardcoded literals —
+    /// `SettingsFields.pairs()` routes user-typed values (profile names, config
+    /// values) through here too — and this runs as root, so refuse any token
+    /// carrying a single quote or backslash rather than risk breaking out of the
+    /// quoting into an injection. (argv-without-a-shell isn't available through
+    /// NSAppleScript's `do shell script`.) Returns nil on a rejected token, which
+    /// callers report as a refusal rather than attempting the command some other
+    /// way — a value containing a quote or backslash will not go through.
     private static func shellQuote(_ tokens: [String]) -> String? {
         guard tokens.allSatisfy({ !$0.contains("'") && !$0.contains("\\") }) else { return nil }
         return tokens.map { "'\($0)'" }.joined(separator: " ")
@@ -229,45 +234,67 @@ enum DezhbanCLI {
         return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
     }
 
-    /// Whether the daemon's control socket is answering — i.e. whether routine ops
-    /// will go through without a password. Parsed from `status`'s "daemon control"
-    /// line, so the GUI and the CLI agree on one source of truth.
-    static func daemonControlReachable() -> Bool {
-        guard let bin = binaryPath() else { return false }
-        let r = exec(bin, ["status"])
-        guard r.status == 0 else { return false }
-        for line in r.out.split(separator: "\n") where line.hasPrefix("daemon control:") {
-            return line.contains("reachable") && !line.contains("unreachable")
-        }
-        return false
+    /// Merged fields from `status --json` that the app needs but the daemon's
+    /// Snapshot itself doesn't carry (those come from Snapshot/Display instead).
+    /// Not private: `AppState.refreshServiceState` reads it directly so a single
+    /// refresh spends one `status --json` subprocess instead of one per field.
+    struct StatusJSON: Decodable {
+        let service: String
+        let controlReachable: Bool
+        let pauseEnabled: Bool
+
+        /// `installed`, derived from `service`'s merged field (itself
+        /// `internal/svc.Status()`) — the single source of truth, so the GUI
+        /// never invents its own notion of "installed" that could drift from
+        /// the CLI's.
+        var serviceInstalled: Bool { service.hasPrefix("installed") }
     }
 
-    /// Whether the OS service is currently registered, per `status --json`'s
-    /// merged service field (itself `internal/svc.Status()`) — the single
-    /// source of truth, so the GUI never invents its own notion of "installed"
-    /// that could drift from the CLI's.
-    static func serviceInstalled() -> Bool {
-        guard let bin = binaryPath() else { return false }
-        let r = exec(bin, ["status", "--json"])
-        guard r.status == 0, let data = r.out.data(using: .utf8) else { return false }
-        struct StatusJSON: Decodable { let service: String }
-        guard let decoded = try? JSONDecoder().decode(StatusJSON.self, from: data) else { return false }
-        return decoded.service.hasPrefix("installed")
-    }
-
-    /// The daemon's currently-published enforcement posture from `status --json`,
-    /// or nil if none is reported yet / the read failed. Reads stdout only (via
-    /// `exec`, like `serviceInstalled()`) rather than `run`'s combined output —
-    /// a warning on stderr with a 0 exit would otherwise corrupt the JSON parse.
-    static func reportedPosture() -> String? {
+    /// Reads `status --json` once. Callers wanting more than one of its fields
+    /// (control reachability, service install state, pause availability)
+    /// should call this once and read every field off the result, rather than
+    /// each spending its own subprocess for the same command.
+    static func readStatusJSON() -> StatusJSON? {
         guard let bin = binaryPath() else { return nil }
         let r = exec(bin, ["status", "--json"])
-        guard r.status == 0, let data = r.out.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let stateObj = obj["state"] as? [String: Any],
-              let posture = stateObj["posture"] as? String, !posture.isEmpty
-        else { return nil }
-        return posture
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return try? JSONDecoder().decode(StatusJSON.self, from: data)
+    }
+
+    /// Reads the configured VPN profiles from `config show`'s `vpn` block —
+    /// the profile *list* lives in config, never in the daemon's Snapshot
+    /// (which only carries `activeProfile`, the one that matched last). Uses
+    /// `exec` directly (stdout only) rather than `.run`, same reasoning as
+    /// `DiagnosticsView`'s doctor call: nothing should be able to corrupt the
+    /// JSON parse by writing to stderr, even though `config show` doesn't
+    /// today.
+    static func readProfiles() -> ProfilesInfo? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["config", "show", "--config", resolvedConfigPath()])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return ProfilesInfo.decode(data)
+    }
+
+    /// Reads all three presets and which (if any) matches the current config,
+    /// via `config preset list --json`.
+    static func readPresets() -> [PresetSummary]? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["config", "preset", "list", "--json", "--config", resolvedConfigPath()])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return PresetSummary.decodeList(data)
+    }
+
+    /// Reads the keys that differ from `name` (or, if nil, the
+    /// matched-or-nearest preset — the same default `preset diff` uses),
+    /// via `config preset diff [name] --json`.
+    static func readPresetDiff(from name: String? = nil) -> PresetDiff? {
+        guard let bin = binaryPath() else { return nil }
+        var args = ["config", "preset", "diff"]
+        if let name { args.append(name) }
+        args += ["--json", "--config", resolvedConfigPath()]
+        let r = exec(bin, args)
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return PresetDiff.decode(data)
     }
 
     /// Memoization for `resolvedConfigPath()`. The resolved value is stable for the

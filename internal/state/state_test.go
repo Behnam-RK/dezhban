@@ -52,6 +52,31 @@ func TestWriteReadRoundTrip(t *testing.T) {
 	if got.PID != want.PID {
 		t.Errorf("PID: got %d want %d", got.PID, want.PID)
 	}
+	if got.Display != nil {
+		t.Errorf("Display: got %+v, want nil (an old-style snapshot with no Display set)", got.Display)
+	}
+}
+
+// TestWriteReadRoundTripDisplay pins Display as an additive field: a snapshot
+// that sets it round-trips the same Key/Headline/Detail, and one that doesn't
+// keeps decoding as nil rather than a zero-valued struct — the same "absent
+// means unknown" contract Version and SwitchState.Trigger already carry.
+func TestWriteReadRoundTripDisplay(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "state.json")
+	want := Snapshot{
+		Posture: "guard",
+		Display: &Display{Key: "on", Headline: "Guarding", Detail: "Traffic leaves only through your VPN tunnel."},
+	}
+	if err := Write(path, want); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	got, err := Read(path)
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if got.Display == nil || *got.Display != *want.Display {
+		t.Errorf("Display: got %+v, want %+v", got.Display, want.Display)
+	}
 }
 
 func TestWriteIsWorldReadable(t *testing.T) {

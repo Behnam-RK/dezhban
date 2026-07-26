@@ -53,7 +53,8 @@ daemon** over its control socket and need no password at all:
 | `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
-| `setup`, `config set`/`edit` | Yes, but only for the config write itself. |
+| `setup`, `config set`/`edit`, `config preset apply` | Yes, but only for the config write itself. `preset apply` is a write like any other — see [Presets](#presets). |
+| `config show`/`path`, `config preset list`/`show`/`diff` | **No** — read-only; they report the config, they don't change it. |
 | `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
 | `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
 | `upgrade check` | **No** — read-only, no root. |
@@ -98,6 +99,16 @@ socket and act on the firewall directly — the escape hatch for a wedged daemon
 A manual `block` **holds**: the daemon suspends its geo state machine until you
 `unblock`, so an allowed country won't quietly undo what you asked for.
 
+`status --json` embeds the daemon's last published snapshot under `state`,
+verbatim. **Check `stateStale` before trusting it.** A crashed or `SIGKILL`ed
+daemon leaves its last posture on disk indefinitely, so `state.posture` alone
+will report a host as protected long after enforcement stopped; `stateStale` is
+`true` once the snapshot ages past 3× the poll interval (floored at 90s), which
+is the same threshold the prose `status` uses to print "Stopped" instead and the
+menubar app uses to grey its icon. It is always present, so its absence means
+you are reading something other than this CLI's output — never "the snapshot is
+fresh".
+
 ```sh
 dezhban status                                    # config + service + block state
 dezhban status --json                             # machine-readable (merges the state file)
@@ -130,13 +141,17 @@ dezhban validate    --config <config>                 # parse + validate, summar
 dezhban print-rules --mode guard --config <config>    # exact ruleset, not applied
 dezhban doctor      --config <config>                 # tunnels, subnets, endpoint sanity
 dezhban doctor --discover --config <config>           # macOS: find the VPN's real server IP
+dezhban doctor --json --config <config>               # the same checks as structured JSON
 dezhban monitor     --config <config>                 # live: IP, country, tunnels, endpoints, verdict
 ```
 
 `monitor` streams the live state the decision rests on; add `--once` for a single
-snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`. See
-[config.md](config.md) for the full field reference and [troubleshooting.md](troubleshooting.md)
-for the lockout-recovery runbook.
+snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`. `doctor
+--json` prints the identical findings `doctor` reports in prose — `{checks:
+[{name, status, summary, details, fixes}], ok}` — for a consumer (the macOS
+app's Diagnostics pane) that needs to render them itself rather than parse
+text. See [config.md](config.md) for the full field reference and
+[troubleshooting.md](troubleshooting.md) for the lockout-recovery runbook.
 
 ## Create & manage the config
 
@@ -183,6 +198,34 @@ succeeds and says so; the new values are read the next time it starts.
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+### Presets
+
+A quick way to answer "how strict am I", without knowing which eight keys that
+touches — see [config.md](config.md#presets) for exactly what each one sets and
+what it costs you:
+
+```sh
+dezhban config preset list                  # strict/balanced/relaxed, cost, and which matches now
+dezhban config preset show strict           # one preset's key/value set
+dezhban config preset diff                  # keys that differ from the matched-or-nearest preset
+dezhban config preset diff relaxed          # keys that differ from a specific preset
+sudo dezhban config preset apply strict     # write it — same validated path as `config set`
+```
+
+`preset apply` is not a new write mechanism — it builds the same `key=value`
+pairs `config set` would take, then validates once and writes once, so it
+applies live where it can and reports what needs a restart exactly like any
+other write. It never touches identity (blocked countries, tunnel interfaces,
+endpoints, profiles); add `--json` to `list`/`show`/`diff` for machine-readable
+output.
+
+A preset also never raises `vpn.advanced.switchWindowMax`/`redialWindowMax`, so
+lowering one of those caps by hand can put a preset out of reach. `list` and
+`diff` mark it `cannot apply:` with both values (a `conflicts` array under
+`--json`), and `apply` refuses before writing anything rather than failing on a
+validation rule mid-write. See
+[config.md](config.md#presets) for the reasoning.
 
 ### Changing settings without a password
 
@@ -260,7 +303,19 @@ sudo dezhban vpn forget <name>          # drop a learned endpoint
 window from the state file until it closes. See [modes.md](../concepts/modes.md#switch-window--connecting-a-brand-new-vpn)
 for the posture and the real-IP-exposure trade-off.
 
-## Pause protection temporarily
+`switch --status` leads with a fixed token — `switch window: OPEN`,
+`switch window: closed`, or `pause: OPEN` for a window opened by `dezhban pause`
+— then the rendered window sentence, then an `until: <RFC3339>` line. The token
+is what a script tests, and it does not move with the wording; the `until:` line
+carries the exact deadline, since the sentence dates a window only to a
+wall-clock time and a window can outlive both its date and its minute:
+
+```
+switch window: OPEN — Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM).
+until: 2026-07-25T15:04:00Z
+```
+
+## Pause the guard temporarily
 
 For the times the *correct* traffic is the one the guard blocks — a domestic-only
 service that refuses a foreign VPN exit:
@@ -347,24 +402,31 @@ Two surfaces, split by urgency:
 - **Main window — everything else**, opened from the dropdown or by clicking the
   Dock icon (never automatically at launch). Sidebar sections:
   - **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
-    profile, switch-window countdown, enforcement-error banner) plus the daily
-    controls and a visually-separated Panic. Degraded states are guided: CLI
-    missing, service not installed, and daemon stopped each render an
-    explanation with the one relevant action inline (Install service… / Start
-    kill switch).
-  - **VPN Guard** — edits tunnels/endpoints/autodetection through
-    the same validation as `config set`, then (after an explicit restart-warning
-    choice) restarts the daemon to apply and verifies the new posture.
-  - **Settings** — startup ("Start protection at boot" installs the launchd
+    every configured VPN profile with the matched one marked, switch-window
+    countdown, enforcement-error banner) plus the daily controls, Pause, and a
+    visually-separated Panic. With profiles configured, "Switching VPN…"
+    becomes a menu so a switch window can target one by name. Degraded states
+    are guided: CLI missing, service not installed, and daemon stopped each
+    render an explanation with the one relevant action inline (Install
+    service… / Guard up).
+  - **Settings** — startup ("Start the guard at boot" installs the launchd
     system service so enforcement survives reboots; "Open this app at login" via
-    `SMAppService`; essential-event notifications), protection (blocked
-    countries, switch-window duration, endpoint grace) applied through one
-    validated `config set` batch, **"Use Touch ID for settings changes"** (see
-    below), and the raw config file escape hatch (some advanced options are
+    `SMAppService`; essential-event notifications), a **strictness preset
+    picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
+    the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
+    countries, poll interval), windows (switch/redial/endpoint grace), timing,
+    all applied through one validated `config set` batch, an **Advanced**
+    disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
+    settings changes"** (see below), an explicit **Restart dezhban…**, and the
+    raw config file escape hatch (control socket, geo providers, allowlist are
     JSON-only).
-  - **Logs & Diagnostics** — read-only `doctor`, a scoped `log show --last 1h`,
-    a live `log stream` with Stop (also opens Console.app), and the transcripts
-    of window-triggered panic/install/uninstall/apply runs.
+  - **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
+    with fixes inline instead of a text dump; an optional "Find my VPN's
+    server" checkbox runs it with `--discover`. Read-only, same guarantee as
+    running `dezhban doctor` in a terminal.
+  - **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
+    (also opens Console.app), and the transcripts of window-triggered
+    panic/install/uninstall/apply/restart runs.
   - **About** — version, config/binary paths, posture, service state, and which
     elevation path (Touch ID-capable Authorization Services vs password-only
     fallback) privileged actions will take.

@@ -54,6 +54,21 @@ jobs:
       - if: matrix.os == 'ubuntu-latest'
         run: GOOS=windows go vet ./...
 
+  # The macOS menubar app: build the whole package, test the pure DezhbanCore
+  # library target (Snapshot decoding, posture→icon derivation, settings-field
+  # batching — the seams where the reported GUI bugs actually lived).
+  # DezhbanMenu itself (AppKit/SwiftUI executable) has no test target — see
+  # docs/contribute/testing.md's Known gaps.
+  gui:
+    if: >-
+      github.event_name == 'push' ||
+      contains(github.event.pull_request.labels.*.name, 'run-ci')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: swift build --package-path gui/macos
+      - run: swift test --package-path gui/macos
+
   # Verify gofmt cleanliness once (formatting is OS-independent).
   fmt:
     if: >-

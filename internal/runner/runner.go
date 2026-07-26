@@ -110,12 +110,12 @@ type Options struct {
 	// interface group / wildcard so a newly-appeared tunnel is covered with no
 	// rule reload (pf/nft only). Optional.
 	TunnelGroups []string
-	// Autodetect enables runtime tunnel re-detection: the watcher samples all
+	// AutoDetect enables runtime tunnel re-detection: the watcher samples all
 	// tunnel-like interfaces and the runner grows/prunes its guard set as VPNs
 	// come and go. Explicit Tunnels are pinned (never pruned). Also relaxes the
 	// startup gates (an empty tunnel/endpoint set is allowed — the standing
 	// posture is a total cut until the first VPN/switch window).
-	Autodetect bool
+	AutoDetect bool
 	// SwitchWindow is the default duration of a MANUAL switch window;
 	// SwitchWindowMax caps it. WindowProtos/WindowPorts optionally restrict the
 	// window. A switch window is only available when SwitchWindow > 0 AND
@@ -153,7 +153,7 @@ type Options struct {
 	// ops back to the root-owned command file. Mirrors config control.allowSwitchOps.
 	AllowSwitchOps bool
 	// PauseMax caps a bounded operator pause (`dezhban pause` / the GUI's
-	// "Pause protection"): a deliberate, timed drop to the real ISP IP,
+	// "Pause"): a deliberate, timed drop to the real ISP IP,
 	// sharing the switch-window machinery as a third trigger
 	// (state.TriggerPause) but with its own cap, never shared with
 	// SwitchWindowMax or RedialWindowMax. <=0 → pausing is off entirely
@@ -522,7 +522,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	// window, an empty tunnel/endpoint set is legal — the standing posture is a
 	// total cut (lo0 + block-all) until the first VPN connects or a switch window
 	// learns one. A plain pinned config keeps the strict gates.
-	relaxed := o.Autodetect || switchEnabled
+	relaxed := o.AutoDetect || switchEnabled
 
 	// Mutable tunnel set; explicit config names are pinned (never pruned).
 	tunnels := append([]string(nil), o.Tunnels...)
@@ -586,7 +586,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	}
 	if len(endpoints) == 0 && !relaxed && !standby {
 		return errors.New("refusing to start: no usable vpn endpoints — set vpn.endpoints (IP or hostname), " +
-			"vpn.profiles, or enable vpn.autoDiscoverEndpoints/vpn.autodetect; a guard with no way to reach the " +
+			"vpn.profiles, or enable vpn.autoDiscoverEndpoints/vpn.autoDetect; a guard with no way to reach the " +
 			"server can never let the tunnel redial")
 	}
 
@@ -941,7 +941,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			o.Log.Warn("REDIAL WINDOW OPEN — "+relaxation+"; tunnel dropped, redial any VPN now (real IP may be exposed until it closes)",
 				"until", windowDeadline)
 		case state.TriggerPause:
-			o.Log.Warn("PAUSED — "+relaxation+"; protection resumes automatically at the deadline (real IP is exposed until then)",
+			o.Log.Warn("PAUSED — "+relaxation+"; the guard re-arms automatically at the deadline (real IP is exposed until then)",
 				"until", windowDeadline)
 		default:
 			o.Log.Warn("SWITCH WINDOW OPEN — "+relaxation+"; connect your VPN now (real IP may be exposed until it closes)",

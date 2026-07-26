@@ -1,71 +1,70 @@
 import Foundation
 
 /// One VPN tunnel's observed state — mirrors Go's `state.Tunnel`.
-struct Tunnel: Codable {
-    let name: String?
-    let up: Bool
-    let detail: String?
+public struct Tunnel: Codable {
+    public let name: String?
+    public let up: Bool
+    public let detail: String?
 }
 
 /// An open switch window — mirrors Go's `state.SwitchState`.
-struct SwitchState: Codable {
-    let open: Bool
-    let until: Date
-    let profile: String?
+public struct SwitchState: Codable {
+    public let open: Bool
+    public let until: Date
+    public let profile: String?
     /// "manual" (operator command), "auto" (automatic redial window opened by a
     /// tunnel drop), or "pause" (deliberate operator pause). Absent from older
     /// daemons — treat nil as "manual".
-    let trigger: String?
+    public let trigger: String?
 
-    var isAutoRedial: Bool { trigger == "auto" }
+    public var isAutoRedial: Bool { trigger == "auto" }
 
     /// A pause is a deliberate drop to the real ISP IP, not a VPN problem, so it
     /// reads and looks different from the other two even though all three share
     /// the same bounded-window machinery underneath.
-    var isPause: Bool { trigger == "pause" }
+    public var isPause: Bool { trigger == "pause" }
 }
 
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.
 /// JSON keys match the lowerCamelCase struct tags in internal/state/state.go.
-struct Snapshot: Codable {
-    let time: Date
+public struct Snapshot: Codable {
+    public let time: Date
     // No `mode`. dezhban has a single enforcement model now, so the field was
     // removed from the daemon's snapshot rather than frozen at one value. It was
     // non-optional here, which means leaving it would have failed decoding of
     // every snapshot the new daemon writes. `posture` carries the real state.
-    let posture: String         // "standby" | "guard" | "full-block" | "switch-window" | "stopped"
-    let blocked: Bool
-    let ip: String?
-    let countryCode: String?
-    let provider: String?
-    let lookupErr: String?          // a GENUINE failure: a tunnel was up and measuring it failed
-    let exitUnknown: String?        // EXPECTED: no tunnel up, so there is no exit to measure
-    let enforcementErr: String?     // last firewall-action failure, nil when clear
-    let tunnels: [Tunnel]?
-    let endpoints: [String]?
-    let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness
-    let blockedCountries: [String]?
-    let pid: Int?
-    let activeProfile: String?      // matched VPN profile name, nil if unknown
-    let `switch`: SwitchState?      // present only while a switch window is open
-    let pending: PendingFlip?       // present only while a posture change is being counted toward
+    public let posture: String         // "standby" | "guard" | "full-block" | "switch-window" | "stopped"
+    public let blocked: Bool
+    public let ip: String?
+    public let countryCode: String?
+    public let provider: String?
+    public let lookupErr: String?          // a GENUINE failure: a tunnel was up and measuring it failed
+    public let exitUnknown: String?        // EXPECTED: no tunnel up, so there is no exit to measure
+    public let enforcementErr: String?     // last firewall-action failure, nil when clear
+    public let tunnels: [Tunnel]?
+    public let endpoints: [String]?
+    public let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness
+    public let blockedCountries: [String]?
+    public let pid: Int?
+    public let activeProfile: String?      // matched VPN profile name, nil if unknown
+    public let `switch`: SwitchState?      // present only while a switch window is open
+    public let pending: PendingFlip?       // present only while a posture change is being counted toward
+    public let display: Display?          // the rendered sentence — nil from an older daemon
 
     /// Wall-clock age of this snapshot.
-    var age: TimeInterval { Date().timeIntervalSince(time) }
+    public var age: TimeInterval { Date().timeIntervalSince(time) }
+}
 
-    /// What the daemon is working toward, in words, or nil when nothing is under
-    /// way. The posture strings are stable identifiers, so they are translated
-    /// here rather than shown raw.
-    var pendingSummary: String? {
-        guard let p = pending else { return nil }
-        let what: String
-        switch p.to {
-        case "guard": what = "Restoring protection"
-        case "full-block": what = "Blocking this exit"
-        default: what = "Changing posture"
-        }
-        return "\(what) — \(p.have) of \(p.need) confirming checks"
-    }
+/// The rendered form of a Snapshot — mirrors Go's `render.Display` (carried via
+/// `state.Display`). `key` is the stable machine classification
+/// ("on"/"off"/"blocked"/"warning"/"paused") and is also a PNG filename
+/// component (menubar-state-<key>.png, dock-state-<key>.png); `headline` and
+/// `detail` are the sentences every surface displays instead of composing its
+/// own. Optional because an older daemon's snapshot won't have one.
+public struct Display: Codable {
+    public let key: String
+    public let headline: String
+    public let detail: String
 }
 
 /// A posture change the daemon is counting toward — mirrors Go's
@@ -75,18 +74,18 @@ struct Snapshot: Codable {
 /// It exists because the posture alone cannot tell "recovering, one check to go"
 /// from "stuck", and after a VPN redials out of a full block those look identical
 /// for as long as the streak takes.
-struct PendingFlip: Codable {
-    let to: String
-    let have: Int
-    let need: Int
+public struct PendingFlip: Codable {
+    public let to: String
+    public let have: Int
+    public let need: Int
 }
 
 /// Reads and decodes the daemon's state file. The daemon (Go) marshals `time` as
 /// RFC3339, sometimes with fractional seconds; `.iso8601` alone rejects the
 /// fractional form, so we try both formatters.
-enum StateReader {
+public enum StateReader {
     /// Default path the daemon publishes to (see cmd/dezhban defaultStatePath).
-    static let defaultPath = "/var/db/dezhban/state.json"
+    public static let defaultPath = "/var/db/dezhban/state.json"
 
     private static let rfc3339: ISO8601DateFormatter = {
         let f = ISO8601DateFormatter()
@@ -112,16 +111,22 @@ enum StateReader {
         return d
     }()
 
+    /// Decodes a snapshot from raw JSON data, or nil if it doesn't parse. Shared
+    /// by `read` (file-backed) and tests (in-memory fixtures).
+    public static func decode(_ data: Data) -> Snapshot? {
+        try? decoder.decode(Snapshot.self, from: data)
+    }
+
     /// Reads the snapshot, or nil if the file is missing/unreadable/unparsable
     /// (all of which the caller renders as "stopped/unknown").
-    static func read(path: String = defaultPath) -> Snapshot? {
+    public static func read(path: String = defaultPath) -> Snapshot? {
         guard let data = FileManager.default.contents(atPath: path) else { return nil }
-        return try? decoder.decode(Snapshot.self, from: data)
+        return decode(data)
     }
 
     /// The state file's last-modified time, or nil if absent. Lets a poller skip
     /// re-decoding an unchanged file (the daemon rewrites it only ~every poll).
-    static func modificationTime(path: String = defaultPath) -> Date? {
+    public static func modificationTime(path: String = defaultPath) -> Date? {
         (try? FileManager.default.attributesOfItem(atPath: path))?[.modificationDate] as? Date
     }
 }

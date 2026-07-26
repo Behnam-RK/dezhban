@@ -35,68 +35,31 @@ current as you land changes.
   about the behaviour changes: the automatic window, its cap, and its anti-flap
   gate work exactly as before under the new names.
 
-### Fixed
+- **Two config keys are renamed for casing/vocabulary consistency**, and both
+  are reported by name — with what to change them to — by `dezhban validate`
+  and at daemon start. Only one of them stops taking effect; see below, because
+  the difference matters.
 
-- **Lowering a window cap now binds the very next window.** A reload adopted the
-  new `vpn.pauseMax` for the "is pausing available at all" check but left the
-  clamp reading the value the daemon started with, so `vpn.pauseMax` reduced from
-  30m to 1m was reported as applied while a 9-minute pause was still granted —
-  a security setting accepted and silently discarded, which is the failure this
-  project treats as the worst one it can have.
+  | Old | New |
+  |---|---|
+  | `vpn.autodetect` | `vpn.autoDetect` |
+  | `vpn.profiles[].ifaceHint` | `vpn.profiles[].tunnelHint` |
 
-- **Five more settings now really do apply live, instead of only reporting that
-  they did.** The reload path adopted them into the daemon's own view while the
-  code that acts on them kept using the value captured at startup, so `Saved and
-  applied` was true of the bookkeeping and false of the enforcement:
+  `vpn.autoDetect` matches the casing of every sibling `auto*` key
+  (`autoDiscoverEndpoints`, `autoArm`). `tunnelHint` drops the word
+  *interface* per the glossary's "keep tunnel, drop interface" rule, matching
+  `vpn.tunnelInterfaces`. `dezhban vpn add`'s `--iface-hint` flag is renamed to
+  `--tunnel-hint` the same way (a CLI flag, so this one has no validate-time
+  report — an old invocation gets a plain "flag provided but not defined").
 
-  - `vpn.endpointGrace` and `vpn.advanced.windowDiscoveryInterval` were read once
-    at boot; both are now read at each use, so a shortened grace binds the very
-    next endpoint reconciliation.
-  - `vpn.advanced.switchWindowMax` bounded the *episode* at its new value but left
-    `switch --for` clamped against the cap the daemon started with.
-  - `vpn.switchWindow` and `vpn.pauseMax` could be turned off live but not back
-    on: a daemon that started with both disabled never wired the command-file
-    poll, so re-enabling a window left the root-owned path deaf until a restart.
-    The poll is now always wired and every command re-checks the live value, so
-    disabling still disables — a `"0"` window cannot be opened by any trigger.
-  - `vpn.autodetect` was never live at all (what autodetects is the tunnel
-    watcher, built at startup) and is now reported as needing a restart, which is
-    what it always needed.
-
-- **A tightening now lands even while traffic is cut.** FULL BLOCK carries the
-  `vpn.allowLocalNetwork` and `vpn.allowPhysicalDNS` passes, but a reload only
-  reinstalled the *standing* rules — which it deliberately skips while blocked. So
-  closing one of those passes during a block was reported as applied while the pass
-  stayed in the firewall until the posture next changed. The current posture is now
-  re-applied in place.
-
-- **An unrelated config change no longer restarts the agreement streak.** Every
-  reload handed the run loop a freshly built country decider, which resets the
-  in-progress hysteresis count — so a settings save while a forbidden exit was
-  being confirmed cancelled the escalation, and a client writing settings once per
-  poll interval could defer FULL BLOCK indefinitely. The decider is now rebuilt only
-  when `blockedCountries` or `hysteresis` actually changed, which is the only case
-  where discarding counted readings is the right answer.
-
-- **The config file is now written atomically.** It was written in place, so a
-  save interrupted partway could leave a truncated file. That is not merely a
-  lost setting: this config is what arms the guard at boot, so an unparseable one
-  would leave the host unprotected at the next start. It is now staged, flushed
-  and renamed, the same convention the daemon's other on-disk records already use.
-  The control token's hash is written the same way, so a power loss cannot leave a
-  zero-length hash that reads as "not enrolled" and locks out a valid token.
-
-- **A failed Touch ID no longer strands you on a password-only prompt.** The app
-  ran `sudo` with stdin on `/dev/null`, so the moment a biometric read missed —
-  a closed lid, a wet finger, a couple of bad reads — PAM's password fallback hit
-  EOF, failed instantly, and the whole attempt dropped to an Authorization
-  Services dialog that cannot offer Touch ID at all. There was no retry, which is
-  why `pam_tid` looked broken when it was configured correctly all along. The app
-  now runs `sudo -A` with a bundled `SUDO_ASKPASS` helper, so a miss becomes the
-  ordinary "enter your password" continuation that macOS's own biometric prompts
-  offer. The helper lives inside the code-signed bundle — sudo executes whatever
-  `SUDO_ASKPASS` names, so it must never be a path a local process can rewrite.
-  Machines without `pam_tid` are unaffected and still use the system dialog.
+  Unlike the redial rename, `vpn.autodetect` (the old, unqualified casing)
+  **keeps working with no deprecation window at all**, and needs no alias to:
+  JSON key matching ignores case, so the old spelling has always landed in the
+  same field, and an explicit `"autodetect": false` still narrows the guard as
+  written. It is reported at `validate`/daemon start as a misspelling that
+  *took effect* — see the report fix under Fixed — rather than as a key with
+  none. `vpn.profiles[].ifaceHint` → `tunnelHint` is a real word change, so
+  that one does stop taking effect and is reported as renamed.
 
 ### Added
 
@@ -180,7 +143,141 @@ current as you land changes.
   brand state icon and its own wording on every surface. It is still not the
   calm guard icon — the guard is relaxed and the real IP is in use either way.
 
+- **Main-thread stall detection in the menubar app.** A background watchdog pings
+  the main queue twice a second and records any stall past one second, plus how
+  long it lasted, to unified logging under the `sh.dezhban.menu` subsystem
+  (`log show --last 1h --predicate 'subsystem == "sh.dezhban.menu"'`). The
+  beachballs have no cause visible in the source — every subprocess and
+  elevation call is already dispatched off-main — so they have to be caught in
+  the act. Diagnostic only: it observes the main thread and never blocks it, and
+  it touches neither the daemon nor the firewall.
+
+- **A single renderer for posture prose.** Posture sentences used to be composed
+  independently in at least eight Go call sites and five Swift ones, with the
+  same fact worded differently every time — including three separate spellings
+  of the hysteresis-streak sentence ("agreeing readings" / "confirming checks" /
+  "good readings"). `internal/render` now composes the headline, the detail
+  sentence, and a stable machine key (`on`/`off`/`blocked`/`warning`/`paused`)
+  from a `state.Snapshot`; `status` prints it, the state file (and therefore
+  `status --json`) carries it, and the macOS app displays it instead of writing
+  its own copy.
+- **`status --json` gains `controlReachable`**, the machine-readable form of the
+  `daemon control:` line, so a consumer no longer has to scrape a human sentence
+  for a substring to learn whether routine ops need a password.
+
+- **`status --json` gains `stateStale`**, so its answer cannot contradict the
+  prose one. A crashed or `SIGKILL`ed daemon leaves its last posture on disk
+  forever; the prose `status` substitutes "Stopped" once a snapshot ages past
+  the staleness threshold, but the JSON passed the snapshot through verbatim —
+  including its rendered `display.headline: "Guarding"` — so a script branching
+  on `state.posture` alone would report a host as protected indefinitely after
+  enforcement stopped. The snapshot is still passed through unchanged (it is a
+  stable contract, and the last known posture is worth having); `stateStale`
+  is how a consumer knows not to trust it. Emitted unconditionally, like
+  `controlReachable` and `pauseEnabled` — `omitempty` on a safety flag would
+  make "the snapshot is fresh" and "this CLI predates the field" the same
+  absence on the wire.
+
+- **`DezhbanCore`, a new Swift Package Manager library target** holding the
+  macOS app's testable logic layer — Snapshot decoding, posture→icon
+  derivation, and settings-field batching — split out of the `DezhbanMenu`
+  executable specifically so it can be unit-tested (an `.executableTarget`
+  cannot be `@testable import`ed). `DezhbanMenu` is unchanged behaviourally;
+  it now imports `DezhbanCore` instead of defining these types itself.
+- **The macOS app's first automated tests**, in a new `DezhbanCoreTests`
+  target: Snapshot decoding (both RFC3339 date forms, an old daemon's
+  `display`-less snapshot, corrupt data), every posture→icon mapping including
+  the guard-holds-a-downed-tunnel case with an empty tunnel list (previously
+  uncovered), and the settings-field seed/pairs round trip. CI gains a `gui`
+  job (`macos-latest`) running `swift build` and `swift test`.
+- **Pause and Resume in the macOS app**, using the same `control.allowPauseOps`
+  socket op the CLI already had — no new daemon behaviour. Overview's action
+  row gains a **Pause — use my real IP** button (disabled with a reason when
+  `vpn.pauseMax: "0"`), and the menubar dropdown gets the same pair. While a
+  pause is open both surfaces show **Resume now (m:ss left)** instead of the
+  switch-window Cancel item — `switch --cancel` refuses to touch a pause by
+  design — and the countdown banner reads "Guard re-arms in …" in blue rather
+  than the switch window's amber "Closes in …", since a pause is deliberate,
+  not a warning. `status --json` gains `pauseEnabled` so the app doesn't have
+  to shell out separately to read `vpn.pauseMax`.
+- **An explicit "Restart dezhban…" control in Settings**, beside Apply. Restart
+  was previously only reachable as a side effect of applying settings that
+  needed one; this makes it a direct, one-prompt action with its own
+  confirmation, and the confirmation gets noticeably stronger — a `.critical`
+  alert naming the exposure — when restarting would lift enforcement during
+  FULL BLOCK or an open window, since that gap is the one thing this tool
+  exists to prevent.
+- **`dezhban doctor --json`.** `doctor`'s checks (config, tunnels, endpoints,
+  the lockout-risk warning, Touch ID discoverability, `--discover`) are now
+  built as structured data (`runDoctor`) and rendered two ways: the existing
+  prose (`printDoctor`, byte-identical to before this change) or
+  `{checks: [{name, status, summary, details, fixes}], ok}` via `--json` —
+  for a consumer that needs to render findings itself instead of parsing
+  text, which the macOS app's new Diagnostics pane (below) does.
+- **A Diagnostics pane in the macOS app**, replacing the Logs pane's old "Run
+  diagnostics" button (which dumped `doctor`'s raw text into the transcript
+  view). Renders `doctor --json`'s checks as status rows — config, tunnels,
+  endpoints, lockout risk, Touch ID, and an optional "Find my VPN's server"
+  (`--discover`) — with fix text inline, read-only and root-free like the CLI
+  command it wraps. The sidebar's "Logs & Diagnostics" section is renamed
+  **Logs**; it keeps its transcript job (last-hour/live logs, and the output
+  of panic/install/config-apply/restart) but no longer runs `doctor` itself.
+- **VPN profile visibility in the macOS app.** Overview's details grid lists
+  every configured profile (`vpn.profiles`) and marks the one the daemon last
+  matched (`activeProfile`), reading `config show` the same way `dezhban vpn
+  list` does. "Switching VPN…" becomes a menu — "Any known VPN" plus one item
+  per profile — so a switch window can be opened targeted at a specific VPN
+  (`switch --no-wait --name <profile>`), the same profile-attribution flag the
+  CLI already had.
+- **Every `vpn.advanced.*` key is now settable** with `dezhban config set` —
+  previously the whole block was hand-edit-only. `switchWindowMax`,
+  `redialWindowMax`, `redialMinUptime`, `windowDiscoveryInterval`,
+  `commandFreshness`, `tunnelPruneAfter`, `learnedEndpointTTL`,
+  `learnedMaxPerProfile`, `promoteAfterRefreshes`, `endpointWarnThreshold`,
+  `windowProtocols`, and `windowPorts` all go through the same validated
+  write-and-reload path, and reset/round-trip the same way every other key
+  does; `redialMinUptime=0` persists as the same explicit-disable sentinel the
+  three windows already use, not a silent reset to its 15s default.
+- **Strict/Balanced/Relaxed presets, defined once in the config core**
+  (`internal/config.Presets`). A preset is a write-time macro over the eight
+  keys that answer "how strict am I" (the three relaxation windows, poll
+  cadence and hysteresis, the two firewall-pass toggles, arm-at-boot) — never
+  runtime state, and never identity (blocked countries, tunnel interfaces,
+  endpoints, profiles), the same carve-out `config reset --all` already uses.
+  `Balanced` is exactly `config.Default()`, so the shipped defaults and the
+  middle preset can never disagree. `PresetDrift`/`MatchPreset` compare a
+  config against a preset (or report "Custom") using the same `config.Change`
+  vocabulary `config set`'s reload report already uses. Each preset states its
+  cost in plain words — see [config.md](docs/usage/config.md#presets). No CLI
+  or GUI surface yet; that's the next two changes.
+- **`dezhban config preset list/show/diff/apply`.** `list` shows all three
+  presets, their cost, and which (if any) matches the current config (or
+  `Custom (N key(s) differ from …)`); `show <name>` prints one preset's
+  key/value set; `diff [<name>]` shows the divergent keys (defaulting to the
+  matched-or-nearest preset); `apply <name>` writes a preset's values through
+  the exact same validated path `config set` uses — one write, live where it
+  can, `Restart dezhban to apply: …` where it can't — and warns before
+  applying Strict if any configured VPN endpoint is a hostname (Strict turns
+  off `vpn.allowPhysicalDNS`, so it couldn't re-resolve while the tunnel is
+  down). `list`/`show`/`diff` take `--json`.
+- **A preset picker and an Advanced pane in the macOS app.** Settings gains a
+  strictness-preset row — one button per preset, checked when it matches the
+  live config, with its summary and cost shown below (or "Custom" plus a
+  disclosure of exactly which keys differ from the nearest preset, matching
+  `dezhban config preset diff`). Choosing one names the cost in the
+  confirmation, then applies through `dezhban config preset apply` via the
+  same batched write/reload/restart-prompt path Apply already uses. A
+  collapsed **Advanced** disclosure exposes all twelve now-settable
+  `vpn.advanced.*` keys, staged into the same batch (`SettingsFields` grows
+  from 13 to 25 fields).
+
 ### Changed
+
+- **`doctor --discover`'s failure line is indented like its siblings.** It was
+  printed with three spaces where every other line in the block uses two — an
+  artifact of `Println`'s operand separator, not a layout — and it only appeared
+  on a host where endpoint discovery errors outright, which is why the
+  before/after comparison across the shipped configs never surfaced it.
 
 - **The macOS app no longer restarts the daemon to apply settings.** Saving now
   applies the change outright, and the restart prompt appears only when the
@@ -204,8 +301,153 @@ current as you land changes.
   instead of the "on" state tile. The Dock answers one question — is my traffic
   being cut right now — so only a real cut earns a distinct tile; everything else
   should look like the app.
+- **`status` now leads with the rendered posture.** It previously never worded
+  the posture at all — printing a config dump plus three narrow live lines — so
+  guard, full block, standby, stopped, a lookup failure, and an enforcement
+  error were simply absent from its output. `vpn switch --status`, the switch
+  wait loop, and `vpn list`'s window line now render the same sentence instead
+  of composing three more variants of it (previously with two different clock
+  formats between them). `vpn switch --status` additionally prints an
+  `until: <RFC3339>` line: the rendered sentence dates a window to a bare
+  wall-clock time, which is the right register for prose and the wrong one for
+  the command whose entire job is "when does my exposure end" — it carries no
+  date and no seconds, and a window can outlive both (`vpn.pauseMax` has no cap
+  floor).
+- **The macOS app displays the daemon's rendered posture instead of composing
+  its own.** `PostureUI.humanPosture`, the icon's inline help text,
+  `OverviewView.postureBlurb`, `Snapshot.pendingSummary`, and the menubar's
+  notification-title map are gone; all five read `snapshot.display` now. The
+  notification classifier no longer parses the rendered sentence to tell
+  standby from stopped (both draw the same grey icon) — it reads the
+  snapshot's posture and liveness directly, so a wording change can no longer
+  misclassify a notification.
+- **One vocabulary, per [docs/concepts/glossary.md](docs/concepts/glossary.md).**
+  The glossary already existed and already ruled on most of this drift; this
+  release implements it: "Stop/Start kill switch" buttons become **Guard
+  down** / **Guard up**; "Not protecting" / "Protection stopped" become
+  "Standby — nothing is being blocked" / "Stopped"; "Autodetect tunnel
+  interface (vpn.autodetect)" becomes "Find my VPN tunnel automatically";
+  "Tunnel interfaces (comma-sep)" becomes "Your VPN tunnel (comma-sep)"; and
+  "the daemon" is gone from every user-facing sentence in the app and CLI
+  (technical register — logs, `--json`, docs — keeps it). The glossary also
+  gains an **Egress** entry: technical register only, never user-facing —
+  "Egress blocked" becomes "Traffic cut" everywhere, including the icon help
+  text and the getting-started guide's image alt text.
 
 ### Fixed
+
+- **A retired config key misspelled in letter case is no longer reported as
+  having taken effect.** `validate` and the daemon's startup report tell you
+  when a key differs from the schema only in case, because `encoding/json`
+  honors it and the value really is live. But three keys the schema still parses
+  are *retired* and read by nothing (`failClosed`, `allowlist`, `vpn.enabled`),
+  so a file containing `"FailClosed": true` got both "`failClosed` has no
+  effect" and "`FailClosed` … TOOK EFFECT" in the same output — self-
+  contradicting, and the half that claimed a discarded security setting was
+  running is the exact failure the whole unknown-key report exists to prevent.
+  Such a key is now reported as retired, naming the schema's spelling and why
+  that key is dead.
+
+- **`switch --status`, `vpn list`, and `switch`'s live progress no longer print
+  an unrelated enforcement error where the window sentence belongs.** All three
+  append their own clause to the rendered sentence — `(profile "work")`, `—
+  connect now…` — and were taking it from the full renderer, which puts a
+  firewall-action failure ahead of the posture. With a window open and a failed
+  `pfctl` action, `switch --status` read `pfctl: /dev/pf: Device busy (profile
+  "work")`. They now use the posture-only renderer; `status` still reports the
+  enforcement failure, which is where a general readout belongs.
+
+- **`upgrade apply` no longer activates while the guard is holding a downed
+  tunnel.** Activation is gated on a healthy posture, but the check only
+  compared the posture *string*: `guard` with no tunnel up carries that same
+  string while being the exact opposite case — the standing guard rule is then
+  the only thing keeping traffic off the physical link, which is why `status`
+  renders it "VPN down — traffic cut". Restarting through it removed every rule
+  for the length of the swap with nothing carrying traffic through a tunnel, and
+  with `vpn.armAtBoot: false` (the Relaxed preset) the host stayed open
+  afterwards instead of re-arming. The gate now refuses, naming the reason, and
+  the payload stays staged for a later `sudo dezhban restart` exactly as it does
+  during FULL BLOCK.
+
+  The staleness budget on the same gate is tightened to the one the renderer
+  uses (3× the poll interval, floored at 90s) instead of its own 5-minute
+  fallback — a safety gate must not call a snapshot fresh that `status` and the
+  menubar app already show as "Stopped".
+
+- **A config key typed in the wrong letter case is no longer reported as having
+  no effect — because it has one.** Go's JSON decoder matches keys
+  case-insensitively, so `"pollinterval": "1h"` or `"vpn": {"pausemax": "2h"}`
+  is honored in full, while the schema check that produces the
+  `validate`/daemon-start report compared spellings exactly and therefore
+  called them unrecognised, adding "it has no effect". That is the same failure
+  this project treats as its worst — a security setting's true state
+  misreported — pointed the other way: someone reading that a 2-hour pause
+  window "has no effect" stops looking while it is in force. Such keys are now
+  reported as taking effect, with the spelling to change them to, and are kept
+  distinct in the report from keys that really are inert (retired, renamed, or
+  simply unrecognised). A block spelled in the wrong case is still walked into,
+  so a genuine typo nested under it is still caught.
+
+- **Lowering a window cap now binds the very next window.** A reload adopted the
+  new `vpn.pauseMax` for the "is pausing available at all" check but left the
+  clamp reading the value the daemon started with, so `vpn.pauseMax` reduced from
+  30m to 1m was reported as applied while a 9-minute pause was still granted —
+  a security setting accepted and silently discarded, which is the failure this
+  project treats as the worst one it can have.
+
+- **Five more settings now really do apply live, instead of only reporting that
+  they did.** The reload path adopted them into the daemon's own view while the
+  code that acts on them kept using the value captured at startup, so `Saved and
+  applied` was true of the bookkeeping and false of the enforcement:
+
+  - `vpn.endpointGrace` and `vpn.advanced.windowDiscoveryInterval` were read once
+    at boot; both are now read at each use, so a shortened grace binds the very
+    next endpoint reconciliation.
+  - `vpn.advanced.switchWindowMax` bounded the *episode* at its new value but left
+    `switch --for` clamped against the cap the daemon started with.
+  - `vpn.switchWindow` and `vpn.pauseMax` could be turned off live but not back
+    on: a daemon that started with both disabled never wired the command-file
+    poll, so re-enabling a window left the root-owned path deaf until a restart.
+    The poll is now always wired and every command re-checks the live value, so
+    disabling still disables — a `"0"` window cannot be opened by any trigger.
+  - `vpn.autoDetect` was never live at all (what autodetects is the tunnel
+    watcher, built at startup) and is now reported as needing a restart, which is
+    what it always needed.
+
+- **A tightening now lands even while traffic is cut.** FULL BLOCK carries the
+  `vpn.allowLocalNetwork` and `vpn.allowPhysicalDNS` passes, but a reload only
+  reinstalled the *standing* rules — which it deliberately skips while blocked. So
+  closing one of those passes during a block was reported as applied while the pass
+  stayed in the firewall until the posture next changed. The current posture is now
+  re-applied in place.
+
+- **An unrelated config change no longer restarts the agreement streak.** Every
+  reload handed the run loop a freshly built country decider, which resets the
+  in-progress hysteresis count — so a settings save while a forbidden exit was
+  being confirmed cancelled the escalation, and a client writing settings once per
+  poll interval could defer FULL BLOCK indefinitely. The decider is now rebuilt only
+  when `blockedCountries` or `hysteresis` actually changed, which is the only case
+  where discarding counted readings is the right answer.
+
+- **The config file is now written atomically.** It was written in place, so a
+  save interrupted partway could leave a truncated file. That is not merely a
+  lost setting: this config is what arms the guard at boot, so an unparseable one
+  would leave the host unprotected at the next start. It is now staged, flushed
+  and renamed, the same convention the daemon's other on-disk records already use.
+  The control token's hash is written the same way, so a power loss cannot leave a
+  zero-length hash that reads as "not enrolled" and locks out a valid token.
+
+- **A failed Touch ID no longer strands you on a password-only prompt.** The app
+  ran `sudo` with stdin on `/dev/null`, so the moment a biometric read missed —
+  a closed lid, a wet finger, a couple of bad reads — PAM's password fallback hit
+  EOF, failed instantly, and the whole attempt dropped to an Authorization
+  Services dialog that cannot offer Touch ID at all. There was no retry, which is
+  why `pam_tid` looked broken when it was configured correctly all along. The app
+  now runs `sudo -A` with a bundled `SUDO_ASKPASS` helper, so a miss becomes the
+  ordinary "enter your password" continuation that macOS's own biometric prompts
+  offer. The helper lives inside the code-signed bundle — sudo executes whatever
+  `SUDO_ASKPASS` names, so it must never be a path a local process can rewrite.
+  Machines without `pam_tid` are unaffected and still use the system dialog.
 
 - **The menubar app no longer reads the daemon's state file on the main thread.**
   The 1-second poll stat'd and decoded `state.json` inline, so any stall in that
@@ -215,16 +457,118 @@ current as you land changes.
   stack up. This is the leading suspect for the reported random beachballs; it
   is a hazard worth removing either way.
 
-### Added
+- **A typo or a renamed key inside `vpn.profiles` was silently dropped.** The
+  unknown-key scanner only recursed into JSON objects, so `vpn.profiles` (a
+  JSON array) was never walked — exactly the failure this mechanism exists to
+  catch, just one container type away from where it was already caught for
+  `vpn`/`vpn.advanced`/`control`. An unrecognised or renamed key inside any
+  profile is now reported with its index (e.g. `vpn.profiles[1].ifaceHint`),
+  and this is what makes the `ifaceHint` → `tunnelHint` rename above reportable
+  at all.
 
-- **Main-thread stall detection in the menubar app.** A background watchdog pings
-  the main queue twice a second and records any stall past one second, plus how
-  long it lasted, to unified logging under the `sh.dezhban.menu` subsystem
-  (`log show --last 1h --predicate 'subsystem == "sh.dezhban.menu"'`). The
-  beachballs have no cause visible in the source — every subprocess and
-  elevation call is already dispatched off-main — so they have to be caught in
-  the act. Diagnostic only: it observes the main thread and never blocks it, and
-  it touches neither the daemon nor the firewall.
+- **`status` no longer reports a crashed or SIGKILLed daemon's last posture as
+  still in force.** It only checked whether the state file was readable, not
+  whether it was fresh, so a dead daemon's last snapshot (`guard`, say) kept
+  printing "Guarding — Traffic leaves only through your VPN tunnel" — the most
+  prominent line in the output — indefinitely, contradicted only by the
+  `service:` line a few rows down. `status` now applies the same staleness rule
+  (`internal/render.IsStale`) the macOS app's icon already used, so a stale
+  snapshot reads as Stopped on both surfaces.
+
+- **`config preset apply --json` now fails loudly instead of silently ignoring
+  `--json`.** `apply`'s output is the ordinary `set k = v` lines `config set`
+  already prints, not a JSON-able report; a script that asked for
+  machine-readable output and got prose back now gets a clear error instead.
+
+- **The macOS app's standalone "Restart dezhban…" button no longer claims a
+  save that never happened.** A failed restart from that control reported
+  "Saved, but the restart failed", which is only true when the restart is a
+  step inside Apply — the standalone button writes nothing first. It now says
+  "Restart failed" when invoked on its own.
+
+- **Applying a preset in the macOS app now warns about unsaved edits it would
+  discard.** The confirmation named the preset's own cost but not the pane's:
+  applying writes the preset to disk and re-seeds every field from what
+  landed, silently overwriting anything typed but not yet saved. The
+  confirmation now says so when there is something to lose.
+
+- **A preset that your own advanced caps forbid is now refused by name, before
+  anything is written.** `vpn.advanced.switchWindowMax`/`redialWindowMax` are
+  deliberately not preset keys — a strictness macro must never raise a ceiling
+  you set by hand — so lowering one can put a preset out of reach. `config
+  preset apply relaxed` under a `10s` `switchWindowMax` used to fail with
+  `vpn.switchWindow 30s exceeds vpn.advanced.switchWindowMax 10s`, which names
+  the validation rule rather than the conflict, while `preset list` and `preset
+  diff` went on offering and diffing a preset that could never apply. All three
+  now say `cannot apply:` with both values and the way forward (`--json` gets a
+  `conflicts` array); the write is refused up front rather than part-way
+  through validation. Nothing was ever persisted in either case. The macOS
+  app's preset picker reads the same field and greys such a preset out with
+  the reason beside it, instead of offering a button that fails when pressed.
+
+- **A renamed config key nested under a miscased parent block keeps its rename
+  hint.** The report shows a key with the spelling your file uses, so it can be
+  found and fixed — but that meant `{"VPN": {"profiles": [{"ifaceHint": …}]}}`
+  reached the rename table as `VPN.profiles[0].ifaceHint` and missed, degrading
+  "renamed to `vpn.profiles[].tunnelHint`" to a bare "not a recognised config
+  key". Both were truthful that the value is dead; only one told you what to
+  change it to. The lookup now ignores letter case.
+
+- **`dezhban switch --status` leads with a stable token again.** Growing a
+  rendered prose sentence left the open branch with no fixed string, while the
+  closed branch still printed `switch window: closed` — so a script testing for
+  `OPEN` silently stopped matching and read an open exposure window as closed.
+  Output is now `switch window: OPEN — <sentence>` (or `pause: OPEN — …`),
+  keeping the sentence and the `until: <RFC3339>` line.
+
+- **`config set` now says when it stored something other than what you typed.**
+  Nine of the twelve `vpn.advanced.*` keys have no disabled state, so a `0`
+  meant as "off" is replaced by the shipped default. The echoed value was
+  already honest, but silently so; a `note: <key> was normalised on write:
+  <typed> → <stored>` line now appears whenever the two differ. The three
+  windows and `redialMinUptime`, whose `0` is a real opt-out, are unaffected
+  and draw no note.
+
+- **`dezhban doctor` can no longer drop a check on the floor.** The text layout
+  indexed checks by name, so two checks sharing a name — or one whose name the
+  layout has no section for — never printed, and a missing check reads exactly
+  like a check that passed. Both cases now print; the shipped checks are also
+  pinned unique by a test.
+
+- **A retired config key nested under a miscased block is no longer reported as
+  having taken effect** — and the spelling the report tells you to change to is
+  now one the schema actually has. Reported key paths deliberately keep your
+  file's own casing so the line can be found, but the *canonical* path was being
+  built from that same prefix, so `{"VPN": {"Enabled": true}}` reached the
+  retirement table as `VPN.enabled`, missed, and printed `"VPN.Enabled" … TOOK
+  EFFECT` directly beneath the correct `"vpn.enabled" has no effect` — the
+  discarded-setting-looks-live lie the whole report exists to prevent, and only
+  the parent block's casing separated the two outcomes. The same prefix made
+  `the schema spells it "VPN.profiles"` name a path that exists nowhere, leaving
+  the one actionable part of the line wrong. The canonical path is now the
+  schema's own name at every level.
+
+- **`config set --token-stdin` now says when it stored something other than what
+  you typed.** The `note: <key> was normalised on write: …` line only appeared
+  on the privileged path: the daemon performs the token/socket write, so the CLI
+  never held the normalised config and reported just `Saved and applied: <key>`
+  — a true statement about a value the operator did not type, on the path the
+  macOS app and every script prefer. The CLI now takes both readings itself and
+  the note appears on either path.
+
+- **The menubar's Pause item no longer blames `vpn.pauseMax` when dezhban simply
+  isn't running.** Two independent reasons greyed it out and one tooltip covered
+  both, so a stopped daemon with a perfectly ordinary `vpn.pauseMax: "30m"` read
+  `Disabled — vpn.pauseMax is "0" in your config.` and sent you to fix a key that
+  was already right (`status --json` is read-only, so it answers correctly with
+  the daemon down — which is exactly why the two causes were indistinguishable).
+  The tooltip now names the reason that applies.
+
+- **A refused preset no longer announces that it was applied.** `config preset
+  apply` printed its `applying <name>: …` banner and the preset's full cost
+  paragraph before the check that refuses a preset your own advanced caps
+  forbid, so the refusal arrived under a heading claiming the write had started
+  and a description of a trade you never made. The check now runs first.
 
 ## [0.7.0] - 2026-07-22
 

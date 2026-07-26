@@ -1,4 +1,5 @@
 import AppKit
+import DezhbanCore
 
 /// AppDelegate owns the menubar item — the safety/glance surface. A 1-second
 /// timer reads the daemon's state file (a tiny local read — no geo-API polling
@@ -154,7 +155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Essential-transition notifications. The FIRST classification after
         // launch is recorded silently — notifying the user about the state the
         // world was already in when the app opened is noise, not news.
-        let essential = essentialClass(state, help)
+        let essential = essentialClass(state, snapshot)
         if let prev = lastEssential, prev != essential {
             NotificationManager.post(title: Self.essentialTitles[essential] ?? "Dezhban", body: "dezhban — \(help)")
         }
@@ -165,23 +166,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private var lastEssential: String?
 
-    /// Collapses (icon state, help) into the coarse classes worth interrupting a
-    /// person for. Standby and stopped both draw the gray icon but mean very
-    /// different things, so they class by the help text, not the icon.
-    private func essentialClass(_ state: String, _ help: String) -> String {
-        if help == "stopped" { return "stopped" }
-        if help.hasPrefix("standby") { return "standby" }
-        return state // on / off / blocked / warning / paused
+    /// Collapses (icon state, snapshot) into the coarse classes worth
+    /// interrupting a person for. Standby and stopped both draw the "off" icon
+    /// but mean very different things, so they class off the snapshot's own
+    /// posture/liveness rather than parsing the rendered prose — the daemon's
+    /// Display.Key is deliberately coarse (five brand states), so "off" alone
+    /// can't tell them apart, but the stable posture string can.
+    private func essentialClass(_ state: String, _ snap: Snapshot?) -> String {
+        guard let snap = snap, PostureUI.isLive(snap) else { return "stopped" }
+        if snap.posture == "standby" { return "standby" }
+        return state // on / blocked / warning / paused
     }
 
     private static let essentialTitles: [String: String] = [
         "on": "Guard armed",
-        "blocked": "Egress blocked",
+        "blocked": "Traffic cut",
         "warning": "Warning",
         "paused": "Paused — using your real IP",
-        "standby": "Standby — not enforcing",
-        "stopped": "Protection stopped",
-        "off": "Not enforcing",
+        "standby": "Standby — nothing is being blocked",
+        "stopped": "Guard stopped",
+        // "off" is unreachable from essentialClass today (standby and stopped —
+        // the only sources of the "off" icon state — are classified separately
+        // above); kept for defensive completeness against the map lookup's
+        // `?? "Dezhban"` fallback.
+        "off": "Standby — nothing is being blocked",
     ]
 
     /// Menubar brand state images, loaded once from the app bundle's Resources
@@ -220,7 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             addInfo(DezhbanCLI.binaryPath() == nil
                 ? "dezhban CLI not found — install it first"
-                : "Kill switch stopped")
+                : "Stopped")
         }
 
         menu.addItem(.separator())
@@ -238,20 +246,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // "my VPN is off on purpose — release the line" action.
         let guardHolds = isRunning && PostureUI.guardHoldsDownedTunnel(s)
         addAction("Block now", #selector(blockNow), enabled: isRunning && !blocked)
-            .toolTip = routineHint("Cuts all egress and holds it until you unblock.")
+            .toolTip = AppState.shared.routineHint("Cuts all egress and holds it until you unblock.")
         addAction("Unblock", #selector(unblockNow), enabled: isRunning && (blocked || guardHolds))
-            .toolTip = routineHint("Releases a manual block and resumes monitoring.")
+            .toolTip = AppState.shared.routineHint("Releases a manual block and resumes monitoring.")
 
         // Switch window: connect a brand-new VPN whose server isn't known yet.
         // Time-critical mid-flow, and the countdown is glanceable — so it stays.
-        if let sw = s?.switch, sw.open {
+        // `switch --cancel` refuses to touch an open PAUSE (see the glossary's
+        // Pause entry) — `resume` is the only way to end one early, so a pause
+        // gets its own item instead of the generic Cancel one.
+        if let sw = s?.switch, sw.open, sw.isPause {
+            let left = max(0, sw.until.timeIntervalSinceNow)
+            addAction("Resume now (\(PostureUI.mmss(left)) left)", #selector(resumeNow), enabled: isRunning)
+                .toolTip = AppState.shared.routineHint("Ends the pause early and re-arms the guard.")
+        } else if let sw = s?.switch, sw.open {
             let left = max(0, sw.until.timeIntervalSinceNow)
             addAction("Cancel VPN switch (\(PostureUI.mmss(left)) left)", #selector(cancelSwitch),
                       enabled: isRunning)
-                .toolTip = routineHint("Closes the window and restores the guard.")
+                .toolTip = AppState.shared.routineHint("Closes the window and restores the guard.")
         } else {
             addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
-                .toolTip = routineHint("Briefly relaxes the guard so a new VPN can connect.")
+                .toolTip = AppState.shared.routineHint("Briefly relaxes the guard so a new VPN can connect.")
+            // Two independent reasons to grey this out, and the tooltip names
+            // the one that actually applies. A single "vpn.pauseMax is 0"
+            // string covered both, so a stopped daemon with a perfectly normal
+            // 30m pauseMax sent the user off to fix a key that was already
+            // right — `status --json` is read-only and answers with the daemon
+            // down, so pauseIsEnabled is true in exactly that case.
+            let pauseAllowed = AppState.shared.pauseIsEnabled
+            let pauseEnabled = isRunning && pauseAllowed
+            addAction("Pause — use my real IP", #selector(pauseNow), enabled: pauseEnabled)
+                .toolTip = {
+                    if !pauseAllowed { return "Disabled — vpn.pauseMax is \"0\" in your config." }
+                    if !isRunning { return "Unavailable — dezhban isn’t running. Start it first." }
+                    return AppState.shared.routineHint(
+                        "Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
+                }()
         }
 
         // Panic is the lockout escape hatch: it must never depend on the main
@@ -268,7 +298,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// The dropdown's one-line glance: posture, plus exit country/provider when known.
     private func statusLine(_ s: Snapshot) -> String {
-        var line = PostureUI.humanPosture(s).capitalized
+        var line = PostureUI.humanPosture(s)
         if let e = s.enforcementErr, !e.isEmpty {
             line = "⚠︎ Enforcement failed — open Dezhban for details"
         } else if let cc = s.countryCode, !cc.isEmpty {
@@ -276,14 +306,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if let p = s.provider, !p.isEmpty { line += " via \(p)" }
         }
         return line
-    }
-
-    /// Appends the password expectation to a routine action's tooltip, so the menu
-    /// tells the truth about what the click will cost before it costs it.
-    private func routineHint(_ what: String) -> String {
-        AppState.shared.controlIsReachable
-            ? "\(what) No password needed — the running daemon handles it."
-            : "\(what) Will ask for your password (the daemon isn’t reachable)."
     }
 
     // MARK: - actions
@@ -296,6 +318,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func unblockNow() { AppActions.routine(["unblock"], "unblock") }
     @objc private func openSwitch() { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
     @objc private func cancelSwitch() { AppActions.routine(["switch", "--cancel"], "cancel the switch window") }
+    @objc private func pauseNow() { AppActions.routine(["pause"], "pause the guard") }
+    @objc private func resumeNow() { AppActions.routine(["resume"], "resume the guard") }
 
     /// Menubar panic: confirmation, then a direct privileged run with the result
     /// in an NSAlert (scrollable transcript) — deliberately NOT routed through

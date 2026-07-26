@@ -1,11 +1,12 @@
 import AppKit
 import SwiftUI
 
-/// The Logs & Diagnostics pane: the single output surface for the window —
-/// run-doctor, last-hour logs, the live `log stream` (with Stop), plus the
-/// transcripts other panes route here (panic, install/uninstall, config apply).
+/// The Logs pane: the transcript output surface for the window — last-hour
+/// logs, the live `log stream` (with Stop), plus the transcripts other panes
+/// route here (panic, install/uninstall, config apply, restart). Structured
+/// diagnostic checks live in the Diagnostics pane instead — this one is raw
+/// text only.
 struct LogsView: View {
-    @EnvironmentObject var state: AppState
     @ObservedObject var console: Console
 
     var body: some View {
@@ -14,14 +15,11 @@ struct LogsView: View {
             Divider()
             ConsoleTextView(console: console)
         }
-        .navigationTitle("Logs & Diagnostics")
+        .navigationTitle("Logs")
     }
 
     private var toolbar: some View {
         HStack(spacing: 10) {
-            Button("Run diagnostics") { runDiagnostics() }
-                .disabled(!state.cliFound)
-                .help("Read-only `dezhban doctor` — no root, no firewall effects.")
             // The log actions run `/usr/bin/log` directly and don't need the
             // dezhban binary, so they stay available even when the CLI is
             // uninstalled/mislocated — reading the unified log is exactly the
@@ -51,17 +49,6 @@ struct LogsView: View {
                 .truncationMode(.tail)
         }
         .padding(12)
-    }
-
-    /// Unprivileged, read-only `doctor` run → console.
-    private func runDiagnostics() {
-        console.set(title: "Diagnostics — running…", text: "")
-        DispatchQueue.global(qos: .userInitiated).async {
-            let result = DezhbanCLI.run(["doctor", "--config", DezhbanCLI.resolvedConfigPath()])
-            DispatchQueue.main.async {
-                console.set(title: "Diagnostics", text: result.output.isEmpty ? "(no output)" : result.output)
-            }
-        }
     }
 
     private func showRecent() {

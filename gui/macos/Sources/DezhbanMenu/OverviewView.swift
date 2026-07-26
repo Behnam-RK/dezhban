@@ -1,4 +1,5 @@
 import SwiftUI
+import DezhbanCore
 
 /// The window's primary pane: a live status hero, the daily controls, and the
 /// panic escape hatch. Degraded states (CLI missing / service not installed /
@@ -30,26 +31,22 @@ struct OverviewView: View {
         let icon = PostureUI.iconFor(s)
         return ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                hero(state: icon.state, symbol: icon.symbol, title: icon.help.capitalized)
+                hero(state: icon.state, symbol: icon.symbol, title: icon.help)
 
-                if let e = s.enforcementErr, !e.isEmpty {
-                    banner("Enforcement failed: \(e)", color: .orange)
-                }
                 if let sw = s.switch, sw.open {
-                    // The window relaxes egress — the real IP may be exposed. Keep it
-                    // loud, with the same rounded-down countdown as the menubar.
-                    banner(sw.isAutoRedial
-                           ? "VPN dropped — redial window open, redial now (closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now))))"
-                           : "Switch window OPEN — closes in \(PostureUI.mmss(sw.until.timeIntervalSince(state.now)))",
-                           color: .orange)
-                }
-
-                // A posture change under way. Without it, the wait between the VPN
-                // redialing and protection coming back is indistinguishable from
-                // nothing happening — which is what made a normal recovery look
-                // like a stuck app. Blue, not orange: this is progress, not a fault.
-                if let progress = s.pendingSummary {
-                    banner(progress, color: .blue)
+                    // The rendered detail (in the hero) already says which kind of
+                    // window this is and gives its absolute deadline; this banner's
+                    // only job is the live, second-by-second countdown, which has to
+                    // stay client-side — a string persisted to state.json goes stale
+                    // the instant it's written. Pause gets its own wording and color
+                    // (blue, not amber — it's deliberate, not a warning) so it never
+                    // reads as an accidental exposure.
+                    let left = PostureUI.mmss(sw.until.timeIntervalSince(state.now))
+                    if sw.isPause {
+                        banner("Guard re-arms in \(left)", color: .blue)
+                    } else {
+                        banner("Closes in \(left)", color: .orange)
+                    }
                 }
 
                 detailsGrid(s)
@@ -63,40 +60,6 @@ struct OverviewView: View {
                 panicRow
             }
             .padding(20)
-        }
-    }
-
-    /// One sentence saying what is true right now and what happens next. This
-    /// replaces the old mode label ("VPN guard mode" / "Legacy country-blocklist
-    /// mode"), which named a distinction that no longer exists — and which told a
-    /// user nothing about whether they were actually protected.
-    ///
-    /// STANDBY is the one that must not be soft-pedalled: nothing is blocked, so
-    /// the copy says so outright rather than implying the guard is watching.
-    static func postureBlurb(_ s: Snapshot) -> String {
-        switch s.posture {
-        case "standby":
-            return "Guard off — standby. Nothing is being blocked. Connect your VPN and dezhban arms itself."
-        case "guard":
-            if PostureUI.guardHoldsDownedTunnel(s) {
-                return "Guard active, but no tunnel is up — all egress is cut until your VPN redials."
-            }
-            return "Guard active. Traffic leaves only through your VPN tunnel."
-        case "full-block":
-            let cc = s.countryCode.map { " (\($0))" } ?? ""
-            return "Full block. Your VPN is exiting through a country you've blocked\(cc). Everything is cut until it moves."
-        case "switch-window":
-            if s.switch?.isPause == true {
-                return "Paused at your request. You are using your real IP, and the guard re-arms itself when the pause ends."
-            }
-            let auto = s.switch?.isAutoRedial ?? false
-            return auto
-                ? "Your VPN dropped. The guard is relaxed while it redials — your real IP is exposed until it closes."
-                : "Guard relaxed so a new VPN can connect — your real IP is exposed until it closes."
-        case "stopped":
-            return "dezhban is not running. Nothing is being blocked."
-        default:
-            return "Posture: \(s.posture)"
         }
     }
 
@@ -118,8 +81,8 @@ struct OverviewView: View {
             VStack(alignment: .leading, spacing: 2) {
                 Text(title)
                     .font(.title2.weight(.semibold))
-                if let s = state.snapshot {
-                    Text(Self.postureBlurb(s))
+                if let detail = state.snapshot?.display?.detail {
+                    Text(detail)
                         .foregroundStyle(.secondary)
                 }
             }
@@ -156,7 +119,12 @@ struct OverviewView: View {
             if let eps = s.endpoints, !eps.isEmpty {
                 row("Endpoints", eps.joined(separator: ", "))
             }
-            if let p = s.activeProfile, !p.isEmpty {
+            if let profiles = state.profiles, !profiles.profiles.isEmpty {
+                let names = profiles.profiles.map { p in
+                    p.name == s.activeProfile ? "\(p.name) (active)" : p.name
+                }
+                row("VPN profiles", names.joined(separator: ", "))
+            } else if let p = s.activeProfile, !p.isEmpty {
                 row("VPN profile", p)
             }
             if let bc = s.blockedCountries, !bc.isEmpty {
@@ -181,31 +149,60 @@ struct OverviewView: View {
         return HStack(spacing: 10) {
             Button("Block now") { AppActions.routine(["block"], "block") }
                 .disabled(blocked)
-                .help(routineHint("Cuts all egress and holds it until you unblock."))
+                .help(state.routineHint("Cuts all egress and holds it until you unblock."))
             Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
                 .disabled(!(blocked || guardHolds))
-                .help(routineHint("Releases a manual block and resumes monitoring."))
-            if let sw = s.switch, sw.open {
+                .help(state.routineHint("Releases a manual block and resumes monitoring."))
+            if let sw = s.switch, sw.open, sw.isPause {
+                // `switch --cancel` deliberately refuses to touch a pause (see the
+                // glossary's Pause entry) — `resume` is the only way to end one early.
+                Button("Resume now (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
+                    AppActions.routine(["resume"], "resume the guard")
+                }
+                .help(state.routineHint("Ends the pause early and re-arms the guard."))
+            } else if let sw = s.switch, sw.open {
                 Button("\(sw.isAutoRedial ? "Cancel redial window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
                     AppActions.routine(["switch", "--cancel"], "cancel the switch window")
                 }
-                .help(routineHint("Closes the window and restores the guard."))
+                .help(state.routineHint("Closes the window and restores the guard."))
             } else {
-                Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
-                    .help(routineHint("Briefly relaxes the guard so a new VPN can connect."))
+                switchMenu
+                Button("Pause — use my real IP") { AppActions.routine(["pause"], "pause the guard") }
+                    .disabled(!state.pauseIsEnabled)
+                    .help(state.pauseIsEnabled
+                        ? state.routineHint("Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
+                        : "Disabled — vpn.pauseMax is \"0\" in your config.")
             }
             Spacer()
-            Button("Stop kill switch") { AppActions.privileged(["stop"], "stop the kill switch") }
-                .help("Stops the daemon. Asks for your password — a daemon can’t stop itself.")
+            Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
+                .help("Stops dezhban. Asks for your password — it can’t stop itself while running.")
         }
     }
 
-    /// Appends the password expectation to a routine action's hint, so the button
-    /// tells the truth about what the click will cost before it costs it.
-    private func routineHint(_ what: String) -> String {
-        state.controlIsReachable
-            ? "\(what) No password needed — the running daemon handles it."
-            : "\(what) Will ask for your password (the daemon isn’t reachable)."
+    /// Opens a switch window, optionally targeted at a known VPN profile so the
+    /// learned endpoint is attributed to it (`switch --no-wait --name <profile>`).
+    /// Plain button when there are no profiles to pick from — a menu with a
+    /// single "Any known VPN" entry would just be a worse button.
+    @ViewBuilder
+    private var switchMenu: some View {
+        if let profiles = state.profiles, !profiles.profiles.isEmpty {
+            Menu("Switching VPN…") {
+                Button("Any known VPN") {
+                    AppActions.routine(["switch", "--no-wait"], "open a switch window")
+                }
+                Divider()
+                ForEach(profiles.profiles) { p in
+                    Button(p.name) {
+                        AppActions.routine(["switch", "--no-wait", "--name", p.name],
+                                           "open a switch window for \(p.name)")
+                    }
+                }
+            }
+            .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
+        } else {
+            Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
+                .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
+        }
     }
 
     private var panicRow: some View {
@@ -219,7 +216,7 @@ struct OverviewView: View {
                 Label("Panic — force unblock…", systemImage: "exclamationmark.octagon.fill")
             }
             .tint(.red)
-            Text("Removes every dezhban firewall rule, even with no daemon running.")
+            Text("Removes every dezhban firewall rule, even with dezhban not running.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
         }
@@ -240,9 +237,9 @@ struct OverviewView: View {
     private var notInstalled: some View {
         guided(
             symbol: "shield",
-            title: "Not protecting",
+            title: "Guard not installed",
             message: "The dezhban system service is not installed, so nothing is enforced — "
-                + "at boot or now. Installing it starts protection immediately and at every boot."
+                + "at boot or now. Installing it starts the guard immediately and at every boot."
         ) {
             Button("Install service…") {
                 busy = true
@@ -259,12 +256,12 @@ struct OverviewView: View {
     private var stopped: some View {
         guided(
             symbol: "shield",
-            title: "Protection stopped",
-            message: "The dezhban service is installed but the daemon isn’t running "
-                + "(or hasn’t reported recently). Egress is not being watched."
+            title: "Stopped",
+            message: "The dezhban service is installed but isn’t running "
+                + "(or hasn’t reported recently). Nothing is being watched."
         ) {
-            Button("Start kill switch") {
-                AppActions.privileged(["start"], "start the kill switch")
+            Button("Guard up") {
+                AppActions.privileged(["start"], "bring the guard up")
             }
             .buttonStyle(.borderedProminent)
         }

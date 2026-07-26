@@ -10,7 +10,7 @@
   "vpn": {
     "tunnelInterfaces": [],
     "endpoints": [],
-    "autodetect": false
+    "autoDetect": false
   },
   "providerQuorum": false,
   "logLevel": "debug"

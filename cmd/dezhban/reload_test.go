@@ -20,7 +20,7 @@ func TestLiveSettingsFromMapsEveryField(t *testing.T) {
 	cfg.PollInterval = 17 * time.Second
 	cfg.BlockedCountries = []string{"IR"}
 	cfg.Hysteresis = 2
-	cfg.VPN.Autodetect = true
+	cfg.VPN.AutoDetect = true
 	cfg.VPN.AllowPhysicalDNS = true
 	cfg.VPN.AllowLocalNetwork = true
 	cfg.VPN.AutoArm = true

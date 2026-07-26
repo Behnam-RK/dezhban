@@ -13,6 +13,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/learned"
+	"github.com/behnam-rk/dezhban/internal/render"
 	"github.com/behnam-rk/dezhban/internal/state"
 	"github.com/behnam-rk/dezhban/internal/vpnimport"
 )
@@ -28,7 +29,7 @@ Subcommands:
   import FILE [--name N]         Import a profile from a WG/OpenVPN/V2Ray config
                                   (--dry-run previews without saving)
 
-Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --iface-hint PREFIX,
+Flags: --config PATH, --endpoint HOST (repeatable), --from FILE, --tunnel-hint PREFIX,
        --as NAME, --name NAME, --dry-run, --all, --learned, --yes`
 
 // cmdSwitch opens (or cancels / inspects) a switch window on the running daemon
@@ -153,7 +154,7 @@ func cmdPause(args []string) int {
 	if !noDaemon() {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpPause, Duration: dur}); handled {
 			if code == 0 {
-				fmt.Println("paused — protection resumes automatically at the deadline. `dezhban status` shows the countdown.")
+				fmt.Println("paused — the guard re-arms automatically at the deadline. `dezhban status` shows the countdown.")
 			}
 			return code
 		}
@@ -166,7 +167,7 @@ func cmdPause(args []string) int {
 		fmt.Fprintln(os.Stderr, "pause:", err)
 		return 1
 	}
-	fmt.Println("pause requested — protection resumes automatically at the deadline.")
+	fmt.Println("pause requested — the guard re-arms automatically at the deadline.")
 	return 0
 }
 
@@ -179,7 +180,7 @@ func cmdResume(args []string) int {
 	if !noDaemon() {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpResume}); handled {
 			if code == 0 {
-				fmt.Println("resumed — protection is active again")
+				fmt.Println("resumed — the guard is active again")
 			}
 			return code
 		}
@@ -223,13 +224,16 @@ func waitForSwitch(statePath string) int {
 		if snap.Switch != nil && snap.Switch.Open {
 			if !sawOpen {
 				sawOpen = true
-				fmt.Printf("  window open until %s — connect now…\n", snap.Switch.Until.Format(time.Kitchen))
+				// Posture, not Text: this line appends its own "— connect now…"
+				// clause, so it needs the window sentence alone (see
+				// render.Posture).
+				fmt.Printf("  %s — connect now…\n", render.Posture(snap).Detail)
 			}
 			continue
 		}
 		if sawOpen {
 			fmt.Println("  window closed.")
-			if snap.Posture == "guard" {
+			if snap.Posture == render.PostureGuard {
 				fmt.Println("  guard active. If a new endpoint was learned, make it permanent with:")
 				fmt.Printf("    sudo dezhban vpn promote <name>   (see: dezhban vpn list)\n")
 			}
@@ -246,17 +250,40 @@ func printSwitchStatus(statePath string) int {
 		fmt.Println("switch window: unknown (no state file; is the daemon running?)")
 		return 0
 	}
-	if snap.Switch != nil && snap.Switch.Open {
-		if snap.Switch.Trigger == state.TriggerPause {
-			// A pause shares the window machinery but is not a switch window —
-			// report it by name so "OPEN" here doesn't read as a stray switch.
-			fmt.Printf("pause: OPEN until %s (end early with `dezhban resume`)\n", snap.Switch.Until.Format(time.RFC3339))
-		} else {
-			fmt.Printf("switch window: OPEN until %s (profile %q)\n", snap.Switch.Until.Format(time.RFC3339), snap.Switch.Profile)
-		}
-	} else {
+	if snap.Switch == nil || !snap.Switch.Open {
 		fmt.Println("switch window: closed")
+		return 0
 	}
+	// Posture, not Text: both branches below append their own clause, and this
+	// command is reporting the WINDOW, so an unrelated enforcement failure must
+	// not take the sentence's place (see render.Posture). `status` still shows
+	// that failure, which is where a general readout belongs.
+	detail := render.Posture(snap).Detail
+	// Every branch leads with a fixed `<what>: OPEN` token, symmetric with the
+	// `switch window: closed` above and unchanged from before this readout grew
+	// its prose sentence. The prose is for a person; the token is the contract a
+	// script tests, and it must not move with the wording — a `grep -q OPEN`
+	// that silently stops matching reports an open exposure window as closed.
+	switch snap.Switch.Trigger {
+	case state.TriggerPause:
+		// A pause shares the window machinery but is not a switch window —
+		// name it, and its hint, accordingly.
+		fmt.Printf("pause: OPEN — %s (end early with `dezhban resume`)\n", detail)
+	default:
+		extra := ""
+		if snap.Switch.Profile != "" {
+			extra = fmt.Sprintf(" (profile %q)", snap.Switch.Profile)
+		}
+		fmt.Printf("switch window: OPEN — %s%s\n", detail, extra)
+	}
+	// The rendered sentence carries the deadline as a bare wall-clock time
+	// (render.untilFormat is time.Kitchen), which is the right register for
+	// prose and the wrong one for the CLI's dedicated readout of "when does my
+	// exposure end": no date, no seconds, and ambiguous once a window runs long
+	// enough to cross noon or midnight (vpn.pauseMax has no cap floor). This is
+	// the one command whose whole job is that answer, so it also prints the
+	// exact instant, in the same RFC3339 form state.json stores.
+	fmt.Printf("until: %s\n", snap.Switch.Until.Format(time.RFC3339))
 	return 0
 }
 
@@ -302,8 +329,8 @@ func cmdVPNList(args []string) int {
 	}
 	for _, p := range cfg.VPN.Profiles {
 		hint := ""
-		if p.IfaceHint != "" {
-			hint = "  [iface " + p.IfaceHint + "*]"
+		if p.TunnelHint != "" {
+			hint = "  [tunnel " + p.TunnelHint + "*]"
 		}
 		fmt.Printf("%-11s %s%s\n", p.Name, strings.Join(p.Endpoints, ", "), hint)
 	}
@@ -325,7 +352,9 @@ func cmdVPNList(args []string) int {
 	// snapshot is unreadable). Matches the "active state" the command advertises.
 	if snap, err := state.Read(defaultStatePath()); err == nil {
 		if snap.Switch != nil && snap.Switch.Open {
-			line := fmt.Sprintf("\nswitch window OPEN until %s", snap.Switch.Until.Format(time.Kitchen))
+			// Posture, not Text: the profile clause is appended below (see
+			// render.Posture).
+			line := "\n" + render.Posture(snap).Detail
 			if snap.Switch.Profile != "" {
 				line += fmt.Sprintf(" (profile %q)", snap.Switch.Profile)
 			}
@@ -343,7 +372,7 @@ func cmdVPNAdd(args []string) int {
 	var eps multiFlag
 	fs.Var(&eps, "endpoint", "VPN server host or IP (repeatable)")
 	from := fs.String("from", "", "import endpoints from a WireGuard/OpenVPN/V2Ray config file")
-	hint := fs.String("iface-hint", "", "tunnel interface name prefix (display only)")
+	hint := fs.String("tunnel-hint", "", "tunnel interface name prefix (display only)")
 	yes := fs.Bool("yes", false, "don't print the endpoint preview before adding")
 	cfgPath, rest := stripConfigFlag(args)
 	pos := parseInterspersed(fs, rest)
@@ -379,7 +408,7 @@ func cmdVPNAdd(args []string) int {
 				return fmt.Errorf("profile %q already exists", name)
 			}
 		}
-		c.VPN.Profiles = append(c.VPN.Profiles, config.Profile{Name: name, Endpoints: endpoints, IfaceHint: *hint})
+		c.VPN.Profiles = append(c.VPN.Profiles, config.Profile{Name: name, Endpoints: endpoints, TunnelHint: *hint})
 		return nil
 	}, fmt.Sprintf("profile %q added", name))
 }

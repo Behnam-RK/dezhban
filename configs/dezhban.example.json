@@ -8,7 +8,7 @@
     "https://ifconfig.co/json"
   ],
   "vpn": {
-    "autodetect": true,
+    "autoDetect": true,
     "autoDiscoverEndpoints": true,
     "allowPhysicalDNS": true
   },

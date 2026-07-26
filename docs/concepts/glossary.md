@@ -24,7 +24,7 @@ What separates the registers is **notation, not concepts**:
 - **Technical** (config keys, `--json`, state files, logs): the same concepts as exact
   identifiers. `guard`, `tunnelInterfaces`, `posture`.
 
-So a label never shows a config key (`vpn.autodetect`), a serialised form
+So a label never shows a config key (`vpn.autoDetect`), a serialised form
 (`comma-sep`), or a posture constant in shouty caps — but it freely says "guard",
 "tunnel", and "endpoint", because those are what the things are called.
 
@@ -44,7 +44,8 @@ becomes "The guard is off".
 
 **Kill switch** — what dezhban *is*, in prose. Correct in the README, marketing copy, and
 introductory documentation. **Avoid as a UI control label** — "Stop kill switch" names
-the machinery rather than the action; say "Turn off the guard".
+the machinery rather than the action; say "Guard down" (the app) or "Turn off the guard"
+(prose).
 
 **Daemon** — the background process (`dezhban run` under launchd/systemd). A technical
 term: correct in these docs, logs, and `--json`. **Never in user-facing copy** — say
@@ -61,8 +62,8 @@ Appears in `status --json` and the state file. User-facing copy **names the post
 then explains it in a sentence**, rather than replacing the name with a euphemism.
 
 **STANDBY** — no rules installed, network fully open, the guard is **off**. The resting
-state before a tunnel has ever been observed. User-facing: "Guard off — standby. Nothing
-is being blocked." Icon is **grey** — nothing is being cut, so nothing is red. See
+state before a tunnel has ever been observed. User-facing: "Standby — nothing is being
+blocked." Icon is **grey** — nothing is being cut, so nothing is red. See
 [ADR-0002](../adr/0002-standby-no-tunnel-posture.md).
 
 **GUARD** — the healthy enforcing state. Only the tunnel may carry traffic off this
@@ -99,7 +100,7 @@ only service, not to connect a VPN. Trigger three, capped by its own
 just different copy on trigger one: its own config key, its own control-socket
 gate (`control.allowPauseOps`), and `switch --cancel` refuses to touch it (use
 `resume`). See [ADR-0008](../adr/0008-arm-at-boot.md). User-facing: "Paused —
-protection resumes automatically at «time»."
+the guard re-arms automatically at «time»."
 
 ## Network concepts
 
@@ -109,6 +110,12 @@ make a user type an interface name to get started; offer Detect.
 
 **Physical interface** — the real network link (`en0`, Wi-Fi, Ethernet). User-facing:
 "your normal connection" or "your real connection".
+
+**Egress** — traffic leaving the machine. Technical register only (logs, `--json`, code
+comments, these docs) — **never in user-facing copy**. Say what actually happened
+instead: "cut" (FULL BLOCK, or a guard holding a downed tunnel), "cut until you unblock"
+(a manual block). A menubar title or icon tooltip reading "Egress blocked" is exactly the
+drift this page exists to end — say "Traffic cut".
 
 **Endpoint** — the VPN server's public address, reached across the physical interface.
 The guard must pass it or the tunnel can never connect. User-facing: "VPN server address".
@@ -160,6 +167,17 @@ streak resolves or a bounded budget runs out. It changes **cadence only** — hy
 still gates the change, and it is skipped entirely when checking would require lifting
 the guard.
 
+**Preset** — a named bundle of values for the keys that answer "how strict am I"
+(the three relaxation windows, poll cadence and hysteresis, the two firewall-pass
+toggles, arm-at-boot): **Strict**, **Balanced** (the shipped defaults), **Relaxed**.
+Applying one is a write-time macro — it writes those keys through the ordinary
+`config set` path, same validation and same live-reload/restart reporting as a hand
+edit. The daemon never knows a preset was applied; a config that has since drifted
+from all three shows as **Custom**. Presets never touch identity (blocked countries,
+tunnel interfaces, endpoints, profiles) — same carve-out as `config reset --all`.
+Each preset states its **cost** in plain words beside its summary — see
+["Safe"/"Secure" as a preset name](#words-we-do-not-use).
+
 **Policy** — the internal description of what should be enforced. Rendered by a backend
 into an actual **ruleset**.
 
@@ -186,10 +204,12 @@ hatch must never depend on the thing it is escaping from.
 |---|---|---|
 | "Legacy mode", "country-blocklist mode", "VPN guard mode" | *(nothing)* | There is one mode. See [ADR-0001](../adr/0001-single-guard-mode.md). |
 | "Protection" / "protected" / "secured" | "the guard" / "guard active" | One word for one concept. The drift this page ends. |
-| "Stop kill switch" | "Turn off the guard" | Name the action, not the machinery. |
+| "Stop kill switch" | "Guard down" (app) / "Turn off the guard" (prose) | Name the action, not the machinery. |
 | "The daemon isn't running" (in the app) | "The guard is off" | Users do not have daemons. They have a guard. |
 | "Enable VPN guard (vpn.enabled)" | "Turn on the guard" | Drop the config key, keep the domain word. |
-| "Blocked" for STANDBY | "Guard off — standby" | Nothing is blocked in standby. The icon must agree. |
+| "Blocked" for STANDBY | "Standby — nothing is being blocked" | Nothing is blocked in standby. The icon must agree. |
 | "Safe" / "Secure" as a preset name | Name the trade | A security tool states costs beside benefits. |
-| "Autodetect tunnel interface (vpn.autodetect)" | "Find my VPN tunnel automatically" | Drop the key and the word *interface*; keep *tunnel*. |
+| "Autodetect tunnel interface (vpn.autoDetect)" | "Find my VPN tunnel automatically" | Drop the key and the word *interface*; keep *tunnel*. |
 | "Tunnel interfaces (comma-sep)" | "Your VPN tunnel" + token field | Serialised forms are not a UI. |
+| "Egress blocked" | "Traffic cut" | *Egress* is a technical word; a security tool's copy should read to someone who just wants their real IP hidden. |
+| "Not protecting" | "Standby — nothing is being blocked" | "Protecting" is the word this page retired; say what state the guard is in. |
