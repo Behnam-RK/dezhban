@@ -100,18 +100,17 @@ struct SettingsView: View {
                 Section("Blocking") {
                     schemaField("blockedCountries", "Blocked countries (comma-sep)",
                                 text: $fields.blockedCountries)
-                    schemaField("pollInterval", "Exit country check interval", text: $fields.pollInterval)
+                    durationField("pollInterval", "Exit country check interval", text: $fields.pollInterval)
                 }
                 Section("Windows") {
-                    schemaField("vpn.switchWindow", "Switch window", text: $fields.switchWindow)
-                    schemaField("vpn.redialWindow", "Redial window", text: $fields.redialWindow)
-                    schemaField("vpn.pauseMax", "Longest pause", text: $fields.pauseMax)
-                    schemaField("vpn.endpointGrace", "VPN server address grace", text: $fields.endpointGrace)
+                    durationField("vpn.switchWindow", "Switch window", text: $fields.switchWindow)
+                    durationField("vpn.redialWindow", "Redial window", text: $fields.redialWindow)
+                    durationField("vpn.pauseMax", "Longest pause", text: $fields.pauseMax)
+                    durationField("vpn.endpointGrace", "VPN server address grace", text: $fields.endpointGrace)
                 }
                 Section("Timing") {
-                    schemaField("vpn.endpointRefresh", "VPN server address refresh",
-                                text: $fields.endpointRefresh)
-                    schemaField("vpn.tunnelWatch", "Tunnel check interval", text: $fields.tunnelWatch)
+                    durationField("vpn.endpointRefresh", "VPN server address refresh", text: $fields.endpointRefresh)
+                    durationField("vpn.tunnelWatch", "Tunnel check interval", text: $fields.tunnelWatch)
                 }
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
@@ -132,20 +131,13 @@ struct SettingsView: View {
                         Text("Touch only if you know why — these override recommended defaults.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                        schemaField("vpn.advanced.switchWindowMax", "Switch window cap",
-                                    text: $fields.advSwitchWindowMax)
-                        schemaField("vpn.advanced.redialWindowMax", "Redial window cap",
-                                    text: $fields.advRedialWindowMax)
-                        schemaField("vpn.advanced.redialMinUptime", "Redial anti-flap uptime",
-                                    text: $fields.advRedialMinUptime)
-                        schemaField("vpn.advanced.commandFreshness", "Command freshness",
-                                    text: $fields.advCommandFreshness)
-                        schemaField("vpn.advanced.windowDiscoveryInterval", "Window discovery interval",
-                                    text: $fields.advWindowDiscoveryInterval)
-                        schemaField("vpn.advanced.tunnelPruneAfter", "Tunnel prune delay",
-                                    text: $fields.advTunnelPruneAfter)
-                        schemaField("vpn.advanced.learnedEndpointTTL", "Learned address lifetime",
-                                    text: $fields.advLearnedEndpointTTL)
+                        durationField("vpn.advanced.switchWindowMax", "Switch window cap", text: $fields.advSwitchWindowMax)
+                        durationField("vpn.advanced.redialWindowMax", "Redial window cap", text: $fields.advRedialWindowMax)
+                        durationField("vpn.advanced.redialMinUptime", "Redial anti-flap uptime", text: $fields.advRedialMinUptime)
+                        durationField("vpn.advanced.commandFreshness", "Command freshness", text: $fields.advCommandFreshness)
+                        durationField("vpn.advanced.windowDiscoveryInterval", "Window discovery interval", text: $fields.advWindowDiscoveryInterval)
+                        durationField("vpn.advanced.tunnelPruneAfter", "Tunnel prune delay", text: $fields.advTunnelPruneAfter)
+                        durationField("vpn.advanced.learnedEndpointTTL", "Learned address lifetime", text: $fields.advLearnedEndpointTTL)
                         schemaField("vpn.advanced.learnedMaxPerProfile", "Learned addresses per profile",
                                     text: $fields.advLearnedMaxPerProfile)
                         schemaField("vpn.advanced.promoteAfterRefreshes", "Sightings before an address is learned",
@@ -360,6 +352,15 @@ struct SettingsView: View {
 
     /// Help text for a field, from the daemon's schema.
     private func helpText(_ key: String) -> String? { schema?.help(for: key) }
+
+    /// A duration setting as a menu of real choices rather than a text field
+    /// that demands Go's duration syntax. Bounds and Off-availability come from
+    /// the schema, and the cap is resolved against the values this pane is
+    /// actually holding, so lowering a cap by hand narrows the menu.
+    private func durationField(_ key: String, _ fallback: String, text: Binding<String>) -> some View {
+        DurationField(key: key, fallbackLabel: fallback, schema: schema,
+                      values: fields.currentValues, text: text, enabled: canApply)
+    }
 
     /// A text field for one config key, labelled and explained from the schema.
     ///
