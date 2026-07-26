@@ -152,12 +152,19 @@ type VPN struct {
 	Advanced Advanced
 }
 
-// Retired names a config key that no longer does anything, so the loader can
-// report it instead of ignoring it silently. A setting that is accepted and
+// Retired names a config key that is not what the schema calls it, so the loader
+// can report it instead of ignoring it silently. A setting that is accepted and
 // discarded without a word is the worst failure mode a security tool has.
 type Retired struct {
 	Key    string
 	Reason string
+	// TookEffect marks the one category here whose value is NOT inert: a key
+	// misspelled only in letter case, which encoding/json honors anyway (see
+	// unknownKey.Canonical). "has no effect" is the correct warning for a
+	// retired, renamed, or unrecognised key and a false one here, so the two
+	// report sites pick their framing from this rather than saying it of every
+	// entry.
+	TookEffect bool
 }
 
 // Profile is a named VPN whose server endpoint(s) dezhban keeps reachable on the
@@ -339,6 +346,13 @@ type fileVPN struct {
 	Endpoints        []string `json:"endpoints"`
 	// Pointers: all default to TRUE, so an explicit false must be
 	// distinguishable from an absent key (same convention as fileControl).
+	//
+	// AutoDetect needs no compatibility alias for its pre-rename "autodetect"
+	// spelling, and must not grow one: encoding/json matches tags
+	// case-insensitively, so the old casing already lands here and an explicit
+	// `"autodetect": false` still takes effect. unknown.go reports it as a
+	// misspelling that worked. A hand-written UnmarshalJSON for it would be
+	// unreachable code claiming to be a safeguard.
 	AutoDetect            *bool         `json:"autoDetect,omitempty"`
 	AutoDiscoverEndpoints *bool         `json:"autoDiscoverEndpoints,omitempty"`
 	AllowPhysicalDNS      *bool         `json:"allowPhysicalDNS,omitempty"`
@@ -353,33 +367,6 @@ type fileVPN struct {
 	RedialWindow          string        `json:"redialWindow,omitempty"`
 	PauseMax              string        `json:"pauseMax,omitempty"`
 	Advanced              *fileAdvanced `json:"advanced,omitempty"`
-}
-
-// UnmarshalJSON honors the pre-rename "vpn.autodetect" key for one release as a
-// deprecated alias of AutoDetect, when the new key is absent. Without this, a
-// config written before the rename has its AutoDetect setting silently
-// discarded and replaced with the (relaxing, since it defaults true) shipped
-// default the moment it's loaded — exactly the "security setting accepted and
-// discarded" failure unknown.go's doc comment names as the worst this
-// codebase can have. unknownKeys/describeUnknown still report "vpn.autodetect"
-// as renamed (they walk the raw JSON independently of this method), so the
-// warning survives even though the value now also takes effect.
-func (v *fileVPN) UnmarshalJSON(data []byte) error {
-	type alias fileVPN
-	var a alias
-	if err := json.Unmarshal(data, &a); err != nil {
-		return err
-	}
-	*v = fileVPN(a)
-	if v.AutoDetect == nil {
-		var legacy struct {
-			Autodetect *bool `json:"autodetect"`
-		}
-		if err := json.Unmarshal(data, &legacy); err == nil {
-			v.AutoDetect = legacy.Autodetect
-		}
-	}
-	return nil
 }
 
 type fileProfile struct {
@@ -473,8 +460,12 @@ func Load(path string) (*Config, error) {
 			}
 			// Anything the schema does not recognise is recorded rather than
 			// ignored — see unknown.go for why silence is the wrong default here.
-			for _, key := range unknownKeys(data) {
-				cfg.Retired = append(cfg.Retired, Retired{Key: key, Reason: describeUnknown(key)})
+			for _, u := range unknownKeys(data) {
+				cfg.Retired = append(cfg.Retired, Retired{
+					Key:        u.Key,
+					Reason:     describeUnknown(u),
+					TookEffect: u.Canonical != "",
+				})
 			}
 		}
 	}

@@ -37,8 +37,9 @@ type Preset struct {
 }
 
 // presetKeys are the exact keys every Preset.Values must set — no more, no
-// less. A preset that touched anything else would blur the line the addendum
-// draws between presets (strictness strategies) and profiles/identity.
+// less. A preset that touched anything else would blur the line
+// docs/concepts/glossary.md's "Preset" entry draws between presets (strictness
+// strategies) and profiles (VPN identities).
 var presetKeys = []string{
 	"vpn.switchWindow", "vpn.redialWindow", "vpn.pauseMax",
 	"pollInterval", "hysteresis",

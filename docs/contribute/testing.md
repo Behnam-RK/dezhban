@@ -405,6 +405,14 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
 - [ ] **Deferred activation during FULL BLOCK.** With the guard in FULL
       BLOCK, `dezhban upgrade apply` installs the payload, refuses to
       activate, and leaves the old daemon enforcing normally.
+- [ ] **Deferred activation while the guard holds a downed tunnel.** With a
+      healthy guard, disconnect the VPN and wait for the redial window to
+      expire, so `status` reads "VPN down — traffic cut" at posture `guard`.
+      `dezhban upgrade apply` must install the payload and REFUSE to activate,
+      naming the downed tunnel — the posture string is `guard`, but the rules
+      about to be torn down are the only thing cutting egress. Then reconnect
+      the VPN and retry: the same command must now activate. The refusal is the
+      half that cannot be caught in CI, since it needs a real tunnel to drop.
 - [ ] **A deferred stash is NOT cleared before activation.** From the state
       above (payload applied, activation refused, stash present), run
       `upgrade apply` again WITHOUT restarting first. It must refuse with the

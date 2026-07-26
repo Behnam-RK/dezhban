@@ -102,6 +102,27 @@ one setting at its default — but silence would be worse still, because a
 disabled window quietly returning to its default re-enables a relaxation of the
 guard that someone deliberately turned off.
 
+### Keys that do something, under the wrong name
+
+One category is **not** inert, and is reported differently for that reason: a
+key whose spelling differs from the real one only by **letter case**. JSON key
+matching ignores case, so these are honored in full —
+
+```
+  note: "vpn.pausemax" is not the schema's spelling, but it TOOK EFFECT.
+        the schema spells it "vpn.pauseMax"; JSON key matching ignores case, so this
+        value IS in effect — rename it to match so the file says what it does
+```
+
+— and the report says so, because telling you a live setting has no effect is
+the same failure as silently discarding one, pointed the other way: you would
+stop looking while a 2-hour pause window was in force. Fix the casing so the
+file says what it does; nothing changes about enforcement when you do.
+
+If **both** spellings are present, which one wins is document order (the
+decoder assigns each key as it reads it), which is why the report flags the
+miscased one rather than trying to pick a winner. Delete it.
+
 #### Renamed keys
 
 | Old name | New name |
@@ -109,8 +130,11 @@ guard that someone deliberately turned off.
 | `vpn.reconnectWindow` | `vpn.redialWindow` |
 | `vpn.advanced.reconnectWindowMax` | `vpn.advanced.redialWindowMax` |
 | `vpn.advanced.reconnectMinUptime` | `vpn.advanced.redialMinUptime` |
-| `vpn.autodetect` | `vpn.autoDetect` |
 | `vpn.profiles[].ifaceHint` | `vpn.profiles[].tunnelHint` |
+
+`vpn.autodetect` → `vpn.autoDetect` is **not** in this table: that rename
+changed only casing, so the old spelling still takes effect and is reported as
+a misspelling (above) rather than as a name with no effect.
 
 #### Retired keys
 

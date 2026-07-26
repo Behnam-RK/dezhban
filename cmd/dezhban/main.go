@@ -221,13 +221,20 @@ func requireRoot(cmd string) bool {
 	return false
 }
 
-// reportRetired warns once per inert key found in the config file: keys that
-// were retired, keys that were renamed, and keys the schema simply does not
-// recognise. All three share one property — the operator wrote a setting and it
-// is doing nothing — and this is the only signal they get. Silence would let
-// someone believe a discarded security setting took effect.
+// reportRetired warns once per config key that is not what the schema calls it:
+// keys that were retired, keys that were renamed, keys the schema does not
+// recognise at all, and keys misspelled only in letter case. The first three
+// share one property — the operator wrote a setting and it is doing nothing —
+// and this is the only signal they get; silence would let someone believe a
+// discarded security setting took effect. The fourth is the opposite and gets
+// the opposite wording: its value IS live, so warning that it "has no effect"
+// would be the same lie in reverse.
 func reportRetired(cfg *config.Config, log *slog.Logger) {
 	for _, r := range cfg.Retired {
+		if r.TookEffect {
+			log.Warn("config key is misspelled but took effect", "key", r.Key, "why", r.Reason)
+			continue
+		}
 		log.Warn("config key has no effect", "key", r.Key, "why", r.Reason)
 	}
 }
@@ -1292,8 +1299,14 @@ func cmdValidate(args []string) int {
 	// Inert keys — retired, renamed, or simply unrecognised — are not an error;
 	// the config is valid and will run. But `validate` is exactly where someone
 	// checks whether their file says what they think it says, so a key that does
-	// nothing belongs here more than anywhere.
+	// nothing belongs here more than anywhere. A key misspelled only in letter
+	// case belongs here for the opposite reason: it is doing something, under a
+	// name the file does not admit to.
 	for _, r := range cfg.Retired {
+		if r.TookEffect {
+			fmt.Printf("\n  note: %q is not the schema's spelling, but it TOOK EFFECT.\n        %s\n", r.Key, r.Reason)
+			continue
+		}
 		fmt.Printf("\n  note: %q has no effect.\n        %s\n", r.Key, r.Reason)
 	}
 	return 0
@@ -1928,8 +1941,20 @@ func statusJSON(cfg *config.Config) int {
 		StatePath        string          `json:"statePath"`
 		State            *state.Snapshot `json:"state,omitempty"`    // nil when no snapshot has been published yet
 		StateAge         string          `json:"stateAge,omitempty"` // wall-clock age of the snapshot
-		PollInterval     string          `json:"pollInterval"`
-		BlockedCountries []string        `json:"blockedCountries"`
+		// StateStale is render.IsStale applied to State: the snapshot is too old
+		// to trust, so its posture (and its embedded display sentences) describe
+		// what a daemon was doing, not what one is doing now. A crashed or
+		// SIGKILLed daemon leaves "guard"/"Guarding" on disk forever, so a
+		// consumer that branches on `state.posture` alone will report a host as
+		// protected indefinitely after enforcement stopped.
+		//
+		// The snapshot itself is passed through verbatim rather than overwritten
+		// — it is a stable contract, and the raw last-known posture is worth
+		// having — so this flag is how the prose `status` (which substitutes
+		// "Stopped" outright) and this one avoid contradicting each other.
+		StateStale       bool     `json:"stateStale,omitempty"`
+		PollInterval     string   `json:"pollInterval"`
+		BlockedCountries []string `json:"blockedCountries"`
 		// PauseEnabled is whether `dezhban pause`/the control-socket pause op
 		// will do anything (vpn.pauseMax > 0). A consumer (the macOS app) uses
 		// this to grey out its own Pause control with a reason, advisory only —
@@ -1954,6 +1979,7 @@ func statusJSON(cfg *config.Config) int {
 	if snap, err := state.Read(statePath); err == nil {
 		out.State = &snap
 		out.StateAge = time.Since(snap.Time).Round(time.Second).String()
+		out.StateStale = render.IsStale(snap, time.Now())
 	}
 	data, err := json.MarshalIndent(out, "", "  ")
 	if err != nil {

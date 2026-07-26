@@ -35,10 +35,10 @@ current as you land changes.
   about the behaviour changes: the automatic window, its cap, and its anti-flap
   gate work exactly as before under the new names.
 
-- **Two config keys are renamed for casing/vocabulary consistency, with no
-  alias for the display-only one** — same treatment the redial rename got:
-  reported by name, with their replacement, by `dezhban validate` and at
-  daemon start.
+- **Two config keys are renamed for casing/vocabulary consistency**, and both
+  are reported by name — with what to change them to — by `dezhban validate`
+  and at daemon start. Only one of them stops taking effect; see below, because
+  the difference matters.
 
   | Old | New |
   |---|---|
@@ -52,13 +52,14 @@ current as you land changes.
   `--tunnel-hint` the same way (a CLI flag, so this one has no validate-time
   report — an old invocation gets a plain "flag provided but not defined").
 
-  Unlike the redial rename, `vpn.autodetect` (the old, unqualified casing) is
-  honored as a deprecated alias for one release when `vpn.autoDetect` is
-  absent: `vpn.autoDetect` defaults to **true**, and true is the *relaxing*
-  value, so silently discarding an old `"autodetect": false` on load would
-  turn a deliberately narrowed guard back on. The rename is still reported at
-  `validate`/daemon start either way; the alias is removed once this
-  deprecation window ends.
+  Unlike the redial rename, `vpn.autodetect` (the old, unqualified casing)
+  **keeps working with no deprecation window at all**, and needs no alias to:
+  JSON key matching ignores case, so the old spelling has always landed in the
+  same field, and an explicit `"autodetect": false` still narrows the guard as
+  written. It is reported at `validate`/daemon start as a misspelling that
+  *took effect* — see the report fix under Fixed — rather than as a key with
+  none. `vpn.profiles[].ifaceHint` → `tunnelHint` is a real word change, so
+  that one does stop taking effect and is reported as renamed.
 
 ### Added
 
@@ -163,6 +164,16 @@ current as you land changes.
 - **`status --json` gains `controlReachable`**, the machine-readable form of the
   `daemon control:` line, so a consumer no longer has to scrape a human sentence
   for a substring to learn whether routine ops need a password.
+
+- **`status --json` gains `stateStale`**, so its answer cannot contradict the
+  prose one. A crashed or `SIGKILL`ed daemon leaves its last posture on disk
+  forever; the prose `status` substitutes "Stopped" once a snapshot ages past
+  the staleness threshold, but the JSON passed the snapshot through verbatim —
+  including its rendered `display.headline: "Guarding"` — so a script branching
+  on `state.posture` alone would report a host as protected indefinitely after
+  enforcement stopped. The snapshot is still passed through unchanged (it is a
+  stable contract, and the last known posture is worth having); `stateStale`
+  is how a consumer knows not to trust it.
 
 - **`DezhbanCore`, a new Swift Package Manager library target** holding the
   macOS app's testable logic layer — Snapshot decoding, posture→icon
@@ -310,6 +321,37 @@ current as you land changes.
   text and the getting-started guide's image alt text.
 
 ### Fixed
+
+- **`upgrade apply` no longer activates while the guard is holding a downed
+  tunnel.** Activation is gated on a healthy posture, but the check only
+  compared the posture *string*: `guard` with no tunnel up carries that same
+  string while being the exact opposite case — the standing guard rule is then
+  the only thing keeping traffic off the physical link, which is why `status`
+  renders it "VPN down — traffic cut". Restarting through it removed every rule
+  for the length of the swap with nothing carrying traffic through a tunnel, and
+  with `vpn.armAtBoot: false` (the Relaxed preset) the host stayed open
+  afterwards instead of re-arming. The gate now refuses, naming the reason, and
+  the payload stays staged for a later `sudo dezhban restart` exactly as it does
+  during FULL BLOCK.
+
+  The staleness budget on the same gate is tightened to the one the renderer
+  uses (3× the poll interval, floored at 90s) instead of its own 5-minute
+  fallback — a safety gate must not call a snapshot fresh that `status` and the
+  menubar app already show as "Stopped".
+
+- **A config key typed in the wrong letter case is no longer reported as having
+  no effect — because it has one.** Go's JSON decoder matches keys
+  case-insensitively, so `"pollinterval": "1h"` or `"vpn": {"pausemax": "2h"}`
+  is honored in full, while the schema check that produces the
+  `validate`/daemon-start report compared spellings exactly and therefore
+  called them unrecognised, adding "it has no effect". That is the same failure
+  this project treats as its worst — a security setting's true state
+  misreported — pointed the other way: someone reading that a 2-hour pause
+  window "has no effect" stops looking while it is in force. Such keys are now
+  reported as taking effect, with the spelling to change them to, and are kept
+  distinct in the report from keys that really are inert (retired, renamed, or
+  simply unrecognised). A block spelled in the wrong case is still walked into,
+  so a genuine typo nested under it is still caught.
 
 - **Lowering a window cap now binds the very next window.** A reload adopted the
   new `vpn.pauseMax` for the "is pausing available at all" check but left the

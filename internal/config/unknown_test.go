@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func loadFromJSON(t *testing.T, body string) *Config {
@@ -69,10 +70,19 @@ func TestRenamedKeysPointAtTheirReplacement(t *testing.T) {
 }
 
 // The vocabulary sweep renamed vpn.autodetect to vpn.autoDetect (casing
-// consistency with every other auto* key) — an old config using the old
-// casing must be told so, not silently reverted to the default.
-func TestRenamedAutodetectPointsAtItsReplacement(t *testing.T) {
-	cfg := loadFromJSON(t, `{"vpn": {"autodetect": true}}`)
+// consistency with every other auto* key). Because the change is case-only,
+// encoding/json still honors the old spelling — so the report must say THAT,
+// not "has no effect". Telling someone a live setting is inert is the same
+// class of failure as silently discarding one, and the more dangerous
+// direction: they stop looking while the value is in force.
+func TestMiscasedAutodetectIsReportedAsHavingTakenEffect(t *testing.T) {
+	cfg := loadFromJSON(t, `{"vpn": {"autodetect": false}}`)
+
+	// The value is live: vpn.autoDetect defaults to TRUE, so a silently
+	// discarded `false` would relax a deliberately narrowed guard.
+	if cfg.VPN.AutoDetect {
+		t.Error("vpn.autodetect=false was not honored; AutoDetect came back as the true default")
+	}
 
 	var found bool
 	for _, r := range cfg.Retired {
@@ -80,44 +90,33 @@ func TestRenamedAutodetectPointsAtItsReplacement(t *testing.T) {
 			continue
 		}
 		found = true
+		if !r.TookEffect {
+			t.Error("vpn.autodetect is reported as inert, but its value took effect")
+		}
 		if want := "vpn.autoDetect"; !strings.Contains(r.Reason, want) {
-			t.Errorf("reason %q does not name the replacement %q", r.Reason, want)
+			t.Errorf("reason %q does not name the correct spelling %q", r.Reason, want)
 		}
 	}
 	if !found {
-		t.Errorf("the old vpn.autodetect was not reported; reported: %v", retiredKeys(cfg))
+		t.Errorf("the old vpn.autodetect casing was not reported at all; reported: %v", retiredKeys(cfg))
 	}
 }
 
-// A rename with no compatibility shim silently reverts the setting to its
-// default the moment an old config is loaded — for vpn.autodetect that default
-// is true (relaxing), so an operator who deliberately wrote "autodetect": false
-// would have that turned back on without a word. fileVPN.UnmarshalJSON honors
-// the old key for one release when the new one is absent, so the value still
-// takes effect while the rename is still reported (pinned above).
-func TestLegacyAutodetectKeyStillTakesEffect(t *testing.T) {
-	cfg := loadFromJSON(t, `{"vpn": {"autodetect": false}}`)
-	if cfg.VPN.AutoDetect {
-		t.Error("the legacy vpn.autodetect=false was not honored; AutoDetect defaulted back to true")
-	}
-
-	var found bool
-	for _, r := range cfg.Retired {
-		if r.Key == "vpn.autodetect" {
-			found = true
+// With both spellings present, which one wins is DOCUMENT ORDER, not
+// exactness — the decoder assigns each key as it reads it, so the later one
+// overwrites the earlier regardless of whose tag matches exactly. That is
+// genuinely ambiguous and cannot be fixed from here, which is exactly why the
+// miscased key has to be reported: the report is the only thing that tells an
+// operator their config has two keys fighting over one setting.
+func TestBothAutoDetectSpellingsPresentIsReported(t *testing.T) {
+	for _, body := range []string{
+		`{"vpn": {"autodetect": true, "autoDetect": false}}`,
+		`{"vpn": {"autoDetect": false, "autodetect": true}}`,
+	} {
+		cfg := loadFromJSON(t, body)
+		if !slices.Contains(retiredKeys(cfg), "vpn.autodetect") {
+			t.Errorf("%s: the miscased vpn.autodetect was not reported; reported: %v", body, retiredKeys(cfg))
 		}
-	}
-	if !found {
-		t.Errorf("vpn.autodetect should still be reported as renamed even though its value took effect; reported: %v", retiredKeys(cfg))
-	}
-}
-
-// The new key always wins when both are present — the alias is a fallback,
-// not a merge.
-func TestNewAutoDetectKeyWinsOverLegacyAlias(t *testing.T) {
-	cfg := loadFromJSON(t, `{"vpn": {"autodetect": true, "autoDetect": false}}`)
-	if cfg.VPN.AutoDetect {
-		t.Error("vpn.autoDetect=false should win over the legacy vpn.autodetect=true")
 	}
 }
 
@@ -184,9 +183,63 @@ func TestRenamedKeyInsideAnArrayElementIsNormalised(t *testing.T) {
 	renamedKeys[oldKey] = newKey
 	t.Cleanup(func() { delete(renamedKeys, oldKey) })
 
-	got := describeUnknown("vpn.profiles[3].syntheticOld")
+	got := describeUnknown(unknownKey{Key: "vpn.profiles[3].syntheticOld"})
 	if want := "renamed to " + newKey; !strings.Contains(got, want) {
 		t.Errorf("describeUnknown(%q) = %q, want it to mention %q", "vpn.profiles[3].syntheticOld", got, want)
+	}
+}
+
+// The failure this guards against, which is the mirror image of the one at the
+// top of this file: encoding/json matches field tags case-insensitively, so a
+// key typed in the wrong case is NOT dropped — it is honored — while a
+// case-sensitive schema walk called it unrecognised and the report said "it has
+// no effect". An operator reading that about a relaxing value stops looking
+// while the value is in force. Both halves are asserted together on purpose:
+// the value landing, and the report admitting it.
+func TestMiscasedKeysTakeEffectAndAreReportedAsSuch(t *testing.T) {
+	cfg := loadFromJSON(t, `{
+	  "pollinterval": "1h",
+	  "vpn": { "PAUSEMAX": "2h", "advanced": { "RedialMinUptime": "0s" } }
+	}`)
+
+	if want := time.Hour; cfg.PollInterval != want {
+		t.Errorf("pollinterval (miscased) = %v, want %v — the premise of this test is that it DOES take effect", cfg.PollInterval, want)
+	}
+	if want := 2 * time.Hour; cfg.VPN.PauseMax != want {
+		t.Errorf("vpn.PAUSEMAX (miscased) = %v, want %v", cfg.VPN.PauseMax, want)
+	}
+
+	byKey := map[string]Retired{}
+	for _, r := range cfg.Retired {
+		byKey[r.Key] = r
+	}
+	for _, key := range []string{"pollinterval", "vpn.PAUSEMAX", "vpn.advanced.RedialMinUptime"} {
+		r, ok := byKey[key]
+		if !ok {
+			t.Errorf("miscased key %q was not reported at all; reported: %v", key, retiredKeys(cfg))
+			continue
+		}
+		if !r.TookEffect {
+			t.Errorf("%q is reported as inert, but a miscased key takes effect", key)
+		}
+		if strings.Contains(r.Reason, "no effect") {
+			t.Errorf("%q reason says it has no effect, which is false: %q", key, r.Reason)
+		}
+	}
+}
+
+// A miscased BLOCK is still walked into: `"VPN": {"nonsense": 1}` took effect as
+// vpn, so a typo nested under it is just as inert as one under the correctly
+// spelled block, and just as much worth reporting.
+func TestTyposUnderAMiscasedBlockAreStillReported(t *testing.T) {
+	cfg := loadFromJSON(t, `{"VPN": {"tunnelInterfaces": ["utun4"], "nonsenseKey": 1}}`)
+
+	got := retiredKeys(cfg)
+	if !slices.Contains(got, "VPN.nonsenseKey") {
+		t.Errorf("a typo nested under a miscased block was not reported; reported: %v", got)
+	}
+	if !slices.Contains(cfg.VPN.TunnelInterfaces, "utun4") {
+		t.Errorf("the miscased block itself did not take effect; tunnels: %v", cfg.VPN.TunnelInterfaces)
 	}
 }
 

@@ -136,7 +136,7 @@ func postureDisplay(s state.Snapshot) Display {
 }
 
 func guardDisplay(s state.Snapshot) Display {
-	if guardHoldsDownedTunnel(s) {
+	if GuardHoldsDownedTunnel(s) {
 		return Display{
 			Key:      KeyBlocked,
 			Headline: "VPN down — traffic cut",
@@ -150,10 +150,19 @@ func guardDisplay(s state.Snapshot) Display {
 	}
 }
 
-// guardHoldsDownedTunnel mirrors PostureUI.guardHoldsDownedTunnel on the macOS
+// GuardHoldsDownedTunnel mirrors PostureUI.guardHoldsDownedTunnel on the macOS
 // side: no tunnels observed, or none of the observed tunnels are up, means the
 // guard is holding a downed tunnel rather than actively passing traffic.
-func guardHoldsDownedTunnel(s state.Snapshot) bool {
+//
+// Exported because it is the difference between the two things the posture
+// string "guard" covers, and that difference is not only cosmetic. A guard with
+// a tunnel up is passing traffic through it; a guard with none up is the ONLY
+// thing keeping traffic off the physical link, so anything that tears the rules
+// down (update.CanActivate's restart) must refuse in the second case and not
+// the first. Callers must not re-derive this from Tunnels themselves — a second
+// copy of the rule is how the CLI, the GUI, and the update gate would come to
+// disagree about what a healthy guard is.
+func GuardHoldsDownedTunnel(s state.Snapshot) bool {
 	if len(s.Tunnels) == 0 {
 		return true
 	}

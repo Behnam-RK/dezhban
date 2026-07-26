@@ -98,6 +98,14 @@ socket and act on the firewall directly — the escape hatch for a wedged daemon
 A manual `block` **holds**: the daemon suspends its geo state machine until you
 `unblock`, so an allowed country won't quietly undo what you asked for.
 
+`status --json` embeds the daemon's last published snapshot under `state`,
+verbatim. **Check `stateStale` before trusting it.** A crashed or `SIGKILL`ed
+daemon leaves its last posture on disk indefinitely, so `state.posture` alone
+will report a host as protected long after enforcement stopped; `stateStale` is
+`true` once the snapshot ages past 3× the poll interval (floored at 90s), which
+is the same threshold the prose `status` uses to print "Stopped" instead and the
+menubar app uses to grey its icon.
+
 ```sh
 dezhban status                                    # config + service + block state
 dezhban status --json                             # machine-readable (merges the state file)
