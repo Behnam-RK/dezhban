@@ -119,6 +119,12 @@ the same failure as silently discarding one, pointed the other way: you would
 stop looking while a 2-hour pause window was in force. Fix the casing so the
 file says what it does; nothing changes about enforcement when you do.
 
+The key on the left is spelled the way **your file** spells it, so you can find
+the line; the one the note tells you to change *to* is always the schema's own
+spelling at **every** level. Miscase a whole block and you get one note per
+level — `"VPN"` → `"vpn"`, then `"VPN.Profiles"` → `"vpn.profiles"` — rather
+than a single hybrid that matches neither.
+
 If **both** spellings are present, which one wins is document order (the
 decoder assigns each key as it reads it), which is why the report flags the
 miscased one rather than trying to pick a winner. Delete it.
@@ -309,7 +315,7 @@ effect, which `config set` says so at the time.
 state, so a non-positive value is replaced with the default shown below. That
 replacement is not silent — `config set` echoes the value actually stored and
 adds a `note: <key> was normalised on write: <typed> → <stored>` line whenever
-the two differ.
+the two differ, on both write paths (elevated and `--token-stdin`).
 
 | Field | Default | What it controls |
 |---|---|---|

@@ -240,14 +240,25 @@ func TestConfigPresetApplyRefusesAgainstALoweredCap(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	var out string
 	msg := captureStderr(t, func() {
-		if code := cmdConfig([]string{"preset", "apply", "relaxed", "--config", p}); code != 1 {
-			t.Fatalf("preset apply exited %d, want 1", code)
-		}
+		out = captureStdout(t, func() {
+			if code := cmdConfig([]string{"preset", "apply", "relaxed", "--config", p}); code != 1 {
+				t.Fatalf("preset apply exited %d, want 1", code)
+			}
+		})
 	})
 	for _, want := range []string{"cannot apply", "vpn.switchWindow", "vpn.advanced.switchWindowMax", "10s"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("refusal %q does not mention %q", msg, want)
+		}
+	}
+	// Nothing was applied, so nothing may announce that it was. The banner used
+	// to print ahead of this check, so a refused preset led with "applying
+	// relaxed: …" and a full paragraph describing a cost the user never paid.
+	for _, forbidden := range []string{"applying", "cost:"} {
+		if strings.Contains(out, forbidden) {
+			t.Errorf("a refused preset printed %q on stdout:\n%s", forbidden, out)
 		}
 	}
 
@@ -331,6 +342,67 @@ func TestConfigSetReportsACoercedValue(t *testing.T) {
 	})
 	if strings.Contains(out, "was normalised on write") {
 		t.Errorf("a value stored as typed was reported as coerced:\n%s", out)
+	}
+}
+
+// The coercion note is owed on the token/socket path too, and used to be
+// missing there: the DAEMON performs that write, so the CLI never held the
+// normalised config and reported only `Saved and applied: <key>` — a true
+// statement about a value the operator did not type, on the path the macOS app
+// and every script prefer.
+//
+// The socket round trip is what this cannot stand up, so it exercises
+// everything either side of it: the "before" reading the CLI now takes itself
+// (typedValues), the write the daemon actually performs (writeConfigKeys — the
+// same function its config-write op calls), and the "after" reading off disk.
+func TestTokenPathAlsoNotesACoercedValue(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	cfg := config.Default()
+	cfg.VPN.Advanced.TunnelPruneAfter = 5 * time.Minute
+	if err := config.Save(p, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	pairs := map[string]string{"vpn.advanced.tunnelPruneAfter": "0"}
+
+	before, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed := typedValues(before, pairs)
+	if got := typed["vpn.advanced.tunnelPruneAfter"]; got != "0s" {
+		t.Fatalf("typedValues rendered %q, want the value as typed (%q)", got, "0s")
+	}
+
+	if err := writeConfigKeys(p, pairs); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() { noteCoercions(saved, typed) })
+	const prefix = "note: vpn.advanced.tunnelPruneAfter was normalised on write: 0s → "
+	if !strings.Contains(out, prefix) || strings.Contains(out, prefix+"0s") {
+		t.Errorf("token path produced no coercion note naming the stored value:\n%s", out)
+	}
+
+	// And a key whose "0" is a real opt-out still draws nothing, so the note
+	// stays a report of a substitution rather than of every write.
+	quiet := map[string]string{"vpn.advanced.redialMinUptime": "0"}
+	before, err = config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	typed = typedValues(before, quiet)
+	if err := writeConfigKeys(p, quiet); err != nil {
+		t.Fatal(err)
+	}
+	saved, err = config.Load(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := captureStdout(t, func() { noteCoercions(saved, typed) }); out != "" {
+		t.Errorf("the disable sentinel was reported as coerced on the token path:\n%s", out)
 	}
 }
 

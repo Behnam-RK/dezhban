@@ -535,6 +535,41 @@ current as you land changes.
   like a check that passed. Both cases now print; the shipped checks are also
   pinned unique by a test.
 
+- **A retired config key nested under a miscased block is no longer reported as
+  having taken effect** — and the spelling the report tells you to change to is
+  now one the schema actually has. Reported key paths deliberately keep your
+  file's own casing so the line can be found, but the *canonical* path was being
+  built from that same prefix, so `{"VPN": {"Enabled": true}}` reached the
+  retirement table as `VPN.enabled`, missed, and printed `"VPN.Enabled" … TOOK
+  EFFECT` directly beneath the correct `"vpn.enabled" has no effect` — the
+  discarded-setting-looks-live lie the whole report exists to prevent, and only
+  the parent block's casing separated the two outcomes. The same prefix made
+  `the schema spells it "VPN.profiles"` name a path that exists nowhere, leaving
+  the one actionable part of the line wrong. The canonical path is now the
+  schema's own name at every level.
+
+- **`config set --token-stdin` now says when it stored something other than what
+  you typed.** The `note: <key> was normalised on write: …` line only appeared
+  on the privileged path: the daemon performs the token/socket write, so the CLI
+  never held the normalised config and reported just `Saved and applied: <key>`
+  — a true statement about a value the operator did not type, on the path the
+  macOS app and every script prefer. The CLI now takes both readings itself and
+  the note appears on either path.
+
+- **The menubar's Pause item no longer blames `vpn.pauseMax` when dezhban simply
+  isn't running.** Two independent reasons greyed it out and one tooltip covered
+  both, so a stopped daemon with a perfectly ordinary `vpn.pauseMax: "30m"` read
+  `Disabled — vpn.pauseMax is "0" in your config.` and sent you to fix a key that
+  was already right (`status --json` is read-only, so it answers correctly with
+  the daemon down — which is exactly why the two causes were indistinguishable).
+  The tooltip now names the reason that applies.
+
+- **A refused preset no longer announces that it was applied.** `config preset
+  apply` printed its `applying <name>: …` banner and the preset's full cost
+  paragraph before the check that refuses a preset your own advanced caps
+  forbid, so the refusal arrived under a heading claiming the write had started
+  and a description of a trade you never made. The check now runs first.
+
 ## [0.7.0] - 2026-07-22
 
 ### Added

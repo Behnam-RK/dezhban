@@ -206,22 +206,66 @@ func TestMiscasedRetiredKeyIsNotReportedAsLive(t *testing.T) {
 	}`)
 
 	for _, miscased := range []string{"FailClosed", "vpn.Enabled"} {
-		var found bool
-		for _, r := range cfg.Retired {
-			if r.Key != miscased {
-				continue
-			}
-			found = true
-			if r.TookEffect {
-				t.Errorf("%q reported as TookEffect; it folds onto a retired key, which nothing reads", miscased)
-			}
-			if !strings.Contains(r.Reason, "retired") {
-				t.Errorf("%q reason = %q, want it to name the retirement", miscased, r.Reason)
-			}
+		assertReportedRetired(t, cfg, miscased)
+	}
+}
+
+// The same key one letter-case away, and for a while the difference decided
+// whether the report told the truth: the retirement lookup is by whole path,
+// and unknownKey.Canonical used to be built from the FILE's prefix, so
+// "VPN.Enabled" reached the table as "VPN.enabled", missed, and fell through to
+// "this value IS in effect" — printed directly beneath apply()'s own correct
+// "vpn.enabled has no effect". Only the parent block's casing separated the two
+// outcomes, which is exactly the accident TestRenameHintSurvivesAMiscasedParent
+// Block pins for the neighbouring lookup.
+func TestMiscasedRetiredKeyUnderAMiscasedParentIsNotReportedAsLive(t *testing.T) {
+	cfg := loadFromJSON(t, `{"VPN": {"Enabled": true}}`)
+	assertReportedRetired(t, cfg, "VPN.Enabled")
+}
+
+func assertReportedRetired(t *testing.T, cfg *Config, miscased string) {
+	t.Helper()
+	var found bool
+	for _, r := range cfg.Retired {
+		if r.Key != miscased {
+			continue
 		}
-		if !found {
-			t.Errorf("%q was not reported at all; reported: %v", miscased, retiredKeys(cfg))
+		found = true
+		if r.TookEffect {
+			t.Errorf("%q reported as TookEffect; it folds onto a retired key, which nothing reads", miscased)
 		}
+		if !strings.Contains(r.Reason, "retired") {
+			t.Errorf("%q reason = %q, want it to name the retirement", miscased, r.Reason)
+		}
+	}
+	if !found {
+		t.Errorf("%q was not reported at all; reported: %v", miscased, retiredKeys(cfg))
+	}
+}
+
+// The spelling the report tells you to change TO must be one the schema
+// actually has. Canonical is a whole path, so every level of it has to be the
+// schema's own name — a leaf-only fix would still emit "VPN.profiles", which
+// exists nowhere and leaves the one actionable part of the line wrong.
+func TestCanonicalSpellingIsSchemaCasedAtEveryLevel(t *testing.T) {
+	cfg := loadFromJSON(t, `{"VPN": {"Profiles": [{"name": "w", "endpoints": ["1.2.3.4"]}]}}`)
+
+	want := map[string]string{"VPN": `"vpn"`, "VPN.Profiles": `"vpn.profiles"`}
+	for _, r := range cfg.Retired {
+		spelling, tracked := want[r.Key]
+		if !tracked {
+			continue
+		}
+		delete(want, r.Key)
+		if !r.TookEffect {
+			t.Errorf("%q: want TookEffect (a miscased live key), got reason %q", r.Key, r.Reason)
+		}
+		if !strings.Contains(r.Reason, "the schema spells it "+spelling) {
+			t.Errorf("%q reason = %q, want it to name the schema spelling %s", r.Key, r.Reason, spelling)
+		}
+	}
+	for key := range want {
+		t.Errorf("%q was not reported at all; reported: %v", key, retiredKeys(cfg))
 	}
 }
 

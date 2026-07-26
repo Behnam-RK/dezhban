@@ -464,6 +464,13 @@ func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code
 	if err != nil || !cfg.Control.Enabled {
 		return 0, false
 	}
+	// What the caller's input parses to, computed from the pre-write config —
+	// the same "before" side noteCoercions gets for free on the privileged path,
+	// which holds the config across the write. Here the DAEMON writes, so this
+	// process never sees the normalised result and has to take both readings
+	// itself: this one now, and the stored one off disk after the reply. cfg is
+	// mutated in the process and is not read again below.
+	typed := typedValues(cfg, pairs)
 	resp, err := control.Do(controlSocketPath(cfg), control.Request{
 		Op:     control.OpConfigWrite,
 		Token:  token,
@@ -482,7 +489,38 @@ func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code
 		return ExitDaemonRefused, true
 	}
 	reportWriteOutcome(resp.Applied, resp.NeedsRestart)
+	// A coercion note is owed on THIS path too, and it used to be missing here:
+	// `Saved and applied: vpn.advanced.tunnelPruneAfter` is a true report of a
+	// value the operator did not type, and the token path is the one the macOS
+	// app and any script prefer. Read back from disk because that is where the
+	// daemon put it.
+	if saved, serr := loadConfig(cfgPath); serr == nil {
+		noteCoercions(saved, typed)
+	}
 	return 0, true
+}
+
+// typedValues renders what pairs parse to, applying them to cfg the way the
+// write path will and reading them back through the same accessors — the input
+// side of noteCoercions for a caller that will not hold the written config.
+// Mutates cfg.
+//
+// A key the accessors reject is skipped rather than reported: the write itself
+// refuses an unknown key by name and an invalid value entire, so there is no
+// stored value for it to differ from and nothing to note.
+func typedValues(cfg *config.Config, pairs map[string]string) map[string]string {
+	keys := make([]string, 0, len(pairs))
+	for k, v := range pairs {
+		f, ok := configFields[k]
+		if !ok {
+			continue
+		}
+		if err := f.set(cfg, v); err != nil {
+			continue
+		}
+		keys = append(keys, k)
+	}
+	return renderKeys(cfg, keys)
 }
 
 // restartMarker introduces the list of keys the running daemon could not adopt.
@@ -1052,20 +1090,37 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 	if code != 0 {
 		return code
 	}
-	fmt.Printf("applying %s: %s\n", p.Name, p.Summary)
-	fmt.Printf("cost: %s\n", p.Cost)
-
-	// Loaded ONCE, up front, and its error is fatal rather than swallowed: both
-	// the Strict warning below and the privileged write further down need it,
-	// and a config that cannot be read is not a condition either of them can do
-	// anything useful with. The token path is unaffected — tryConfigWrite loads
-	// the config itself and declines to handle the write when it can't, so
-	// reporting the failure here says the same thing one step earlier.
+	// Loaded ONCE, up front, and its error is fatal rather than swallowed: the
+	// conflict pre-flight, the Strict warning, and the privileged write further
+	// down all need it, and a config that cannot be read is not a condition any
+	// of them can do anything useful with. The token path is unaffected —
+	// tryConfigWrite loads the config itself and declines to handle the write
+	// when it can't, so reporting the failure here says the same thing one step
+	// earlier.
 	cfg, err := loadConfig(flagVal)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "config error:", err)
 		return 1
 	}
+
+	// Pre-flight against the operator's own advanced caps, BEFORE either write
+	// path AND before the banner below. Without it the write still fails safely
+	// — Validate rejects it and nothing is persisted — but the error names the
+	// validation rule ("vpn.switchWindow 30s exceeds
+	// vpn.advanced.switchWindowMax 10s") rather than the actual conflict,
+	// leaving the user to work out that a preset they were offered can never
+	// apply to their config. It runs ahead of the banner because "applying
+	// relaxed: …" followed by a full cost paragraph is a report of a write that
+	// is about to be refused — and a cost the user never paid.
+	if conflicts := config.PresetConflicts(cfg, p); len(conflicts) > 0 {
+		for _, c := range conflicts {
+			fmt.Fprintln(os.Stderr, "cannot apply:", c)
+		}
+		return 1
+	}
+
+	fmt.Printf("applying %s: %s\n", p.Name, p.Summary)
+	fmt.Printf("cost: %s\n", p.Cost)
 
 	// Strict disables vpn.allowPhysicalDNS. A VPN endpoint given as a hostname
 	// needs the physical link's DNS to re-resolve its server while the tunnel
@@ -1085,21 +1140,6 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 				break
 			}
 		}
-	}
-
-	// Pre-flight against the operator's own advanced caps, BEFORE either write
-	// path. Without it the write still fails safely — Validate rejects it and
-	// nothing is persisted — but the error names the validation rule
-	// ("vpn.switchWindow 30s exceeds vpn.advanced.switchWindowMax 10s") rather
-	// than the actual conflict, leaving the user to work out that a preset they
-	// were offered can never apply to their config. Same shape as the Strict
-	// warning above, but fatal: that one is a caveat, this one is a value the
-	// preset cannot legally write.
-	if conflicts := config.PresetConflicts(cfg, p); len(conflicts) > 0 {
-		for _, c := range conflicts {
-			fmt.Fprintln(os.Stderr, "cannot apply:", c)
-		}
-		return 1
 	}
 
 	if useToken {

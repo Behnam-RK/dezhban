@@ -267,11 +267,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } else {
             addAction("Switching VPN…", #selector(openSwitch), enabled: isRunning)
                 .toolTip = AppState.shared.routineHint("Briefly relaxes the guard so a new VPN can connect.")
-            let pauseEnabled = isRunning && AppState.shared.pauseIsEnabled
+            // Two independent reasons to grey this out, and the tooltip names
+            // the one that actually applies. A single "vpn.pauseMax is 0"
+            // string covered both, so a stopped daemon with a perfectly normal
+            // 30m pauseMax sent the user off to fix a key that was already
+            // right — `status --json` is read-only and answers with the daemon
+            // down, so pauseIsEnabled is true in exactly that case.
+            let pauseAllowed = AppState.shared.pauseIsEnabled
+            let pauseEnabled = isRunning && pauseAllowed
             addAction("Pause — use my real IP", #selector(pauseNow), enabled: pauseEnabled)
-                .toolTip = pauseEnabled
-                    ? AppState.shared.routineHint("Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
-                    : "Disabled — vpn.pauseMax is \"0\" in your config."
+                .toolTip = {
+                    if !pauseAllowed { return "Disabled — vpn.pauseMax is \"0\" in your config." }
+                    if !isRunning { return "Unavailable — dezhban isn’t running. Start it first." }
+                    return AppState.shared.routineHint(
+                        "Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
+                }()
         }
 
         // Panic is the lockout escape hatch: it must never depend on the main

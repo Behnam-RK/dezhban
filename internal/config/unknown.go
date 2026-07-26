@@ -107,6 +107,16 @@ type unknownKey struct {
 	// prevent, pointed the other way — and it is the more dangerous direction
 	// for a relaxing value: someone who reads "vpn.pausemax has no effect"
 	// stops looking, while a 2h pause window is in force.
+	//
+	// It is a WHOLE-PATH schema spelling, canonical at every level, which is
+	// why walkUnknown threads a second prefix rather than reusing Key's. Key
+	// deliberately keeps the file's own casing so the line can be found and
+	// fixed; building Canonical from that prefix produced a hybrid that exists
+	// nowhere ("VPN.enabled"), and — worse — missed the retiredReasons lookup
+	// in describeUnknown, so a retired key under a miscased block was reported
+	// as having taken effect. Both halves of this field's job need the real
+	// schema path: naming the spelling to change to, and being a key other
+	// schema tables can be looked up by.
 	Canonical string
 }
 
@@ -122,7 +132,7 @@ func unknownKeys(data []byte) []unknownKey {
 		return nil
 	}
 	var out []unknownKey
-	walkUnknown(raw, reflect.TypeFor[fileConfig](), "", &out)
+	walkUnknown(raw, reflect.TypeFor[fileConfig](), "", "", &out)
 	sort.Slice(out, func(i, j int) bool { return sortKey(out[i].Key) < sortKey(out[j].Key) })
 	return out
 }
@@ -141,7 +151,13 @@ func sortKey(key string) string {
 	})
 }
 
-func walkUnknown(raw map[string]any, t reflect.Type, prefix string, out *[]unknownKey) {
+// walkUnknown carries TWO prefixes, and the difference between them is
+// load-bearing. `prefix` is the path as the FILE spells it, so a reported key
+// points at the line to edit. `canonPrefix` is the same path as the SCHEMA
+// spells it, built from each level's canonical name rather than the file's, and
+// it is what unknownKey.Canonical is made of — see that field's doc comment for
+// what using the file's prefix there cost.
+func walkUnknown(raw map[string]any, t reflect.Type, prefix, canonPrefix string, out *[]unknownKey) {
 	known := jsonFields(t)
 	for name, val := range raw {
 		canonical, ft, ok := known.lookup(name)
@@ -153,7 +169,7 @@ func walkUnknown(raw map[string]any, t reflect.Type, prefix string, out *[]unkno
 			// Only the spelling is wrong; the value is live. Reported, then
 			// still walked into below — a typo nested under a miscased block
 			// took effect just as much as one under a correctly-spelled block.
-			*out = append(*out, unknownKey{Key: prefix + name, Canonical: prefix + canonical})
+			*out = append(*out, unknownKey{Key: prefix + name, Canonical: canonPrefix + canonical})
 		}
 		for ft.Kind() == reflect.Ptr {
 			ft = ft.Elem()
@@ -163,7 +179,7 @@ func walkUnknown(raw map[string]any, t reflect.Type, prefix string, out *[]unkno
 			// Recurse into nested objects (vpn, vpn.advanced, control) so a typo
 			// inside a block is caught with its full dotted path, not just its leaf.
 			if ft.Kind() == reflect.Struct {
-				walkUnknown(v, ft, prefix+name+".", out)
+				walkUnknown(v, ft, prefix+name+".", canonPrefix+canonical+".", out)
 			}
 		case []any:
 			// Recurse into arrays of objects (vpn.profiles) the same way. Without
@@ -182,7 +198,10 @@ func walkUnknown(raw map[string]any, t reflect.Type, prefix string, out *[]unkno
 			}
 			for i, item := range v {
 				if obj, ok := item.(map[string]any); ok {
-					walkUnknown(obj, elemType, fmt.Sprintf("%s%s[%d].", prefix, name, i), out)
+					walkUnknown(obj, elemType,
+						fmt.Sprintf("%s%s[%d].", prefix, name, i),
+						fmt.Sprintf("%s%s[%d].", canonPrefix, canonical, i),
+						out)
 				}
 			}
 		}
@@ -263,7 +282,12 @@ var arrayIndexPattern = regexp.MustCompile(`\[\d+\]`)
 //     unknownKey.Canonical); say so, and name the spelling to change it to.
 //   - wrong letter case, folding onto a RETIRED key: the decoder honors the
 //     spelling but nothing reads the field, so this is inert like the exact
-//     spelling is — report the retirement, not "it took effect".
+//     spelling is — report the retirement, not "it took effect". This is why
+//     unknownKey.Canonical must be canonical at EVERY level and not just the
+//     leaf: the lookup below is by whole path, so a `{"VPN": {"Enabled": …}}`
+//     whose Canonical read "VPN.enabled" missed the table and claimed a dead
+//     key was live, contradicting apply()'s own correct note in the same
+//     output.
 //   - renamed: name the replacement. "not recognised" alone sends someone
 //     hunting through docs for a key that simply moved.
 //   - anything else: not a key at all, and it has no effect.
