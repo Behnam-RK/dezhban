@@ -66,15 +66,27 @@ struct DiagnosticsView: View {
         }
     }
 
+    /// Indexed, not `id: \.self`: detail lines are free-form text from the
+    /// daemon and two identical ones in the same check (or two paragraph
+    /// breaks) would collide on a value-based id, which SwiftUI resolves by
+    /// dropping rows.
     private func checkRow(_ check: DoctorCheck) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Label(rowTitle(check), systemImage: symbol(for: check.status))
                 .foregroundStyle(color(for: check.status))
                 .font(.body.weight(.semibold))
-            ForEach(check.details ?? [], id: \.self) { line in
-                Text(line).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+            ForEach(Array((check.details ?? []).enumerated()), id: \.offset) { _, line in
+                // An empty detail is a paragraph break, not a finding (see
+                // doctorCheck.Details in cmd/dezhban/main.go) — rendering it as
+                // a Text would leave a stray blank row where the CLI puts a
+                // blank line.
+                if line.isEmpty {
+                    Spacer().frame(height: 4)
+                } else {
+                    Text(line).font(.callout).foregroundStyle(.secondary).textSelection(.enabled)
+                }
             }
-            ForEach(check.fixes ?? [], id: \.self) { fix in
+            ForEach(Array((check.fixes ?? []).enumerated()), id: \.offset) { _, fix in
                 Label(fix, systemImage: "wrench.and.screwdriver")
                     .font(.callout)
                     .foregroundStyle(.secondary)

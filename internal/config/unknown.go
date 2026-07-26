@@ -30,6 +30,24 @@ import (
 // enforcement disagreeing, silently — so the report distinguishes them rather
 // than lumping every non-schema spelling together. See unknownKey.Canonical.
 
+// retiredReasons maps a key the schema still PARSES but no longer acts on to
+// why. The DTO keeps these fields (fileConfig.FailClosed/Allowlist,
+// fileVPN.Enabled) purely so apply() can report them; the runtime Config never
+// reads one.
+//
+// It lives here, next to the rest of the report vocabulary, because two callers
+// need the same answer and must not disagree about it: apply() reports a key
+// spelled exactly as the schema spells it, and describeUnknown reports one that
+// differs only by letter case. The decoder folds the second onto the first, so
+// without this map a `"FailClosed"` would be described as a live setting — the
+// same "a discarded security setting looks like it took effect" lie the rest of
+// this file exists to prevent, just reached from the other direction.
+var retiredReasons = map[string]string{
+	"failClosed":  "belonged to the retired country-blocklist model; the guard's standing rules are the fail-closed block now (docs/adr/0001, docs/adr/0006)",
+	"allowlist":   "belonged to the retired country-blocklist model; a VPN posture opens the tunnel endpoint, not a physical destination allowlist (docs/adr/0001)",
+	"vpn.enabled": "dezhban now has a single guard state machine; with no tunnel it rests in standby rather than enforcing (docs/adr/0001, 0002)",
+}
+
 // renamedKeys maps keys that used to mean something to what replaced them, so a
 // stale config gets a fix rather than just a complaint. Entries stay until the
 // old name is long gone.
@@ -211,12 +229,16 @@ func jsonFields(t reflect.Type) schema {
 // "[2]" in "vpn.profiles[2].ifaceHint".
 var arrayIndexPattern = regexp.MustCompile(`\[\d+\]`)
 
-// describeUnknown turns one reported key into the line a user sees. Three
-// distinct things can be wrong, and they need three different sentences —
-// collapsing them would mean telling someone a live setting does nothing:
+// describeUnknown turns one reported key into the line a user sees, and reports
+// whether the value it names is actually LIVE. Four distinct things can be
+// wrong, and they need four different sentences — collapsing them would mean
+// telling someone a live setting does nothing, or an inert one that it works:
 //
-//   - wrong letter case: the value IS in effect (see unknownKey.Canonical);
-//     say so, and name the spelling to change it to.
+//   - wrong letter case, folding onto a real key: the value IS in effect (see
+//     unknownKey.Canonical); say so, and name the spelling to change it to.
+//   - wrong letter case, folding onto a RETIRED key: the decoder honors the
+//     spelling but nothing reads the field, so this is inert like the exact
+//     spelling is — report the retirement, not "it took effect".
 //   - renamed: name the replacement. "not recognised" alone sends someone
 //     hunting through docs for a key that simply moved.
 //   - anything else: not a key at all, and it has no effect.
@@ -226,14 +248,20 @@ var arrayIndexPattern = regexp.MustCompile(`\[\d+\]`)
 // which entry to fix — but is normalised to "vpn.profiles[].ifaceHint" before
 // consulting renamedKeys, so one map entry covers a rename inside every element
 // rather than needing one per index.
-func describeUnknown(u unknownKey) string {
+func describeUnknown(u unknownKey) (reason string, tookEffect bool) {
 	if u.Canonical != "" {
+		if why, retired := retiredReasons[u.Canonical]; retired {
+			// apply() already reported the canonical name as retired; this line
+			// only has to explain why the odd spelling in the file is the same
+			// dead key rather than a live one the other note missed.
+			return fmt.Sprintf("the schema spells it %q, and that key is retired — %s", u.Canonical, why), false
+		}
 		return fmt.Sprintf("the schema spells it %q; JSON key matching ignores case, so this value IS "+
-			"in effect — rename it to match so the file says what it does", u.Canonical)
+			"in effect — rename it to match so the file says what it does", u.Canonical), true
 	}
 	lookupKey := arrayIndexPattern.ReplaceAllString(u.Key, "[]")
 	if to, ok := renamedKeys[lookupKey]; ok {
-		return "renamed to " + to + "; the old name has no effect"
+		return "renamed to " + to + "; the old name has no effect", false
 	}
-	return "not a recognised config key; it has no effect"
+	return "not a recognised config key; it has no effect", false
 }

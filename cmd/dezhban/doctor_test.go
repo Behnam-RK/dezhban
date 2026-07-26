@@ -2,6 +2,7 @@ package main
 
 import (
 	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/behnam-rk/dezhban/internal/config"
@@ -215,5 +216,97 @@ func TestPrintDoctorMatchesKnownLayout(t *testing.T) {
 	got := captureStdout(t, func() { printDoctor(r) })
 	if got != want {
 		t.Errorf("printDoctor output mismatch\ngot:\n%s\nwant:\n%s", got, want)
+	}
+}
+
+// The three checks the layout test above does not reach, and which the
+// build-a-binary-and-diff verification could not reach either: `lockout` needs
+// a config with a tunnel and no endpoint, `touchID` only renders on a Mac
+// WITHOUT pam_tid configured, and `discover` needs --discover. All three carry
+// layout the plain checks don't — the paragraph break inside Details, and the
+// four-space Fixes indent — so they are pinned by hand here.
+func TestPrintDoctorLayoutForLockoutTouchIDAndDiscover(t *testing.T) {
+	r := doctorReport{
+		OK: false,
+		Checks: []doctorCheck{
+			{Name: "config", Status: checkOK, Summary: "OK (loaded and validated)"},
+			{Name: "tunnels", Status: checkOK, Details: []string{"utun4 — 10.0.0.0/24"}},
+			{Name: "endpoints", Status: checkWarn, Details: []string{"(none resolved)"}},
+			buildLockoutCheck([]string{"utun4"}),
+			{
+				Name: "touchID", Status: checkWarn,
+				Summary: "not configured for sudo — privileged ops will ask for a password.",
+				Details: []string{"To authenticate with a fingerprint instead (survives OS updates):"},
+				Fixes:   []string{"echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local"},
+			},
+			{
+				Name: "discover", Status: checkOK,
+				Details: []string{"198.51.100.7:51820 [wg0]  <- not in vpn.endpoints"},
+				Fixes:   []string{"add any missing server IP to vpn.endpoints and drop stale entries."},
+			},
+		},
+	}
+	want := "dezhban doctor\n" +
+		"\n" +
+		"config:  OK (loaded and validated)\n" +
+		"\n" +
+		"tunnels:\n" +
+		"  utun4 — 10.0.0.0/24\n" +
+		"\n" +
+		"endpoints (resolved: literals + hostnames + discovery):\n" +
+		"  (none resolved)\n" +
+		"\n" +
+		"LOCKOUT RISK — dezhban will refuse to start:\n" +
+		"  The VPN guard is on and utun4 is up, but no server address is known.\n" +
+		"  The guard would block the tunnel's own transport and cut ALL traffic.\n" +
+		"\n" +
+		"  Auto-discovery reads CONNECTED sockets. WireGuard (and other\n" +
+		"  NetworkExtension clients) send from an UNCONNECTED UDP socket, so they\n" +
+		"  never appear as a connected flow — discovery cannot find them. Name the\n" +
+		"  server explicitly:\n" +
+		"\n" +
+		"    dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it\n" +
+		"    dezhban vpn add <name> --endpoint <host-or-ip>\n" +
+		"    sudo dezhban config set vpn.endpoints=<server-ip>\n" +
+		"\n" +
+		"touch id: not configured for sudo — privileged ops will ask for a password.\n" +
+		"  To authenticate with a fingerprint instead (survives OS updates):\n" +
+		"\n" +
+		"    echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local\n" +
+		"\n" +
+		"discover (best-effort, macOS):\n" +
+		"  198.51.100.7:51820 [wg0]  <- not in vpn.endpoints\n" +
+		"  add any missing server IP to vpn.endpoints and drop stale entries.\n"
+	got := captureStdout(t, func() { printDoctor(r) })
+	if got != want {
+		t.Errorf("printDoctor output mismatch\ngot:\n%q\nwant:\n%q", got, want)
+	}
+}
+
+// A discover run that found nothing (or failed) carries its one line as
+// Summary and NOTHING in Details — setting both printed it twice in the GUI's
+// Diagnostics row. The CLI must still print it, at the same two-space indent as
+// every sibling line: the pre-refactor code used `fmt.Println("  ", err)`,
+// whose operand separator made the error branch three spaces, and that is a
+// typo rather than a layout worth reproducing.
+func TestPrintDoctorDegenerateDiscoverPrintsSummaryOnceAtTwoSpaces(t *testing.T) {
+	for _, summary := range []string{
+		"no physical-side public transport sockets found — is the VPN connected?",
+		"endpoint discovery is macOS-only",
+	} {
+		r := doctorReport{
+			Checks: []doctorCheck{
+				{Name: "config", Status: checkOK, Summary: "OK (loaded and validated)"},
+				{Name: "discover", Status: checkWarn, Summary: summary},
+			},
+		}
+		out := captureStdout(t, func() { printDoctor(r) })
+		want := "discover (best-effort, macOS):\n  " + summary + "\n"
+		if !strings.HasSuffix(out, want) {
+			t.Errorf("discover block = %q, want it to end with %q", out, want)
+		}
+		if strings.Count(out, summary) != 1 {
+			t.Errorf("summary %q printed %d times, want exactly 1", summary, strings.Count(out, summary))
+		}
 	}
 }

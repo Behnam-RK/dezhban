@@ -56,8 +56,18 @@ func CanActivate(statePath string) GateResult {
 
 	// render.StaleThreshold, not a local copy of the same 3x-poll arithmetic:
 	// this gate must not call a snapshot fresh that `status` and the menubar app
-	// already render as "Stopped". It used to allow a 5m fallback where they
-	// allow 90s, which is the wrong direction for a safety gate to differ in.
+	// already render as "Stopped", nor stale one they still show as guarding —
+	// an activation refused for a reason the operator's own tools contradict is
+	// an unexplainable refusal.
+	//
+	// It moves in BOTH directions, deliberately. With no PollIntervalSeconds the
+	// budget tightens (5m → 90s), which is the safe direction. With one it can
+	// LOOSEN: at the default 15s poll it goes 45s → 90s, because the shared rule
+	// floors at 90s so that a daemon between polls never reads as dead. Agreeing
+	// with the other two surfaces is worth those extra 45 seconds — the gate's
+	// real work is the posture check below, and a snapshot that stale would have
+	// to have gone stale in the window between `upgrade apply` reading it and
+	// restarting.
 	if age := time.Since(snap.Time); age > render.StaleThreshold(snap) {
 		return GateResult{
 			OK:      false,

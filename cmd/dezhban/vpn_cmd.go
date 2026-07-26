@@ -224,7 +224,10 @@ func waitForSwitch(statePath string) int {
 		if snap.Switch != nil && snap.Switch.Open {
 			if !sawOpen {
 				sawOpen = true
-				fmt.Printf("  %s — connect now…\n", render.Text(snap).Detail)
+				// Posture, not Text: this line appends its own "— connect now…"
+				// clause, so it needs the window sentence alone (see
+				// render.Posture).
+				fmt.Printf("  %s — connect now…\n", render.Posture(snap).Detail)
 			}
 			continue
 		}
@@ -251,7 +254,11 @@ func printSwitchStatus(statePath string) int {
 		fmt.Println("switch window: closed")
 		return 0
 	}
-	detail := render.Text(snap).Detail
+	// Posture, not Text: both branches below append their own clause, and this
+	// command is reporting the WINDOW, so an unrelated enforcement failure must
+	// not take the sentence's place (see render.Posture). `status` still shows
+	// that failure, which is where a general readout belongs.
+	detail := render.Posture(snap).Detail
 	switch snap.Switch.Trigger {
 	case state.TriggerPause:
 		// A pause shares the window machinery but is not a switch window —
@@ -340,7 +347,9 @@ func cmdVPNList(args []string) int {
 	// snapshot is unreadable). Matches the "active state" the command advertises.
 	if snap, err := state.Read(defaultStatePath()); err == nil {
 		if snap.Switch != nil && snap.Switch.Open {
-			line := "\n" + render.Text(snap).Detail
+			// Posture, not Text: the profile clause is appended below (see
+			// render.Posture).
+			line := "\n" + render.Posture(snap).Detail
 			if snap.Switch.Profile != "" {
 				line += fmt.Sprintf(" (profile %q)", snap.Switch.Profile)
 			}

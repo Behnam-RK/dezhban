@@ -461,10 +461,11 @@ func Load(path string) (*Config, error) {
 			// Anything the schema does not recognise is recorded rather than
 			// ignored — see unknown.go for why silence is the wrong default here.
 			for _, u := range unknownKeys(data) {
+				reason, tookEffect := describeUnknown(u)
 				cfg.Retired = append(cfg.Retired, Retired{
 					Key:        u.Key,
-					Reason:     describeUnknown(u),
-					TookEffect: u.Canonical != "",
+					Reason:     reason,
+					TookEffect: tookEffect,
 				})
 			}
 		}
@@ -490,10 +491,7 @@ func apply(cfg *Config, fc fileConfig) error {
 		cfg.BlockedCountries = fc.BlockedCountries
 	}
 	if fc.FailClosed != nil {
-		cfg.Retired = append(cfg.Retired, Retired{
-			Key:    "failClosed",
-			Reason: "belonged to the retired country-blocklist model; the guard's standing rules are the fail-closed block now (docs/adr/0001, docs/adr/0006)",
-		})
+		cfg.Retired = append(cfg.Retired, Retired{Key: "failClosed", Reason: retiredReasons["failClosed"]})
 	}
 	if fc.Hysteresis != nil {
 		cfg.Hysteresis = *fc.Hysteresis
@@ -502,10 +500,7 @@ func apply(cfg *Config, fc fileConfig) error {
 		cfg.Providers = fc.Providers
 	}
 	if fc.Allowlist != nil {
-		cfg.Retired = append(cfg.Retired, Retired{
-			Key:    "allowlist",
-			Reason: "belonged to the retired country-blocklist model; a VPN posture opens the tunnel endpoint, not a physical destination allowlist (docs/adr/0001)",
-		})
+		cfg.Retired = append(cfg.Retired, Retired{Key: "allowlist", Reason: retiredReasons["allowlist"]})
 	}
 	if fc.ProviderQuorum != nil {
 		cfg.ProviderQuorum = *fc.ProviderQuorum
@@ -628,10 +623,7 @@ func apply(cfg *Config, fc fileConfig) error {
 			v.Advanced = adv
 		}
 		if fc.VPN.Enabled != nil {
-			cfg.Retired = append(cfg.Retired, Retired{
-				Key:    "vpn.enabled",
-				Reason: "dezhban now has a single guard state machine; with no tunnel it rests in standby rather than enforcing (docs/adr/0001, 0002)",
-			})
+			cfg.Retired = append(cfg.Retired, Retired{Key: "vpn.enabled", Reason: retiredReasons["vpn.enabled"]})
 		}
 		cfg.VPN = v
 	}

@@ -201,6 +201,34 @@ func TestTextEnforcementErrWinsOverUnknownPosture(t *testing.T) {
 	}
 }
 
+// Posture is the variant for callers that append their own clause, so it must
+// report the POSTURE and nothing else: no EnforcementErr short-circuit (which
+// would put a raw backend error where `switch --status` prints the window
+// sentence, right before "(profile …)"), and no appended lookup/hysteresis
+// note (which would land between that sentence and the caller's clause).
+func TestPostureIgnoresEnforcementErrAndNotes(t *testing.T) {
+	until := time.Date(2026, 7, 25, 15, 4, 0, 0, time.UTC)
+	snap := state.Snapshot{
+		Posture:        PostureSwitchWindow,
+		Switch:         &state.SwitchState{Open: true, Until: until, Trigger: state.TriggerManual},
+		EnforcementErr: "pfctl: /dev/pf: Device busy",
+		LookupErr:      "dial tcp: i/o timeout",
+		Pending:        &state.PendingFlip{To: PostureFullBlock, Have: 1, Need: 2},
+	}
+
+	got := Posture(snap)
+	want := "Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM)."
+	if got.Key != KeyWarning || got.Headline != "Switch window open" || got.Detail != want {
+		t.Errorf("Posture() = %+v, want the window sentence alone (detail %q)", got, want)
+	}
+
+	// Text on the same snapshot is deliberately different — that is the whole
+	// reason both exist, so pin the divergence rather than just the new one.
+	if full := Text(snap); full.Headline != "Enforcement failed" {
+		t.Errorf("Text() = %+v, want the enforcement failure to still win there", full)
+	}
+}
+
 func TestStaleThreshold(t *testing.T) {
 	cases := []struct {
 		name string

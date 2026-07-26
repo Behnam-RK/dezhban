@@ -184,9 +184,44 @@ func TestRenamedKeyInsideAnArrayElementIsNormalised(t *testing.T) {
 	renamedKeys[oldKey] = newKey
 	t.Cleanup(func() { delete(renamedKeys, oldKey) })
 
-	got := describeUnknown(unknownKey{Key: "vpn.profiles[3].syntheticOld"})
+	got, tookEffect := describeUnknown(unknownKey{Key: "vpn.profiles[3].syntheticOld"})
 	if want := "renamed to " + newKey; !strings.Contains(got, want) {
 		t.Errorf("describeUnknown(%q) = %q, want it to mention %q", "vpn.profiles[3].syntheticOld", got, want)
+	}
+	if tookEffect {
+		t.Error("a renamed key was reported as having taken effect; the old name is inert")
+	}
+}
+
+// A key misspelled only in letter case normally IS live, because the decoder
+// folds it onto the schema field — but not when the field it folds onto is
+// RETIRED, which the DTO keeps only so apply() can report it. Reporting
+// "this value IS in effect" there tells an operator a discarded security
+// setting is running, which is the lie this whole file exists to prevent,
+// reached from the one direction the case-folding branch didn't cover.
+func TestMiscasedRetiredKeyIsNotReportedAsLive(t *testing.T) {
+	cfg := loadFromJSON(t, `{
+	  "FailClosed": true,
+	  "vpn": { "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "Enabled": false }
+	}`)
+
+	for _, miscased := range []string{"FailClosed", "vpn.Enabled"} {
+		var found bool
+		for _, r := range cfg.Retired {
+			if r.Key != miscased {
+				continue
+			}
+			found = true
+			if r.TookEffect {
+				t.Errorf("%q reported as TookEffect; it folds onto a retired key, which nothing reads", miscased)
+			}
+			if !strings.Contains(r.Reason, "retired") {
+				t.Errorf("%q reason = %q, want it to name the retirement", miscased, r.Reason)
+			}
+		}
+		if !found {
+			t.Errorf("%q was not reported at all; reported: %v", miscased, retiredKeys(cfg))
+		}
 	}
 }
 

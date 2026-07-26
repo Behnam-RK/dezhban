@@ -53,7 +53,8 @@ daemon** over its control socket and need no password at all:
 | `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
-| `setup`, `config set`/`edit` | Yes, but only for the config write itself. |
+| `setup`, `config set`/`edit`, `config preset apply` | Yes, but only for the config write itself. `preset apply` is a write like any other — see [Presets](#presets). |
+| `config show`/`path`, `config preset list`/`show`/`diff` | **No** — read-only; they report the config, they don't change it. |
 | `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
 | `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
 | `upgrade check` | **No** — read-only, no root. |

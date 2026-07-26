@@ -1067,11 +1067,15 @@ func presetApply(flagVal string, rest []string, useToken bool) int {
 // values — a reset is a write like any other, and routing it through the same op
 // keeps one validated path instead of two.
 //
-// `--all` is deliberately NOT offered here. The local `--all` resets everything
-// including the keys `config set` cannot yet reach (vpn.advanced.*), so serving
-// it over an op that can only express settable keys would silently reset less
-// than it claims. Refusing sends the caller to the privileged path, which does
-// the whole job.
+// `--all` is deliberately NOT offered here, and the reason survives every key
+// becoming settable (vpn.advanced.* now is; that gap is closed). The local
+// `--all` is `*cfg = config.Default()` with identity preserved — it resets
+// whatever the struct holds, including a field added tomorrow. The socket op
+// can only carry an ENUMERATION of key=value pairs, so it resets whatever
+// configFields currently remembers, which is the same thing only for as long as
+// nobody adds a field without a configFields entry. "Reset everything" is
+// exactly the command that must not quietly mean "reset the part we listed", so
+// refusing sends the caller to the privileged path, which does the whole job.
 func resetViaToken(flagVal string, args []string) (code int, handled bool) {
 	if len(args) == 1 && args[0] == "--all" {
 		fmt.Fprintln(os.Stderr, "config reset --all cannot go over the control socket (it resets keys the socket op cannot express)")

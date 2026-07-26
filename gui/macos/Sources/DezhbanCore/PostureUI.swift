@@ -74,11 +74,24 @@ public enum PostureUI {
     /// Guard mode holding a downed tunnel: Unblock doubles as the "my VPN is off
     /// on purpose — release the line" action (a vpn.autoArm daemon returns to
     /// standby; without autoArm it's a harmless no-op the daemon acknowledges).
-    /// An EMPTY tunnel list counts as down: the zero-tunnel standing posture is a
-    /// total egress cut (ModeFullBlock shape under the "guard" posture string),
-    /// and the icon must never show a calm green shield while the network is cut.
+    ///
+    /// READ from the daemon's own rendering, not re-derived: under the "guard"
+    /// posture, `render.Text` (Go) already emits key "blocked" for exactly this
+    /// state and "on" for a guard with a tunnel up, and
+    /// `render.GuardHoldsDownedTunnel`'s doc comment says in as many words that
+    /// callers must not compute this from `tunnels` themselves — a second copy
+    /// of the rule is how the CLI, the GUI, and `update.CanActivate` would come
+    /// to disagree about what a healthy guard is. This used to be that second
+    /// copy.
+    ///
+    /// The tunnel scan survives only as the fallback for a snapshot with no
+    /// Display (a daemon older than that field). There, an EMPTY tunnel list
+    /// counts as down: the zero-tunnel standing posture is a total egress cut
+    /// (ModeFullBlock shape under the "guard" posture string), and the icon must
+    /// never show a calm green shield while the network is cut.
     public static func guardHoldsDownedTunnel(_ s: Snapshot?) -> Bool {
         guard let s = s, s.posture == "guard" else { return false }
+        if let d = s.display { return d.key == "blocked" }
         guard let tuns = s.tunnels, !tuns.isEmpty else { return true }
         return !tuns.contains(where: { $0.up })
     }

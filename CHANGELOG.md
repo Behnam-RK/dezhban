@@ -273,6 +273,12 @@ current as you land changes.
 
 ### Changed
 
+- **`doctor --discover`'s failure line is indented like its siblings.** It was
+  printed with three spaces where every other line in the block uses two — an
+  artifact of `Println`'s operand separator, not a layout — and it only appeared
+  on a host where endpoint discovery errors outright, which is why the
+  before/after comparison across the shipped configs never surfaced it.
+
 - **The macOS app no longer restarts the daemon to apply settings.** Saving now
   applies the change outright, and the restart prompt appears only when the
   daemon reports keys it could not adopt live — naming them, so the choice is
@@ -329,6 +335,27 @@ current as you land changes.
   text and the getting-started guide's image alt text.
 
 ### Fixed
+
+- **A retired config key misspelled in letter case is no longer reported as
+  having taken effect.** `validate` and the daemon's startup report tell you
+  when a key differs from the schema only in case, because `encoding/json`
+  honors it and the value really is live. But three keys the schema still parses
+  are *retired* and read by nothing (`failClosed`, `allowlist`, `vpn.enabled`),
+  so a file containing `"FailClosed": true` got both "`failClosed` has no
+  effect" and "`FailClosed` … TOOK EFFECT" in the same output — self-
+  contradicting, and the half that claimed a discarded security setting was
+  running is the exact failure the whole unknown-key report exists to prevent.
+  Such a key is now reported as retired, naming the schema's spelling and why
+  that key is dead.
+
+- **`switch --status`, `vpn list`, and `switch`'s live progress no longer print
+  an unrelated enforcement error where the window sentence belongs.** All three
+  append their own clause to the rendered sentence — `(profile "work")`, `—
+  connect now…` — and were taking it from the full renderer, which puts a
+  firewall-action failure ahead of the posture. With a window open and a failed
+  `pfctl` action, `switch --status` read `pfctl: /dev/pf: Device busy (profile
+  "work")`. They now use the posture-only renderer; `status` still reports the
+  enforcement failure, which is where a general readout belongs.
 
 - **`upgrade apply` no longer activates while the guard is holding a downed
   tunnel.** Activation is gated on a healthy posture, but the check only

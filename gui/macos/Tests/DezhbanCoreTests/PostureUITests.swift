@@ -102,22 +102,50 @@ struct PostureUITests {
         #expect(!PostureUI.guardHoldsDownedTunnel(snapshot(posture: "standby")))
     }
 
+    /// The rendered Display is what a real daemon publishes for a guard whose
+    /// tunnel is down — internal/render emits key "blocked" and this headline
+    /// for exactly that state — so these use it rather than a hand-built
+    /// snapshot claiming "on" while its tunnels say otherwise.
+    private static let downedGuardDisplay = (
+        key: "blocked", headline: "VPN down — traffic cut",
+        detail: "Guard active, but no tunnel is up — all traffic is cut until your VPN redials."
+    )
+
     @Test func guardHoldsDownedTunnelFalseWhenTunnelUp() {
         #expect(!PostureUI.guardHoldsDownedTunnel(snapshot(posture: "guard", tunnels: [(name: "utun4", up: true)])))
     }
 
     @Test func guardHoldsDownedTunnelTrueWhenTunnelDown() {
-        #expect(PostureUI.guardHoldsDownedTunnel(snapshot(posture: "guard", tunnels: [(name: "utun4", up: false)])))
+        #expect(PostureUI.guardHoldsDownedTunnel(
+            snapshot(posture: "guard", display: Self.downedGuardDisplay, tunnels: [(name: "utun4", up: false)])))
     }
 
     @Test func guardHoldsDownedTunnelTrueWhenTunnelListEmpty() {
         // The zero-tunnel standing posture is a total egress cut — this is the
         // case the addendum's testing notes call out as having no coverage.
-        #expect(PostureUI.guardHoldsDownedTunnel(snapshot(posture: "guard", tunnels: [])))
+        #expect(PostureUI.guardHoldsDownedTunnel(
+            snapshot(posture: "guard", display: Self.downedGuardDisplay, tunnels: [])))
     }
 
     @Test func guardHoldsDownedTunnelFalseForNilSnapshot() {
         #expect(!PostureUI.guardHoldsDownedTunnel(nil))
+    }
+
+    /// The daemon's Display is authoritative: this must NOT be re-derived from
+    /// `tunnels`, or the GUI can call a guard healthy that `status` and
+    /// `update.CanActivate` both call blocked. A snapshot whose tunnel list
+    /// disagrees with its rendered key resolves to the key.
+    @Test func guardHoldsDownedTunnelPrefersDisplayOverTunnelScan() {
+        #expect(PostureUI.guardHoldsDownedTunnel(
+            snapshot(posture: "guard", display: Self.downedGuardDisplay, tunnels: [(name: "utun4", up: true)])))
+    }
+
+    /// …and falls back to the tunnel scan only for a daemon predating Display.
+    @Test func guardHoldsDownedTunnelFallsBackToTunnelsWithoutDisplay() {
+        #expect(PostureUI.guardHoldsDownedTunnel(
+            snapshot(posture: "guard", display: nil, tunnels: [(name: "utun4", up: false)])))
+        #expect(!PostureUI.guardHoldsDownedTunnel(
+            snapshot(posture: "guard", display: nil, tunnels: [(name: "utun4", up: true)])))
     }
 
     // MARK: - dockState / mmss / agoString

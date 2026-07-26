@@ -57,9 +57,27 @@ type Display struct {
 	Detail   string `json:"detail"`
 }
 
-// Text renders a Snapshot. It always returns something displayable, even for
-// a posture string it does not recognise (an older or newer daemon), so a
-// caller never needs its own fallback.
+// Posture renders ONLY what the posture itself says: no enforcement-error
+// override, no trailing lookup/hysteresis notes. Use it where the caller has
+// already decided which fact it is reporting and is going to append its own
+// clause — `switch --status` printing "(profile …)" after the sentence, or
+// `vpn list`'s window line. Text's extras are correct for a general readout
+// and wrong there: the EnforcementErr short-circuit would put a raw backend
+// error where the window sentence belongs, leaving `switch --status` to print
+// something like `pfctl: /dev/pf: Device busy (profile "work")`, and the
+// appended notes would land between the sentence and the caller's own clause.
+//
+// A caller that wants the whole story for a human — the CLI's `status`
+// headline, the daemon's published Display — wants Text, not this.
+func Posture(s state.Snapshot) Display {
+	return postureDisplay(s)
+}
+
+// Text renders a Snapshot in full: the posture sentence, with an enforcement
+// failure taking precedence over it and any lookup/hysteresis note appended.
+// It always returns something displayable, even for a posture string it does
+// not recognise (an older or newer daemon), so a caller never needs its own
+// fallback.
 func Text(s state.Snapshot) Display {
 	if s.EnforcementErr != "" {
 		// Wins over posture: the daemon tried to enforce and the backend

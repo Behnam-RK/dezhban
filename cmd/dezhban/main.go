@@ -1514,8 +1514,17 @@ type doctorCheck struct {
 	Name    string      `json:"name"`
 	Status  checkStatus `json:"status"`
 	Summary string      `json:"summary"`
-	Details []string    `json:"details,omitempty"`
-	Fixes   []string    `json:"fixes,omitempty"`
+	// Details are the check's findings, one line each. An EMPTY string is a
+	// paragraph break, not a finding — the only piece of layout this contract
+	// carries, and it is here because both renderers need it: printDoctor emits
+	// a blank line, and the GUI's checkRow emits vertical space. A renderer that
+	// treats it as an ordinary line gets a stray empty row, so new consumers
+	// must handle it. Anything more elaborate than a break belongs in Fixes.
+	Details []string `json:"details,omitempty"`
+	// Fixes are the commands or actions that resolve the check, never prose
+	// about them — the GUI badges each one, so a sentence dressed as a fix
+	// reads as a command the user should run.
+	Fixes []string `json:"fixes,omitempty"`
 }
 
 // doctorReport is `doctor`'s complete findings, machine-readable via
@@ -1652,11 +1661,12 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 			Name:    "touchID",
 			Status:  checkWarn,
 			Summary: "not configured for sudo — privileged ops will ask for a password.",
-			Details: []string{
-				"To authenticate with a fingerprint instead (survives OS updates):",
-				"",
-				"echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local",
-			},
+			Details: []string{"To authenticate with a fingerprint instead (survives OS updates):"},
+			// The command is a Fix, not a Detail: it is the thing to run, so it
+			// belongs where every other runnable line lives (and where the GUI
+			// badges it) rather than as a detail line the CLI had to indent
+			// differently from its siblings to make it look like one.
+			Fixes: []string{"echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local"},
 		})
 	}
 
@@ -1664,14 +1674,15 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 		discoverCheck := doctorCheck{Name: "discover", Status: checkOK}
 		cands, err := netdetect.DiscoverEndpoints()
 		switch {
+		// Summary only, never also as a Detail: the GUI renders Summary in the
+		// row's title and Details beneath it, so setting both printed the same
+		// sentence twice.
 		case err != nil:
 			discoverCheck.Status = checkWarn
 			discoverCheck.Summary = err.Error()
-			discoverCheck.Details = []string{err.Error()}
 		case len(cands) == 0:
 			discoverCheck.Status = checkWarn
 			discoverCheck.Summary = "no physical-side public transport sockets found — is the VPN connected?"
-			discoverCheck.Details = []string{discoverCheck.Summary}
 		default:
 			configured := map[string]bool{}
 			for _, ep := range endpoints {
@@ -1699,9 +1710,16 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 	return doctorReport{Checks: checks, OK: !(lockout || len(bad) > 0)}
 }
 
-// printDoctor renders a doctorReport in the exact text layout `doctor` has
-// always printed — this function's job is to keep that layout byte-identical
-// across the refactor that introduced doctorReport, not to reinterpret it.
+// printDoctor renders a doctorReport in the text layout `doctor` has always
+// printed — this function's job is to keep that layout, not to reinterpret it.
+//
+// It is byte-identical to the pre-doctorReport version with ONE deliberate
+// exception: `--discover`'s error line used to be printed as
+// `fmt.Println("  ", err)`, and Println's operand separator made that THREE
+// spaces where every one of its sibling lines used two. That was a typo, not a
+// layout, and it is the one branch the byte-for-byte comparison could not cover
+// (DiscoverEndpoints only errors on a non-macOS host or a failed netstat), so
+// it is normalised to two rather than reproduced.
 func printDoctor(r doctorReport) {
 	byName := map[string]doctorCheck{}
 	for _, c := range r.Checks {
@@ -1714,16 +1732,12 @@ func printDoctor(r doctorReport) {
 	fmt.Println()
 
 	fmt.Println("tunnels:")
-	for _, line := range byName["tunnels"].Details {
-		fmt.Printf("  %s\n", line)
-	}
+	printDetails(byName["tunnels"].Details)
 	fmt.Println()
 
 	fmt.Println("endpoints (resolved: literals + hostnames + discovery):")
 	ep := byName["endpoints"]
-	for _, line := range ep.Details {
-		fmt.Printf("  %s\n", line)
-	}
+	printDetails(ep.Details)
 	if len(ep.Fixes) > 0 {
 		fmt.Println()
 		fmt.Println("fixes:")
@@ -1735,13 +1749,7 @@ func printDoctor(r doctorReport) {
 	if lockout, ok := byName["lockout"]; ok {
 		fmt.Println()
 		fmt.Printf("LOCKOUT RISK — %s:\n", lockout.Summary)
-		for _, line := range lockout.Details {
-			if line == "" {
-				fmt.Println()
-			} else {
-				fmt.Printf("  %s\n", line)
-			}
-		}
+		printDetails(lockout.Details)
 		fmt.Println()
 		for _, f := range lockout.Fixes {
 			fmt.Printf("    %s\n", f)
@@ -1751,26 +1759,38 @@ func printDoctor(r doctorReport) {
 
 	if touchID, ok := byName["touchID"]; ok {
 		fmt.Printf("touch id: %s\n", touchID.Summary)
-		for i, line := range touchID.Details {
-			if line == "" {
-				fmt.Println()
-			} else if i == 0 {
-				fmt.Printf("  %s\n", line)
-			} else {
-				fmt.Printf("    %s\n", line)
-			}
+		printDetails(touchID.Details)
+		fmt.Println()
+		for _, f := range touchID.Fixes {
+			fmt.Printf("    %s\n", f)
 		}
 		fmt.Println()
 	}
 
 	if discover, ok := byName["discover"]; ok {
 		fmt.Println("discover (best-effort, macOS):")
-		for _, line := range discover.Details {
-			fmt.Println("  " + line)
+		// A degenerate discover run (an error, or nothing found) carries its one
+		// line as Summary rather than duplicating it into Details, so print that
+		// where the detail lines would have gone.
+		if len(discover.Details) == 0 && discover.Summary != "" {
+			fmt.Printf("  %s\n", discover.Summary)
 		}
+		printDetails(discover.Details)
 		for _, f := range discover.Fixes {
 			fmt.Printf("  %s\n", f)
 		}
+	}
+}
+
+// printDetails prints a check's Details at the standard two-space indent,
+// honouring the empty-string paragraph break (see doctorCheck.Details).
+func printDetails(details []string) {
+	for _, line := range details {
+		if line == "" {
+			fmt.Println()
+			continue
+		}
+		fmt.Printf("  %s\n", line)
 	}
 }
 
