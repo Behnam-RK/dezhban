@@ -202,6 +202,12 @@ current as you land changes.
   as the deleted profiles above: a question the wizard never put on screen now
   leaves its key alone.
 
+- **A drop that did not happen today now says which day it was.** The drop
+  record is carried until a tunnel returns, so through an overnight outage or a
+  long FULL BLOCK "Your VPN dropped at 3:04PM" read as *a few minutes ago* and
+  understated how long the host had been cut. It now reads "at 3:04PM on Jul 26"
+  once the drop is no longer on the snapshot's own day.
+
 ### Changed — BREAKING
 
 - **"reconnect" is now "redial" everywhere.** The codebase used both words for the

@@ -235,7 +235,8 @@ struct HelpWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
         // Nothing bundled runs script; the pane only ever scrolls to an anchor,
-        // which the coordinator does itself via evaluateJavaScript.
+        // which the coordinator does with a URL fragment and WebKit's own
+        // scrolling — no script is injected either (see `load`).
         config.defaultWebpagePreferences.allowsContentJavaScript = false
         let web = WKWebView(frame: .zero, configuration: config)
         web.navigationDelegate = context.coordinator
@@ -284,6 +285,20 @@ struct HelpWebView: NSViewRepresentable {
             DispatchQueue.main.async { [parent] in parent.anchor = nil }
         }
 
+        /// Whether `url` is `root` itself or something beneath it.
+        ///
+        /// Compared by path COMPONENT, not by string prefix: a sibling whose
+        /// name merely starts with the same characters — "help-old" next to
+        /// "help" — satisfies a prefix test while being inside nothing. The
+        /// bundle is generated and has no such sibling today, which is exactly
+        /// why the check should not depend on that staying true.
+        static func isInside(_ url: URL, _ root: URL) -> Bool {
+            let here = url.standardizedFileURL.pathComponents
+            let base = root.standardizedFileURL.pathComponents
+            guard here.count >= base.count else { return false }
+            return Array(here.prefix(base.count)) == base
+        }
+
         func webView(_ web: WKWebView,
                      decidePolicyFor action: WKNavigationAction,
                      decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
@@ -295,9 +310,7 @@ struct HelpWebView: NSViewRepresentable {
             // refused — no http(s), no custom scheme, no path outside the
             // bundle. A refused link is reported so the pane can say what
             // happened rather than appearing to ignore the click.
-            guard target.isFileURL,
-                  target.standardizedFileURL.path.hasPrefix(parent.readAccess.standardizedFileURL.path)
-            else {
+            guard target.isFileURL, Coordinator.isInside(target, parent.readAccess) else {
                 let blocked = target
                 DispatchQueue.main.async { [parent] in parent.blockedLink = blocked }
                 decisionHandler(.cancel)

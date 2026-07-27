@@ -72,6 +72,22 @@ func TestText(t *testing.T) {
 				"all traffic is cut until your VPN redials.",
 		},
 		{
+			// The record is carried until a tunnel returns, so it outlives the
+			// day it happened on. A bare clock time would then read as "a few
+			// minutes ago" and understate how long the host has been cut.
+			name: "guard holds downed tunnel, drop was not today",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until.AddDate(0, 0, 2),
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Drop:    &state.DropRecord{At: until, Cut: true},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN dropped at 3:04PM on " + until.Format("Jan 2") +
+				". Guard active, but no tunnel is up — all traffic is cut until your VPN redials.",
+		},
+		{
 			name:         "full block with country",
 			snap:         state.Snapshot{Posture: PostureFullBlock, CountryCode: "IR"},
 			wantKey:      KeyBlocked,

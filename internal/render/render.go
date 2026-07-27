@@ -288,12 +288,32 @@ func redialCause(s state.Snapshot) string {
 	return "Your VPN dropped and the guard relaxed so it can redial."
 }
 
+// droppedFormat qualifies a drop with the day it happened. Used once the drop is
+// no longer on the snapshot's own day.
+const droppedFormat = time.Kitchen + " on Jan 2"
+
 // dropTime renders the carried drop's time, or "" when no drop is being carried.
+//
+// The record is carried until a tunnel returns, which through an overnight
+// outage or a long FULL BLOCK is not the same day. A bare "3:04PM" then reads as
+// "a few minutes ago" and quietly misstates how long the host has been cut, so
+// the day is named as soon as it is not the snapshot's own. Compared against
+// s.Time rather than time.Now() so the sentence a snapshot renders to depends
+// only on the snapshot.
 func dropTime(s state.Snapshot) string {
 	if s.Drop == nil || s.Drop.At.IsZero() {
 		return ""
 	}
+	if !s.Time.IsZero() && !sameDay(s.Drop.At, s.Time) {
+		return s.Drop.At.Format(droppedFormat)
+	}
 	return s.Drop.At.Format(untilFormat)
+}
+
+func sameDay(a, b time.Time) bool {
+	ay, am, ad := a.Date()
+	by, bm, bd := b.Date()
+	return ay == by && am == bm && ad == bd
 }
 
 // lookupNote surfaces a genuine exit-country lookup failure. ExitUnknown is
