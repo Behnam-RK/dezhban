@@ -990,9 +990,14 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		// Hold the line, checked before the flap guard: an operator who said
 		// this drop is deliberate has answered the only question the window
-		// exists to guess at. One-shot — spent here, whether or not anything
-		// else would have suppressed the window anyway, so "armed" never
-		// silently carries over to a later accidental drop.
+		// exists to guess at. One-shot — spent here rather than left armed for
+		// a later, accidental drop.
+		//
+		// The guard clause above returns first when nothing could have opened a
+		// window anyway (standby, FULL BLOCK, a window already open, a tunnel
+		// never seen up), so the flag survives those. That is safe because a
+		// drop cannot follow a drop without an intervening tunnel-up edge, and
+		// that edge disarms it — see the st.Up branch in the watcher.
 		if holdArmed {
 			holdArmed = false
 			o.Log.Warn("vpn tunnel down — redial window suppressed (hold the line was armed); "+
@@ -1531,7 +1536,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		pauseWindowMax = ls.PauseMax
 		pauseEnabled = pauseWindowMax > 0 && o.PollCommand != nil
-		o.PauseMax = ls.PauseMax // clampPause reads this, and so does the log line below
+		o.PauseMax = ls.PauseMax // pauseDuration reads this, and so does the log line below
 
 		if ls.EndpointRefresh > 0 {
 			if ls.EndpointRefresh != o.EndpointRefresh {
@@ -1593,8 +1598,9 @@ func (o Options) runGuard(ctx context.Context) error {
 	// that started with both disabled must still notice a command once one is
 	// re-enabled — otherwise the reload reports the key as applied while the
 	// root-owned command path stays deaf until a restart. Every command handler
-	// below re-checks the live value (clampWindow / clampPause return <=0 when the
-	// trigger is off), so an ungated tick can never act on a disabled trigger.
+	// below re-checks the live value (clampWindow returns <=0 and pauseDuration
+	// refuses when the trigger is off), so an ungated tick can never act on a
+	// disabled trigger.
 	var cmdC <-chan time.Time
 	if o.PollCommand != nil {
 		cmdInterval := o.CommandPoll
@@ -1760,12 +1766,19 @@ func (o Options) runGuard(ctx context.Context) error {
 					o.Log.Warn("ignoring pause command — a switch window is already open (cancel it first)")
 					continue
 				}
-				dur := o.clampPause(cmd.Duration)
-				if dur <= 0 {
-					// Reachable, and the live gate: the poll ticks regardless of
-					// whether pausing is enabled. Never open a pause the operator
-					// disabled.
-					o.Log.Warn("ignoring pause command — pausing is disabled (vpn.pauseMax: \"0\")")
+				// Same refusal the socket path gives, for the same reason: an
+				// over-cap request is declined and explained, never silently
+				// shortened. Reporting the refusal verbatim matters because this
+				// path has no reply channel — the log line is the only account
+				// the operator gets, so it must say which setting refused and
+				// why rather than blaming a disabled pause for a length problem.
+				//
+				// Reachable, and the live gate: the poll ticks regardless of
+				// whether pausing is enabled, so a PauseMax <= 0 refusal here is
+				// what stops a disabled pause from ever opening.
+				dur, refusal := o.pauseDuration(cmd.Duration)
+				if refusal != "" {
+					o.Log.Warn("ignoring pause command — " + refusal)
 					continue
 				}
 				openWindow(now, dur, "", state.TriggerPause)
@@ -2204,19 +2217,13 @@ func (o Options) clampWindow(req string) time.Duration {
 // comes from the caller (CLI flag / GUI preset).
 const defaultPauseDuration = 15 * time.Minute
 
-// clampPause parses a requested pause duration and caps it at PauseMax (no
-// floor). An empty/invalid request falls back to defaultPauseDuration. Returns
-// 0 when pausing is disabled (PauseMax <= 0) — callers (control-socket ops,
-// command-poll cases) are already gated on pauseEnabled, but failing closed
-// here means a future caller that skipped the gate can never turn "disabled"
-// into a real relaxation of the guard, whatever value req parses to.
-func (o Options) clampPause(req string) time.Duration {
-	dur, _ := o.pauseDuration(req)
-	return dur
-}
-
 // pauseDuration resolves a requested pause length, or explains why it cannot be
 // granted. The refusal string is empty when the duration is usable.
+//
+// Both callers — the control-socket op and the command-file poll — are already
+// gated on pauseEnabled, but this fails closed on PauseMax <= 0 anyway, so a
+// future caller that skipped the gate can never turn "disabled" into a real
+// relaxation of the guard, whatever value req parses to.
 //
 // An explicitly requested length longer than vpn.pauseMax is REFUSED, not
 // shortened. Quietly granting 30m to someone who asked for an hour is the same

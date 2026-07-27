@@ -154,10 +154,12 @@ current as you land changes.
   silently shortened to the cap.** Asking for an hour against a 30-minute cap
   used to grant thirty minutes and report success, which is indistinguishable
   from having got what you asked for. It now fails, names the cap, and says how
-  to raise it. Both the CLI and the daemon refuse, so a control-socket client
-  cannot get the old behaviour either. A pause with *no* duration given is
-  unchanged: nobody asked for a particular length, so the built-in default is
-  still clamped to the cap.
+  to raise it. Every path refuses — the CLI, the control socket, and the
+  root-owned command file — so no client can get the old behaviour, and the
+  command file (the one that still works with `control.allowPauseOps: false`)
+  logs the same reason the socket would have replied with. A pause with *no*
+  duration given is unchanged: nobody asked for a particular length, so the
+  built-in default is still clamped to the cap.
 
 ### Fixed
 
