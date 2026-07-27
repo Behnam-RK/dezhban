@@ -462,9 +462,26 @@ both surfaces saying the same thing about it. See
 - [ ] **Exhaustion holds, and says so.** Keep flapping until the log reads
       `redial budget spent`. Traffic must stay cut, `status` must read
       *"Your VPN has dropped often enough to use up its redial budget…"* with a
-      real time after "It can relax again at", and the menubar app must show the
-      **same sentence** — it renders `display.detail`, so a difference means
+      real time after "No window will open before", and the menubar app must show
+      the **same sentence** — it renders `display.detail`, so a difference means
       something is composing prose that shouldn't.
+- [ ] **The refusal re-decides itself.** From that exhausted state, leave the
+      tunnel **down and untouched** — do not reconnect, do not run anything. At
+      the `nextEligible` the refusal named, a window must open on its own
+      (`REDIAL WINDOW OPEN` in the log, `state.switch.trigger` = `auto`). This is
+      the whole point of publishing an instant: before the retry timer existed,
+      nothing acted at that time and the host stayed cut until someone ran
+      `dezhban switch`. Verify with the VPN client stopped, so no reconnection
+      can be confused for the cause.
+- [ ] **One window per drop, even with the retry.** Let that window expire with
+      the tunnel still down. Nothing may open a second one, however long you
+      wait and however much budget has refilled — the next window requires a new
+      drop. A repeating window here is the retry re-arming after a grant.
+- [ ] **Hold suppresses the re-decision.** Reach an exhausted refusal again, then
+      run `dezhban hold` while the tunnel is still down. At `nextEligible` no
+      window may open (`redial retry skipped` in the log). Then reconnect and
+      drop: that drop must still be covered by hold — the retry honours the flag
+      but does not spend it.
 - [ ] **The budget refills.** Wait out `vpn.advanced.redialBudgetWindow` with
       the tunnel down, then drop again → a window opens. It must open no later
       than the `nextEligible` the refusal named.

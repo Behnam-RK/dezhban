@@ -195,6 +195,14 @@ exit — clears it, and the next drop starts from a full window again. A
 `redial budget spent` wait is the one that has to elapse, because the budget is
 the actual bound.
 
+**You do not have to do anything when it elapses, either.** dezhban re-takes the
+decision at the `nextEligible` instant it reported, so a drop that was refused
+gets its window as soon as the bound lifts — the tunnel does not have to drop
+again first. That matters when the tunnel cannot come back on its own, which is
+the rotation case below. The re-decision may refuse again if the budget is still
+short, and it is skipped entirely while `dezhban hold` is armed, which is the
+point of arming it. One drop still earns at most one automatic window.
+
 **Confirming it is rotation.** `dezhban doctor`'s *learned endpoints* check reads
 the store and says which of the two opposite problems you have. "Every learned
 address … has aged out" means the addresses were learned and then discarded, and

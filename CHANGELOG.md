@@ -12,6 +12,23 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **A refused redial is re-decided when its bound lifts, instead of waiting for
+  another drop.** `nextEligible` named an instant nothing acted on: the decision
+  was retaken only on the next tunnel-down edge, so a tunnel that could not come
+  back on its own — a rotated server address the endpoint pass does not cover,
+  which is exactly the case the automatic window exists for — produced no further
+  edge, the refusal stood indefinitely, and the budget refilling changed nothing.
+  The stated time now has a timer behind it.
+
+  Still trigger two, and still no fourth trigger: the drop qualified at its own
+  edge and only the budget or cooldown said no, so re-asking when that expires
+  completes a decision already earned. Every rail holds — one automatic window
+  per drop, the same cap, the same ledger, all preconditions re-checked, and
+  `dezhban hold` suppresses the re-decision without being spent by it. See
+  [ADR-0009](docs/adr/0009-redial-budget.md).
+
 ### Fixed
 
 - **A refusal states its time as a bound, not an appointment.** "It can relax

@@ -136,6 +136,49 @@ struct SnapshotTests {
         #expect(s.redial?.fastDrops == nil)
     }
 
+    /// Every date in the contract is `omitzero` on the Go side, so "the writer
+    /// had no value" arrives as a MISSING KEY rather than as
+    /// "0001-01-01T00:00:00Z" — which the ISO8601 decoder refuses, and one
+    /// unreadable date fails the whole Snapshot, blanking the menubar over a
+    /// detail nothing displays. This is the shape that must never throw.
+    @Test func absentDatesDoNotFailTheDecode() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "switch-window", "blocked": false,
+          "switch": { "open": true, "trigger": "auto" },
+          "drop": {}, "hold": { "armed": true } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.switch?.open == true)
+        #expect(s.switch?.until == nil)
+        #expect(s.drop?.at == nil)
+        #expect(s.hold?.armed == true)
+        #expect(s.hold?.at == nil)
+    }
+
+    /// A window with no deadline is still an open window: the countdown is
+    /// dropped, never rendered as "0:00 left", which would count down to a
+    /// moment nobody wrote down.
+    @Test func aWindowWithoutADeadlineShowsNoCountdown() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let dated = SwitchState(open: true, until: now.addingTimeInterval(90),
+                                profile: nil, trigger: "auto")
+        #expect(dated.timeLeft(asOf: now) == 90)
+        #expect(dated.leftSuffix(asOf: now) == " (1:30 left)")
+
+        let undated = SwitchState(open: true, until: nil, profile: nil, trigger: "auto")
+        #expect(undated.timeLeft(asOf: now) == nil)
+        #expect(undated.leftSuffix(asOf: now) == "")
+    }
+
+    /// A deadline already in the past clamps to zero rather than going negative,
+    /// so a late poll cannot render "-0:03 left".
+    @Test func aPassedDeadlineClampsToZero() {
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let stale = SwitchState(open: true, until: now.addingTimeInterval(-30),
+                                profile: nil, trigger: "manual")
+        #expect(stale.timeLeft(asOf: now) == 0)
+    }
+
     /// A refusal whose `nextEligible` the writer had no value for. Go omits it
     /// (`omitzero`) rather than publishing "0001-01-01T00:00:00Z", which the
     /// ISO8601 decoder refuses — and a throwing date inside `redial` would fail

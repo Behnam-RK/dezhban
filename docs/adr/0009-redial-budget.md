@@ -68,16 +68,51 @@ of the rolling period rather than strictly past it, so the published instant is
 one the ledger will actually honour.
 
 The instant is a **bound, not an appointment**, and both surfaces word it that
-way ("No window will open before 3:15PM"). Nothing in the run loop fires at it:
-the decision is retaken only on the next tunnel-down edge, so a tunnel that
-cannot come back on its own produces no further edge and no further decision.
-Wording it as an event would promise an unattended recovery that is not coming —
-worst in exactly the case the window exists for. What the copy says instead is
-true in every case: the bound, that a held guard still passes known server
-addresses so the VPN's own redial is unaffected, and that a manual window is
-always available.
+way ("No window will open before 3:15PM"). A refused drop is **re-decided when
+that bound lifts**, from a timer in the run loop, so the instant is one the guard
+acts on rather than one it merely reports.
+
+Without the re-decision the instant was inert. The decision was retaken only on
+the next tunnel-down edge, so a tunnel that could not come back on its own — a
+rotated server address the endpoint pass does not cover, which is precisely the
+case the automatic window exists for — produced no further edge, the refusal
+stood indefinitely, and the budget refilling changed nothing. The user waited out
+a time that was never going to be honoured and then had to run `dezhban switch`.
+That is the manual interaction this ADR exists to remove, reintroduced by the
+bound meant to be safe.
+
+The copy still promises no more than the guard can deliver: the bound, that a
+held guard keeps passing known server addresses so the VPN's own redial is
+unaffected, and that a manual window is always available.
 
 This is still trigger 2. There is no fourth trigger.
+
+The re-decision is **not** a new trigger, and the distinction is load-bearing. A
+trigger is a *cause* for relaxing the guard; this admits none. The drop already
+qualified at its own tunnel-down edge — healthy GUARD, a tunnel observed up, not
+standby, not FULL BLOCK, no window open, hold not armed — and the only thing that
+said no was the budget or the cooldown. Re-asking when that bound expires
+completes a decision the drop had already earned. Concretely, every rail is
+unchanged: the same `redial.Grant`, the same ledger debit and credit-on-close,
+the same `TriggerAuto` episode capped by `redialWindowMax`.
+
+The rails that keep it from becoming one:
+
+- **At most one automatic window per drop, still.** A retry runs only while a
+  refusal stands; a grant clears the refusal and disarms the timer, and nothing
+  re-arms it. An expired window never re-opens.
+- **The retry re-asks the same question.** The drop's uptime and confirmed-exit
+  status are captured at its edge, because `now - tunnelUpSince` keeps growing
+  while the tunnel is down — a retry deriving uptime fresh would report a fast
+  drop as healthy and cancel the backoff at the moment it is working.
+- **Every precondition is re-checked**, from the same predicate the drop edge
+  uses. A retry into standby, FULL BLOCK, or an already-open window does nothing.
+- **Hold the line still wins.** An operator who arms it during a cut is saying
+  "keep me cut"; the retry honours that and does not spend the flag, which names
+  the next drop. Hold may only ever subtract a relaxation, so it must be able to
+  subtract this one.
+- **It is armed only for an instant in the future**, so a bound that has already
+  lifted schedules nothing rather than spinning.
 
 ## Alternatives considered
 

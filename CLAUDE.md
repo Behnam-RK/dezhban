@@ -163,8 +163,18 @@ The design depends on these invariants (rationale in
   true; `false` restores root-only); (2) the **automatic redial window**
   (`vpn.redialWindow`, default 30s, `"0"` disables — an explicit opt-out):
   a tunnel-down edge from *healthy GUARD only* — never from standby, FULL BLOCK,
-  an already-open window, or a tunnel never observed up, and gated against
-  flapping by `vpn.advanced.redialMinUptime`; (3) an explicit operator
+  an already-open window, or a tunnel never observed up, bounded by the rolling
+  `redialBudget` and backed off via `vpn.advanced.redialMinUptime`
+  ([docs/adr/0009](docs/adr/0009-redial-budget.md)). **A drop that the budget or
+  cooldown REFUSED is re-decided when that bound lifts, from a timer in the run
+  loop — this is trigger 2 completing, not a fourth trigger**, because the drop
+  already qualified at its edge and only the bound said no; it re-asks with the
+  drop's *captured* uptime (never one recomputed later, which would grow while
+  the tunnel is down and cancel the backoff), re-checks every precondition,
+  still yields to hold the line, and still opens at most one window per drop.
+  Without it `nextEligible` was a time nothing acted on, so a tunnel that could
+  not come back on its own stayed cut until an operator intervened; (3) an
+  explicit operator
   **pause** (`dezhban pause`/`resume`, `state.TriggerPause`), via the same
   command file or the control socket (gated separately by
   `control.allowPauseOps`, default true, independent of `allowSwitchOps`) —
@@ -193,7 +203,11 @@ The design depends on these invariants (rationale in
   the safer behaviour. Keep it one-shot and un-persisted — spent by the drop it
   covers (`maybeAutoWindow`), disarmed on a tunnel-up edge, gone on restart. An
   armed flag surviving a reboot would leave a later *accidental* drop with no
-  redial help, which is the one failure this feature must never cause. Anything
+  redial help, which is the one failure this feature must never cause. It also
+  suppresses trigger 2's **re-decision** (`retryAutoWindow`) — an operator who
+  arms it mid-cut is saying "keep me cut", and a rule that may only subtract must
+  be able to subtract that too — but is NOT spent there: the flag names the next
+  drop, and a cut already in progress is not one. Anything
   added here must likewise only subtract.
 - **All three windows are independently disableable, and "disabled" must
   survive `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);

@@ -41,11 +41,12 @@ struct OverviewView: View {
                     // the instant it's written. Pause gets its own wording and color
                     // (blue, not amber — it's deliberate, not a warning) so it never
                     // reads as an accidental exposure.
-                    let left = PostureUI.mmss(sw.until.timeIntervalSince(state.now))
+                    let left = sw.timeLeft(asOf: state.now).map { PostureUI.mmss($0) }
                     if sw.isPause {
-                        banner("Guard re-arms in \(left)", color: .blue)
+                        banner(left.map { "Guard re-arms in \($0)" } ?? "Guard re-arms when the pause ends",
+                               color: .blue)
                     } else {
-                        banner("Closes in \(left)", color: .orange)
+                        banner(left.map { "Closes in \($0)" } ?? "Closes when the window ends", color: .orange)
                     }
                 }
 
@@ -156,12 +157,13 @@ struct OverviewView: View {
             if let sw = s.switch, sw.open, sw.isPause {
                 // `switch --cancel` deliberately refuses to touch a pause (see the
                 // glossary's Pause entry) — `resume` is the only way to end one early.
-                Button("Resume now (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
+                Button("Resume now" + sw.leftSuffix(asOf: state.now)) {
                     AppActions.routine(["resume"], "resume the guard")
                 }
                 .help(state.routineHint("Ends the pause early and re-arms the guard."))
             } else if let sw = s.switch, sw.open {
-                Button("\(sw.isAutoRedial ? "Cancel redial window" : "Cancel VPN switch") (\(PostureUI.mmss(sw.until.timeIntervalSince(state.now))) left)") {
+                Button("\(sw.isAutoRedial ? "Cancel redial window" : "Cancel VPN switch")"
+                       + sw.leftSuffix(asOf: state.now)) {
                     AppActions.routine(["switch", "--cancel"], "cancel the switch window")
                 }
                 .help(state.routineHint("Closes the window and restores the guard."))

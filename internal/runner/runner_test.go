@@ -1846,3 +1846,173 @@ func TestAnOpenWindowIsNeverPublishedBesideARefusal(t *testing.T) {
 			"on .redial.reason sees the guard holding while a window is open", both)
 	}
 }
+
+// redialScriptWatcher replays a fixed up/down script, one entry per sample,
+// holding the last entry forever. Unlike edgeWatcher it can produce a tunnel
+// that comes back and drops AGAIN, which is what it takes to exhaust the redial
+// budget; unlike recovery_test.go's scriptedWatcher it needs no test goroutine
+// driving it, because the behaviour under test happens on its own with no
+// further input. Each run is at least as long as netdetect's down debounce
+// (2 samples) so every edge is actually emitted.
+func redialScriptWatcher(script []bool) *netdetect.Watcher {
+	n := 0
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			up := script[len(script)-1]
+			if n < len(script) {
+				up = script[n]
+			}
+			n++
+			if up {
+				return netdetect.TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+			}
+			return netdetect.TunnelState{}
+		},
+	}
+}
+
+// A refusal names an instant the guard can relax again; this is the test that it
+// is a time the guard ACTS on rather than one it merely reports.
+//
+// The decision used to be retaken only on the next tunnel-down edge, so a tunnel
+// that could not come back by itself — the rotated-server-address case the window
+// exists for — produced no further edge, and the refusal stood until an operator
+// ran `dezhban switch`. The budget refilling changed nothing on its own.
+//
+// The script drops twice: the first drop spends the budget, the second is refused
+// against it. Then the tunnel stays DOWN, so any window that opens after that can
+// only have come from the retry — there is no second up edge to trigger one.
+func TestARefusedRedialRetriesWhenTheBudgetRefills(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	// up ~15ms, down (drop 1), up again ~15ms, then down forever (drop 2).
+	script := make([]bool, 0, 60)
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, false)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	script = append(script, false)
+
+	var (
+		mu    sync.Mutex
+		snaps []state.Snapshot
+	)
+	o := Options{
+		// The lookup always fails, so no confirmed exit ever closes a window
+		// early — every window costs its full grant, which is what makes the
+		// budget reachable inside a test's lifetime.
+		Monitor:      steadyFailMonitor{},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      redialScriptWatcher(script),
+		RedialWindow: 20 * time.Millisecond,
+		// Room for one full window and no more, refilling 120ms after the first
+		// window opened.
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			defer mu.Unlock()
+			snaps = append(snaps, s)
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	// A refusal must have been published, or the test proved nothing.
+	refusedAt := -1
+	for i, s := range snaps {
+		if s.Redial != nil {
+			refusedAt = i
+			break
+		}
+	}
+	if refusedAt < 0 {
+		t.Fatal("no redial refusal was ever published; the budget never ran out and this fixture tests nothing")
+	}
+
+	// After the refusal, a window must open while the tunnel is still DOWN. With
+	// no further up edge in the script, the retry is the only thing that could
+	// have opened it.
+	reopened := false
+	for _, s := range snaps[refusedAt:] {
+		if s.Switch == nil || !s.Switch.Open {
+			continue
+		}
+		if s.Switch.Trigger != state.TriggerAuto {
+			t.Errorf("window after the refusal has trigger %q, want %q — the retry must stay trigger 2",
+				s.Switch.Trigger, state.TriggerAuto)
+		}
+		if anyTunnelUp(s.Tunnels) {
+			continue // a window with a tunnel up cannot be attributed to the retry
+		}
+		reopened = true
+		// The refusal must be gone: a window is open, so nothing is being held.
+		if s.Redial != nil {
+			t.Errorf("a window is open but state.redial still reports %q — "+
+				"exactly one of the two may be present", s.Redial.Reason)
+		}
+		break
+	}
+	if !reopened {
+		t.Error("the refused drop never got a window once the budget refilled — " +
+			"nextEligible is being published as a time nothing acts on")
+	}
+}
+
+// The retry must not multiply windows: one automatic window per drop is the
+// standing rule, and a retry that re-armed after its own window closed would
+// turn a single drop into a repeating relaxation.
+func TestTheRetryStillOpensAtMostOneWindowPerDrop(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Up briefly, then down for the rest of the run: exactly one drop.
+	script := []bool{true, true, true, true, true, false}
+
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 60 * time.Millisecond,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	windows := 0
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			windows++
+		}
+	}
+	// One drop, one window. The budget refills repeatedly inside this run, so a
+	// retry that re-armed after its own window closed would show up here as many.
+	if windows != 1 {
+		t.Errorf("one drop opened %d automatic windows, want exactly 1 — "+
+			"the retry must not re-arm once a window has been granted", windows)
+	}
+}

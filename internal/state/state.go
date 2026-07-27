@@ -143,8 +143,15 @@ type PendingFlip struct {
 
 // SwitchState describes an open switch window for observers (status, menubar).
 type SwitchState struct {
-	Open    bool      `json:"open"`
-	Until   time.Time `json:"until"`
+	Open bool `json:"open"`
+	// Until is the window's deadline. omitzero for the reason given on
+	// RedialState.NextEligible: a zero time.Time marshals to year 1, which the
+	// macOS app's ISO8601 decoder refuses, and one unreadable date fails the
+	// WHOLE Snapshot decode. render.windowDisplay already treats a zero Until as
+	// "no deadline to show" rather than as an error, so the zero case is one this
+	// codebase considers reachable — it must not be the one that blanks the
+	// menubar.
+	Until   time.Time `json:"until,omitzero"`
 	Profile string    `json:"profile,omitempty"`
 	// Trigger says what opened the window: TriggerManual (operator command) or
 	// TriggerAuto (automatic redial window on a tunnel drop). Additive field —
@@ -172,8 +179,12 @@ type SwitchState struct {
 // since" nor "not cut" describes what followed. What a reader needs from a drop
 // is WHEN — the posture fields already say what is happening now.
 type DropRecord struct {
-	// At is when the tunnel was observed down.
-	At time.Time `json:"at"`
+	// At is when the tunnel was observed down. omitzero for the reason given on
+	// RedialState.NextEligible — render.dropTime already treats a zero as "no
+	// drop time to show", so publishing it as a year-1 timestamp would turn a
+	// clause this codebase knows how to omit into a total decode failure in the
+	// app.
+	At time.Time `json:"at,omitzero"`
 }
 
 // HoldState reports that "hold the line" is armed: the next tunnel drop will
@@ -192,8 +203,11 @@ type HoldState struct {
 	// Armed is true from the moment it is armed until the drop it covers, an
 	// explicit cancel, or a tunnel coming back up.
 	Armed bool `json:"armed"`
-	// At is when it was armed.
-	At time.Time `json:"at"`
+	// At is when it was armed. omitzero for the reason given on
+	// RedialState.NextEligible: no reader needs the instant (the app shows only
+	// that hold is armed), so a zero must cost a missing key rather than the
+	// whole snapshot.
+	At time.Time `json:"at,omitzero"`
 }
 
 // RedialState is why the automatic redial window did not open for the drop being
