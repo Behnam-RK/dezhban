@@ -59,7 +59,7 @@ func TestPrintSwitchStatus(t *testing.T) {
 				Posture: "switch-window",
 				Switch:  &state.SwitchState{Open: true, Until: until, Trigger: state.TriggerPause},
 			},
-			want: "pause: OPEN — You are using your real IP at your request, until 3:04PM. The guard re-arms automatically at 3:04PM. (end early with `dezhban resume`)\n" +
+			want: "pause: OPEN — You are using your real IP at your request. The guard re-arms automatically at 3:04PM. (end early with `dezhban resume`)\n" +
 				"until: 2026-07-25T15:04:00Z\n",
 		},
 	}

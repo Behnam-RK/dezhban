@@ -140,7 +140,7 @@ func TestText(t *testing.T) {
 			}},
 			wantKey:      KeyPaused,
 			wantHeadline: "Paused",
-			wantDetail:   "You are using your real IP at your request, until 3:04PM. The guard re-arms automatically at 3:04PM.",
+			wantDetail:   "You are using your real IP at your request. The guard re-arms automatically at 3:04PM.",
 		},
 		{
 			name:         "switch window with no Switch struct falls back to manual wording",

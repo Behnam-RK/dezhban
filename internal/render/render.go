@@ -234,7 +234,7 @@ func windowDisplay(s state.Snapshot) Display {
 		return Display{
 			Key:      KeyPaused,
 			Headline: "Paused",
-			Detail:   joinSentences(pausedSentence(until), rearmSentence(until)),
+			Detail:   joinSentences(pausedSentence(), rearmSentence(until)),
 		}
 	case state.TriggerAuto:
 		return Display{
@@ -261,12 +261,11 @@ func rearmSentence(until string) string {
 
 // pausedSentence leads with the fact that matters — the real IP is in use — and
 // says so as a present condition, not a risk: during a pause the exposure is the
-// point, not a side effect.
-func pausedSentence(until string) string {
-	if until == "" {
-		return "You are using your real IP at your request."
-	}
-	return "You are using your real IP at your request, until " + until + "."
+// point, not a side effect. It never states the until time itself: rearmSentence
+// states it immediately after, and stating it twice in adjacent sentences reads
+// as an unintentional echo rather than emphasis.
+func pausedSentence() string {
+	return "You are using your real IP at your request."
 }
 
 func exposedSentence(until string) string {
