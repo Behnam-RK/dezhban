@@ -394,6 +394,42 @@ Per OS, privileged:
 - [ ] **`restart` applies the restart-required keys** (most keys apply live — see
       the section below), and `start` and `stop` are idempotent.
 
+## Unattended recovery (`doctor`'s boot and retention checks)
+
+Unprivileged, but they need real machine state CI has none of — a service
+manager, a reboot, and a VPN that has actually connected.
+
+- [ ] **Boot service, honestly reported without root.** With the service
+      installed and running, `dezhban doctor` **as a normal user** reports
+      *boot service: registered to start at boot, and enforcing now*. This is
+      the regression that matters: the check reads the unit file precisely
+      because an unprivileged `launchctl` query cannot see the system domain and
+      would report a live daemon as not installed.
+- [ ] **Boot service, absent.** `sudo dezhban uninstall` → the check warns and
+      offers `dezhban install`. If a daemon is still running by hand, it also
+      says so rather than reading as "the guard is off".
+- [ ] **Not at boot.** Edit `RunAtLoad` to `<false/>` in
+      `/Library/LaunchDaemons/dezhban.plist` (Linux: `systemctl disable
+      dezhban`) → the check warns that every reboot comes up unguarded.
+      Reinstall to restore.
+- [ ] **Arm at boot, precondition met.** After a VPN has been up once,
+      `<state dir>/armed.json` has `tunnelEverUp: true`, the check reports the
+      first/last times, and a reboot arms the guard before the VPN connects.
+- [ ] **Arm at boot, precondition missing.** Remove `armed.json` → the check
+      warns that no tunnel has been observed, and a reboot opens into standby.
+      Connect the VPN once → the file returns and the check goes green.
+- [ ] **Arm at boot, record corrupt.** Write `{` into `armed.json` → the check
+      warns with the parse error and dezhban still starts (a corrupt record is
+      "never armed", never a crash).
+- [ ] **Learned endpoints, healthy.** After a normal drop and redial, the check
+      reports addresses retained and a drop that can redial without a window.
+- [ ] **Learned endpoints, aged out.** Set
+      `vpn.advanced.learnedEndpointTTL=1s`, wait, re-run → the check warns they
+      aged out and offers the retention knob, **not** the rotation advice.
+- [ ] **Learned endpoints, rotating.** On a rotating-pool VPN (NordVPN,
+      ProtonVPN), reconnect until the store fills → the check reports rotation
+      and leads with the hostname fix.
+
 ## Upgrade
 
 macOS only, privileged (`dezhban upgrade download`/`apply`). See

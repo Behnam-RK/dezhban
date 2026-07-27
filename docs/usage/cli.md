@@ -153,6 +153,16 @@ app's Diagnostics pane) that needs to render them itself rather than parse
 text. See [config.md](config.md) for the full field reference and
 [troubleshooting.md](troubleshooting.md) for the lockout-recovery runbook.
 
+Beyond the lockout checks, `doctor` answers **will dezhban need me again**:
+whether a reboot brings the guard back (*boot service*, *arm at boot*) and
+whether a VPN drop can redial on its own (*learned endpoints*). Those three are
+informational — they never change the exit code, because none of them is a
+guard about to fail closed — but they are where the "I have to turn it on
+again" and "every drop needs a manual window" complaints get diagnosed. The
+boot-service check reads the service unit rather than asking the service
+manager, so it stays truthful without root: on macOS an unprivileged status
+query cannot see the system domain and reports a running daemon as absent.
+
 ## Create & manage the config
 
 You rarely need to touch JSON by hand. See [config.md](config.md#where-the-config-lives)

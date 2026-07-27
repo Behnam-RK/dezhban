@@ -101,9 +101,16 @@ struct DiagnosticsView: View {
         return check.summary.isEmpty ? name : "\(name) — \(check.summary)"
     }
 
+    /// Display names for the checks `dezhban doctor --json` ships. The fallback
+    /// is `.capitalized`, which is fine for a one-word name and wrong for a
+    /// camelCased one ("armAtBoot" reads as "Armatboot"), so every shipped check
+    /// belongs here. The wording matches the CLI's own section headings — one
+    /// voice, per docs/concepts/glossary.md.
     private let checkNames: [String: String] = [
         "config": "Config", "tunnels": "Tunnels", "endpoints": "Endpoints",
-        "lockout": "Lockout risk", "touchID": "Touch ID", "discover": "Discovered servers",
+        "lockout": "Lockout risk", "service": "Boot service",
+        "armAtBoot": "Arm at boot", "endpointRetention": "Learned endpoints",
+        "touchID": "Touch ID", "discover": "Discovered servers",
     ]
 
     private func symbol(for status: String) -> String {

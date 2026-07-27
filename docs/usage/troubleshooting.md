@@ -58,6 +58,36 @@ If you need the real ISP IP for a domestic-only site rather than turning
 anything off, use a bounded [`pause`](cli.md#pause-the-guard-temporarily)
 instead — it re-arms itself, so there's nothing to remember to undo.
 
+## I have to turn dezhban on again after every reboot
+
+The opposite complaint to the one above, and it has three different causes that
+look identical from the outside. `doctor` tells them apart — no root needed:
+
+```sh
+dezhban doctor
+```
+
+**"boot service: not registered to start at boot."** Nothing is asking the OS to
+launch dezhban, so a reboot leaves the host unguarded until you start it by
+hand. `sudo dezhban install` registers it. The variant *"installed, but not set
+to start at boot"* means the service unit exists with the wrong options —
+`sudo dezhban install` rewrites it.
+
+**"arm at boot: … it cannot arm."** The boot service is fine, but
+[`vpn.armAtBoot`](config.md) cannot take effect. It may only arm the guard at
+startup when a configured tunnel has been observed up at least once on this host
+([ADR-0008](../adr/0008-arm-at-boot.md)) — arming without that would fail closed
+on a machine whose VPN has never worked, which is a lockout by design. Connect
+your VPN once with dezhban running and the observation persists from then on.
+If the check instead reports the record could not be read, the daemon rewrites
+it the next time a tunnel comes up.
+
+**Both are healthy, but you still see nothing after logging in.** Then the guard
+*is* up and what is missing is the menubar app, which is a login-item question,
+not an enforcement one — add Dezhban.app under System Settings → General →
+Login Items. `dezhban status` from a terminal confirms the guard is enforcing
+without it.
+
 ## VPN guard: tunnel dies, DNS fails ("no such host"), country lookups time out
 
 Symptom (from the daemon log):
@@ -149,6 +179,20 @@ configured strict behavior, not a bug. If the window keeps getting suppressed in
 the logs, your tunnel is flapping faster than
 `vpn.advanced.redialMinUptime` (default `15s`) — fix the VPN, or lower/zero
 the gate if the flapping is expected.
+
+**Confirming it is rotation.** `dezhban doctor`'s *learned endpoints* check reads
+the store and says which of the two opposite problems you have. "Every learned
+address … has aged out" means the addresses were learned and then discarded, and
+retaining them longer (`vpn.advanced.learnedEndpointTTL`) removes the
+interaction. "… looks like it rotates its server address" means the store is
+full of addresses seen for the first time recently, so retaining more only
+delays the problem — name the server by **hostname** instead, which dezhban
+re-resolves on `vpn.endpointRefresh` and follows the rotation rather than
+chasing it:
+
+```sh
+dezhban vpn add work --endpoint vpn.example.net
+```
 
 ### Note for NetworkExtension VPNs (macOS)
 

@@ -14,6 +14,31 @@ current as you land changes.
 
 ### Added
 
+- **`dezhban doctor` answers "will dezhban need me again".** Three new checks,
+  for the two complaints that are really the same complaint — being asked to do
+  by hand what the guard exists to do for you.
+
+  *Boot service* says whether a reboot brings the guard back at all, separating
+  "nothing is registered", "registered but not set to start at boot", and "both
+  fine, and enforcing right now" — the last one matters because it rules
+  enforcement out and leaves the menubar app's login item, which has an entirely
+  different fix. It reads the service unit rather than asking the service
+  manager, so it stays truthful for a normal user: on macOS an unprivileged
+  status query cannot see the system domain and reports a running daemon as
+  absent.
+
+  *Arm at boot* says whether the next reboot arms the guard immediately or opens
+  into standby. `vpn.armAtBoot` may only arm when a tunnel has been observed up
+  at least once on this host, and that half fails silently — the setting reads
+  "on" the whole time — so the check names which half is missing.
+
+  *Learned endpoints* reads the store the guard redials through and tells apart
+  the two opposite reasons a drop keeps needing a window by hand: addresses that
+  were learned and then aged out (retain them longer), or a VPN that rotates its
+  server address (retaining more only delays it — a hostname re-resolves and
+  follows the rotation). All three are informational and never change the exit
+  code; the macOS Diagnostics pane shows them alongside the rest.
+
 - **`dezhban config schema` describes every setting**, so you can ask what a key
   is instead of reading source. For each one it prints the label, its default,
   what bounds it, whether `"0"` turns it off, whether a strictness preset writes
