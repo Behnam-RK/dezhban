@@ -61,9 +61,19 @@ public struct RedialState: Codable {
     /// Stable identifier: "cooldown" (backing off after fast drops) or
     /// "exhausted" (the rolling budget is spent). Match on it, don't display it.
     public let reason: String
-    /// Earliest instant a window could open. This is what makes a refusal
-    /// actionable — "the guard is holding" without it is a wall, not a wait.
-    public let nextEligible: Date
+    /// Earliest instant a window could open — a bound, not an appointment:
+    /// nothing fires at it, the decision is retaken on the next tunnel-down
+    /// edge. This is what makes a refusal actionable all the same — "the guard
+    /// is holding" without it is a wall, not a wait.
+    ///
+    /// Optional purely as a decode guard. The Go field has no `omitempty`, so a
+    /// zero `time.Time` would arrive as "0001-01-01T00:00:00Z", which
+    /// `ISO8601DateFormatter` refuses — and a throwing `Date` here fails the
+    /// WHOLE `Snapshot` decode, so `StateReader.decode` returns nil and the
+    /// menubar reads "stopped" while dezhban is enforcing. Both refusal paths
+    /// set a real instant today, so this is unreachable; it costs one `?` to
+    /// keep it that way, and the failure it prevents is silent and total.
+    public let nextEligible: Date?
     /// What is left of the rolling budget, in seconds.
     public let remainingSeconds: Double
     /// Consecutive fast drops behind the current backoff; absent when the budget

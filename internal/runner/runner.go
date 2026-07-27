@@ -643,8 +643,8 @@ func (o Options) runGuard(ctx context.Context) error {
 	// of standby re-checks endpoints at arm time (tryAutoArm).
 	if !standby && len(tunnels) > 0 && len(endpoints) == 0 {
 		return fmt.Errorf("refusing to start: the VPN tunnel (%s) is up but dezhban does not know its server "+
-			"address, and the guard blocks all egress on the physical link — including the tunnel's own encrypted "+
-			"transport. Arming it would cut ALL traffic, and the tunnel could never re-handshake. "+
+			"address, and the guard blocks all outbound traffic on the physical link — including the tunnel's own "+
+			"encrypted transport. Arming it would cut ALL traffic, and the tunnel could never re-handshake. "+
 			"Auto-discovery reads connected sockets, and WireGuard/NetworkExtension clients use an unconnected UDP "+
 			"socket, so there is nothing for it to find. Name the server instead:\n"+
 			"    dezhban vpn import <wg0.conf|client.ovpn>   (reads the endpoint from your VPN's own config)\n"+
@@ -1357,7 +1357,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// the outcome so nothing downstream can claim a key took effect when
 			// it is still being enforced at its old value.
 			if o.ReloadConfig == nil {
-				return reply(false, "this daemon cannot reload its configuration")
+				return reply(false, "the running dezhban cannot reload its configuration")
 			}
 			ls, report, rerr := o.ReloadConfig()
 			if rerr != nil {
@@ -1380,7 +1380,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				return reply(false, "config writes over the control socket are disabled (control.allowConfigOps)")
 			}
 			if o.WriteConfig == nil || o.ReloadConfig == nil {
-				return reply(false, "this daemon cannot write its configuration")
+				return reply(false, "the running dezhban cannot write its configuration")
 			}
 			if len(req.Config) == 0 {
 				return reply(false, "config-write carried no keys")
@@ -1479,7 +1479,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			if standby {
 				// Nothing to relax: standby enforces nothing, so the VPN can
 				// already connect freely — and the guard arms itself when it does.
-				return reply(false, "standby — egress is already open; connect your VPN and the guard arms itself")
+				return reply(false, "standby — nothing is being blocked; connect your VPN and the guard arms itself")
 			}
 			if !o.AllowSwitchOps {
 				return reply(false, "switch ops over the control socket are disabled (control.allowSwitchOps)")
@@ -1525,7 +1525,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			if standby {
 				// Nothing to relax: standby already has no rules, so there is
 				// nothing to pause.
-				return reply(false, "standby — egress is already open; nothing to pause")
+				return reply(false, "standby — nothing is being blocked; nothing to pause")
 			}
 			if !o.AllowPauseOps {
 				return reply(false, "pause ops over the control socket are disabled (control.allowPauseOps)")

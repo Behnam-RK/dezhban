@@ -168,12 +168,42 @@ func Load(path string) ([]Term, error) {
 // compile builds the word-boundary matcher for a phrase. Internal whitespace is
 // relaxed to \s+ so a phrase that got soft-wrapped across two lines in prose
 // still matches — a line break is not a different sentence.
+//
+// The \b anchors are conditional, and that is not a refinement. \b asserts a
+// word/non-word transition, so a phrase ENDING in a non-word character — every
+// row here that names a config key, e.g. "Enable VPN guard (vpn.enabled)" —
+// gets a trailing \b that nothing can satisfy, and the row silently matches
+// nothing at all. It still parses, still counts toward the "zero terms" guard,
+// and enforces exactly nothing: the row-level version of the empty-table
+// failure Load exists to prevent. Anchor only where there is a word character
+// to anchor against. TestEveryTermMatchesItself is what keeps this honest.
 func compile(phrase string) (*regexp.Regexp, error) {
 	parts := strings.Fields(phrase)
 	for i, p := range parts {
 		parts[i] = regexp.QuoteMeta(p)
 	}
-	return regexp.Compile(`(?i)\b` + strings.Join(parts, `\s+`) + `\b`)
+	body := strings.Join(parts, `\s+`)
+	var lead, trail string
+	if r := []rune(phrase); len(r) > 0 {
+		if isWordRune(r[0]) {
+			lead = `\b`
+		}
+		if isWordRune(r[len(r)-1]) {
+			trail = `\b`
+		}
+	}
+	return regexp.Compile(`(?i)` + lead + body + trail)
+}
+
+// isWordRune reports whether r is what \b counts as a word character: ASCII
+// letters, digits, and underscore. Deliberately ASCII-only, because Go's regexp
+// \b is ASCII-only too — asking a different question than the anchor does is how
+// the anchor would come back.
+func isWordRune(r rune) bool {
+	return r == '_' ||
+		(r >= '0' && r <= '9') ||
+		(r >= 'a' && r <= 'z') ||
+		(r >= 'A' && r <= 'Z')
 }
 
 // Check reports each banned term that appears in text — one Hit per term, at its
@@ -201,6 +231,12 @@ func Check(text string, terms []Term, userFacing bool) []Hit {
 
 // splitRow splits a markdown table row into its cells, dropping the empty
 // leading and trailing fields the outer pipes produce.
+//
+// It does not understand escaped pipes (\|) or a pipe inside inline code
+// (`a|b`): either would split one cell into two and shift every cell after it,
+// so a row needing one has to be reworded. Cheap to live with while no row does
+// — and TestEveryTermMatchesItself would not catch it, since the fragments
+// would still compile, so a row that starts behaving oddly is the signal.
 func splitRow(line string) []string {
 	cells := strings.Split(strings.Trim(line, "|"), "|")
 	for i, c := range cells {

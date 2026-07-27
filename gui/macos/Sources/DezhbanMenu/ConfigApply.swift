@@ -300,7 +300,7 @@ enum ConfigApply {
                                    transcript: log + """
                                        The service restarted but published no posture within 20s.
 
-                                       The daemon writes its posture to \(StateReader.defaultPath). If that file
+                                       dezhban writes its posture to \(StateReader.defaultPath). If that file
                                        is missing or unreadable, check that the service is actually running:
 
                                            dezhban status
@@ -325,7 +325,7 @@ enum ConfigApply {
             \(keys.joined(separator: ", ")).
 
             Restarting briefly stops network filtering, usually for under a few \
-            seconds. Choosing “Later” keeps the daemon on the old values for \
+            seconds. Choosing “Later” keeps dezhban on the old values for \
             those settings until you restart it.
             """
         alert.addButton(withTitle: "Restart Now")

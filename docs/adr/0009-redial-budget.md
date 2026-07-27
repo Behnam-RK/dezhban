@@ -59,6 +59,24 @@ tunnel-down edge, that refusal stands until an operator opens a window by hand.
 Rationing a link that recovered is the interaction this ADR exists to remove. The
 rolling budget, not the cooldown, is the bound that must not be negotiable.
 
+A refusal publishes **when a window could next open, answering for every bound at
+once** — the later of the cooldown deadline and the instant enough budget has
+rolled off. Reporting only whichever bound refused first would hand the user a
+deadline that moves: told 3:00PM, they wait, and the drop at 3:00PM is refused
+with 3:15PM instead. For the same reason an episode is retired *on* the boundary
+of the rolling period rather than strictly past it, so the published instant is
+one the ledger will actually honour.
+
+The instant is a **bound, not an appointment**, and both surfaces word it that
+way ("No window will open before 3:15PM"). Nothing in the run loop fires at it:
+the decision is retaken only on the next tunnel-down edge, so a tunnel that
+cannot come back on its own produces no further edge and no further decision.
+Wording it as an event would promise an unattended recovery that is not coming —
+worst in exactly the case the window exists for. What the copy says instead is
+true in every case: the bound, that a held guard still passes known server
+addresses so the VPN's own redial is unaffected, and that a manual window is
+always available.
+
 This is still trigger 2. There is no fourth trigger.
 
 ## Alternatives considered

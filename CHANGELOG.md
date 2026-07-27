@@ -14,6 +14,53 @@ current as you land changes.
 
 ### Fixed
 
+- **A refusal states its time as a bound, not an appointment.** "It can relax
+  again at 3:15PM" read as a scheduled event, and nothing is scheduled: the
+  decision is retaken only on the next tunnel-down edge, so nothing fires at
+  that instant — and if the tunnel cannot come back on its own, nothing fires
+  at all. Both surfaces now read *"No window will open before 3:15PM — your VPN
+  can still reconnect on its own, and you can open a window yourself at any
+  time"*: the bound, the fact that a held guard still passes known server
+  addresses so the VPN's own redial is unaffected, and the way out that always
+  works. `docs/usage/cli.md` already stated the caveat for scripts; a person
+  deserves it more, not less.
+
+- **A cooldown refusal now answers for the budget too.** `nextEligible` reported
+  only the cooldown deadline, so a host that was backing off *and* out of budget
+  was told 3:00PM, waited, and was told 3:15PM instead — the moving deadline the
+  published refusal exists to avoid. It reports the later of the two bounds now.
+
+- **The budget's rolling period is honoured on its boundary.** An episode exactly
+  one period old was still counted, so the instant `nextEligible` published was
+  one tick before the ledger could actually afford a window: the drop that
+  arrived at the promised time was refused and handed a new one.
+
+- **`state.redial.nextEligible` is omitted rather than published as a zero
+  timestamp.** `omitempty` does not omit a zero `time.Time`, so a writer without
+  an instant would have emitted `"0001-01-01T00:00:00Z"` — which the macOS app's
+  ISO8601 decoder refuses, failing the *whole* snapshot decode and reading as
+  "stopped" while dezhban was enforcing. The field is `omitzero`, and the app
+  decodes it as optional.
+
+- **Four control-socket refusals said "daemon" or "egress" to the user.**
+  `dezhban pause` in standby answered *"standby — egress is already open"*, and a
+  runner without a reload hook answered *"this daemon cannot reload its
+  configuration"*. These reach the user verbatim after `dezhban refused:`, so
+  they are copy — `internal/runner` is now in the vocabulary lint's Go scope, and
+  the startup lockout refusal no longer says "egress" either.
+
+- **Three glossary rows enforced nothing, and the app's alert copy was
+  unreadable to the lint.** Any banned phrase ending in punctuation — every row
+  naming a config key, e.g. `"Enable VPN guard (vpn.enabled)"` — compiled to a
+  regex with a trailing `\b` that cannot match, so the row parsed, counted, and
+  checked nothing. Word-boundary anchors are now applied only where there is a
+  word to anchor against, and `TestEveryTermMatchesItself` fails any row that
+  cannot find itself. Separately, the Swift scanner could not see multi-line
+  (`"""`) literals at all — the fences carry no content and the content lines
+  carry no quotes — so two user-facing alerts told people about "the daemon"
+  while the lint reported the file clean. Both are fixed; the alerts now say
+  "dezhban".
+
 - **A refusal no longer names a time it has already gone past.** The "it can
   relax again at 3:15PM" clause is decided when the tunnel drops and re-decided
   only when it drops again, so a tunnel that stays down carried the old instant
@@ -144,9 +191,10 @@ current as you land changes.
   (the reason, when a window can next open, and what is left of the budget) for
   as long as the refusal stands, and `status` and the menubar app both read
   *"Your VPN has dropped often enough to use up its redial budget, so the guard
-  is holding and traffic stays cut. It can relax again at 3:15PM."* — the same
-  sentence, composed once. Without a time, "the guard is holding" leaves a wait
-  indistinguishable from a wall.
+  is holding and traffic stays cut. No window will open before 3:15PM — your VPN
+  can still reconnect on its own, and you can open a window yourself at any
+  time."* — the same sentence, composed once. Without a time, "the guard is
+  holding" leaves a wait indistinguishable from a wall.
 
   Still trigger two, not a fourth trigger. `vpn.redialWindow: "0"` remains the
   one way to turn the automatic window off; `dezhban hold` still suppresses a

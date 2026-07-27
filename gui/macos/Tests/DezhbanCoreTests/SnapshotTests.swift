@@ -136,6 +136,22 @@ struct SnapshotTests {
         #expect(s.redial?.fastDrops == nil)
     }
 
+    /// A refusal whose `nextEligible` the writer had no value for. Go omits it
+    /// (`omitzero`) rather than publishing "0001-01-01T00:00:00Z", which the
+    /// ISO8601 decoder refuses — and a throwing date inside `redial` would fail
+    /// the WHOLE Snapshot decode, blanking the menubar over a missing detail on
+    /// an optional sub-object. The rest of the refusal must still decode.
+    @Test func aRefusalWithoutATimeStillDecodes() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "redial": { "reason": "cooldown", "remainingSeconds": 12.5 } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.redial?.reason == "cooldown")
+        #expect(s.redial?.nextEligible == nil)
+        #expect(s.redial?.remainingSeconds == 12.5)
+    }
+
     /// The additive rule again, for the field this release adds: every snapshot
     /// an older daemon ever wrote lacks `redial`, and the app has to keep reading
     /// them. Absent means "nothing refused", never "no budget" and never a

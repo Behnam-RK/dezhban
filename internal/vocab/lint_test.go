@@ -40,6 +40,16 @@ var allowed = map[string]string{
 		"the flag's line in `dezhban help`; the word here IS the flag's name, and a help " +
 		"page that lists a flag under a different name than the one you type is useless",
 
+	// A log fragment built one line before the log call that consumes it. The
+	// exemption pass walks literals INSIDE a logging CallExpr, so a string
+	// assigned to a local first is invisible to it — the local here feeds three
+	// o.Log.Warn calls and goes nowhere else, which is the technical register
+	// where "egress" is the correct word. Exempting the fragment is honest;
+	// teaching isLogCall to chase locals would be a dataflow analysis, and a
+	// wrong one the first time a local reached both a log and a reply.
+	"egress relaxed to configured protocols/ports": "" +
+		"a fragment of three o.Log.Warn lines, assigned to a local one line above them",
+
 	// A file path. Renaming a shipped ADR to satisfy a copy rule is precisely
 	// what ADRs forbid, and the path has to match the file on disk.
 	"has leaked. See docs/adr/0003-biometric-token-over-existing-daemon.md.": "" +
@@ -58,7 +68,16 @@ var allowed = map[string]string{
 // statement sees a format verb and declares the file clean while the sentence
 // itself sits in a package it never opens. Copy is where the words are, not
 // where the write call is.
-var goScopes = []string{"cmd", "internal/render", "internal/config"}
+//
+// internal/runner is here for the same reason, and it was missed for the same
+// reason. Its refusal messages look like internals — `reply(false, "…")` deep in
+// a select case — but reply puts them in control.Response.Error, and
+// cmd/dezhban/control_client.go prints that verbatim after "dezhban refused:".
+// Four of them said "daemon" or "egress" on the day this lint shipped, so
+// `dezhban pause` in standby answered a user with two retired words in one
+// sentence. The log calls all around them stay exempt through isLogCall, which
+// is exactly the distinction go/parser buys.
+var goScopes = []string{"cmd", "internal/render", "internal/config", "internal/runner"}
 
 // goExempt are files whose string literals are not copy at all. completion.go is
 // one big shell-script template: every "daemon" in it is `--no-daemon`, a flag
@@ -106,6 +125,35 @@ func TestTheGlossaryStillParses(t *testing.T) {
 	if copyOnly == 0 {
 		t.Error("no ‡ rows parsed; the marker is how a word stays legal in logs and docs, " +
 			"and losing it would force the technical register to be renamed too")
+	}
+}
+
+// TestEveryTermMatchesItself is the row-level version of Load's zero-terms
+// guard, and it exists because the table-level one is not enough: a row can
+// parse, be counted, and still match nothing.
+//
+// Three rows shipped that way — every phrase ending in a config key, e.g.
+// "Enable VPN guard (vpn.enabled)" — because \b after ")" asserts a transition
+// that cannot occur. They read as enforced on the page and enforced nothing, so
+// the lint reported success over a rule it was not applying. A term that cannot
+// find itself in its own text can never find itself in anyone else's.
+func TestEveryTermMatchesItself(t *testing.T) {
+	terms, err := Load(glossary())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, term := range terms {
+		if term.re.FindString(term.Phrase) == "" {
+			t.Errorf("glossary bans %q but the matcher never fires — the row lints nothing. "+
+				"Check for leading/trailing punctuation, which \\b cannot anchor against.",
+				term.Phrase)
+		}
+		// Again inside a sentence: the anchors must survive real surroundings,
+		// not just an exact-string match, or a row would pass here and still
+		// miss every actual use.
+		if term.re.FindString("the "+term.Phrase+" thing") == "" {
+			t.Errorf("glossary bans %q but the matcher does not fire inside a sentence", term.Phrase)
+		}
 	}
 }
 
@@ -225,14 +273,49 @@ func isLogCall(fun ast.Expr) bool {
 // checkSwiftFile scans string literals line by line. There is no Swift parser
 // here, so this is the pragmatic form: doc comments are skipped (they are notes
 // to developers) and everything in quotes is treated as copy.
+//
+// Multi-line (`"""`) literals get their own mode, because the line-by-line form
+// cannot see them at all: the fence lines carry no content and the content lines
+// carry no quotes, so an entire alert body registers as zero literals. That is
+// not a theoretical gap — ConfigApply's restart alert sat inside one and told
+// users dezhban would "keep the daemon on the old values" while this lint
+// reported the file clean. A modal alert is the most user-facing copy the app
+// has, so the one shape the scanner could not see was the worst one to miss.
+//
+// Each line inside the fence is checked on its own, matching how checkGoFile
+// splits a `usage` block: a violation names the sentence, not the alert. Swift's
+// trailing `\` line-continuation means a banned phrase can straddle two lines,
+// which this will miss — the same soft-wrap limit checkGoFile has, and the
+// reason Term.re relaxes internal whitespace to \s+ rather than a literal space.
 func checkSwiftFile(t *testing.T, path string, terms []Term) {
 	t.Helper()
 	data, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
+	inBlock := false
 	for i, line := range strings.Split(string(data), "\n") {
 		trimmed := strings.TrimSpace(line)
+		// A fence toggles the mode and never carries copy itself: the opening
+		// line is `... = """` and the closing one is `"""` alone.
+		if strings.Contains(line, `"""`) {
+			inBlock = !inBlock
+			continue
+		}
+		if inBlock {
+			// No quotes to find in here — the whole line IS the literal. Strip
+			// Swift's trailing line-continuation backslash so it cannot end up
+			// inside a matched phrase.
+			lit := strings.TrimSuffix(trimmed, `\`)
+			if _, ok := allowed[strings.TrimSpace(lit)]; ok {
+				continue
+			}
+			for _, hit := range Check(lit, terms, true) {
+				t.Errorf("%s:%d: user-facing copy says %q — say %s instead (docs/concepts/glossary.md).\n    in: %q",
+					rel(path), i+1, hit.Match, hit.Term.Instead, trim(lit))
+			}
+			continue
+		}
 		if strings.HasPrefix(trimmed, "//") {
 			continue
 		}

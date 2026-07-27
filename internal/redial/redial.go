@@ -166,8 +166,16 @@ func (b *Budget) Grant(now time.Time, uptime time.Duration, goodExit bool, s Set
 	// already the response to the flap, and escalating on drops that were given
 	// no help would compound a punishment for something the guard declined to
 	// assist with — the backoff exists to ration windows, not to score drops.
+	//
+	// NextEligible answers for BOTH bounds, not just the one that happened to
+	// refuse first. A host deep in a flap can be cooling down and short of budget
+	// at once; reporting only coolUntil then tells the user 3:00 and, when the
+	// next drop arrives at 3:00, tells them 3:15 instead. nextEligible already
+	// floors its answer at coolUntil, so asking it here is strictly more correct
+	// than the bare deadline and never less. The reason stays "cooldown" — that
+	// is what refused this drop, and the reason is what the surfaces match on.
 	if now.Before(b.coolUntil) && !recovered {
-		return Grant{Reason: ReasonCooldown, NextEligible: b.coolUntil}
+		return Grant{Reason: ReasonCooldown, NextEligible: b.nextEligible(now, s, floorFor(s.Window))}
 	}
 
 	// Compute the backoff without committing it. Same principle as the cooldown
@@ -285,10 +293,18 @@ func (b *Budget) spent() time.Duration {
 	return total
 }
 
-// expire drops episodes that started more than one Interval ago. Inclusion is by
-// START time, so an episode straddling the boundary leaves the ledger whole
+// expire drops episodes that started a full Interval ago or more. Inclusion is
+// by START time, so an episode straddling the boundary leaves the ledger whole
 // rather than being pro-rated — simpler, and it errs toward forgetting sooner,
 // which is the direction that keeps the budget from over-refusing.
+//
+// The boundary is inclusive for a reason that is not stylistic: nextEligible
+// answers start+Interval, and both surfaces state that instant to the user as
+// when the guard can relax again. With a strict comparison the episode at
+// exactly start+Interval is still on the ledger, so the drop that arrives at the
+// promised time is refused and handed a NEW time — the moving deadline this
+// package exists to avoid. Retiring on the boundary makes the published instant
+// one the ledger will actually honour.
 func (b *Budget) expire(now time.Time, interval time.Duration) {
 	if interval <= 0 {
 		return
@@ -301,7 +317,7 @@ func (b *Budget) expire(now time.Time, interval time.Duration) {
 		// never aged out however long it has been running — dropping it would
 		// lose the debit and leave Close with nothing to settle, quietly making
 		// the longest windows the cheapest ones.
-		if e.settled && e.start.Before(cutoff) {
+		if e.settled && !e.start.After(cutoff) {
 			continue
 		}
 		if !e.settled {

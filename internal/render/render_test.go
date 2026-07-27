@@ -108,7 +108,8 @@ func TestText(t *testing.T) {
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "Your VPN dropped at 3:04PM. Your VPN has dropped often enough to use up " +
 				"its redial budget, so the guard is holding and traffic stays cut. " +
-				"It can relax again at 3:19PM.",
+				"No window will open before 3:19PM — your VPN can still reconnect on its own, " +
+				"and you can open a window yourself at any time.",
 		},
 		{
 			name: "guard holds while backing off after fast drops",
@@ -126,7 +127,9 @@ func TestText(t *testing.T) {
 			wantKey:      KeyBlocked,
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "Your VPN dropped at 3:04PM. Your VPN keeps dropping, so dezhban is waiting " +
-				"before it relaxes the guard again — traffic stays cut. It can relax again at 3:05PM.",
+				"before it relaxes the guard again — traffic stays cut. No window will open before " +
+				"3:05PM — your VPN can still reconnect on its own, and you can open a window " +
+				"yourself at any time.",
 		},
 		{
 			// A refusal reason this build does not recognise, from a newer daemon
@@ -146,7 +149,8 @@ func TestText(t *testing.T) {
 			wantKey:      KeyBlocked,
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "The guard is holding rather than opening a window for your VPN, so " +
-				"traffic stays cut. It can relax again at 3:04PM.",
+				"traffic stays cut. No window will open before 3:04PM — your VPN can still " +
+				"reconnect on its own, and you can open a window yourself at any time.",
 		},
 		{
 			// NextEligible is the sentence's reason for existing, but a snapshot

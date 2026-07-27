@@ -124,6 +124,14 @@ that stays down carries the refusal past its own deadline and nothing acts at
 that instant. A script should treat a `nextEligible` in the past as "the bound
 has lifted, waiting for the VPN to try again" — which is what
 `state.display.detail` then says, in place of naming a time that has gone by.
+`state.display.detail` states the future case as a bound too ("No window will
+open before 3:15PM"), never as an appointment, for the same reason.
+
+It answers for **both** bounds, not just whichever refused first: a host that is
+backing off *and* out of budget reports the later of the two, so the instant does
+not move when the next drop arrives. The key is **omitted** when the writer had
+no instant to give — never published as a zero timestamp, which every reader
+would have to special-case. Treat absent as "no time known" and say nothing.
 
 `remainingSeconds` is **not** stale in that way: unlike `reason` and
 `nextEligible`, which are the decision and stay as decided, it is re-read from

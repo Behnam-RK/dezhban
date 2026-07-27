@@ -206,6 +206,52 @@ func TestTheCooldownStillHoldsWithoutEvidence(t *testing.T) {
 	}
 }
 
+// A cooldown refusal must answer for the BUDGET too, not only for the cooldown
+// that happened to be checked first. A host deep in a flap hits both bounds at
+// once, and a NextEligible that names only the nearer one is a deadline the next
+// drop moves — the user is told 12:00:30, waits, and is told 12:15:00 instead.
+//
+// Stating a time the guard will not honour is worse than stating none: it is the
+// same failure as reporting a setting applied while the old one is enforced, and
+// internal/render leans on this instant being real ("It can relax again at …").
+func TestACooldownRefusalAlsoAnswersForTheBudget(t *testing.T) {
+	// A budget that affords the first window and then almost nothing: 17s buys
+	// the 15s first grant and leaves 2s, below the 5s floor.
+	s := Settings{
+		Window:    30 * time.Second,
+		Budget:    17 * time.Second,
+		Interval:  15 * time.Minute,
+		MinUptime: 15 * time.Second,
+	}
+	b := New()
+
+	// A fast drop: halved to 15s, and it arms a 30s cooldown.
+	if g := b.Grant(t0, 5*time.Second, false, s); g.Duration != 15*time.Second {
+		t.Fatalf("first grant = %s, want 15s", g.Duration)
+	}
+	b.Close(t0.Add(15 * time.Second))
+
+	// A second fast drop, inside the cooldown AND past what the budget can
+	// afford. The cooldown lifts at t0+30s; the budget does not recover until
+	// the first episode rolls out of the interval at t0+15m.
+	at := t0.Add(20 * time.Second)
+	g := b.Grant(at, 3*time.Second, false, s)
+	if g.OK() || g.Reason != ReasonCooldown {
+		t.Fatalf("got %+v, want a cooldown refusal", g)
+	}
+	if want := t0.Add(s.Interval); !g.NextEligible.Equal(want) {
+		t.Errorf("NextEligible = %s, want %s — the cooldown lifts at %s but the "+
+			"budget cannot afford a window until the first episode expires",
+			g.NextEligible, want, t0.Add(30*time.Second))
+	}
+
+	// And the promise holds: the drop that arrives at the stated instant is
+	// granted rather than refused with a later time.
+	if g := b.Grant(g.NextEligible, 3*time.Second, false, s); !g.OK() {
+		t.Errorf("the drop at the promised instant was refused: %+v", g)
+	}
+}
+
 // The bound the ADR exists to add: total open time inside the rolling interval
 // cannot exceed the budget, however many drops occur.
 func TestBudgetIsExhaustedAndHolds(t *testing.T) {

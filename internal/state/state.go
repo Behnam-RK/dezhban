@@ -211,10 +211,19 @@ type RedialState struct {
 	// ("cooldown", "exhausted"). Surfaces match on it; the sentence a user reads
 	// is composed in internal/render, never here.
 	Reason string `json:"reason"`
-	// NextEligible is the earliest instant a window could open. The whole point
-	// of publishing a refusal is that it comes with a "until when" — "the guard
-	// is holding" alone leaves the user unable to tell a wait from a wall.
-	NextEligible time.Time `json:"nextEligible"`
+	// NextEligible is the earliest instant a window could open — a bound, not an
+	// appointment: nothing fires at it, the decision is retaken on the next
+	// tunnel-down edge. The whole point of publishing a refusal is that it comes
+	// with an "until when" all the same — "the guard is holding" alone leaves
+	// the user unable to tell a wait from a wall.
+	//
+	// omitzero, not omitempty: omitempty does not omit a zero time.Time (a
+	// non-empty struct), so a writer without an instant would publish
+	// "0001-01-01T00:00:00Z". Every reader then has to special-case year 1, and
+	// the macOS app's ISO8601 decoder simply refuses it — failing the WHOLE
+	// Snapshot decode, which reads as "stopped" while dezhban is enforcing. An
+	// absent key is the one shape every consumer already handles.
+	NextEligible time.Time `json:"nextEligible,omitzero"`
 	// RemainingSeconds is what is left of the rolling budget AS OF THIS
 	// SNAPSHOT, not as of the refusal: episodes keep rolling out of the interval
 	// while the cut lasts, so this grows back on its own and a reader can watch

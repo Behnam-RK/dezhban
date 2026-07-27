@@ -303,6 +303,14 @@ func redialCause(s state.Snapshot) string {
 // moment now" and "not for eleven minutes" is the whole reason the refusal is
 // published at all, and a surface that omits it may as well have stayed silent.
 //
+// But it names the instant as a BOUND, not as an appointment. Nothing in the
+// daemon fires at nextEligible: the decision is retaken only on the next
+// tunnel-down edge, so the time says when a window becomes possible, never when
+// one arrives. Wording it as an event would promise an unattended recovery the
+// run loop cannot deliver — worst in exactly the case the window exists for, a
+// rotated server address the endpoint pass does not cover, where the tunnel
+// cannot come back by itself and so no further edge is ever produced.
+//
 // Which is why a passed deadline gets its own clause rather than the instant.
 // The refusal is published for the drop being carried and is only re-decided on
 // the next tunnel-down edge, so once nextEligible is behind the snapshot's own
@@ -333,7 +341,20 @@ func redialRefusal(s state.Snapshot) string {
 	at, passed := nextEligible(s)
 	switch {
 	case at != "":
-		return why + ". It can relax again at " + at + "."
+		// A LOWER BOUND, never an appointment. The instant is the earliest a
+		// window could open, and the run loop only re-decides on the next
+		// tunnel-down edge (maybeAutoWindow's sole call site) — so nothing fires
+		// at this time, and if the tunnel cannot come back on its own, nothing
+		// fires at all. "It can relax again at 3:15PM" read as a scheduled
+		// event and quietly promised an automatic recovery that was never
+		// coming; docs/usage/cli.md states the same caveat for scripts, and a
+		// human deserves it more, not less.
+		//
+		// So: the bound, the fact that the VPN's own redial is unaffected (the
+		// guard still passes known server addresses on the physical link — a
+		// held guard is not a stopped VPN), and the way out that always works.
+		return why + ". No window will open before " + at +
+			" — your VPN can still reconnect on its own, and you can open a window yourself at any time."
 	case passed:
 		return why + ". It can relax again the next time your VPN tries to reconnect."
 	}
