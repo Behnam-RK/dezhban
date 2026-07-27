@@ -7,6 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	// Test-only, and it must stay test-only: production `config` depends on
+	// nothing but the standard library because nearly every other package
+	// imports it. internal/redial imports only "time", so there is no cycle to
+	// worry about here — see minRedialGrant.
+	"github.com/behnam-rk/dezhban/internal/redial"
 )
 
 func TestLoadMissingPathReturnsDefaults(t *testing.T) {
@@ -1023,5 +1029,66 @@ func TestAbsentRedialBudgetTakesTheDefault(t *testing.T) {
 	if cfg.VPN.Advanced.RedialBudgetWindow != defaultRedialBudgetWindow {
 		t.Errorf("redialBudgetWindow = %s, want default %s",
 			cfg.VPN.Advanced.RedialBudgetWindow, defaultRedialBudgetWindow)
+	}
+}
+
+// The validation rule below is only as good as the number behind it, and that
+// number lives in another package. If redial.MinGrant moves and this copy does
+// not, Validate starts accepting a budget the ledger will refuse forever — the
+// exact silent-disable this rule exists to prevent, reintroduced by a constant
+// nobody thought to grep for.
+func TestMinRedialGrantMatchesTheLedger(t *testing.T) {
+	if minRedialGrant != redial.MinGrant {
+		t.Fatalf("minRedialGrant = %s but redial.MinGrant = %s; the validation rule "+
+			"and the ledger disagree about the shortest window worth opening",
+			minRedialGrant, redial.MinGrant)
+	}
+}
+
+// A budget too small to afford even the shortest window turns the automatic
+// redial window off by arithmetic while the config still reads as though it is
+// on. Turning it off is fine — `vpn.redialWindow: "0"` is there for that — but
+// it has to be a decision, not a rounding error, so this is refused by name.
+func TestABudgetTooSmallToEverOpenIsRefused(t *testing.T) {
+	for _, budget := range []time.Duration{time.Second, redial.MinGrant - time.Nanosecond} {
+		cfg := Default()
+		cfg.VPN.TunnelInterfaces = []string{"utun4"}
+		cfg.VPN.RedialWindow = 30 * time.Second
+		cfg.VPN.Advanced.RedialBudget = budget
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatalf("redialBudget %s validated clean; the automatic window can never open", budget)
+		}
+		for _, want := range []string{"redialBudget", "vpn.redialWindow"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error for %s does not mention %q: %v", budget, want, err)
+			}
+		}
+	}
+}
+
+// The other side of the same rule: a budget at the floor is exactly enough for
+// one shortest window, so it is a legitimate — if severe — choice and must pass.
+// A rule that also refused this would be tightening past what it can justify.
+func TestABudgetAtTheFloorIsAccepted(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun4"}
+	cfg.VPN.RedialWindow = 30 * time.Second
+	cfg.VPN.Advanced.RedialBudget = redial.MinGrant
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a budget of exactly redial.MinGrant was refused: %v", err)
+	}
+}
+
+// And the rule must not fire when the automatic window is already off outright:
+// with vpn.redialWindow disabled the budget is inert, so complaining about its
+// size would block a config that has no automatic window to break.
+func TestTheBudgetFloorIsMootWhenTheWindowIsDisabled(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun4"}
+	cfg.VPN.RedialWindow = Disabled
+	cfg.VPN.Advanced.RedialBudget = time.Second
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the budget floor fired on a config with no automatic window: %v", err)
 	}
 }

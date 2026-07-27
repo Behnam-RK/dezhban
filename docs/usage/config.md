@@ -327,6 +327,13 @@ surface to offer. Raise the budget to relax the bound, or set
 `vpn.redialWindow` to `"0"` to turn the automatic redial window off outright.
 Full rationale: [ADR-0009](../adr/0009-redial-budget.md).
 
+For the same reason, a `redialBudget` **below `5s`** is refused while the
+automatic window is enabled. `5s` is the shortest window dezhban will open — a
+shorter one exposes the real IP without leaving a VPN client time to finish a
+handshake — so a budget under it can never afford a window, and the automatic
+redial window would be off permanently while the config still read as though it
+were on. Turning it off is fine; turning it off by accident is not.
+
 | Field | Default | What it controls |
 |---|---|---|
 | `switchWindowMax` | `3m` | Hard cap on any MANUAL switch window (incl. `--for`). |

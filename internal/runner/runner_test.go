@@ -1667,3 +1667,182 @@ func TestProbeFallsBackToLiftWhenNoProviders(t *testing.T) {
 		t.Errorf("fallback probe calls = %v, want %v (lift then re-cut)", be.calls, want)
 	}
 }
+
+// --- the redial ledger's debit/credit pairing at the runner seam ---
+
+// firstWindowFailsBackend fails the FIRST window-open Apply and succeeds after,
+// so a test can observe what the ledger did about a window that never opened.
+type firstWindowFailsBackend struct {
+	mu     sync.Mutex
+	calls  []string
+	failed bool
+}
+
+func (b *firstWindowFailsBackend) Apply(p firewall.Policy) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch p.Mode {
+	case firewall.ModeGuard:
+		b.calls = append(b.calls, "apply-guard")
+	case firewall.ModeSwitchWindow:
+		if !b.failed {
+			b.failed = true
+			b.calls = append(b.calls, "apply-switch-failed")
+			return errors.New("pfctl said no")
+		}
+		b.calls = append(b.calls, "apply-switch")
+	default:
+		b.calls = append(b.calls, "apply-fullblock")
+	}
+	return nil
+}
+func (b *firstWindowFailsBackend) Block(a firewall.Allowlist) error { return nil }
+func (b *firstWindowFailsBackend) Unblock() error                   { return nil }
+func (b *firstWindowFailsBackend) Cleanup() error                   { return nil }
+func (b *firstWindowFailsBackend) seen() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.calls...)
+}
+
+// twoDropWatcher goes up, down, up, down — two separate drops, so a test can ask
+// what the SECOND one was allowed to do.
+func twoDropWatcher() *netdetect.Watcher {
+	n := 0
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			n++
+			if (n > 5 && n <= 8) || (n > 20 && n <= 24) {
+				return netdetect.TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+			}
+			return netdetect.TunnelState{}
+		},
+	}
+}
+
+// A window whose rules never landed cost the user nothing, so it must cost the
+// budget nothing. The grant is debited before Backend.Apply runs — it has to be,
+// the decision comes first — so a failed Apply would otherwise leave the debit
+// standing with no window to close it, and expire deliberately never ages an
+// open episode out. The budget here affords exactly one window: if the failed
+// open is charged, the second drop gets nothing.
+func TestAFailedOpenCostsTheBudgetNothing(t *testing.T) {
+	be := &firstWindowFailsBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            twoDropWatcher(),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       20 * time.Millisecond, // room for exactly one window
+		RedialBudgetWindow: time.Minute,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	calls := be.seen()
+	var failed, opened int
+	for _, c := range calls {
+		switch c {
+		case "apply-switch-failed":
+			failed++
+		case "apply-switch":
+			opened++
+		}
+	}
+	if failed == 0 {
+		t.Fatalf("the fixture never attempted a window open, so nothing is proven; calls = %v", calls)
+	}
+	if opened == 0 {
+		t.Errorf("the second drop got no window: the first open FAILED (no rules applied, "+
+			"no exposure taken) yet the budget was charged for it. The ledger is measuring "+
+			"exposure OFFERED, which is what credit-on-close exists to prevent. calls = %v", calls)
+	}
+}
+
+// docs/usage/cli.md promises a reader that an open window is reported by
+// state.switch "instead, never here", and tells scripts to match on
+// .redial.reason. A manual switch opened over a standing refusal used to publish
+// both at once — the guard relaxed and, in the same snapshot, an explanation of
+// why it was holding until 3:15PM.
+func TestAnOpenWindowIsNeverPublishedBesideARefusal(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	var mu sync.Mutex
+	var snaps []state.Snapshot
+	sent := false
+
+	o := Options{
+		Monitor:   steadyFailMonitor{},
+		Decider:   decision.New([]string{"IR"}, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:   flapWatcher(),
+		// Too small to afford any window, so the drop is refused and the
+		// refusal stands while the tunnel stays down.
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       time.Millisecond,
+		RedialBudgetWindow: time.Minute,
+		SwitchWindow:       80 * time.Millisecond,
+		SwitchWindowMax:    time.Minute,
+		CommandPoll:        5 * time.Millisecond,
+		// Open a manual window only once a refusal has actually been published,
+		// so the two really do overlap rather than racing.
+		PollCommand: func() (command.Command, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			if sent {
+				return command.Command{}, false
+			}
+			for _, s := range snaps {
+				if s.Redial != nil {
+					sent = true
+					return command.Command{Op: command.OpOpenSwitchWindow}, true
+				}
+			}
+			return command.Command{}, false
+		},
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			snaps = append(snaps, s)
+			mu.Unlock()
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var refusals, both int
+	for _, s := range snaps {
+		if s.Redial == nil {
+			continue
+		}
+		refusals++
+		if s.Switch != nil {
+			both++
+			t.Logf("posture=%q switch.trigger=%q redial.reason=%q",
+				s.Posture, s.Switch.Trigger, s.Redial.Reason)
+		}
+	}
+	if refusals == 0 {
+		t.Fatal("no refusal was ever published, so the overlap could not occur; nothing is proven")
+	}
+	if both > 0 {
+		t.Errorf("%d snapshot(s) carry BOTH state.switch and state.redial — a script matching "+
+			"on .redial.reason sees the guard holding while a window is open", both)
+	}
+}

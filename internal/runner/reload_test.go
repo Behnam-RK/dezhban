@@ -416,3 +416,96 @@ func TestReloadedWindowDiscoveryIntervalAppliesToTheNextWindow(t *testing.T) {
 		t.Errorf("in-window discovery ran %d times (startup only); the reloaded interval was ignored", got)
 	}
 }
+
+// vpn.advanced.redialBudget and redialBudgetWindow are declared live-appliable,
+// which is a promise to the user: `config set` reports "Saved and applied". The
+// completeness tests above only prove the field is COPIED from one struct to
+// another — a value the run loop then snapshotted into a local at startup would
+// pass every one of them while the old number kept being enforced.
+//
+// These two prove the behaviour changed, which is what the promise is about. The
+// ledger reads all four settings through a closure over `o` on every drop for
+// exactly this reason; a captured redial.Settings would fail here and nowhere
+// else.
+func TestReloadedRedialBudgetDecidesTheNextDrop(t *testing.T) {
+	// Boot with a budget too small to afford any window, reload to a generous
+	// one, then drop: a window must open. If the ledger held the boot value the
+	// drop is refused and no window ever appears.
+	t.Run("a raised budget lets the next drop open a window", func(t *testing.T) {
+		be := &fakeBackend{}
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+
+		reloadC := make(chan LiveSettings, 1)
+		reloadC <- LiveSettings{
+			Interval:           time.Hour,
+			RedialWindow:       20 * time.Millisecond,
+			RedialWindowMax:    time.Minute,
+			RedialBudget:       10 * time.Second, // the change under test
+			RedialBudgetWindow: time.Minute,
+		}
+
+		o := Options{
+			Monitor:            steadyFailMonitor{},
+			Decider:            decision.New([]string{"IR"}, 1),
+			Backend:            be,
+			Log:                discardLog(),
+			Interval:           time.Hour,
+			Tunnels:            []string{"utun4"},
+			Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+			Watcher:            flapWatcher(),
+			RedialWindow:       20 * time.Millisecond,
+			RedialWindowMax:    time.Minute,
+			RedialBudget:       time.Nanosecond, // at boot: affords nothing
+			RedialBudgetWindow: time.Minute,
+			ReloadC:            reloadC,
+		}
+		if err := Run(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+		if !hasCall(be.calls, "apply-switch") {
+			t.Errorf("no redial window opened after the budget was raised; the ledger is still "+
+				"enforcing the boot value. calls = %v", be.calls)
+		}
+	})
+
+	// The other direction, which is the one that matters for a security bound: a
+	// budget LOWERED at runtime must bind immediately, not at the next restart.
+	t.Run("a lowered budget refuses the next drop", func(t *testing.T) {
+		be := &fakeBackend{}
+		ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+		defer cancel()
+
+		reloadC := make(chan LiveSettings, 1)
+		reloadC <- LiveSettings{
+			Interval:           time.Hour,
+			RedialWindow:       20 * time.Millisecond,
+			RedialWindowMax:    time.Minute,
+			RedialBudget:       time.Nanosecond, // the change under test
+			RedialBudgetWindow: time.Minute,
+		}
+
+		o := Options{
+			Monitor:            steadyFailMonitor{},
+			Decider:            decision.New([]string{"IR"}, 1),
+			Backend:            be,
+			Log:                discardLog(),
+			Interval:           time.Hour,
+			Tunnels:            []string{"utun4"},
+			Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+			Watcher:            flapWatcher(),
+			RedialWindow:       20 * time.Millisecond,
+			RedialWindowMax:    time.Minute,
+			RedialBudget:       10 * time.Second, // at boot: affords plenty
+			RedialBudgetWindow: time.Minute,
+			ReloadC:            reloadC,
+		}
+		if err := Run(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+		if hasCall(be.calls, "apply-switch") {
+			t.Errorf("a redial window opened after the budget was lowered to nothing; a tightened "+
+				"bound did not bind until restart. calls = %v", be.calls)
+		}
+	})
+}

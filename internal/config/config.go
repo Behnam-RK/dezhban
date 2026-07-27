@@ -1148,6 +1148,14 @@ const (
 	defaultRedialBudget       = 2 * time.Minute
 	defaultRedialBudgetWindow = 15 * time.Minute
 
+	// minRedialGrant mirrors redial.MinGrant, the shortest automatic window that
+	// package considers worth opening. Duplicated rather than imported because this package
+	// depends on nothing but the standard library and is imported by nearly
+	// everything else — reversing that for one constant would be a poor trade.
+	// TestMinRedialGrantMatchesTheLedger keeps the copy honest, so the two cannot
+	// drift into a validation rule that permits a budget the ledger then refuses.
+	minRedialGrant = 5 * time.Second
+
 	maxProfileName = 64
 
 	// Disabled marks a duration the user explicitly set to "0" (feature
@@ -1348,6 +1356,23 @@ func validateSwitchWindow(v VPN) error {
 	// Capped separately from the manual window — see Advanced.RedialWindowMax.
 	if v.RedialWindow > 0 && v.RedialWindow > rmax {
 		return fmt.Errorf("vpn.redialWindow %s exceeds vpn.advanced.redialWindowMax %s (or \"0\" to disable)", v.RedialWindow, rmax)
+	}
+	// A budget below the shortest window worth opening can never afford one, so
+	// the automatic redial window is off — permanently, and by arithmetic rather
+	// than by decision. Refuse it by name.
+	//
+	// Turning a feature off is a legitimate thing to want; every window here has
+	// an explicit "0" for exactly that. What must never happen is turning it off
+	// by ACCIDENT while the config still reads as though it is on: that is the
+	// mirror of accepting a security setting and silently discarding it, and it
+	// is worse here because the surfaces cover for it. With an empty ledger
+	// redial.Budget.nextEligible has nothing to wait for and answers "now", so
+	// `status` and the app tell the user it can relax again the next time the VPN
+	// reconnects — a promise nothing will ever keep.
+	if v.RedialWindow > 0 && v.Advanced.RedialBudget > 0 && v.Advanced.RedialBudget < minRedialGrant {
+		return fmt.Errorf("vpn.advanced.redialBudget %s is below the %s minimum window, so the "+
+			"automatic redial window could never open; raise it, or set vpn.redialWindow to \"0\" "+
+			"to turn the automatic window off deliberately", v.Advanced.RedialBudget, minRedialGrant)
 	}
 	return nil
 }

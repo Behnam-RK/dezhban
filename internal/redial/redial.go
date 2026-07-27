@@ -224,6 +224,12 @@ func (b *Budget) Close(now time.Time) {
 // Remaining is how much of the budget is unspent as of now. An open window
 // counts at its full grant: it is committed, and reporting it as free would let
 // a surface promise room that is already claimed.
+//
+// It MUTATES: expiring the ledger is what makes the answer current, so this
+// retires episodes that have rolled out of the interval. Harmless where it is
+// called — the run loop's single goroutine, the same one that owns every
+// Backend.Apply — but it is not the read-only accessor its name suggests, so do
+// not reach for it from anywhere else without moving the expiry out first.
 func (b *Budget) Remaining(now time.Time, s Settings) time.Duration {
 	b.expire(now, s.Interval)
 	return max(0, s.Budget-b.spent())

@@ -125,6 +125,13 @@ that instant. A script should treat a `nextEligible` in the past as "the bound
 has lifted, waiting for the VPN to try again" — which is what
 `state.display.detail` then says, in place of naming a time that has gone by.
 
+`remainingSeconds` is stale in the same way and for the same reason: it is what
+the budget held **at the moment of the refusal**, and the rolling period keeps
+turning underneath it. So it only ever *understates* what is actually left. Read
+it as "at least this much was free when dezhban last decided", not as a live
+gauge — there is no live gauge, because the budget is only consulted on a
+tunnel-down edge.
+
 ```sh
 dezhban status                                    # config + service + block state
 dezhban status --json                             # machine-readable (merges the state file)

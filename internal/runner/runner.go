@@ -1001,6 +1001,14 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		windowPrevBlocked = blocked
 		windowActive = true
+		// A window is open, so no refusal stands — whatever the trigger. The
+		// automatic path already cleared it before calling, but a MANUAL switch
+		// or a pause opens over a standing refusal and would otherwise publish
+		// both: state.switch saying the guard is relaxed and state.redial saying
+		// it is holding until 3:15PM. docs/usage/cli.md promises a reader exactly
+		// one of those ("an open window is reported by state.switch instead,
+		// never here"), and a script matching on .redial.reason believes it.
+		redialRefused = nil
 		windowStart = now
 		windowProfile = profile
 		windowTrigger = trigger
@@ -1105,6 +1113,15 @@ func (o Options) runGuard(ctx context.Context) error {
 				"consecutiveFastDrops", redialLedger.ShortRun())
 		}
 		openWindow(now, g.Duration, "", state.TriggerAuto)
+		// openWindow reports failure by leaving windowActive false: the Apply
+		// errored, so no rule landed and no exposure was taken. Credit the whole
+		// grant back — charging it would make the ledger measure exposure OFFERED,
+		// which is the one thing credit-on-close exists to prevent, and the debit
+		// would otherwise sit unsettled until some later Grant charged it in full
+		// (expire never ages an open episode out, on purpose).
+		if !windowActive {
+			redialLedger.Close(now)
+		}
 	}
 
 	// closeWindowRevert reverts to the prior posture (expiry / cancel). Session-

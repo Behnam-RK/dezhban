@@ -38,6 +38,32 @@ current as you land changes.
   now say the same thing: a limit has no "off" — raise it, or set
   `vpn.redialWindow` to `"0"` to turn the automatic window off outright.
 
+- **A redial window whose firewall rules failed to install no longer costs the
+  budget anything.** The grant is debited before the rules are applied — the
+  decision has to come first — so an `Apply` that errored left the debit standing
+  with no window to close it, and the ledger deliberately never ages out an open
+  episode. A single failed open could therefore spend the whole budget and refuse
+  every later drop, for exposure that never happened. The grant is credited back
+  in full when the open fails, which is what "the budget measures exposure taken,
+  not exposure offered" was supposed to mean all along.
+
+- **`status --json` no longer reports an open window and a standing refusal at
+  the same time.** Opening a manual `switch` or a `pause` over a refused drop
+  left `state.redial` published beside `state.switch`, so a script matching on
+  `.redial.reason` — which [the CLI reference](docs/usage/cli.md) tells it to do
+  — saw the guard holding until 3:15PM while the guard was in fact relaxed. Any
+  window opening now clears the refusal, whatever its trigger. The sentence a
+  person reads was never affected.
+
+- **`vpn.advanced.redialBudget` below `5s` is refused** while the automatic
+  window is enabled, instead of validating clean. `5s` is the shortest window
+  dezhban will open, so a smaller budget can never afford one: the automatic
+  redial window was off permanently while the config still read as though it were
+  on, and `status` compounded it by reporting that the guard could relax again
+  "the next time your VPN tries to reconnect" — a promise nothing would ever
+  keep. Turning the window off stays available and explicit
+  (`vpn.redialWindow: "0"`); turning it off by arithmetic does not.
+
 ### Changed
 
 - **The glossary is now checked, not just written down.** It has always claimed
