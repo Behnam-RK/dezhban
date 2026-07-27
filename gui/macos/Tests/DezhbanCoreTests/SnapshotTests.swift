@@ -72,11 +72,11 @@ struct SnapshotTests {
         {
           "time": "2026-07-25T10:00:05Z", "posture": "switch-window", "blocked": false,
           "switch": { "open": true, "until": "2026-07-25T10:00:35Z", "trigger": "auto" },
-          "drop": { "at": "2026-07-25T10:00:00Z", "cut": true }
+          "drop": { "at": "2026-07-25T10:00:00Z" }
         }
         """.data(using: .utf8)!
         let s = try! #require(StateReader.decode(json))
-        #expect(s.drop?.cut == true)
+        #expect(s.drop != nil)
         #expect(s.switch?.isAutoRedial == true)
         // The drop happened before the window it opened, and the two timestamps
         // must not be confused for one another.
@@ -86,15 +86,18 @@ struct SnapshotTests {
         #expect(dropAt < s.time)
     }
 
-    /// A drop in standby is not a cut — nothing was being enforced — and the app
-    /// must not claim otherwise.
-    @Test func aStandbyDropIsNotACut() {
+    /// A key the app no longer knows about must not fail the decode. The daemon
+    /// and the app ship in one package but are not guaranteed to be restarted
+    /// together, so a running daemon can still be emitting a field this build
+    /// has dropped — `drop.cut` is the first one that happened to. Refusing the
+    /// whole snapshot over it would blank the menubar until the next restart.
+    @Test func anUnknownFieldOnTheDropRecordIsIgnored() {
         let json = """
-        { "time": "2026-07-25T10:00:05Z", "posture": "standby", "blocked": false,
-          "drop": { "at": "2026-07-25T10:00:00Z", "cut": false } }
+        { "time": "2026-07-25T10:00:05Z", "posture": "guard", "blocked": true,
+          "drop": { "at": "2026-07-25T10:00:00Z", "cut": true } }
         """.data(using: .utf8)!
         let s = try! #require(StateReader.decode(json))
-        #expect(s.drop?.cut == false)
+        #expect(s.drop?.at != nil)
     }
 
     @Test func decodesHoldTheLineArmed() {

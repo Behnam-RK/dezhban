@@ -53,7 +53,7 @@ current as you land changes.
   rendered strings.
 
 - **The state file records when your VPN dropped.** `status --json` gains a
-  `drop` object (`at`, `cut`) present from a tunnel drop until a tunnel is up
+  `drop` object (`at`) present from a tunnel drop until a tunnel is up
   again. Until now the moment the guard cut traffic was unobservable on the
   common path: the automatic redial window opens on the same edge, so the cut
   snapshot was replaced within microseconds while observers read the file about

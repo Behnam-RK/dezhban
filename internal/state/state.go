@@ -148,8 +148,8 @@ type SwitchState struct {
 	Trigger string `json:"trigger,omitempty"`
 }
 
-// DropRecord is the moment a healthy tunnel went down and the guard cut traffic,
-// carried forward until a tunnel is up again.
+// DropRecord is the moment a healthy tunnel went down, carried forward until a
+// tunnel is up again.
 //
 // It exists because the cut is otherwise unobservable on the common path. The
 // run loop opens the automatic redial window on the same tunnel-down edge, so a
@@ -161,14 +161,14 @@ type SwitchState struct {
 // Carrying it does NOT make the window look like a cut. An open window is a
 // relaxation: traffic is flowing and the real IP may be exposed, so it stays
 // amber. The record says what happened, not what is happening.
+// It carries the moment and nothing else. A companion "was traffic cut at that
+// instant" flag was tried and removed: no surface could truthfully render it,
+// because a window may have opened and expired in between, so neither "cut
+// since" nor "not cut" describes what followed. What a reader needs from a drop
+// is WHEN — the posture fields already say what is happening now.
 type DropRecord struct {
 	// At is when the tunnel was observed down.
 	At time.Time `json:"at"`
-	// Cut reports that the guard was actually enforcing at that moment, so
-	// traffic really was cut before anything relaxed. False when the drop
-	// happened in a posture that was not cutting (standby), where saying
-	// "traffic was cut" would be a lie.
-	Cut bool `json:"cut"`
 }
 
 // HoldState reports that "hold the line" is armed: the next tunnel drop will

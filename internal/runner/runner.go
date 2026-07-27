@@ -1680,13 +1680,11 @@ func (o Options) runGuard(ctx context.Context) error {
 				tryAutoArm(st.Detail)
 			}
 			if wasUp && !st.Up {
-				// Record the cut, and publish it, BEFORE anything relaxes.
+				// Record the drop, and publish it, BEFORE anything relaxes.
 				// maybeAutoWindow may open a redial window on this very line,
 				// which would otherwise make the guard-holding-a-downed-tunnel
-				// state unreachable on the common path. Cut is false in standby
-				// because nothing was being enforced, and saying traffic was cut
-				// would be a lie.
-				lastDrop = &state.DropRecord{At: time.Now(), Cut: !standby}
+				// state unreachable on the common path.
+				lastDrop = &state.DropRecord{At: time.Now()}
 				snapshot()
 				maybeAutoWindow(time.Now(), st.Detail)
 			}

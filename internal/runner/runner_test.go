@@ -1120,8 +1120,8 @@ func TestTunnelDropPublishesTheCutBeforeRelaxing(t *testing.T) {
 	if got := snaps[firstDrop].Posture; got != "guard" {
 		t.Errorf("the cut snapshot's posture = %q, want \"guard\" (the guard holding a downed tunnel)", got)
 	}
-	if !snaps[firstDrop].Drop.Cut {
-		t.Error("the cut snapshot reports Cut=false, but the guard was enforcing when the tunnel dropped")
+	if snaps[firstDrop].Drop.At.IsZero() {
+		t.Error("the drop record carries no time, which is the one thing it exists to report")
 	}
 
 	// Carried through the window, or the surface that users actually look at

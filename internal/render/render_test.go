@@ -64,7 +64,7 @@ func TestText(t *testing.T) {
 			snap: state.Snapshot{
 				Posture: PostureGuard,
 				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
-				Drop:    &state.DropRecord{At: until, Cut: true},
+				Drop:    &state.DropRecord{At: until},
 			},
 			wantKey:      KeyBlocked,
 			wantHeadline: "VPN down — traffic cut",
@@ -80,7 +80,7 @@ func TestText(t *testing.T) {
 				Posture: PostureGuard,
 				Time:    until.AddDate(0, 0, 2),
 				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
-				Drop:    &state.DropRecord{At: until, Cut: true},
+				Drop:    &state.DropRecord{At: until},
 			},
 			wantKey:      KeyBlocked,
 			wantHeadline: "VPN down — traffic cut",
@@ -126,7 +126,7 @@ func TestText(t *testing.T) {
 			snap: state.Snapshot{
 				Posture: PostureSwitchWindow,
 				Switch:  &state.SwitchState{Open: true, Until: until, Trigger: state.TriggerAuto},
-				Drop:    &state.DropRecord{At: dropAt, Cut: true},
+				Drop:    &state.DropRecord{At: dropAt},
 			},
 			wantKey:      KeyWarning,
 			wantHeadline: "Redial window open",

@@ -25,15 +25,15 @@ public struct SwitchState: Codable {
     public var isPause: Bool { trigger == "pause" }
 }
 
-/// The moment a healthy tunnel went down and the guard cut traffic — mirrors
-/// Go's `state.DropRecord`. Carried from the drop until a tunnel is up again,
+/// The moment a healthy tunnel went down — mirrors Go's `state.DropRecord`.
+/// Carried from the drop until a tunnel is up again,
 /// including across the redial window that follows, which is the only reason any
 /// surface can report the drop at all.
+///
+/// It carries the moment and nothing else — see Go's DropRecord for why a "was
+/// traffic cut" companion flag could not be rendered truthfully.
 public struct DropRecord: Codable {
     public let at: Date
-    /// The guard was enforcing at that moment, so traffic really was cut. False
-    /// for a drop in standby, where nothing was being enforced.
-    public let cut: Bool
 }
 
 /// "Hold the line" is armed — mirrors Go's `state.HoldState`. The next tunnel

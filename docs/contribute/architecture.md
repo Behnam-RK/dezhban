@@ -74,8 +74,7 @@ something to describe — absent in STANDBY, before any tunnel is known.
     "trigger": "manual"                  // "manual" (operator command) | "auto" (redial window on a tunnel drop); absent from older daemons — treat as "manual"
   },
   "drop": {                              // (vpn) present from a tunnel drop until a tunnel is up again
-    "at": "2026-07-01T12:01:30Z",
-    "cut": true                          // the guard was enforcing at that moment, so traffic really was cut
+    "at": "2026-07-01T12:01:30Z"         // when — the posture fields say what is happening now
   },
   "hold": {                              // (vpn) present only while "hold the line" is armed
     "armed": true,                       // the NEXT tunnel drop stays cut — no automatic redial window
