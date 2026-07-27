@@ -451,6 +451,34 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
 - [ ] A fresh `dezhban setup` on macOS produces an autodetect + auto-discovery
       config with **zero** concrete interface names, and offers to install and
       start the service.
+- [ ] Re-running it on a configured host seeds every question with what the
+      config already says, and pressing Enter through the whole wizard writes a
+      config identical to the one you started from (`dezhban config show` before
+      and after). `internal/setup` pins this, but only the real run proves the
+      forms are bound to the same answers.
+- [ ] Re-running it **without** naming profile files keeps the profiles already
+      imported (`dezhban vpn list`).
+- [ ] `dezhban setup --questions --json` runs with no TTY, no root, and no
+      config file present, and lists the same questions the wizard asks.
+
+### First-run wizard (macOS app)
+
+- [ ] With no VPN configured and `defaults delete com.dezhban.menu
+      dezhban.firstRunCompleted`, launching the app opens the window **and** the
+      wizard. With a VPN already configured from the CLI, it does not — the
+      questions were already answered.
+- [ ] The questions, their order, and the gating match `dezhban setup` run in a
+      terminal on the same host. Declining "Configure your VPN now?" skips the
+      whole VPN branch in both.
+- [ ] Saving writes through one `config set` (one password prompt, or none with
+      a token enrolled) and the values land in `dezhban config show`. Choosing
+      automatic detection leaves `vpn.tunnelInterfaces` **empty**.
+- [ ] Cancelling with "Not now" writes nothing and offers the wizard again next
+      launch.
+- [ ] Naming VPN config files imports them as profiles (`dezhban vpn list`);
+      cancelling that second prompt leaves the config saved and only the import
+      undone.
+- [ ] Settings → "Run Setup Again…" reopens it seeded with current values.
 
 ## macOS app
 
@@ -462,9 +490,14 @@ task gui:build && open dist/Dezhban.app
 
 ### Surfaces & window lifecycle
 
-- [ ] **Menubar is the safety core only.** The dropdown shows exactly: one status
-      line, Open Dezhban… (⌘O), Block now, Unblock, the switch item (VPN mode),
-      Panic — force unblock…, Quit. Nothing else.
+- [ ] **Menubar is a glance and the time-critical set only.** The dropdown shows
+      exactly: one status line, Open Dezhban… (⌘O), the switch/pause item with
+      its live countdown, hold the line, Quit. **No Block or Unblock** — those
+      live in the window's Overview.
+- [ ] **Panic is behind ⌥.** Holding Option swaps "Open Dezhban…" for "Panic —
+      force unblock…"; ⌘⌥O fires it; releasing Option restores the open item. It
+      still works with the daemon stopped and with the main window unable to
+      open.
 - [ ] **Window opening.** "Open Dezhban…" and a Dock-icon click both open/focus
       the main window; a fresh app launch opens **no** window (menubar + Dock
       only); closing the window (⌘W) leaves the app and icon running.
@@ -619,6 +652,36 @@ end up typing a password.
 - [ ] A `fail`/`warn` row's fix text is readable and matches the fix text
       `dezhban doctor` prints in a terminal.
 - [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
+
+### Help pane
+
+The pane's whole reason for existing is that it works while the guard has cut
+traffic, so the check that matters is the one CI cannot run: with egress gone.
+
+- [ ] With **FULL BLOCK active** (or the tunnel down and no window open), open
+      Help: pages render fully, the sidebar and search work, and nothing is
+      blank or spinning. Confirm no request leaves the machine — Little Snitch,
+      or `tcpdump`/`pfctl -s state` showing nothing new from `DezhbanMenu`.
+- [ ] A link in a page to another bundled page moves the sidebar selection with
+      it, so the highlighted row is the page being read.
+- [ ] A link that points off the bundle (an `https://` one in a doc) is refused
+      in the pane and reported with a Copy link button — it must not navigate.
+- [ ] A link to a doc that is **not** bundled — the ADR references in Postures,
+      say — reports a `https://github.com/…` URL, not a `file:///…/Contents/…`
+      path. Every such link was a dead click reporting an internal path before
+      the renderer rewrote them.
+- [ ] Pages are **styled** — headings, table borders, code backgrounds, and the
+      dark-mode palette. The bundled pages carry a `Content-Security-Policy`, and
+      a `file:` origin is opaque, so a CSP that is too strict would silently drop
+      `help.css` and leave the pane readable but unstyled. Only a real WKWebView
+      shows this; the Go tests cannot.
+- [ ] Built from a checkout whose `docs/` was renamed under it, `task gui:build`
+      **fails** rather than producing an app whose Help pane is missing a page.
+- [ ] The **?** beside a Settings field opens Help scrolled to that key's own
+      heading — not the top of the configuration reference. Spot-check one field
+      per section, including one under Advanced.
+- [ ] Against a CLI too old to know `config schema`, the **?** buttons are absent
+      rather than present and inert.
 
 ### Logs pane
 

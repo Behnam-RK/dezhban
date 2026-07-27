@@ -19,7 +19,14 @@ import (
 	"github.com/behnam-rk/dezhban/internal/control"
 )
 
-const configUsage = `usage: dezhban config <subcommand>
+// configUsage is assembled rather than written out, because its "Keys" section
+// used to be a hand-maintained copy of the settable-key set — one more list to
+// forget. It is now generated from config.Tunables(), the same table `config
+// schema` prints and the app reads, so a new key appears in the help by existing.
+var configUsage = configUsageProse + wrapKeys(config.TunableKeys()) + `
+  (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
+
+const configUsageProse = `usage: dezhban config <subcommand>
 
 Subcommands:
   path              Print the resolved config path
@@ -39,6 +46,8 @@ Subcommands:
   preset apply <name>      Write a preset's values, validate, and save — same
                     path as 'set', so it applies live where it can and reports
                     what needs a restart
+  schema            Describe every settable key: its default, cap, unit, whether
+                    it can be turned off, and whether it applies live
   edit              Open the config in $EDITOR (created from defaults if missing)
 
 Flags:
@@ -47,22 +56,126 @@ Flags:
                     Falls back to a privileged write if no daemon answers; a
                     daemon that REFUSES is reported, never routed around.
                     See 'dezhban token'.
-  --json            ('preset list'/'preset show'/'preset diff' only) print
-                    machine-readable JSON instead of prose
+  --json            ('preset list'/'preset show'/'preset diff'/'schema' only)
+                    print machine-readable JSON instead of prose
 
 Keys (dotted; list values are comma-separated):
-  pollInterval blockedCountries hysteresis providers providerQuorum logLevel
-  vpn.tunnelInterfaces vpn.endpoints vpn.autoDetect
-  vpn.autoDiscoverEndpoints vpn.allowPhysicalDNS vpn.allowLocalNetwork
-  vpn.autoArm vpn.armAtBoot vpn.switchWindow
-  vpn.redialWindow vpn.pauseMax vpn.endpointRefresh vpn.endpointGrace vpn.tunnelWatch
-  control.enabled control.socket control.group control.allowSwitchOps
-  control.allowPauseOps control.allowConfigOps
-  vpn.advanced.switchWindowMax vpn.advanced.redialWindowMax vpn.advanced.redialMinUptime
-  vpn.advanced.commandFreshness vpn.advanced.windowDiscoveryInterval vpn.advanced.tunnelPruneAfter
-  vpn.advanced.learnedEndpointTTL vpn.advanced.learnedMaxPerProfile vpn.advanced.promoteAfterRefreshes
-  vpn.advanced.endpointWarnThreshold vpn.advanced.windowProtocols vpn.advanced.windowPorts
-  (VPN profiles are managed with 'dezhban vpn add/remove', not 'config set')`
+`
+
+// wrapKeys renders the settable-key list for the usage text: two-space indent,
+// space-separated, wrapped near 78 columns so it reads in a standard terminal.
+func wrapKeys(keys []string) string {
+	const width = 78
+	var b strings.Builder
+	line := " "
+	for _, k := range keys {
+		if len(line)+1+len(k) > width {
+			b.WriteString(line)
+			b.WriteString("\n")
+			line = " "
+		}
+		line += " " + k
+	}
+	b.WriteString(line)
+	return b.String()
+}
+
+// schemaEntry is what `config schema --json` emits: the declared Tunable
+// verbatim (it already carries the lowerCamelCase tags every surface decodes)
+// plus whether the key is one a strictness preset writes.
+//
+// Embedding rather than restating the eleven fields is deliberate — a parallel
+// struct here would be exactly the kind of second copy this whole phase exists
+// to delete.
+type schemaEntry struct {
+	config.Tunable
+	// Preset reports that applying a strictness preset overwrites this key, so a
+	// surface can warn that changing it by hand drifts the config to Custom.
+	Preset bool `json:"preset"`
+}
+
+// presetWritten reports which keys a strictness preset sets. Taken from the
+// preset definitions themselves rather than a list here, so the two cannot
+// disagree; every preset writes the same key set, so the first one answers for all.
+func presetWritten() map[string]bool {
+	out := map[string]bool{}
+	for _, p := range config.Presets() {
+		for k := range p.Values {
+			out[k] = true
+		}
+	}
+	return out
+}
+
+// configSchema describes every settable key. It deliberately reads no config
+// file: the schema is what the keys ARE, not what this host has set, so it
+// answers identically on a machine with no config yet — which is exactly when a
+// first-run wizard needs it.
+func configSchema(args []string) int {
+	args, jsonOut := stripJSONFlag(args)
+	if len(args) != 0 {
+		fmt.Fprintf(os.Stderr, "config schema takes no arguments (got %q)\n", strings.Join(args, " "))
+		return 2
+	}
+
+	written := presetWritten()
+	tunables := config.Tunables()
+
+	if jsonOut {
+		out := make([]schemaEntry, 0, len(tunables))
+		for _, t := range tunables {
+			out = append(out, schemaEntry{Tunable: t, Preset: written[t.Key]})
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "config schema json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	for _, t := range tunables {
+		fmt.Printf("%s\n", t.Key)
+		fmt.Printf("  %s (%s)\n", t.Label, t.Kind)
+		fmt.Printf("  %s\n", t.Help)
+
+		facts := []string{"default " + quoteEmpty(t.Default)}
+		if t.Unit != "" {
+			facts = append(facts, "in "+t.Unit)
+		}
+		if t.CapKey != "" {
+			facts = append(facts, "capped by "+t.CapKey)
+		}
+		if t.Disablable {
+			facts = append(facts, `"0" turns it off`)
+		}
+		if t.Advanced {
+			facts = append(facts, "advanced")
+		}
+		if written[t.Key] {
+			facts = append(facts, "set by presets")
+		}
+		fmt.Printf("  %s\n", strings.Join(facts, "; "))
+
+		if t.RestartReason != "" {
+			fmt.Printf("  needs a restart: %s\n", t.RestartReason)
+		} else {
+			fmt.Printf("  applies live\n")
+		}
+		fmt.Printf("  docs: %s\n\n", t.DocAnchor)
+	}
+	return 0
+}
+
+// quoteEmpty renders an empty default as something visible, so "default " isn't
+// mistaken for a truncated line. control.socket legitimately defaults to empty.
+func quoteEmpty(v string) string {
+	if v == "" {
+		return `"" (unset)`
+	}
+	return v
+}
 
 // configField is a get/set pair for one dotted config key.
 type configField struct {
@@ -378,6 +491,8 @@ func cmdConfig(args []string) int {
 		return configReset(cfgPath, rest, useToken)
 	case "preset":
 		return configPreset(cfgPath, rest, useToken)
+	case "schema":
+		return configSchema(rest)
 	case "edit":
 		return configEdit(cfgPath)
 	case "-h", "--help", "help":

@@ -12,6 +12,223 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **`dezhban config schema` describes every setting**, so you can ask what a key
+  is instead of reading source. For each one it prints the label, its default,
+  what bounds it, whether `"0"` turns it off, whether a strictness preset writes
+  it, whether a running daemon adopts it without a restart, and where it is
+  documented. `--json` for tools; read-only, no root, and it reads no config file
+  — the schema is what the keys *are*, not what this host has set, so it answers
+  the same on a machine that has never been configured.
+
+  Behind it, defaults are now data rather than prose. They used to be written
+  down in four places — the Go constants, the macOS app's placeholder hints, the
+  documentation tables, and the example configs — and they had already come
+  apart: the app advertised a 30s endpoint refresh and a 5s tunnel watch while
+  the shipped defaults were 1m and 1s. Every surface now derives them from one
+  table, which itself derives the values from the shipped defaults, so the same
+  drift cannot recur.
+
+- **`dezhban hold` keeps a deliberate disconnect cut.** dezhban cannot tell a VPN
+  you turned off from a VPN that fell over, so it treats every drop the same way
+  and opens a redial window — a relaxation you never asked for when you are the
+  one disconnecting. Arm hold the line first and the next drop stays cut, with
+  the icon red because traffic really is cut. `hold --status` reports it,
+  `hold --cancel` disarms it.
+
+  It only ever **removes** a relaxation, so the three sanctioned triggers are
+  unchanged and there is no fourth — and it carries no `control.allow*` gate,
+  because there is no authority to withhold. One-shot on purpose: spent by the
+  drop it covers, disarmed once a tunnel is back, and forgotten if the daemon
+  restarts, so a flag left armed can never cost a later *accidental* drop the
+  redial help it should have had. `status --json` gains a `hold` object.
+
+- **A relaxed guard says so first, and names when your VPN dropped.** Every
+  window sentence now leads with the exposure and when it ends, instead of
+  opening with the machinery and leaving the consequence trailing after a dash:
+  *"Your real IP may be exposed until 3:04PM. Your VPN dropped at 3:03PM and the
+  guard relaxed so it can redial."* A guard holding a downed tunnel names the
+  drop time too. Both surfaces change together, because both display the same
+  rendered strings.
+
+- **The state file records when your VPN dropped.** `status --json` gains a
+  `drop` object (`at`) present from a tunnel drop until a tunnel is up
+  again. Until now the moment the guard cut traffic was unobservable on the
+  common path: the automatic redial window opens on the same edge, so the cut
+  snapshot was replaced within microseconds while observers read the file about
+  once a second — leaving both surfaces able to say only "a window is open".
+
+- **The macOS Settings pane is reorganised around what you are deciding**, not
+  around the shape of the config file. Sections are ordered which VPN to trust →
+  what gets blocked → when the guard may relax → local network → how closely it
+  watches → startup, each with a line saying why you would touch it. Headings say
+  the thing rather than the config block: "When the guard relaxes", not
+  "Windows". Autodetection is folded into "Your VPN", where those toggles were
+  always about the same decision.
+
+- **Duration settings in the macOS app are a menu of real choices**, not a text
+  field demanding Go's duration syntax. Each offers lengths derived from that
+  key's own default and its live cap, marks the recommended value, and provides
+  a Custom entry with immediate validity feedback instead of a modal alert after
+  Apply. Lowering a cap by hand narrows the menu, because the ceiling is read
+  from your config rather than a constant.
+
+  Where `"0"` is a real, persisted opt-out — the switch window, the redial
+  window, the pause cap, and the anti-flap gate — an explicit **Off** is offered
+  and states its consequence in words. It is offered *only* for those keys: for
+  every other duration a `0` is coerced back to the default, so an Off there
+  would be a security choice that silently did nothing.
+
+- **`vpn.pauseMax` has a control in the macOS app**, under Windows alongside the
+  switch and redial windows. It was settable from the CLI and reachable by
+  editing the file, but the app offered no way to see or change how long a pause
+  may last.
+
+- **Pause offers realistic lengths, in both surfaces.** `dezhban pause --list`
+  prints them with what each one is for, and the macOS app's Pause item gains a
+  submenu of the same choices. They are defined once in the config core and read
+  from the daemon, so the two cannot drift apart. Lengths above `vpn.pauseMax` are listed as unavailable with the
+  cap as the reason rather than hidden — a cap you cannot see is one you keep
+  bumping into. Any duration up to the cap still works.
+
+- **The macOS app carries dezhban's documentation inside it.** A new Help pane
+  in the main window shows the same pages as the repository's `docs/` — quick
+  start, how the guard works, the postures, troubleshooting, and the full
+  configuration and command references — with a search box and a first-time
+  reading order.
+
+  It reads them from inside the app bundle and never touches the network, which
+  is the entire point: the moment you most need to know what the guard is doing
+  to your traffic is often the moment it has cut all of it, and a help pane that
+  needed a working connection would be blank exactly then. The pages are
+  rendered from the repository's markdown when the app is built, so they always
+  match the version that documents them, and the pane refuses to follow any link
+  that leaves the bundle.
+
+  Every setting in the Settings pane also carries a **?** button that opens Help
+  at that setting's own section. A tooltip has room for one sentence; why a
+  setting exists, what it costs, and what turning it off actually does often
+  needs a page — and each link lands on the heading, not the top of a long
+  reference.
+
+- **`dezhban setup --questions` says what the wizard would ask** — each question,
+  what it writes, its seeded answer, and which earlier answer unlocks it —
+  without asking anything. Read-only, no root, no terminal needed; `--json` is
+  the machine form.
+
+  Behind it, the wizard's decisions moved out of the CLI into `internal/setup`,
+  which now owns the question set, the branching, and how answers become a
+  config. The CLI keeps only the presentation. A second wizard therefore cannot
+  ask different questions or apply the same answer differently — the same reason
+  the settings schema lives in one place.
+
+- **The macOS app has a setup wizard.** Launch it with nothing configured and it
+  walks the same questions `dezhban setup` asks — which countries to refuse, how
+  to find your VPN, whether to pin an interface — seeded from whatever config
+  you already have, with no terminal involved. It reads the question set from
+  the daemon rather than keeping its own, and saves through the same batched,
+  validated `config set` every other pane uses.
+
+  It is offered only when dezhban does not know a VPN yet: if you set it up from
+  the CLI, the app does not ask you to do it again. Settings → **Run Setup
+  Again…** reopens it whenever you want, which is the guided way through those
+  decisions when you change VPN.
+
+### Changed
+
+- **The macOS menubar is a glance and the actions that are urgent when you look
+  at it** — the posture line, the switch or pause countdown, hold the line, and
+  Open Dezhban. **Block now and Unblock have moved into the window's Overview**:
+  someone who wants to cut their own internet can turn off Wi-Fi, so blocking by
+  hand is a power-user and debugging affordance rather than part of the routine
+  flow.
+
+  **Panic now sits behind the Option key**, as the alternate to "Open Dezhban…" —
+  hold ⌥ and the item becomes "Panic — force unblock…", or press ⌘⌥O. It stays
+  in the menubar on purpose, because the moment it is needed is the moment the
+  main window may not open; it is one keystroke away rather than one slip away
+  in a menu people open to check a countdown.
+
+- **A pause longer than `vpn.pauseMax` is now refused and explained, instead of
+  silently shortened to the cap.** Asking for an hour against a 30-minute cap
+  used to grant thirty minutes and report success, which is indistinguishable
+  from having got what you asked for. It now fails, names the cap, and says how
+  to raise it. Every path refuses — the CLI, the control socket, and the
+  root-owned command file — so no client can get the old behaviour, and the
+  command file (the one that still works with `control.allowPauseOps: false`)
+  logs the same reason the socket would have replied with. A pause with *no*
+  duration given is unchanged: nobody asked for a particular length, so the
+  built-in default is still clamped to the cap.
+
+### Fixed
+
+- **Re-running `dezhban setup` no longer deletes your saved VPN profiles.** The
+  wizard collects profiles by importing config files you name, and it wrote that
+  list over the configured one — so running setup again to change, say, your log
+  level, and not naming those files a second time, silently dropped every
+  profile you had imported. Imported profiles are now merged into the saved
+  ones, replacing by name.
+
+- **The macOS app's Settings pane no longer advertises wrong defaults.** Its
+  field hints were literal strings that had drifted from the shipped values — it
+  suggested a 30s endpoint refresh and a 5s tunnel watch when the defaults are
+  1m and 1s. Labels, hints, and help text now come from the daemon's own schema,
+  so the pane says what dezhban actually does. Against a CLI too old to report a
+  schema the pane falls back to a plainer label rather than a stale value: less
+  helpful, never wrong.
+
+- **The documentation bundled into the app now renders as written.** The subset
+  renderer degraded silently instead of refusing, so pages shipped wrong while
+  every test passed: Quick start — the first page of the guided track — opened
+  with three lines of raw HTML source shown as text, bold that the author had
+  wrapped across two lines left literal `**` in eight of the nine pages, nested
+  bullets flattened into their own parents, and an asterisk inside `` `code` ``
+  paired with an unrelated one to open emphasis that closed outside the tag.
+  Soft-wrapped lines are now joined before inline markup is read, a list item's
+  continuation stays inside the item, emphasis cannot reach into a code span,
+  and anything the renderer still cannot represent **fails the build** rather
+  than shipping — which is what the design claimed all along.
+
+- **A settings value can no longer be written under the wrong key.** The pane
+  staged its twenty-five values as an array destructured by position, with only
+  a count check — so inserting or reordering a key would have silently applied
+  one field's value to another setting. Values are now keyed throughout.
+
+- **`dezhban setup` no longer clears `vpn.autoDiscoverEndpoints` on Linux and
+  Windows.** Endpoint discovery is macOS-only, so the wizard does not ask about
+  it elsewhere — and an unasked question was read as "no" and written to the
+  config, quietly turning off a setting the user had set. The same class of bug
+  as the deleted profiles above: a question the wizard never put on screen now
+  leaves its key alone.
+
+- **A drop that did not happen today now says which day it was.** The drop
+  record is carried until a tunnel returns, so through an overnight outage or a
+  long FULL BLOCK "Your VPN dropped at 3:04PM" read as *a few minutes ago* and
+  understated how long the host had been cut. It now reads "at 3:04PM on Jul 26"
+  once the drop is no longer on the snapshot's own day.
+
+- **Links in the app's Help pane go somewhere.** The bundled pages cross-reference
+  the ADRs and the contributor docs thirty times over, and those deliberately do
+  not ship — so each of those links resolved to a file beside the bundle that does
+  not exist, and clicking one reported *"That link points outside the app:
+  file:///…/Contents/Resources/adr/0008-arm-at-boot.md"* with a Copy button that
+  copied exactly that. Every bundled page had them. A link to a document that is
+  not bundled now points at the repository, so the pane names a URL that works in
+  a browser; a link to a page that *is* bundled still opens it in place. The pane
+  still reaches the network for nothing.
+
+- **`dezhban hold` no longer reports success for a hold the daemon discards.**
+  Arming through the root-owned command file was a silent no-op when
+  `vpn.redialWindow` was `"0"` — nothing to suppress, nothing logged. The CLI
+  checks the config first, but skips that check when the file cannot be read, and
+  then printed "hold the line armed". The daemon now says why it ignored the
+  command, the same way the pause path does.
+
+- **An over-cap pause refusal now says how to fix it.** The daemon's log named the
+  cap but not the command to raise it, so the CLI and the daemon explained the
+  same refusal differently.
+
 ### Changed — BREAKING
 
 - **"reconnect" is now "redial" everywhere.** The codebase used both words for the

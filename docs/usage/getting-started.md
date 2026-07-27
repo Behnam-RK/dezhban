@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="../../gui/artifacts/png/banner-1280x640.png" alt="Dezhban — system-wide network kill switch" width="640">
-</p>
-
 # Quick start
 
 Get dezhban protecting your machine in about ten minutes — without locking
@@ -54,6 +50,11 @@ a VPN config file, import it instead of typing endpoints:
 ```sh
 dezhban vpn import ~/wg0.conf     # WireGuard .conf, OpenVPN .ovpn, or V2Ray JSON
 ```
+
+On macOS you can answer the same questions in the app instead: launch Dezhban
+with nothing configured and the setup wizard opens by itself, seeded from
+whatever config you already have. It is also in Settings → **Run Setup Again…**,
+for when you change VPN.
 
 Prefer to write the file yourself? Start from `configs/dezhban.example.json` and
 see the [config reference](config.md).
@@ -187,6 +188,11 @@ you need it — the full runbook is in
 ---
 
 ## Where to go next
+
+Everything below also ships **inside the macOS app** — open the main window and
+pick **Help**. Those pages are rendered into the app when it is built, so they
+match the version you are running and they work with every byte of egress cut,
+which is exactly when you are most likely to need them.
 
 | If you want to… | Read |
 |---|---|

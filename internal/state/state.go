@@ -84,6 +84,16 @@ type Snapshot struct {
 	// Pending describes a posture change the daemon is counting toward but has
 	// not committed, present only while a hysteresis streak is running.
 	Pending *PendingFlip `json:"pending,omitempty"`
+	// Drop records the most recent tunnel drop, from the moment it happened
+	// until a tunnel is up again — including across the redial window that
+	// follows, which is the only reason any surface can report the drop at all.
+	// Additive field: absent from older snapshots, so nil means "no drop is
+	// being carried", never "no drop has ever happened".
+	Drop *DropRecord `json:"drop,omitempty"`
+	// Hold reports that the next tunnel drop will stay cut instead of opening
+	// an automatic redial window. Present only while armed. Additive field:
+	// absent from older snapshots, so nil means "not armed".
+	Hold *HoldState `json:"hold,omitempty"`
 	// Display is the rendered posture sentence — see internal/render, the
 	// package that composes it from this same Snapshot. Carried here for the
 	// one consumer that cannot call Go directly: the macOS menubar app reads
@@ -136,6 +146,49 @@ type SwitchState struct {
 	// absent in snapshots from older daemons, so observers must treat "" as
 	// TriggerManual.
 	Trigger string `json:"trigger,omitempty"`
+}
+
+// DropRecord is the moment a healthy tunnel went down, carried forward until a
+// tunnel is up again.
+//
+// It exists because the cut is otherwise unobservable on the common path. The
+// run loop opens the automatic redial window on the same tunnel-down edge, so a
+// snapshot showing the guard holding a downed tunnel is superseded microseconds
+// later, and observers read the state file about once a second — they would
+// never see it. Without this, both surfaces could only say "a window is open"
+// and never "your VPN dropped at 3:04PM, and here is what happened next".
+//
+// Carrying it does NOT make the window look like a cut. An open window is a
+// relaxation: traffic is flowing and the real IP may be exposed, so it stays
+// amber. The record says what happened, not what is happening.
+// It carries the moment and nothing else. A companion "was traffic cut at that
+// instant" flag was tried and removed: no surface could truthfully render it,
+// because a window may have opened and expired in between, so neither "cut
+// since" nor "not cut" describes what followed. What a reader needs from a drop
+// is WHEN — the posture fields already say what is happening now.
+type DropRecord struct {
+	// At is when the tunnel was observed down.
+	At time.Time `json:"at"`
+}
+
+// HoldState reports that "hold the line" is armed: the next tunnel drop will
+// NOT open an automatic redial window, so a deliberate disconnect stays cut.
+//
+// dezhban cannot tell an intentional disconnect from an accidental drop, and
+// that ambiguity is the whole reason this exists — disconnecting by hand
+// otherwise opens a redial window the user never wanted. Arming says which kind
+// of drop the next one will be.
+//
+// It only ever SUPPRESSES. It removes an automatic relaxation for one drop and
+// grants nothing, so the three sanctioned relaxation triggers are unchanged and
+// there is no fourth. Being strictly more restrictive is also why it needs no
+// config gate of its own: there is no setting to protect.
+type HoldState struct {
+	// Armed is true from the moment it is armed until the drop it covers, an
+	// explicit cancel, or a tunnel coming back up.
+	Armed bool `json:"armed"`
+	// At is when it was armed.
+	At time.Time `json:"at"`
 }
 
 // Trigger values for SwitchState.Trigger. Stable identifiers — status --json

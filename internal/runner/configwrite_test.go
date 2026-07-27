@@ -181,9 +181,13 @@ func TestConfigWriteUnavailableWithoutAWriter(t *testing.T) {
 }
 
 // Lowering vpn.pauseMax has to bind the very next pause. The cap is a security
-// setting: a reload that reported it applied while the loop kept clamping to the
+// setting: a reload that reported it applied while the loop kept honouring the
 // old, larger value would be exactly the silent-discard failure the config layer
 // goes to such lengths to prevent.
+//
+// The new cap binds by REFUSING an over-cap request, not by shortening it — see
+// Options.pauseDuration. A caller who asked for nine minutes and was handed one
+// would have no way to know, which is the same failure in a different costume.
 func TestReloadLowersThePauseCapImmediately(t *testing.T) {
 	be := &fakeBackend{}
 	w := &writeRecorder{}
@@ -212,10 +216,23 @@ func TestReloadLowersThePauseCapImmediately(t *testing.T) {
 		t.Fatalf("config-write refused: %+v", resp)
 	}
 
-	// Ask for far more than the new cap allows.
+	// Ask for far more than the new cap allows: it must be refused, and the
+	// refusal must name the NEW cap, or the reload did not take effect.
+	resp := do(t, path, control.Request{Op: control.OpPause, Duration: "9m"})
+	if resp.OK {
+		t.Fatal("a 9m pause was accepted after the cap was lowered to 1m — either the reload " +
+			"did not bind, or the request was silently shortened")
+	}
+	if !strings.Contains(resp.Error, "1m") {
+		t.Errorf("refusal = %q, want it to name the reloaded 1m cap (the old 10m cap may still be in force)",
+			resp.Error)
+	}
+
+	// A request within the new cap still works, so the refusal above is the cap
+	// binding rather than pausing having broken outright.
 	before := time.Now()
-	if resp := do(t, path, control.Request{Op: control.OpPause, Duration: "9m"}); !resp.OK {
-		t.Fatalf("pause refused: %+v", resp)
+	if resp := do(t, path, control.Request{Op: control.OpPause, Duration: "30s"}); !resp.OK {
+		t.Fatalf("a within-cap pause was refused: %+v", resp)
 	}
 
 	var until time.Time
@@ -233,6 +250,6 @@ func TestReloadLowersThePauseCapImmediately(t *testing.T) {
 		t.Fatal("no snapshot reported an open pause")
 	}
 	if got := until.Sub(before); got > 2*time.Minute {
-		t.Fatalf("pause runs for %s, want it clamped to the reloaded 1m cap (the old 10m cap was still in force)", got.Round(time.Second))
+		t.Fatalf("pause runs for %s, want the 30s that was asked for", got.Round(time.Second))
 	}
 }

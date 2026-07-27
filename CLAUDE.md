@@ -66,7 +66,7 @@ dev tooling only, never the daemon path); non-TTY prints the grouped menu
 
 Subcommands: `run`, `block`, `unblock`, `status`, `panic`, `install`, `uninstall`,
 `start`, `stop`, `restart`, `detect-vpn`, `validate`, `print-rules`, `doctor`, `monitor`,
-`switch`, `pause`, `resume`, `vpn`, `setup`, `config`, `token`, `completion`,
+`switch`, `pause`, `resume`, `hold`, `vpn`, `setup`, `config`, `token`, `completion`,
 `upgrade`, `version`, `help` (also `--help`/`-h`; `--version` aliases `version`),
 plus three globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation),
 `--no-daemon` (skip the control socket, act on the firewall directly).
@@ -74,7 +74,8 @@ plus three globals: `-v`/`--verbose`, `--no-sudo` (skip auto-elevation),
 The **privileged set** — requires root/admin — is exactly: `run`, `block`,
 `unblock`, `panic`, `install`, `uninstall`, `start`, `stop`, `restart`, `switch`,
 `pause`, `resume`, `vpn add`/`remove`/`promote`/`forget`/`import` (but not
-`vpn list`/`show`), `setup`, `config set`/`edit`/`preset apply`, `token enroll`/`forget` (but not
+`vpn list`/`show`), `setup` (but not `setup --questions`, which asks nothing and only reports what
+the wizard would ask), `config set`/`edit`/`preset apply`, `token enroll`/`forget` (but not
 `token status`), and `upgrade download`/`upgrade apply` (macOS only — `download`'s staging directory is root-owned so a local user
 can't swap the verified `.pkg` before `apply` installs it). `switch`, `pause`,
 and `resume` are usually passwordless in practice: they ask the running daemon
@@ -82,7 +83,7 @@ over its control socket first (gated by `control.allowSwitchOps`/
 `control.allowPauseOps` respectively) and only fall back to the root-owned
 command file when no daemon answers. Everything else — `status`, `detect-vpn`,
 `validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
-`config show`/`path`/`preset list`/`preset show`/`preset diff`, `token status`,
+`config show`/`path`/`schema`/`preset list`/`preset show`/`preset diff`, `token status`,
 `completion`, `upgrade check`, `version`,
 `help` — is read-only: no root, no firewall effects. Full reference:
 [docs/usage/cli.md](docs/usage/cli.md); the upgrade design in full:
@@ -182,6 +183,18 @@ The design depends on these invariants (rationale in
   trigger at first open (`Run`'s `openWindow` closure) exist for exactly this
   reason. Never widen a window past its own cap, never add a FOURTH trigger
   without a new ADR, never let any of the three outlive its deadline.
+- **"Hold the line" SUPPRESSES trigger 2; it is not a fourth trigger.**
+  `dezhban hold` arms a one-shot flag that makes the next tunnel drop stay cut
+  instead of opening the automatic redial window — it answers the one thing the
+  daemon cannot infer, whether a disconnect was deliberate. It only ever
+  *removes* a relaxation, which is why it needs no ADR and carries **no
+  `control.allow*` gate**: every such gate exists to withhold an authority, this
+  op grants none, and adding one would only hand an operator a way to switch off
+  the safer behaviour. Keep it one-shot and un-persisted — spent by the drop it
+  covers (`maybeAutoWindow`), disarmed on a tunnel-up edge, gone on restart. An
+  armed flag surviving a reboot would leave a later *accidental* drop with no
+  redial help, which is the one failure this feature must never cause. Anything
+  added here must likewise only subtract.
 - **All three windows are independently disableable, and "disabled" must
   survive `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);
   `vpn.redialWindow: "0"` removes trigger (2); `vpn.pauseMax: "0"` removes
@@ -281,7 +294,23 @@ The design depends on these invariants (rationale in
   lies about its own status is worse than none. A doc path cited from Go/Swift
   source (`grep -rn "docs/" --include="*.go" --include="*.swift"`) is load-bearing:
   moving or merging a doc means fixing every such reference, not just the ones in
-  other docs.
+  other docs. **A page listed in `internal/help.Pages` is load-bearing the same
+  way**: it ships inside the macOS app, rendered from the repo's markdown at
+  build time by `tools/helpgen`, so the app's help matches the version it
+  documents and works with egress cut. `go test ./internal/help` fails when a
+  bundled page is moved, renamed, or written with markdown the subset renderer
+  cannot show — and every `Tunable.DocAnchor` is checked to resolve against a
+  real heading, so a contextual help link cannot rot into a silent no-op.
+  Concretely, a bundled page may not use **raw HTML**, **nested lists**, or a
+  **remote image**; all three fail the build by name. Soft-wrapped emphasis is
+  fine (blocks are joined before inline markup is read). **A relative link to a
+  doc that is not bundled is rewritten to point at the repository** — never left
+  as written, which resolved to a nonexistent file beside the bundle and made
+  every cross-reference to an ADR a dead click; `TestEveryLinkGoesSomewhere`
+  pins it. The rule that makes all of this safe is that the renderer
+  must **refuse** what it cannot represent, never degrade quietly: silent
+  degradation ships a wrong page while every test passes, which is exactly how
+  the banner on Quick start reached users.
 - **Every PR that changes user-visible behavior updates [CHANGELOG.md](CHANGELOG.md)'s
   `## [Unreleased]` section, in the same PR** — not as a follow-up. `[Unreleased]`
   *is* the next release's notes (see [docs/contribute/releasing.md](docs/contribute/releasing.md)); a PR

@@ -284,6 +284,46 @@ enum DezhbanCLI {
         return PresetSummary.decodeList(data)
     }
 
+    /// Reads what every settable key IS — its label, default, cap, whether it
+    /// can be turned off — via `config schema --json`.
+    ///
+    /// Deliberately passes no `--config`: the schema describes the keys, not this
+    /// host's values, so it answers the same before anything is configured. That
+    /// is what lets a first-run surface label its fields.
+    ///
+    /// Returns nil against a CLI too old to know the subcommand, which callers
+    /// must degrade gracefully for — a missing schema means less helpful hints,
+    /// never wrong ones.
+    static func readSchema() -> ConfigSchema? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["config", "schema", "--json"])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return ConfigSchema.decode(data)
+    }
+
+    /// Reads the setup wizard's questions — what it asks, in what order, gated
+    /// how, seeded from THIS host's config — via `setup --questions --json`.
+    /// Read-only, no root, and it asks nothing.
+    ///
+    /// Passes `--config` deliberately, unlike `readSchema`: the schema describes
+    /// keys in the abstract, but a wizard's job is to start from what is already
+    /// configured, so it must be seeded from the real file.
+    static func readSetupQuestions() -> [SetupQuestion]? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["setup", "--questions", "--json", "--config", resolvedConfigPath()])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return SetupQuestion.decodeList(data)
+    }
+
+    /// Reads the offered pause lengths and which of them this host's
+    /// vpn.pauseMax allows, via `pause --list --json`. Read-only, no root.
+    static func readPauseOptions() -> [PauseOption]? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["pause", "--list", "--json", "--config", resolvedConfigPath()])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return PauseOption.decodeList(data)
+    }
+
     /// Reads the keys that differ from `name` (or, if nil, the
     /// matched-or-nearest preset — the same default `preset diff` uses),
     /// via `config preset diff [name] --json`.

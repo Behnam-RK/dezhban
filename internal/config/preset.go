@@ -253,3 +253,83 @@ func MatchPreset(c *Config) (name string, exact bool) {
 	}
 	return "", false
 }
+
+// Pause durations, defined once so the CLI and the app offer the same choices.
+//
+// A pause is the one relaxation a user asks for on purpose, so the question is
+// never "how many seconds" but "how long do I need my real IP for". These are
+// the realistic answers to that; anything else is still typeable
+// (`dezhban pause 7m`), this is just what gets offered.
+var pauseOptions = []PauseOption{
+	{Label: "5 minutes", Duration: 5 * time.Minute, Why: "long enough to load one stubborn site"},
+	{Label: "15 minutes", Duration: 15 * time.Minute, Why: "a bank transfer or a delivery tracker"},
+	{Label: "30 minutes", Duration: 30 * time.Minute, Why: "a form you have to fill in properly"},
+	{Label: "1 hour", Duration: time.Hour, Why: "a long call with a domestic-only service"},
+	{Label: "2 hours", Duration: 2 * time.Hour, Why: "an evening of something the VPN's exit can't reach"},
+}
+
+// A PauseOption is one offered pause length.
+type PauseOption struct {
+	Label    string        `json:"label"`
+	Duration time.Duration `json:"-"`
+	// Value is the Duration as `dezhban pause` accepts it, so a surface can
+	// pass it straight through without formatting a duration itself.
+	Value string `json:"value"`
+	// Why says what this length is for, so the choice is made on the need
+	// rather than on the number.
+	Why string `json:"why"`
+	// Unavailable is non-empty when vpn.pauseMax forbids this length, and says
+	// so in words. The option is still LISTED: silently hiding or shortening a
+	// choice teaches a user their cap is something other than it is. See the
+	// "clamp nothing silently" decision in issue #33's second addendum.
+	Unavailable string `json:"unavailable,omitempty"`
+}
+
+// PauseOptions returns the offered pause lengths for a config, each marked
+// available or not against that config's vpn.pauseMax.
+//
+// Options above the cap are returned, not filtered. A picker must show them as
+// unavailable with the reason, because the alternative — quietly dropping them,
+// or worse, accepting one and shortening it — leaves the user with a wrong idea
+// of what their own setting does.
+func PauseOptions(c *Config) []PauseOption {
+	max := c.VPN.PauseMax
+	out := make([]PauseOption, 0, len(pauseOptions))
+	for _, o := range pauseOptions {
+		o.Value = durString(o.Duration)
+		switch {
+		case max <= 0:
+			o.Unavailable = "pausing is off (vpn.pauseMax is \"0\")"
+		case o.Duration > max:
+			o.Unavailable = fmt.Sprintf("longer than your %s cap (vpn.pauseMax)", durString(max))
+		}
+		out = append(out, o)
+	}
+	return out
+}
+
+// PauseRefusal reports why a requested pause duration cannot be granted, or ""
+// when it can.
+//
+// This is where "clamp nothing silently" is enforced. The runner used to shorten
+// an over-cap request to the cap, which is the same class of bug as accepting a
+// disabled window and restoring the default: the user asked for one thing, got
+// another, and was not told.
+//
+// runner.pauseDuration says the same things to a client that got past this one
+// (a raw socket call, or a stale command file). Kept as two sentences rather
+// than one helper because internal/runner takes an Options and never a
+// *Config — change one, change the other.
+func PauseRefusal(c *Config, requested time.Duration) string {
+	switch {
+	case c.VPN.PauseMax <= 0:
+		return "pausing is disabled (vpn.pauseMax is \"0\"). Set it to a duration to enable it."
+	case requested <= 0:
+		return ""
+	case requested > c.VPN.PauseMax:
+		return fmt.Sprintf("%s is longer than your %s cap (vpn.pauseMax). "+
+			"Ask for %s or less, or raise the cap with `dezhban config set vpn.pauseMax=%s`.",
+			durString(requested), durString(c.VPN.PauseMax), durString(c.VPN.PauseMax), durString(requested))
+	}
+	return ""
+}

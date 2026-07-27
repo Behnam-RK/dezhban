@@ -331,7 +331,7 @@ func anyTunnelUp(tunnels []state.Tunnel) bool {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string) {
+func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord, hold *state.HoldState) {
 	if o.Publish == nil {
 		return
 	}
@@ -348,6 +348,8 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		PID:                 os.Getpid(),
 		ActiveProfile:       profile,
 		Switch:              win,
+		Drop:                drop,
+		Hold:                hold,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -742,8 +744,34 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		return &state.SwitchState{Open: true, Until: windowDeadline, Profile: windowProfile, Trigger: windowTrigger}
 	}
+	// lastDrop is the tunnel drop currently being lived through: set on the
+	// down edge, carried across whatever follows it (a redial window, a guard
+	// holding the line), and cleared once a tunnel is up again.
+	//
+	// It has to be carried rather than merely published once. The down edge
+	// opens the redial window in the same loop pass, so a snapshot showing the
+	// guard holding a downed tunnel is replaced within microseconds, and
+	// observers poll the state file about once a second — they would never see
+	// it. Carrying the record is what lets both surfaces say "your VPN dropped
+	// at 3:04PM" instead of only "a window is open".
+	var lastDrop *state.DropRecord
+	// holdArmed suppresses the NEXT automatic redial window, so a deliberate
+	// disconnect stays cut instead of being handed a relaxation nobody asked
+	// for. It only ever suppresses — there is still no fourth relaxation
+	// trigger — and it is one-shot: spent by the drop it covers, cleared by a
+	// tunnel coming back, and gone on restart. Not persisted on purpose, since
+	// a forgotten armed flag surviving a reboot would leave a later accidental
+	// drop cut with no redial help.
+	holdArmed := false
+	holdArmedAt := time.Time{}
+	holdState := func() *state.HoldState {
+		if !holdArmed {
+			return nil
+		}
+		return &state.HoldState{Armed: true, At: holdArmedAt}
+	}
 	snapshot := func() {
-		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile)
+		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState())
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
 
@@ -958,6 +986,22 @@ func (o Options) runGuard(ctx context.Context) error {
 	// up. The anti-flap gate keeps a flapping VPN from chaining windows.
 	maybeAutoWindow := func(now time.Time, detail string) {
 		if o.RedialWindow <= 0 || windowActive || standby || blocked || !sawTunnelUp {
+			return
+		}
+		// Hold the line, checked before the flap guard: an operator who said
+		// this drop is deliberate has answered the only question the window
+		// exists to guess at. One-shot — spent here rather than left armed for
+		// a later, accidental drop.
+		//
+		// The guard clause above returns first when nothing could have opened a
+		// window anyway (standby, FULL BLOCK, a window already open, a tunnel
+		// never seen up), so the flag survives those. That is safe because a
+		// drop cannot follow a drop without an intervening tunnel-up edge, and
+		// that edge disarms it — see the st.Up branch in the watcher.
+		if holdArmed {
+			holdArmed = false
+			o.Log.Warn("vpn tunnel down — redial window suppressed (hold the line was armed); "+
+				"guard holds, traffic stays cut", "detail", detail)
 			return
 		}
 		if minUp := o.RedialMinUptime; minUp > 0 && !goodExitThisUp &&
@@ -1345,7 +1389,13 @@ func (o Options) runGuard(ctx context.Context) error {
 			if windowActive && windowTrigger != state.TriggerPause {
 				return reply(false, "a switch window is open — cancel it first")
 			}
-			openWindow(time.Now(), o.clampPause(req.Duration), "", state.TriggerPause)
+			// Refused, not shortened: see pauseDuration. A client that asked for
+			// an hour must not be handed thirty minutes and told it succeeded.
+			dur, refusal := o.pauseDuration(req.Duration)
+			if refusal != "" {
+				return reply(false, refusal)
+			}
+			openWindow(time.Now(), dur, "", state.TriggerPause)
 			if !windowActive {
 				return reply(false, "open pause failed")
 			}
@@ -1365,6 +1415,32 @@ func (o Options) runGuard(ctx context.Context) error {
 			if windowActive {
 				return reply(false, "resume failed — pause held open, revert is being retried")
 			}
+			return reply(true, "")
+
+		// Hold the line is ungated on purpose: every control.allow* flag exists
+		// to withhold an authority, and these two grant none — they only ever
+		// suppress a relaxation. A gate would imply there is something to
+		// protect against, and would hand an operator a way to switch off the
+		// safer behaviour.
+		case control.OpHoldArm:
+			if o.RedialWindow <= 0 {
+				// Nothing to suppress. Saying so beats reporting success for an
+				// action that cannot have an effect.
+				return reply(false, "the automatic redial window is already disabled (vpn.redialWindow is \"0\"), so there is nothing to hold")
+			}
+			if !holdArmed {
+				holdArmed = true
+				holdArmedAt = time.Now()
+				o.Log.Info("hold the line armed — the next tunnel drop will stay cut")
+			}
+			snapshot()
+			return reply(true, "")
+		case control.OpHoldCancel:
+			if holdArmed {
+				holdArmed = false
+				o.Log.Info("hold the line disarmed (control socket)")
+			}
+			snapshot()
 			return reply(true, "")
 		}
 		return reply(false, fmt.Sprintf("unsupported op %q", req.Op))
@@ -1460,7 +1536,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		pauseWindowMax = ls.PauseMax
 		pauseEnabled = pauseWindowMax > 0 && o.PollCommand != nil
-		o.PauseMax = ls.PauseMax // clampPause reads this, and so does the log line below
+		o.PauseMax = ls.PauseMax // pauseDuration reads this, and so does the log line below
 
 		if ls.EndpointRefresh > 0 {
 			if ls.EndpointRefresh != o.EndpointRefresh {
@@ -1522,8 +1598,9 @@ func (o Options) runGuard(ctx context.Context) error {
 	// that started with both disabled must still notice a command once one is
 	// re-enabled — otherwise the reload reports the key as applied while the
 	// root-owned command path stays deaf until a restart. Every command handler
-	// below re-checks the live value (clampWindow / clampPause return <=0 when the
-	// trigger is off), so an ungated tick can never act on a disabled trigger.
+	// below re-checks the live value (clampWindow returns <=0 and pauseDuration
+	// refuses when the trigger is off), so an ungated tick can never act on a
+	// disabled trigger.
 	var cmdC <-chan time.Time
 	if o.PollCommand != nil {
 		cmdInterval := o.CommandPoll
@@ -1603,7 +1680,27 @@ func (o Options) runGuard(ctx context.Context) error {
 				tryAutoArm(st.Detail)
 			}
 			if wasUp && !st.Up {
+				// Record the drop, and publish it, BEFORE anything relaxes.
+				// maybeAutoWindow may open a redial window on this very line,
+				// which would otherwise make the guard-holding-a-downed-tunnel
+				// state unreachable on the common path.
+				lastDrop = &state.DropRecord{At: time.Now()}
+				snapshot()
 				maybeAutoWindow(time.Now(), st.Detail)
+			}
+			if st.Up {
+				// The drop is over the moment a tunnel is back, whether or not
+				// the exit has been verified yet. Keeping it past that point
+				// would leave both surfaces narrating an event that has ended.
+				lastDrop = nil
+				// A tunnel coming back also ends the intent behind "hold the
+				// line": the deliberate disconnect it was armed for is over.
+				// Leaving it armed would silently cut a LATER, accidental drop
+				// off from the redial help it should have had.
+				if holdArmed {
+					holdArmed = false
+					o.Log.Info("hold the line disarmed — a tunnel is up again")
+				}
 			}
 			// A tunnel coming back while blocked is the strongest hint available
 			// that the forbidden exit may be gone — it is exactly the moment the
@@ -1667,12 +1764,19 @@ func (o Options) runGuard(ctx context.Context) error {
 					o.Log.Warn("ignoring pause command — a switch window is already open (cancel it first)")
 					continue
 				}
-				dur := o.clampPause(cmd.Duration)
-				if dur <= 0 {
-					// Reachable, and the live gate: the poll ticks regardless of
-					// whether pausing is enabled. Never open a pause the operator
-					// disabled.
-					o.Log.Warn("ignoring pause command — pausing is disabled (vpn.pauseMax: \"0\")")
+				// Same refusal the socket path gives, for the same reason: an
+				// over-cap request is declined and explained, never silently
+				// shortened. Reporting the refusal verbatim matters because this
+				// path has no reply channel — the log line is the only account
+				// the operator gets, so it must say which setting refused and
+				// why rather than blaming a disabled pause for a length problem.
+				//
+				// Reachable, and the live gate: the poll ticks regardless of
+				// whether pausing is enabled, so a PauseMax <= 0 refusal here is
+				// what stops a disabled pause from ever opening.
+				dur, refusal := o.pauseDuration(cmd.Duration)
+				if refusal != "" {
+					o.Log.Warn("ignoring pause command — " + refusal)
 					continue
 				}
 				openWindow(now, dur, "", state.TriggerPause)
@@ -1681,6 +1785,30 @@ func (o Options) runGuard(ctx context.Context) error {
 				if windowActive && windowTrigger == state.TriggerPause {
 					closeWindowRevert("resumed")
 				}
+			case command.OpHoldArm:
+				// Same account the socket path gives, for the same reason as the
+				// pause refusal above: this path has no reply channel, so a
+				// command that changed nothing must still say so. `dezhban hold`
+				// checks the config first, but it skips that check when the file
+				// cannot be read — and then prints "armed" for something the
+				// daemon would otherwise discard in silence.
+				if o.RedialWindow <= 0 {
+					o.Log.Warn("ignoring hold command — the automatic redial window is already " +
+						"disabled (vpn.redialWindow: \"0\"), so there is nothing to hold")
+					continue
+				}
+				if !holdArmed {
+					holdArmed = true
+					holdArmedAt = time.Now()
+					o.Log.Info("hold the line armed — the next tunnel drop will stay cut")
+				}
+				snapshot()
+			case command.OpHoldCancel:
+				if holdArmed {
+					holdArmed = false
+					o.Log.Info("hold the line disarmed")
+				}
+				snapshot()
 			default:
 				o.Log.Debug("ignoring unsupported command", "op", cmd.Op)
 			}
@@ -2098,26 +2226,47 @@ func (o Options) clampWindow(req string) time.Duration {
 // comes from the caller (CLI flag / GUI preset).
 const defaultPauseDuration = 15 * time.Minute
 
-// clampPause parses a requested pause duration and caps it at PauseMax (no
-// floor). An empty/invalid request falls back to defaultPauseDuration. Returns
-// 0 when pausing is disabled (PauseMax <= 0) — callers (control-socket ops,
-// command-poll cases) are already gated on pauseEnabled, but failing closed
-// here means a future caller that skipped the gate can never turn "disabled"
-// into a real relaxation of the guard, whatever value req parses to.
-func (o Options) clampPause(req string) time.Duration {
+// pauseDuration resolves a requested pause length, or explains why it cannot be
+// granted. The refusal string is empty when the duration is usable.
+//
+// Both callers — the control-socket op and the command-file poll — are already
+// gated on pauseEnabled, but this fails closed on PauseMax <= 0 anyway, so a
+// future caller that skipped the gate can never turn "disabled" into a real
+// relaxation of the guard, whatever value req parses to.
+//
+// The refusals are worded to match config.PauseRefusal, which says the same
+// things to a CLI user before the request is ever sent. They are two sentences
+// rather than one shared helper on purpose: internal/runner takes an Options,
+// never a *config.Config, and that boundary is worth more than the duplication.
+// Change one, change the other.
+//
+// An explicitly requested length longer than vpn.pauseMax is REFUSED, not
+// shortened. Quietly granting 30m to someone who asked for an hour is the same
+// class of bug as accepting a disabled window and restoring the default: the
+// operator asked for one thing, got another, and was never told. An unspecified
+// request is different — nobody asked for a particular length, so the built-in
+// default is clamped to the cap rather than refused.
+func (o Options) pauseDuration(req string) (time.Duration, string) {
 	if o.PauseMax <= 0 {
-		return 0
+		return 0, "pausing is disabled (vpn.pauseMax is \"0\")"
 	}
-	dur := defaultPauseDuration
-	if req != "" {
-		if d, err := time.ParseDuration(req); err == nil && d > 0 {
-			dur = d
+	if req == "" {
+		dur := defaultPauseDuration
+		if dur > o.PauseMax {
+			dur = o.PauseMax
 		}
+		return dur, ""
 	}
-	if dur > o.PauseMax {
-		dur = o.PauseMax
+	d, err := time.ParseDuration(req)
+	if err != nil || d <= 0 {
+		return 0, fmt.Sprintf("invalid pause duration %q", req)
 	}
-	return dur
+	if d > o.PauseMax {
+		return 0, fmt.Sprintf("%s is longer than your %s cap (vpn.pauseMax). "+
+			"Ask for %s or less, or raise the cap with `dezhban config set vpn.pauseMax=%s`.",
+			d, o.PauseMax, o.PauseMax, d)
+	}
+	return d, ""
 }
 
 // configKeys is the sorted key list of a config-write request, for logging.

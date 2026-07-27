@@ -4,7 +4,7 @@ import DezhbanCore
 
 /// The main window's sidebar sections.
 enum SidebarSection: String, CaseIterable, Identifiable {
-    case overview, diagnostics, settings, logs, about
+    case overview, diagnostics, settings, help, logs, about
 
     var id: String { rawValue }
 
@@ -13,6 +13,10 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "Overview"
         case .diagnostics: return "Diagnostics"
         case .settings: return "Settings"
+        // The repo's own docs, rendered into the app at build time — see
+        // internal/help. Sits next to Settings because that is where a reader
+        // asking "what does this setting cost me?" is standing.
+        case .help: return "Help"
         // Structured findings moved to the Diagnostics pane above; this pane
         // is transcripts only now (panic, install, config apply, `log` output).
         case .logs: return "Logs"
@@ -25,6 +29,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "shield.lefthalf.filled"
         case .diagnostics: return "stethoscope"
         case .settings: return "gearshape"
+        case .help: return "book"
         case .logs: return "text.alignleft"
         case .about: return "info.circle"
         }
@@ -113,10 +118,27 @@ final class AppState: ObservableObject {
     /// Advisory only, same convention as `controlIsReachable` — `dezhban pause`
     /// still refuses for real if this cache is stale.
     @Published var pauseIsEnabled = true
+    /// The pause lengths the daemon offers, and which of them this host's
+    /// vpn.pauseMax allows (nil: not yet read, or the CLI is too old to know
+    /// `pause --list`). Cached so building the menu never shells out — a
+    /// shell-out while the menu is opening would stall it.
+    ///
+    /// Read from the daemon rather than listed here so the menu and
+    /// `dezhban pause --list` cannot offer different choices.
+    @Published var pauseOptions: [PauseOption]?
     /// The configured VPN profiles (nil: not yet read, or config unreadable).
     /// Lives in config, not the daemon's Snapshot — see DezhbanCLI.readProfiles.
     @Published var profiles: ProfilesInfo?
     @Published var selectedSection: SidebarSection? = .overview
+    /// A page (and optionally a heading) the Help pane should open next —
+    /// how a contextual link from Settings names where it wants to land. The
+    /// pane consumes it and sets it back to nil, so selecting Help again later
+    /// does not jump back to a link the reader has moved on from.
+    @Published var helpTarget: HelpTarget?
+    /// Whether the first-run wizard is on screen. Presented as a sheet over the
+    /// main window, so there is one window and the wizard cannot be lost behind
+    /// it.
+    @Published var showFirstRun = false
     /// Last update check result (nil: none run yet, or the last one found
     /// nothing worth reporting — see UpdateChecker.check's doc comment on why
     /// a failure never surfaces as an error here).
@@ -125,6 +147,38 @@ final class AppState: ObservableObject {
     let console = Console()
 
     var isLive: Bool { PostureUI.isLive(snapshot) }
+
+    /// Offers the first-run wizard when this account has never completed it AND
+    /// nothing is configured yet.
+    ///
+    /// The check is "does dezhban know a VPN server yet", not "is there a config
+    /// file": someone who set dezhban up from the CLI has already answered these
+    /// questions, and asking again the first time they open the app would look
+    /// like it had forgotten. An endpoint or a profile is the signal, because
+    /// tunnel interfaces are legitimately empty on an autodetect config — the
+    /// recommended one. Opens the window too: a fresh install with nothing
+    /// configured is the one launch where a window is the point.
+    func offerFirstRunIfNeeded() {
+        guard !FirstRun.isComplete, cliFound else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let info = DezhbanCLI.readProfiles()
+            let configured = !(info?.defaultEndpoints.isEmpty ?? true) || !(info?.profiles.isEmpty ?? true)
+            DispatchQueue.main.async {
+                guard FirstRun.shouldOffer(vpnKnown: configured) else { return }
+                self?.showFirstRun = true
+                MainWindow.shared.open()
+            }
+        }
+    }
+
+    /// Opens the Help pane at a specific place in the documentation, named the
+    /// way a `Tunable`'s docAnchor writes it ("usage/config.md#fields").
+    /// A docAnchor that names nothing bundled still opens the pane — better a
+    /// reader lands in the documentation than on a dead control.
+    func openHelp(docAnchor: String) {
+        helpTarget = HelpTarget(docAnchor: docAnchor)
+        selectedSection = .help
+    }
 
     /// Routes a finished transcript into the Logs pane and
     /// navigates there — the window-side output surface for long actions.
@@ -160,11 +214,15 @@ final class AppState: ObservableObject {
             // control socket independently on top of that).
             let status = DezhbanCLI.readStatusJSON()
             let profiles = DezhbanCLI.readProfiles()
+            // Read here, with the rest, so the menu can build from a cache
+            // instead of shelling out while it is opening.
+            let pauseOptions = DezhbanCLI.readPauseOptions()
             DispatchQueue.main.async {
                 self?.serviceIsInstalled = status?.serviceInstalled ?? false
                 self?.controlIsReachable = status?.controlReachable ?? false
                 self?.pauseIsEnabled = status?.pauseEnabled ?? false
                 self?.profiles = profiles
+                self?.pauseOptions = pauseOptions
             }
         }
     }

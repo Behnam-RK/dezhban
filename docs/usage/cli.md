@@ -54,7 +54,7 @@ daemon** over its control socket and need no password at all:
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
 | `setup`, `config set`/`edit`, `config preset apply` | Yes, but only for the config write itself. `preset apply` is a write like any other — see [Presets](#presets). |
-| `config show`/`path`, `config preset list`/`show`/`diff` | **No** — read-only; they report the config, they don't change it. |
+| `config show`/`path`/`schema`, `config preset list`/`show`/`diff`, `setup --questions` | **No** — read-only; they report the config (or what the wizard would ask), they don't change it. |
 | `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
 | `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
 | `upgrade check` | **No** — read-only, no root. |
@@ -163,6 +163,7 @@ sudo dezhban setup                 # interactive wizard — builds/updates the c
                                    # detects tunnels, previews the ruleset, then writes it
 dezhban config path                # print the resolved config path
 dezhban config show                # print the effective config as JSON
+dezhban config schema              # describe every settable key (add --json for machine output)
 dezhban config get blockedCountries
 sudo dezhban config set blockedCountries IR,RU   # set, validate, save
 sudo dezhban config reset vpn.switchWindow       # restore a shipped default (--all: every tunable)
@@ -198,6 +199,36 @@ succeeds and says so; the new values are read the next time it starts.
 `setup` needs an interactive terminal and reuses the same tunnel detection,
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
+
+`setup --questions` is the exception: it prints what the wizard *would* ask —
+each question, what it writes, its seeded answer, and which earlier answer
+unlocks it — and asks nothing. Read-only, no root, no terminal needed.
+`--json` is the machine form, and is how the macOS app's own first-run wizard
+gets the question set instead of keeping a second copy of it.
+
+```sh
+dezhban setup --questions          # what would you ask me?
+dezhban setup --questions --json   # the same, for another surface to render
+```
+
+### Asking what a key is
+
+`config schema` describes the keys themselves rather than your values: for each
+one, its default, what bounds it, whether `"0"` turns it off, whether a preset
+writes it, whether the running daemon can adopt it without a restart, and which
+part of [config.md](config.md) documents it.
+
+```sh
+dezhban config schema              # every key, explained
+dezhban config schema --json       # the same, for tools
+```
+
+It reads no config file — the schema is what the keys *are*, not what this host
+has set — so it answers the same on a machine that has never been configured.
+That is what lets the macOS app label its settings, bound its sliders, and know
+where an explicit **Off** is a real choice instead of hardcoding any of it. The
+defaults it prints are derived from the shipped defaults themselves, so this
+output cannot drift from what you actually get by setting nothing.
 
 ### Presets
 
@@ -311,7 +342,7 @@ carries the exact deadline, since the sentence dates a window only to a
 wall-clock time and a window can outlive both its date and its minute:
 
 ```
-switch window: OPEN — Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM).
+switch window: OPEN — Your real IP may be exposed until 3:04PM. The guard is relaxed so a new VPN can connect.
 until: 2026-07-25T15:04:00Z
 ```
 
@@ -321,6 +352,7 @@ For the times the *correct* traffic is the one the guard blocks — a domestic-o
 service that refuses a foreign VPN exit:
 
 ```sh
+dezhban pause --list       # the offered lengths, and what each is for
 sudo dezhban pause 15m     # real IP for 15 minutes, capped by vpn.pauseMax
 sudo dezhban resume        # end it early
 ```
@@ -329,6 +361,40 @@ Unlike `switch`, this doesn't wait for a VPN — it just opens egress for the gi
 duration and re-arms the guard by itself at the deadline, so there's nothing to
 remember to turn back on. See
 [modes.md](../concepts/modes.md#pause--deliberately-using-your-real-ip).
+
+`--list` offers a short set of realistic lengths — the question is never "how
+many seconds" but "how long do I need my real IP for" — and any duration up to
+the cap still works if none of them fit. Lengths above `vpn.pauseMax` are shown
+as **unavailable with the cap as the reason**, not hidden: a cap you cannot see
+is a cap you will keep bumping into.
+
+A pause longer than the cap is **refused and explained, never shortened**. Asking
+for an hour against a 30-minute cap fails with the cap named, rather than quietly
+granting thirty minutes you did not ask for and cannot tell apart from the hour
+you wanted.
+
+## Keep a deliberate disconnect cut
+
+dezhban cannot tell a VPN you turned off from a VPN that fell over, so by default
+it treats every drop the same way: it opens a redial window so the client can get
+back. When you are the one disconnecting, that is a relaxation you never asked
+for. Arm **hold the line** first and the next drop stays cut:
+
+```sh
+dezhban hold               # the next VPN drop stays cut — no redial window
+dezhban hold --status      # armed or not
+dezhban hold --cancel      # back to the usual behaviour
+```
+
+It is the opposite of `pause` in both directions: pause says *let me use my real
+IP*, hold the line says *keep me cut*. It only ever **removes** a relaxation, so
+the three sanctioned triggers are unchanged and there is no fourth — which is
+also why it needs no `control.allow*` gate of its own.
+
+It is one-shot on purpose: spent by the drop it covers, disarmed as soon as a
+tunnel is up again, and forgotten if the daemon restarts. A flag that survived a
+reboot would eventually cut an *accidental* drop off from the redial help it
+should have had.
 
 ## Shell completion
 
@@ -400,36 +466,39 @@ Two surfaces, split by urgency:
   lockout-recovery actions; they never depend on the main window opening. Items
   enable/disable from the current state.
 - **Main window — everything else**, opened from the dropdown or by clicking the
-  Dock icon (never automatically at launch). Sidebar sections:
-  - **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
-    every configured VPN profile with the matched one marked, switch-window
-    countdown, enforcement-error banner) plus the daily controls, Pause, and a
-    visually-separated Panic. With profiles configured, "Switching VPN…"
-    becomes a menu so a switch window can target one by name. Degraded states
-    are guided: CLI missing, service not installed, and daemon stopped each
-    render an explanation with the one relevant action inline (Install
-    service… / Guard up).
-  - **Settings** — startup ("Start the guard at boot" installs the launchd
-    system service so enforcement survives reboots; "Open this app at login" via
-    `SMAppService`; essential-event notifications), a **strictness preset
-    picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
-    the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
-    countries, poll interval), windows (switch/redial/endpoint grace), timing,
-    all applied through one validated `config set` batch, an **Advanced**
-    disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
-    settings changes"** (see below), an explicit **Restart dezhban…**, and the
-    raw config file escape hatch (control socket, geo providers, allowlist are
-    JSON-only).
-  - **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
-    with fixes inline instead of a text dump; an optional "Find my VPN's
-    server" checkbox runs it with `--discover`. Read-only, same guarantee as
-    running `dezhban doctor` in a terminal.
-  - **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
-    (also opens Console.app), and the transcripts of window-triggered
-    panic/install/uninstall/apply/restart runs.
-  - **About** — version, config/binary paths, posture, service state, and which
-    elevation path (Touch ID-capable Authorization Services vs password-only
-    fallback) privileged actions will take.
+  Dock icon (never automatically at launch).
+
+The main window's sidebar sections:
+
+- **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
+  every configured VPN profile with the matched one marked, switch-window
+  countdown, enforcement-error banner) plus the daily controls, Pause, and a
+  visually-separated Panic. With profiles configured, "Switching VPN…"
+  becomes a menu so a switch window can target one by name. Degraded states
+  are guided: CLI missing, service not installed, and daemon stopped each
+  render an explanation with the one relevant action inline (Install
+  service… / Guard up).
+- **Settings** — startup ("Start the guard at boot" installs the launchd
+  system service so enforcement survives reboots; "Open this app at login" via
+  `SMAppService`; essential-event notifications), a **strictness preset
+  picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
+  the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
+  countries, poll interval), windows (switch/redial/endpoint grace), timing,
+  all applied through one validated `config set` batch, an **Advanced**
+  disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
+  settings changes"** (see below), an explicit **Restart dezhban…**, and the
+  raw config file escape hatch (control socket, geo providers, allowlist are
+  JSON-only).
+- **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
+  with fixes inline instead of a text dump; an optional "Find my VPN's
+  server" checkbox runs it with `--discover`. Read-only, same guarantee as
+  running `dezhban doctor` in a terminal.
+- **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
+  (also opens Console.app), and the transcripts of window-triggered
+  panic/install/uninstall/apply/restart runs.
+- **About** — version, config/binary paths, posture, service state, and which
+  elevation path (Touch ID-capable Authorization Services vs password-only
+  fallback) privileged actions will take.
 
 **Status icon** — full-color brand state icons (from `gui/artifacts/`), shown in both
 the menu bar and the Dock tile: teal allow/guard, red block/full-block, amber

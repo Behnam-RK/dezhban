@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -125,27 +126,163 @@ func cmdSwitch(args []string) int {
 // itself with no further action. For deliberately, temporarily using the real
 // ISP IP — e.g. a sanctioned-country-only service the VPN's exit can't reach —
 // without leaving protection off by mistake afterward.
+// pauseList prints the offered pause lengths. Options above vpn.pauseMax are
+// listed as unavailable with the reason rather than hidden: a user whose cap
+// forbids two hours should learn that from the list, not from a refusal after
+// they have chosen.
+func pauseList(cfgPath string, jsonOut bool) int {
+	cfg, err := loadConfig(cfgPath)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "pause --list:", err)
+		return 1
+	}
+	opts := config.PauseOptions(cfg)
+
+	if jsonOut {
+		data, err := json.MarshalIndent(opts, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "pause --list json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	for _, o := range opts {
+		if o.Unavailable != "" {
+			fmt.Printf("  %-12s unavailable — %s\n", o.Label, o.Unavailable)
+			continue
+		}
+		fmt.Printf("  %-12s %-8s %s\n", o.Label, o.Value, o.Why)
+	}
+	if cfg.VPN.PauseMax > 0 {
+		fmt.Printf("\nAny duration up to %s works: dezhban pause 7m\n", cfg.VPN.PauseMax)
+	}
+	return 0
+}
+
+// cmdHold arms or disarms "hold the line": the next tunnel drop stays cut
+// instead of opening an automatic redial window.
+//
+// dezhban cannot tell a deliberate disconnect from an accidental drop, and that
+// ambiguity is what this answers. It is strictly MORE restrictive than the
+// default — it only removes a relaxation — so it adds no fourth trigger, needs
+// no ADR, and carries no control.allow* gate of its own: there is no authority
+// here to withhold.
+func cmdHold(args []string) int {
+	fs := flag.NewFlagSet("hold", flag.ExitOnError)
+	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	cancel := fs.Bool("cancel", false, "disarm, so the next drop opens a redial window normally")
+	statusOnly := fs.Bool("status", false, "report whether it is armed, change nothing")
+	_ = fs.Parse(args)
+
+	if *cancel && *statusOnly {
+		fmt.Fprintln(os.Stderr, "hold: --cancel and --status are mutually exclusive")
+		return 2
+	}
+
+	if *statusOnly {
+		return holdStatus(*cfgPath)
+	}
+
+	// Refusing early beats reporting success for something that cannot take
+	// effect: with no automatic window there is nothing to suppress.
+	if !*cancel {
+		if cfg, err := loadConfig(*cfgPath); err == nil && cfg.VPN.RedialWindow <= 0 {
+			fmt.Fprintln(os.Stderr, "hold: the automatic redial window is already disabled "+
+				"(vpn.redialWindow: \"0\"), so every drop already stays cut.")
+			return 1
+		}
+	}
+
+	op, fileOp := control.OpHoldArm, command.OpHoldArm
+	armedMsg := "hold the line armed — the next VPN drop stays cut, and no redial window opens.\n" +
+		"It disarms itself once a tunnel is up again, or with `dezhban hold --cancel`."
+	if *cancel {
+		op, fileOp = control.OpHoldCancel, command.OpHoldCancel
+		armedMsg = "hold the line disarmed — the next VPN drop opens a redial window as usual."
+	}
+
+	// Passwordless path first, same shape as pause/switch: the daemon does it
+	// itself, and the root-owned command file is the fallback when no daemon
+	// answers.
+	if !noDaemon() {
+		if code, handled := tryControl(*cfgPath, control.Request{Op: op}); handled {
+			if code == 0 {
+				fmt.Println(armedMsg)
+			}
+			return code
+		}
+	}
+
+	if !requireRoot("hold") {
+		return 1
+	}
+	if err := command.Write(defaultCommandPath(), newCommand(fileOp, "", "")); err != nil {
+		fmt.Fprintln(os.Stderr, "hold:", err)
+		return 1
+	}
+	fmt.Println(armedMsg)
+	return 0
+}
+
+// holdStatus reports from the published snapshot, like `switch --status`.
+func holdStatus(cfgPath string) int {
+	snap, err := state.Read(defaultStatePath())
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "hold --status: no state file — is dezhban running?")
+		return 1
+	}
+	if cfg, err := loadConfig(cfgPath); err == nil && cfg.VPN.RedialWindow <= 0 {
+		fmt.Println("hold the line: not needed — the automatic redial window is disabled " +
+			"(vpn.redialWindow: \"0\"), so every drop already stays cut.")
+		return 0
+	}
+	if snap.Hold != nil && snap.Hold.Armed {
+		fmt.Printf("hold the line: ARMED since %s — the next VPN drop stays cut.\n",
+			snap.Hold.At.Format(time.Kitchen))
+		return 0
+	}
+	fmt.Println("hold the line: not armed — a VPN drop opens a redial window so it can redial.")
+	return 0
+}
+
 func cmdPause(args []string) int {
 	fs := flag.NewFlagSet("pause", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
+	list := fs.Bool("list", false, "print the offered pause lengths and stop")
+	jsonOut := fs.Bool("json", false, "with --list, print machine-readable JSON")
 	_ = fs.Parse(args)
+
+	if *list {
+		return pauseList(*cfgPath, *jsonOut)
+	}
+
 	dur := ""
 	if fs.NArg() > 0 {
 		dur = fs.Arg(0)
 	}
-	// Validate here rather than letting the daemon's clampPause silently fall
-	// back to its default on a typo — `dezhban pause 15x` must error, not
-	// quietly become a 15m exposure the operator never asked for.
+	// Validate here rather than letting the daemon fall back to its default on a
+	// typo — `dezhban pause 15x` must error, not quietly become a 15m exposure
+	// the operator never asked for.
+	var requested time.Duration
 	if dur != "" {
-		if d, err := time.ParseDuration(dur); err != nil || d <= 0 {
+		d, err := time.ParseDuration(dur)
+		if err != nil || d <= 0 {
 			fmt.Fprintf(os.Stderr, "pause: invalid duration %q (want e.g. \"15m\")\n", dur)
 			return 2
 		}
+		requested = d
 	}
 
-	if cfg, err := loadConfig(*cfgPath); err == nil && cfg.VPN.PauseMax <= 0 {
-		fmt.Fprintln(os.Stderr, "pause: disabled by vpn.pauseMax: \"0\". Set it to a duration (e.g. \"30m\") to enable.")
-		return 1
+	// Refused here and again in the daemon, and in both places explained rather
+	// than clamped. A pause quietly shortened to the cap is a pause the operator
+	// did not ask for, and they would have no way to know.
+	if cfg, err := loadConfig(*cfgPath); err == nil {
+		if refusal := config.PauseRefusal(cfg, requested); refusal != "" {
+			fmt.Fprintln(os.Stderr, "pause:", refusal)
+			return 1
+		}
 	}
 
 	// Passwordless path first: the daemon opens the pause itself when

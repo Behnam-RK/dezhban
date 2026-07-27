@@ -25,6 +25,29 @@ public struct SwitchState: Codable {
     public var isPause: Bool { trigger == "pause" }
 }
 
+/// The moment a healthy tunnel went down — mirrors Go's `state.DropRecord`.
+/// Carried from the drop until a tunnel is up again,
+/// including across the redial window that follows, which is the only reason any
+/// surface can report the drop at all.
+///
+/// It carries the moment and nothing else — see Go's DropRecord for why a "was
+/// traffic cut" companion flag could not be rendered truthfully.
+public struct DropRecord: Codable {
+    public let at: Date
+}
+
+/// "Hold the line" is armed — mirrors Go's `state.HoldState`. The next tunnel
+/// drop stays cut instead of opening an automatic redial window, so a deliberate
+/// disconnect does not get a relaxation the user never asked for.
+///
+/// It only ever suppresses, so it is not a fourth relaxation trigger and the
+/// icon rules are unaffected: it makes the RED state reachable rather than
+/// introducing a new colour.
+public struct HoldState: Codable {
+    public let armed: Bool
+    public let at: Date
+}
+
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.
 /// JSON keys match the lowerCamelCase struct tags in internal/state/state.go.
 public struct Snapshot: Codable {
@@ -50,9 +73,14 @@ public struct Snapshot: Codable {
     public let `switch`: SwitchState?      // present only while a switch window is open
     public let pending: PendingFlip?       // present only while a posture change is being counted toward
     public let display: Display?          // the rendered sentence — nil from an older daemon
+    public let drop: DropRecord?          // present from a tunnel drop until a tunnel is up again
+    public let hold: HoldState?           // present only while "hold the line" is armed
 
     /// Wall-clock age of this snapshot.
     public var age: TimeInterval { Date().timeIntervalSince(time) }
+
+    /// The next VPN drop will stay cut rather than opening a redial window.
+    public var holdArmed: Bool { hold?.armed ?? false }
 }
 
 /// The rendered form of a Snapshot — mirrors Go's `render.Display` (carried via

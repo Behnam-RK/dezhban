@@ -7,10 +7,14 @@ import DezhbanCore
 /// main window renders from; the dropdown is rebuilt from the current snapshot
 /// each time it opens.
 ///
-/// The dropdown deliberately carries only the emergency/time-critical set —
-/// status line, Open Dezhban, Block/Unblock, the switch window, Panic, Quit.
-/// Panic and Block must work even if the main window can't open, so they never
-/// move behind it. Everything else lives in the window (MainWindow/MainView).
+/// The dropdown is a glance and the handful of actions that are time-critical
+/// at the moment you reach for it: the status line, Open Dezhban, the switch
+/// window with its countdown, Pause, hold the line, and Quit — plus Panic
+/// behind ⌥, which must work even if the main window cannot open, so it never
+/// moves behind it. Manual block and unblock are deliberately NOT here:
+/// somebody who wants to cut their own internet can turn off Wi-Fi, so blocking
+/// by hand is a power-user affordance and lives in the window's Overview with
+/// everything else (MainWindow/MainView).
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
@@ -60,6 +64,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         AppState.shared.refreshServiceState()
         AppState.shared.checkForUpdates()
+        AppState.shared.offerFirstRunIfNeeded()
         timer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             self?.refresh()
         }
@@ -235,20 +240,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
         let open = addAction("Open Dezhban…", #selector(openMainWindow))
         open.keyEquivalent = "o"
+        open.toolTip = "Everything else — settings, diagnostics, manual block, logs, help. Hold ⌥ for Panic."
+
+        // Panic is the lockout escape hatch: it must never depend on the main
+        // window opening, so it keeps a menubar item. It sits behind ⌥ as the
+        // alternate to "Open Dezhban…" — one keystroke away in a fixed place,
+        // but not one slip away from a menu people open to check a countdown.
+        //
+        // An alternate must be adjacent to its sibling and share its key
+        // equivalent, differing only by the extra modifier: ⌘O opens the window,
+        // ⌥ swaps the item, ⌘⌥O panics.
+        let panic = addAction("Panic — force unblock…", #selector(confirmPanic),
+                              enabled: DezhbanCLI.binaryPath() != nil)
+        panic.keyEquivalent = "o"
+        panic.keyEquivalentModifierMask = [.command, .option]
+        panic.isAlternate = true
+        panic.toolTip = "Removes every rule dezhban installed. Works with no daemon running."
 
         menu.addItem(.separator())
 
-        // Manual block / unblock, gated on current posture. These go to the running
-        // daemon over its control socket, so they normally need no password — say so,
-        // and say the opposite when they'd have to fall back to a direct root action.
-        let blocked = s?.blocked ?? false
-        // With the guard holding a downed tunnel, Unblock doubles as the
-        // "my VPN is off on purpose — release the line" action.
-        let guardHolds = isRunning && PostureUI.guardHoldsDownedTunnel(s)
-        addAction("Block now", #selector(blockNow), enabled: isRunning && !blocked)
-            .toolTip = AppState.shared.routineHint("Cuts all egress and holds it until you unblock.")
-        addAction("Unblock", #selector(unblockNow), enabled: isRunning && (blocked || guardHolds))
-            .toolTip = AppState.shared.routineHint("Releases a manual block and resumes monitoring.")
+        // Manual block and unblock are NOT here. Somebody who wants to cut their
+        // own internet can turn off Wi-Fi; blocking by hand is a power-user and
+        // debugging affordance, and it lives in the window's Overview with the
+        // rest of them. What stays is what is time-critical at the moment you
+        // reach for the menubar.
 
         // Switch window: connect a brand-new VPN whose server isn't known yet.
         // Time-critical mid-flow, and the countdown is glanceable — so it stays.
@@ -275,18 +290,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // down, so pauseIsEnabled is true in exactly that case.
             let pauseAllowed = AppState.shared.pauseIsEnabled
             let pauseEnabled = isRunning && pauseAllowed
-            addAction("Pause — use my real IP", #selector(pauseNow), enabled: pauseEnabled)
-                .toolTip = {
-                    if !pauseAllowed { return "Disabled — vpn.pauseMax is \"0\" in your config." }
-                    if !isRunning { return "Unavailable — dezhban isn’t running. Start it first." }
-                    return AppState.shared.routineHint(
-                        "Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
-                }()
-        }
+            let pauseItem = addAction("Pause — use my real IP", #selector(pauseNow), enabled: pauseEnabled)
+            pauseItem.toolTip = {
+                if !pauseAllowed { return "Disabled — vpn.pauseMax is \"0\" in your config." }
+                if !isRunning { return "Unavailable — dezhban isn’t running. Start it first." }
+                return AppState.shared.routineHint(
+                    "Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
+            }()
+            // The offered lengths come from the daemon (`pause --list --json`),
+            // so this menu and `dezhban pause --list` can never offer different
+            // choices. Clicking the parent still pauses for the built-in
+            // default; the submenu is for picking deliberately.
+            if pauseEnabled, let options = AppState.shared.pauseOptions, !options.isEmpty {
+                let submenu = NSMenu()
+                for option in options {
+                    let item = NSMenuItem(title: option.label,
+                                          action: #selector(pauseForOption(_:)),
+                                          keyEquivalent: "")
+                    item.target = self
+                    item.representedObject = option.value
+                    // An over-cap length is shown disabled with the reason,
+                    // never hidden and never quietly shortened — a cap you
+                    // cannot see is one you keep bumping into.
+                    item.isEnabled = option.isAvailable
+                    item.toolTip = option.isAvailable ? option.why : option.unavailable
+                    submenu.addItem(item)
+                }
+                submenu.autoenablesItems = false
+                pauseItem.submenu = submenu
+            }
 
-        // Panic is the lockout escape hatch: it must never depend on the main
-        // window opening, so it keeps a first-class menubar item.
-        addAction("Panic — force unblock…", #selector(confirmPanic), enabled: DezhbanCLI.binaryPath() != nil)
+            // The mirror image of Pause, and placed beside it so the pair reads
+            // as the two answers to "I am about to change my VPN situation":
+            // pause = let me use my real IP, hold the line = keep me cut.
+            // It only ever suppresses a relaxation, so it is safe to offer
+            // whenever the daemon is running.
+            if s?.holdArmed ?? false {
+                addAction("Don’t hold the line", #selector(cancelHold), enabled: isRunning)
+                    .toolTip = "Armed — the next VPN drop stays cut. Choose this to let it redial normally instead."
+            } else {
+                addAction("Hold the line — keep me cut", #selector(holdLine), enabled: isRunning)
+                    .toolTip = isRunning
+                        ? AppState.shared.routineHint(
+                            "For when YOU are disconnecting: the next VPN drop stays cut instead of "
+                                + "opening a window so it can redial.")
+                        : "Unavailable — dezhban isn’t running. Start it first."
+            }
+        }
 
         menu.addItem(.separator())
         addAction("Quit", #selector(quit))
@@ -314,12 +364,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Routine posture ops: handled by the running daemon over its control socket,
     // with no password — semantics in AppActions.routine (refusals never escalate).
-    @objc private func blockNow() { AppActions.routine(["block"], "block") }
-    @objc private func unblockNow() { AppActions.routine(["unblock"], "unblock") }
     @objc private func openSwitch() { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
     @objc private func cancelSwitch() { AppActions.routine(["switch", "--cancel"], "cancel the switch window") }
     @objc private func pauseNow() { AppActions.routine(["pause"], "pause the guard") }
     @objc private func resumeNow() { AppActions.routine(["resume"], "resume the guard") }
+    /// Pauses for a length chosen from the submenu. The value travels verbatim
+    /// from the daemon's own list, so the app never formats a duration itself.
+    @objc private func pauseForOption(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? String else { return }
+        AppActions.routine(["pause", value], "pause the guard for \(sender.title)")
+    }
+    @objc private func holdLine() { AppActions.routine(["hold"], "hold the line") }
+    @objc private func cancelHold() { AppActions.routine(["hold", "--cancel"], "cancel hold the line") }
 
     /// Menubar panic: confirmation, then a direct privileged run with the result
     /// in an NSAlert (scrollable transcript) — deliberately NOT routed through

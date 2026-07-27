@@ -212,7 +212,8 @@ func (s *Server) serve(ctx context.Context, conn net.Conn) {
 	}
 
 	switch req.Op {
-	case OpStatus, OpBlock, OpUnblock, OpOpenSwitch, OpCancelSwitch, OpPause, OpResume, OpReload:
+	case OpStatus, OpBlock, OpUnblock, OpOpenSwitch, OpCancelSwitch, OpPause, OpResume, OpReload,
+		OpHoldArm, OpHoldCancel:
 	case OpConfigWrite:
 		// Authorised here rather than in the run loop, so a request that cannot
 		// prove itself never reaches the goroutine that touches the firewall.

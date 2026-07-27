@@ -329,7 +329,8 @@ the two differ, on both write paths (elevated and `--token-stdin`).
 | `promoteAfterRefreshes` | `3` | Consecutive sightings before a discovered endpoint is learned under normal guard. |
 | `redialMinUptime` | `15s` | Anti-flap gate on the automatic redial window: an auto-window opens only if the tunnel had been up at least this long (or a good exit was confirmed during that uptime). The first drop after startup is exempt — uptime before the daemon started is unknowable. `"0"` disables the gate. |
 | `endpointWarnThreshold` | `256` | Union size at which `doctor` warns about rule-list bloat. |
-| `windowProtocols` / `windowPorts` | (empty = allow all) | Restrict the switch window to these protocols/ports instead of all outbound — only useful when every VPN you switch to uses a fixed port set (e.g. WireGuard on 51820). |
+| `windowProtocols` | `[]` | Restrict a switch window to these protocols (e.g. `["udp"]`) instead of allowing all outbound. Empty allows all — only worth setting when every VPN you switch to uses a fixed protocol. |
+| `windowPorts` | `[]` | Restrict a switch window to these ports (e.g. `[51820]`) instead of allowing all outbound. Empty allows all — only worth setting when every VPN you switch to uses a fixed port set (e.g. WireGuard on 51820). |
 
 ## Presets
 

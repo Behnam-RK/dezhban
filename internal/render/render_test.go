@@ -9,6 +9,9 @@ import (
 
 func TestText(t *testing.T) {
 	until := time.Date(2026, 7, 25, 15, 4, 0, 0, time.UTC)
+	// A minute before the window's deadline, so a case carrying both can tell
+	// the drop time and the close time apart.
+	dropAt := time.Date(2026, 7, 25, 15, 3, 0, 0, time.UTC)
 
 	cases := []struct {
 		name         string
@@ -55,6 +58,36 @@ func TestText(t *testing.T) {
 			wantDetail:   "Guard active, but no tunnel is up — all traffic is cut until your VPN redials.",
 		},
 		{
+			// The whole point of carrying the drop record: a cut the user can
+			// check against their own experience of the network dying.
+			name: "guard holds downed tunnel, drop time known",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Drop:    &state.DropRecord{At: until},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN dropped at 3:04PM. Guard active, but no tunnel is up — " +
+				"all traffic is cut until your VPN redials.",
+		},
+		{
+			// The record is carried until a tunnel returns, so it outlives the
+			// day it happened on. A bare clock time would then read as "a few
+			// minutes ago" and understate how long the host has been cut.
+			name: "guard holds downed tunnel, drop was not today",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until.AddDate(0, 0, 2),
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Drop:    &state.DropRecord{At: until},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN dropped at 3:04PM on " + until.Format("Jan 2") +
+				". Guard active, but no tunnel is up — all traffic is cut until your VPN redials.",
+		},
+		{
 			name:         "full block with country",
 			snap:         state.Snapshot{Posture: PostureFullBlock, CountryCode: "IR"},
 			wantKey:      KeyBlocked,
@@ -75,7 +108,7 @@ func TestText(t *testing.T) {
 			}},
 			wantKey:      KeyWarning,
 			wantHeadline: "Switch window open",
-			wantDetail:   "Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM).",
+			wantDetail:   "Your real IP may be exposed until 3:04PM. The guard is relaxed so a new VPN can connect.",
 		},
 		{
 			name: "automatic redial window",
@@ -84,7 +117,21 @@ func TestText(t *testing.T) {
 			}},
 			wantKey:      KeyWarning,
 			wantHeadline: "Redial window open",
-			wantDetail:   "Your VPN dropped. The guard is relaxed while it redials — your real IP may be exposed until it closes (3:04PM).",
+			wantDetail:   "Your real IP may be exposed until 3:04PM. Your VPN dropped and the guard relaxed so it can redial.",
+		},
+		{
+			// A redial window that still knows when the drop happened reports
+			// both halves: the exposure and its cause, in that order.
+			name: "automatic redial window, drop time known",
+			snap: state.Snapshot{
+				Posture: PostureSwitchWindow,
+				Switch:  &state.SwitchState{Open: true, Until: until, Trigger: state.TriggerAuto},
+				Drop:    &state.DropRecord{At: dropAt},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Redial window open",
+			wantDetail: "Your real IP may be exposed until 3:04PM. " +
+				"Your VPN dropped at 3:03PM and the guard relaxed so it can redial.",
 		},
 		{
 			name: "pause window",
@@ -93,14 +140,14 @@ func TestText(t *testing.T) {
 			}},
 			wantKey:      KeyPaused,
 			wantHeadline: "Paused",
-			wantDetail:   "Using your real IP at your request. The guard re-arms automatically at 3:04PM.",
+			wantDetail:   "You are using your real IP at your request. The guard re-arms automatically at 3:04PM.",
 		},
 		{
 			name:         "switch window with no Switch struct falls back to manual wording",
 			snap:         state.Snapshot{Posture: PostureSwitchWindow},
 			wantKey:      KeyWarning,
 			wantHeadline: "Switch window open",
-			wantDetail:   "Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes.",
+			wantDetail:   "Your real IP may be exposed until this window closes. The guard is relaxed so a new VPN can connect.",
 		},
 		{
 			name:         "unknown posture",
@@ -217,7 +264,7 @@ func TestPostureIgnoresEnforcementErrAndNotes(t *testing.T) {
 	}
 
 	got := Posture(snap)
-	want := "Guard relaxed so a new VPN can connect — your real IP may be exposed until it closes (3:04PM)."
+	want := "Your real IP may be exposed until 3:04PM. The guard is relaxed so a new VPN can connect."
 	if got.Key != KeyWarning || got.Headline != "Switch window open" || got.Detail != want {
 		t.Errorf("Posture() = %+v, want the window sentence alone (detail %q)", got, want)
 	}

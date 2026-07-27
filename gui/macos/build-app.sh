@@ -61,6 +61,16 @@ cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
 # SUDO_ASKPASS helper. Lives in the (code-signed, read-only) bundle so sudo is
 # never pointed at a path a local process could swap out from under it.
 install -m 0755 "$HERE/askpass.sh" "$APP/Contents/Resources/askpass.sh"
+
+# Documentation, rendered from the repo's own markdown into the bundle. Shipping
+# it means the help pane works with every byte of egress cut — which is exactly
+# when someone needs it — and that the docs always match the version they
+# document. tools/helpgen is dev tooling (stdlib only, never installed); a
+# missing or renamed page is an error there, not a silently thinner bundle.
+if ! (cd "$REPO_ROOT" && go run ./tools/helpgen -docs docs -out "$APP/Contents/Resources/help"); then
+	echo "build-app.sh: helpgen failed — the app would ship without its documentation" >&2
+	exit 1
+fi
 # Brand artifacts (gui/artifacts/png): full-color menubar + Dock state
 # icons. Optional — a checkout without gui/artifacts/ still builds, and AppDelegate
 # falls back to SF Symbols / the static app icon when the PNGs are absent.

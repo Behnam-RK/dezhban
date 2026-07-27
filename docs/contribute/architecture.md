@@ -72,9 +72,30 @@ something to describe — absent in STANDBY, before any tunnel is known.
     "until": "2026-07-01T12:02:00Z",
     "profile": "newvpn",
     "trigger": "manual"                  // "manual" (operator command) | "auto" (redial window on a tunnel drop); absent from older daemons — treat as "manual"
+  },
+  "drop": {                              // (vpn) present from a tunnel drop until a tunnel is up again
+    "at": "2026-07-01T12:01:30Z"         // when — the posture fields say what is happening now
+  },
+  "hold": {                              // (vpn) present only while "hold the line" is armed
+    "armed": true,                       // the NEXT tunnel drop stays cut — no automatic redial window
+    "at": "2026-07-01T12:00:00Z"
   }
 }
 ```
+
+`drop` is carried, not merely published once, and that is the only reason any
+surface can report a drop. The run loop opens the automatic redial window on the
+same tunnel-down edge, so the snapshot showing the guard holding a downed tunnel
+is superseded within microseconds — and observers read this file about once a
+second. Without carrying the record across the window, the CLI and the app could
+only ever say "a window is open", never "your VPN dropped at 12:01:30 and the
+guard cut traffic before relaxing so it could redial".
+
+Carrying it does **not** make an open window look like a cut: the window is a
+relaxation, traffic is flowing, and the posture stays amber. `drop` says what
+happened; `posture` says what is happening. `cut` is false when the drop
+occurred in standby, where nothing was being enforced and claiming traffic was
+cut would be false.
 
 `lookupErr` and `exitUnknown` are mutually exclusive, and the split matters. A
 lookup that fails because **no tunnel is up** is not a fault — it is the normal

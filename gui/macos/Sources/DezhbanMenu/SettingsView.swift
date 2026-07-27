@@ -28,11 +28,17 @@ struct SettingsView: View {
 
     @State private var fields = SettingsFields()
 
-    /// The values this pane was last seeded with, in `SettingsFields.keys` order.
-    /// Comparing the live fields against these is how an unsaved edit is told
-    /// from a pane that is merely displaying what is on disk — which decides
-    /// whether it is safe to re-read the file underneath the user.
-    @State private var seededValues: [String] = []
+    /// The values this pane was last seeded with, keyed by config key. Comparing
+    /// the live fields against these is how an unsaved edit is told from a pane
+    /// that is merely displaying what is on disk — which decides whether it is
+    /// safe to re-read the file underneath the user.
+    @State private var seededValues: [String: String] = [:]
+
+    /// What every key IS, read once from `config schema --json`. Nil until it
+    /// loads, and nil forever against a CLI too old to know the subcommand —
+    /// every use falls back to a plainer label rather than a hardcoded value,
+    /// because a wrong hint is worse than a terse one.
+    @State private var schema: ConfigSchema?
 
     private var hasUnsavedEdits: Bool {
         !seededValues.isEmpty && fields.currentValues != seededValues
@@ -57,7 +63,64 @@ struct SettingsView: View {
                 Section("Strictness preset") {
                     presetPicker
                 }
-                Section("Startup") {
+                // Ordered by what a person is actually deciding: which VPN to
+                // trust, what to block, when the guard may relax, and only then
+                // the machinery. Headings say the thing rather than the config
+                // block it lives in, per docs/concepts/glossary.md.
+                Section {
+                    schemaField("vpn.tunnelInterfaces", "Your VPN tunnel (comma-separated)",
+                                text: $fields.tunnelInterfaces)
+                    schemaField("vpn.endpoints", "VPN server addresses (comma-separated)", text: $fields.endpoints)
+                    schemaToggle("vpn.autoDetect", "Find my VPN tunnel automatically", isOn: $fields.autoDetect)
+                    schemaToggle("vpn.autoDiscoverEndpoints", "Find the VPN server address automatically",
+                                 isOn: $fields.autoDiscover)
+                    schemaToggle("vpn.autoArm", "Arm the guard when a VPN connects", isOn: $fields.autoArm)
+                } header: {
+                    sectionHeader("Your VPN",
+                                  "Which tunnel the guard trusts. Leave the two fields empty and let "
+                                      + "dezhban find them — that is what most setups want.")
+                }
+
+                Section {
+                    schemaField("blockedCountries", "Blocked countries (comma-separated)",
+                                text: $fields.blockedCountries)
+                    durationField("pollInterval", "Exit country check interval", text: $fields.pollInterval)
+                } header: {
+                    sectionHeader("What gets blocked",
+                                  "If your VPN surfaces in one of these countries, everything is cut "
+                                      + "until it moves.")
+                }
+
+                Section {
+                    durationField("vpn.switchWindow", "Switch window", text: $fields.switchWindow)
+                    durationField("vpn.redialWindow", "Redial window", text: $fields.redialWindow)
+                    durationField("vpn.pauseMax", "Longest pause", text: $fields.pauseMax)
+                } header: {
+                    sectionHeader("When the guard relaxes",
+                                  "The only three ways traffic is ever let out around the guard. Each is "
+                                      + "bounded, re-arms itself, and can be turned Off entirely.")
+                }
+
+                Section {
+                    schemaToggle("vpn.allowLocalNetwork", "Keep local devices reachable",
+                                 isOn: $fields.allowLocalNetwork)
+                } header: {
+                    sectionHeader("Local network",
+                                  "Printers, NAS, your router — reachable while the guard is armed. Local "
+                                      + "destinations only, so nothing on the internet is opened.")
+                }
+
+                Section {
+                    durationField("vpn.endpointRefresh", "VPN server address refresh", text: $fields.endpointRefresh)
+                    durationField("vpn.endpointGrace", "VPN server address grace", text: $fields.endpointGrace)
+                    durationField("vpn.tunnelWatch", "Tunnel check interval", text: $fields.tunnelWatch)
+                } header: {
+                    sectionHeader("How closely dezhban watches",
+                                  "How quickly a dropped tunnel is noticed, and how long a known VPN "
+                                      + "server stays reachable so it can redial.")
+                }
+
+                Section {
                     Toggle("Start the guard at boot (install the system service)", isOn: bootBinding)
                         .disabled(bootBusy || !state.cliFound)
                         .help("Installs dezhban as a background system service: the guard starts at boot — "
@@ -67,67 +130,20 @@ struct SettingsView: View {
                         .help("Registers the app as a login item (System Settings → General → Login Items). "
                             + "This is only the status display — the guard itself is the system service above.")
                     Toggle("Notify on essential events", isOn: notifyBinding)
-                        .help("macOS notifications for the transitions that matter: guard armed, egress "
-                            + "blocked, warnings (enforcement error / switch window open), standby, stopped. "
+                        .help("macOS notifications for the transitions that matter: guard armed, traffic "
+                            + "cut, warnings (enforcement error / window open), standby, stopped. "
                             + "Nothing else.")
                     Toggle("Check for updates automatically", isOn: checkUpdatesBinding)
                         .help("Checks GitHub for a newer release at launch and every ~24h — never from the "
                             + "background service, only here, in this app, on this schedule. Turn off to stop this "
                             + "host contacting GitHub about updates entirely; \"Check Now\" in About still "
                             + "works either way.")
+                } header: {
+                    sectionHeader("Startup and updates",
+                                  "These take effect immediately — they are actions, not settings, so "
+                                      + "Apply does not touch them.")
                 }
-                Section("VPN guard") {
-                    TextField("Your VPN tunnel (comma-sep)", text: $fields.tunnelInterfaces)
-                        .disabled(!canApply)
-                    TextField("Endpoints (comma-sep)", text: $fields.endpoints)
-                        .disabled(!canApply)
-                }
-                Section("Autodetection") {
-                    Toggle("Find my VPN tunnel automatically", isOn: $fields.autoDetect)
-                        .disabled(!canApply)
-                    Toggle("Auto-discover endpoints (vpn.autoDiscoverEndpoints)", isOn: $fields.autoDiscover)
-                        .disabled(!canApply)
-                    Toggle("Auto-arm when a VPN connects (vpn.autoArm)", isOn: $fields.autoArm)
-                        .disabled(!canApply)
-                        .help("With no VPN connected dezhban idles in standby (nothing blocked) and arms "
-                            + "the guard the moment a tunnel appears. It never disarms on a drop — that's the "
-                            + "kill switch — only an explicit Unblock with the VPN off returns to standby.")
-                }
-                Section("Local network") {
-                    Toggle("Keep local devices reachable", isOn: $fields.allowLocalNetwork)
-                        .disabled(!canApply)
-                        .help("Printers, NAS, your router's admin page, AirPlay and Chromecast, and local "
-                            + "dev servers keep working while the guard is armed. This is not a hole in the "
-                            + "kill switch: it allows local destinations only, so anything on the internet "
-                            + "stays blocked. The one cost is on untrusted Wi-Fi (a café, a hotel), where it "
-                            + "also lets other devices on that network reach you.")
-                }
-                Section("Blocking") {
-                    TextField("Blocked countries (comma-sep, e.g. IR,RU,KP)", text: $fields.blockedCountries)
-                        .disabled(!canApply)
-                    TextField("Geo IP lookup interval (e.g. 15s)", text: $fields.pollInterval)
-                        .disabled(!canApply)
-                        .help("How often the current VPN exit's country is checked.")
-                }
-                Section("Windows") {
-                    TextField("Switch window (e.g. 5s)", text: $fields.switchWindow)
-                        .disabled(!canApply)
-                        .help("Manual switch window (`dezhban switch`): 0 disables it, otherwise up to 3m.")
-                    TextField("Redial window (e.g. 30s)", text: $fields.redialWindow)
-                        .disabled(!canApply)
-                        .help("Automatic window opened when a healthy tunnel drops, so the VPN client can "
-                            + "redial: 0 disables it, otherwise up to 10m.")
-                    TextField("Endpoint grace (e.g. 15m)", text: $fields.endpointGrace)
-                        .disabled(!canApply)
-                        .help("How long a discovered VPN server stays reachable after its connection "
-                            + "disappears, so a dropped VPN can redial the same server.")
-                }
-                Section("Timing") {
-                    TextField("Endpoint refresh (e.g. 30s)", text: $fields.endpointRefresh)
-                        .disabled(!canApply)
-                    TextField("Tunnel watch (e.g. 5s)", text: $fields.tunnelWatch)
-                        .disabled(!canApply)
-                }
+
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
                         .disabled(tokenBusy || !biometryAvailable)
@@ -144,40 +160,28 @@ struct SettingsView: View {
                 }
                 Section {
                     DisclosureGroup("Advanced") {
-                        Text("Touch only if you know why — these override recommended defaults.")
+                        Text("Touch only if you know why. These override recommended defaults, and the "
+                            + "three caps below bound how much exposure the settings above can ever "
+                            + "cause — lowering one narrows the choices they offer.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
-                        TextField("Manual switch window cap (e.g. 3m)", text: $fields.advSwitchWindowMax)
-                            .disabled(!canApply)
-                        TextField("Redial window cap (e.g. 10m)", text: $fields.advRedialWindowMax)
-                            .disabled(!canApply)
-                        TextField("Redial anti-flap uptime (e.g. 15s; 0 disables the gate)", text: $fields.advRedialMinUptime)
-                            .disabled(!canApply)
-                        TextField("Command freshness (e.g. 30s)", text: $fields.advCommandFreshness)
-                            .disabled(!canApply)
-                            .help("How recent a control command must be to be acted on (replay guard).")
-                        TextField("Window discovery interval (e.g. 1s)", text: $fields.advWindowDiscoveryInterval)
-                            .disabled(!canApply)
-                            .help("How often a new VPN server is looked for while a switch window is open.")
-                        TextField("Tunnel prune delay (e.g. 60s)", text: $fields.advTunnelPruneAfter)
-                            .disabled(!canApply)
-                            .help("How long a dynamically-detected tunnel must be gone before it's dropped.")
-                        TextField("Learned endpoint lifetime (e.g. 720h)", text: $fields.advLearnedEndpointTTL)
-                            .disabled(!canApply)
-                            .help("How long an unused learned endpoint is kept.")
-                        TextField("Learned endpoints per profile (e.g. 16)", text: $fields.advLearnedMaxPerProfile)
-                            .disabled(!canApply)
-                        TextField("Promote after N sightings (e.g. 3)", text: $fields.advPromoteAfterRefreshes)
-                            .disabled(!canApply)
-                            .help("Consecutive sightings before a discovered endpoint is learned under normal guard.")
-                        TextField("Endpoint-bloat warning threshold (e.g. 256)", text: $fields.advEndpointWarnThreshold)
-                            .disabled(!canApply)
-                        TextField("Switch-window protocols (comma-sep, e.g. udp,tcp)", text: $fields.advWindowProtocols)
-                            .disabled(!canApply)
-                            .help("Restricts a switch window to these protocols instead of allowing all outbound. Needs a restart to take effect.")
-                        TextField("Switch-window ports (comma-sep, e.g. 51820,443)", text: $fields.advWindowPorts)
-                            .disabled(!canApply)
-                            .help("Restricts a switch window to these ports instead of allowing all outbound. Needs a restart to take effect.")
+                        durationField("vpn.advanced.switchWindowMax", "Switch window cap", text: $fields.advSwitchWindowMax)
+                        durationField("vpn.advanced.redialWindowMax", "Redial window cap", text: $fields.advRedialWindowMax)
+                        durationField("vpn.advanced.redialMinUptime", "Redial anti-flap uptime", text: $fields.advRedialMinUptime)
+                        durationField("vpn.advanced.commandFreshness", "Command freshness", text: $fields.advCommandFreshness)
+                        durationField("vpn.advanced.windowDiscoveryInterval", "Window discovery interval", text: $fields.advWindowDiscoveryInterval)
+                        durationField("vpn.advanced.tunnelPruneAfter", "Tunnel prune delay", text: $fields.advTunnelPruneAfter)
+                        durationField("vpn.advanced.learnedEndpointTTL", "Learned address lifetime", text: $fields.advLearnedEndpointTTL)
+                        schemaField("vpn.advanced.learnedMaxPerProfile", "Learned addresses per profile",
+                                    text: $fields.advLearnedMaxPerProfile)
+                        schemaField("vpn.advanced.promoteAfterRefreshes", "Sightings before an address is learned",
+                                    text: $fields.advPromoteAfterRefreshes)
+                        schemaField("vpn.advanced.endpointWarnThreshold", "Address-bloat warning threshold",
+                                    text: $fields.advEndpointWarnThreshold)
+                        schemaField("vpn.advanced.windowProtocols", "Window protocols (comma-sep)",
+                                    text: $fields.advWindowProtocols)
+                        schemaField("vpn.advanced.windowPorts", "Window ports (comma-sep)",
+                                    text: $fields.advWindowPorts)
                     }
                 }
                 Section {
@@ -193,6 +197,11 @@ struct SettingsView: View {
                     Button("Open Config File…") {
                         NSWorkspace.shared.open(URL(fileURLWithPath: configPath))
                     }
+                    // The wizard is not first-run-only: it is the guided way
+                    // back through the same decisions, for someone changing VPN
+                    // rather than someone starting out.
+                    Button("Run Setup Again…") { state.showFirstRun = true }
+                        .help("Walk through the setup questions again, seeded with your current settings.")
                 } footer: {
                     Text("Some advanced options (control socket, geo providers, allowlist) live only in the config file.")
                         .foregroundStyle(.secondary)
@@ -359,6 +368,118 @@ struct SettingsView: View {
         }
     }
 
+    /// Reads the key schema once per pane opening. Off the main thread because
+    /// it shells out, like every other CLI read here.
+    ///
+    /// It is only re-read on open rather than watched: the schema is a property
+    /// of the installed binary, so the one thing that can change it — an upgrade
+    /// — also relaunches the app.
+    private func refreshSchema() {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let loaded = DezhbanCLI.readSchema()
+            DispatchQueue.main.async { schema = loaded }
+        }
+    }
+
+    /// Placeholder for a text field: the concept's name and its real default,
+    /// from the daemon. `fallback` is used only when the schema is unavailable,
+    /// and deliberately states no value — a stale hardcoded default is exactly
+    /// what this replaces.
+    private func hint(_ key: String, _ fallback: String) -> String {
+        schema?.placeholder(for: key, fallback: fallback) ?? fallback
+    }
+
+    /// Help text for a field, from the daemon's schema.
+    private func helpText(_ key: String) -> String? { schema?.help(for: key) }
+
+    /// A section heading with a line saying what the section is for.
+    ///
+    /// The headings name the thing rather than the config block it lives in —
+    /// "When the guard relaxes", not "Windows" — following
+    /// docs/concepts/glossary.md, which is the authority for user-facing words.
+    /// The description carries the part a tooltip cannot: why you would touch
+    /// this section at all.
+    private func sectionHeader(_ title: String, _ description: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(title)
+            Text(description)
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .textCase(nil)
+        }
+        .padding(.bottom, 2)
+    }
+
+    /// A duration setting as a menu of real choices rather than a text field
+    /// that demands Go's duration syntax. Bounds and Off-availability come from
+    /// the schema, and the cap is resolved against the values this pane is
+    /// actually holding, so lowering a cap by hand narrows the menu.
+    private func durationField(_ key: String, _ fallback: String, text: Binding<String>) -> some View {
+        HStack(spacing: 6) {
+            DurationField(key: key, fallbackLabel: fallback, schema: schema,
+                          values: fields.currentValues, text: text, enabled: canApply)
+            docLink(key)
+        }
+    }
+
+    /// A text field for one config key, labelled and explained from the schema.
+    ///
+    /// `fallback` is the label to use when the schema is unavailable. It names
+    /// the concept but states no default, because the whole point of this change
+    /// is that the app no longer holds an opinion about what a default is.
+    @ViewBuilder
+    private func schemaField(_ key: String, _ fallback: String, text: Binding<String>) -> some View {
+        let field = TextField(hint(key, fallback), text: text).disabled(!canApply)
+        HStack(spacing: 6) {
+            if let help = helpText(key) {
+                field.help(help)
+            } else {
+                field
+            }
+            docLink(key)
+        }
+    }
+
+    /// A toggle for one boolean config key, labelled and explained from the schema.
+    @ViewBuilder
+    private func schemaToggle(_ key: String, _ fallback: String, isOn: Binding<Bool>) -> some View {
+        let toggle = Toggle(schema?[key]?.label ?? fallback, isOn: isOn).disabled(!canApply)
+        HStack(spacing: 6) {
+            if let help = helpText(key) {
+                toggle.help(help)
+            } else {
+                toggle
+            }
+            docLink(key)
+        }
+    }
+
+    /// Opens the Help pane at the section of the documentation that describes
+    /// this key.
+    ///
+    /// A tooltip has room for one sentence; the reason a setting exists, what it
+    /// costs, and what happens when it is off often needs a page. This is the
+    /// bridge between the two — and it lands on the *heading*, from the key's
+    /// own `docAnchor`, so the answer is on screen rather than somewhere in a
+    /// long reference page.
+    ///
+    /// Absent when the schema is unavailable (a CLI too old to know
+    /// `config schema`): a button that could only apologise is worse than none.
+    @ViewBuilder
+    private func docLink(_ key: String) -> some View {
+        if let tunable = schema?[key], !tunable.docAnchor.isEmpty {
+            Button {
+                state.openHelp(docAnchor: tunable.docAnchor)
+            } label: {
+                Image(systemName: "questionmark.circle")
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.secondary)
+            .help("Read about \(tunable.label) in the documentation")
+            .accessibilityLabel("Documentation for \(tunable.label)")
+        }
+    }
+
     // MARK: - reset to defaults
 
     /// Restores every tunable to its shipped default via `config reset --all`,
@@ -508,6 +629,7 @@ struct SettingsView: View {
         fields = SettingsFields()
         state.refreshServiceState()
         refreshPresets()
+        refreshSchema()
         // `path` is the same resolution ConfigApply.seed already did for the
         // `config get` calls — reusing it here means configPath never needs its
         // own second background resolve, so there's nothing to race.
@@ -531,10 +653,17 @@ struct SettingsView: View {
     // MARK: - apply (staged fields)
 
     private func apply() {
-        for (label, value) in fields.durationFieldsForValidation {
-            guard DurationText.looksLikeGoDuration(value) else {
-                ConfigApply.invalidDurationAlert(label, value)
-                return
+        // Which fields are durations, and what they are called, both come from
+        // the daemon's schema. With no schema there is nothing to pre-validate
+        // against, and the daemon still rejects a malformed duration and says
+        // so — better than guessing the field set or inventing labels that
+        // disagree with the ones on screen.
+        if let schema {
+            for (label, value) in fields.durationFieldsForValidation(schema: schema) {
+                guard DurationText.looksLikeGoDuration(value) else {
+                    ConfigApply.invalidDurationAlert(label, value)
+                    return
+                }
             }
         }
 
