@@ -315,6 +315,11 @@ func PauseOptions(c *Config) []PauseOption {
 // an over-cap request to the cap, which is the same class of bug as accepting a
 // disabled window and restoring the default: the user asked for one thing, got
 // another, and was not told.
+//
+// runner.pauseDuration says the same things to a client that got past this one
+// (a raw socket call, or a stale command file). Kept as two sentences rather
+// than one helper because internal/runner takes an Options and never a
+// *Config — change one, change the other.
 func PauseRefusal(c *Config, requested time.Duration) string {
 	switch {
 	case c.VPN.PauseMax <= 0:

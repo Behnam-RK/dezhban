@@ -1786,7 +1786,18 @@ func (o Options) runGuard(ctx context.Context) error {
 					closeWindowRevert("resumed")
 				}
 			case command.OpHoldArm:
-				if o.RedialWindow > 0 && !holdArmed {
+				// Same account the socket path gives, for the same reason as the
+				// pause refusal above: this path has no reply channel, so a
+				// command that changed nothing must still say so. `dezhban hold`
+				// checks the config first, but it skips that check when the file
+				// cannot be read — and then prints "armed" for something the
+				// daemon would otherwise discard in silence.
+				if o.RedialWindow <= 0 {
+					o.Log.Warn("ignoring hold command — the automatic redial window is already " +
+						"disabled (vpn.redialWindow: \"0\"), so there is nothing to hold")
+					continue
+				}
+				if !holdArmed {
 					holdArmed = true
 					holdArmedAt = time.Now()
 					o.Log.Info("hold the line armed — the next tunnel drop will stay cut")
@@ -2223,6 +2234,12 @@ const defaultPauseDuration = 15 * time.Minute
 // future caller that skipped the gate can never turn "disabled" into a real
 // relaxation of the guard, whatever value req parses to.
 //
+// The refusals are worded to match config.PauseRefusal, which says the same
+// things to a CLI user before the request is ever sent. They are two sentences
+// rather than one shared helper on purpose: internal/runner takes an Options,
+// never a *config.Config, and that boundary is worth more than the duplication.
+// Change one, change the other.
+//
 // An explicitly requested length longer than vpn.pauseMax is REFUSED, not
 // shortened. Quietly granting 30m to someone who asked for an hour is the same
 // class of bug as accepting a disabled window and restoring the default: the
@@ -2245,8 +2262,9 @@ func (o Options) pauseDuration(req string) (time.Duration, string) {
 		return 0, fmt.Sprintf("invalid pause duration %q", req)
 	}
 	if d > o.PauseMax {
-		return 0, fmt.Sprintf("%s is longer than the %s cap (vpn.pauseMax); "+
-			"ask for %s or less, or raise the cap", d, o.PauseMax, o.PauseMax)
+		return 0, fmt.Sprintf("%s is longer than your %s cap (vpn.pauseMax). "+
+			"Ask for %s or less, or raise the cap with `dezhban config set vpn.pauseMax=%s`.",
+			d, o.PauseMax, o.PauseMax, d)
 	}
 	return d, ""
 }

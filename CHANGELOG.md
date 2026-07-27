@@ -218,6 +218,17 @@ current as you land changes.
   a browser; a link to a page that *is* bundled still opens it in place. The pane
   still reaches the network for nothing.
 
+- **`dezhban hold` no longer reports success for a hold the daemon discards.**
+  Arming through the root-owned command file was a silent no-op when
+  `vpn.redialWindow` was `"0"` — nothing to suppress, nothing logged. The CLI
+  checks the config first, but skips that check when the file cannot be read, and
+  then printed "hold the line armed". The daemon now says why it ignored the
+  command, the same way the pause path does.
+
+- **An over-cap pause refusal now says how to fix it.** The daemon's log named the
+  cap but not the command to raise it, so the CLI and the daemon explained the
+  same refusal differently.
+
 ### Changed — BREAKING
 
 - **"reconnect" is now "redial" everywhere.** The codebase used both words for the
