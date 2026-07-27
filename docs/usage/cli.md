@@ -466,36 +466,39 @@ Two surfaces, split by urgency:
   lockout-recovery actions; they never depend on the main window opening. Items
   enable/disable from the current state.
 - **Main window — everything else**, opened from the dropdown or by clicking the
-  Dock icon (never automatically at launch). Sidebar sections:
-  - **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
-    every configured VPN profile with the matched one marked, switch-window
-    countdown, enforcement-error banner) plus the daily controls, Pause, and a
-    visually-separated Panic. With profiles configured, "Switching VPN…"
-    becomes a menu so a switch window can target one by name. Degraded states
-    are guided: CLI missing, service not installed, and daemon stopped each
-    render an explanation with the one relevant action inline (Install
-    service… / Guard up).
-  - **Settings** — startup ("Start the guard at boot" installs the launchd
-    system service so enforcement survives reboots; "Open this app at login" via
-    `SMAppService`; essential-event notifications), a **strictness preset
-    picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
-    the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
-    countries, poll interval), windows (switch/redial/endpoint grace), timing,
-    all applied through one validated `config set` batch, an **Advanced**
-    disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
-    settings changes"** (see below), an explicit **Restart dezhban…**, and the
-    raw config file escape hatch (control socket, geo providers, allowlist are
-    JSON-only).
-  - **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
-    with fixes inline instead of a text dump; an optional "Find my VPN's
-    server" checkbox runs it with `--discover`. Read-only, same guarantee as
-    running `dezhban doctor` in a terminal.
-  - **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
-    (also opens Console.app), and the transcripts of window-triggered
-    panic/install/uninstall/apply/restart runs.
-  - **About** — version, config/binary paths, posture, service state, and which
-    elevation path (Touch ID-capable Authorization Services vs password-only
-    fallback) privileged actions will take.
+  Dock icon (never automatically at launch).
+
+The main window's sidebar sections:
+
+- **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
+  every configured VPN profile with the matched one marked, switch-window
+  countdown, enforcement-error banner) plus the daily controls, Pause, and a
+  visually-separated Panic. With profiles configured, "Switching VPN…"
+  becomes a menu so a switch window can target one by name. Degraded states
+  are guided: CLI missing, service not installed, and daemon stopped each
+  render an explanation with the one relevant action inline (Install
+  service… / Guard up).
+- **Settings** — startup ("Start the guard at boot" installs the launchd
+  system service so enforcement survives reboots; "Open this app at login" via
+  `SMAppService`; essential-event notifications), a **strictness preset
+  picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
+  the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
+  countries, poll interval), windows (switch/redial/endpoint grace), timing,
+  all applied through one validated `config set` batch, an **Advanced**
+  disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
+  settings changes"** (see below), an explicit **Restart dezhban…**, and the
+  raw config file escape hatch (control socket, geo providers, allowlist are
+  JSON-only).
+- **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
+  with fixes inline instead of a text dump; an optional "Find my VPN's
+  server" checkbox runs it with `--discover`. Read-only, same guarantee as
+  running `dezhban doctor` in a terminal.
+- **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
+  (also opens Console.app), and the transcripts of window-triggered
+  panic/install/uninstall/apply/restart runs.
+- **About** — version, config/binary paths, posture, service state, and which
+  elevation path (Touch ID-capable Authorization Services vs password-only
+  fallback) privileged actions will take.
 
 **Status icon** — full-color brand state icons (from `gui/artifacts/`), shown in both
 the menu bar and the Dock tile: teal allow/guard, red block/full-block, amber

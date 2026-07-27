@@ -301,6 +301,12 @@ The design depends on these invariants (rationale in
   bundled page is moved, renamed, or written with markdown the subset renderer
   cannot show — and every `Tunable.DocAnchor` is checked to resolve against a
   real heading, so a contextual help link cannot rot into a silent no-op.
+  Concretely, a bundled page may not use **raw HTML** or **nested lists**; both
+  fail the build by name. Soft-wrapped emphasis is fine (blocks are joined before
+  inline markup is read). The rule that makes this safe is that the renderer
+  must **refuse** what it cannot represent, never degrade quietly: silent
+  degradation ships a wrong page while every test passes, which is exactly how
+  the banner on Quick start reached users.
 - **Every PR that changes user-visible behavior updates [CHANGELOG.md](CHANGELOG.md)'s
   `## [Unreleased]` section, in the same PR** — not as a follow-up. `[Unreleased]`
   *is* the next release's notes (see [docs/contribute/releasing.md](docs/contribute/releasing.md)); a PR

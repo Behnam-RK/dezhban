@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"html"
 	"regexp"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -18,6 +20,12 @@ import (
 // not understand, and a test fails the build when a bundled page uses it. That
 // keeps the renderer honest AND keeps the docs inside a style the renderer can
 // actually show — a silently mangled page would be worse than a build failure.
+//
+// "Reports anything it does not understand" is the load-bearing half, and it has
+// to be maintained deliberately: a construct this renderer degrades silently is
+// a page that ships wrong while every test passes. Whenever a case is added
+// here that cannot be represented, note() it — do not let it fall through to
+// the paragraph branch and render as literal text.
 
 // Heading is one heading in a rendered page, for search and anchor resolution.
 type Heading struct {
@@ -38,22 +46,56 @@ type Rendered struct {
 }
 
 var (
-	inlineCode   = regexp.MustCompile("`([^`]+)`")
-	inlineLink   = regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
-	inlineImage  = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
-	inlineBold   = regexp.MustCompile(`\*\*([^*]+)\*\*`)
+	inlineCode  = regexp.MustCompile("`([^`]+)`")
+	inlineLink  = regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
+	inlineImage = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
+	// Non-greedy and NOT [^*]+, so a bold span may contain italics: the docs
+	// write **… *not* …** and an inner-asterisk ban left the outer ** as
+	// literal text. Bold is substituted first and the inner *not* survives into
+	// the emphasis pass below, which is what turns it into <em>.
+	inlineBold   = regexp.MustCompile(`\*\*(.+?)\*\*`)
 	inlineItalic = regexp.MustCompile(`(^|[^*])\*([^*]+)\*`)
 	headingRe    = regexp.MustCompile(`^(#{1,6})\s+(.*)$`)
 	bulletRe     = regexp.MustCompile(`^\s*[-*]\s+(.*)$`)
 	numberedRe   = regexp.MustCompile(`^\s*\d+\.\s+(.*)$`)
 	anchorStrip  = regexp.MustCompile(`[^a-z0-9 -]`)
+	// htmlBlockRe matches a line that opens, closes, or comments raw HTML. The
+	// renderer has no way to show it, and escaping it prints the tag's source
+	// at the top of the page — which is exactly what shipped before this check
+	// existed.
+	htmlBlockRe = regexp.MustCompile(`^<(/?[a-zA-Z][a-zA-Z0-9-]*|!--)`)
+	// schemeRe matches a URL scheme prefix, so a link can be checked against the
+	// allowlist in rewriteLink.
+	schemeRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*:`)
 )
+
+// linkSchemes is what a documentation link is allowed to use. Anything else —
+// javascript:, data:, file: — is refused at render time rather than relied on
+// being cancelled by the app's navigation delegate: the bundle should not
+// contain the link in the first place.
+var linkSchemes = map[string]bool{"http": true, "https": true, "mailto": true}
 
 // Render converts one markdown document to HTML.
 func Render(markdown string) Rendered {
 	var out strings.Builder
 	var text strings.Builder
 	r := Rendered{}
+
+	// note collects what could not be represented. A set, because one page
+	// repeating the same unsupported construct twenty times is still one thing
+	// to fix, and the message should say what it is rather than how often.
+	unsupported := map[string]bool{}
+	note := func(what string) { unsupported[what] = true }
+
+	// renderInline is the only way inline markup reaches the output, so every
+	// construct it cannot represent is reported from one place.
+	renderInline := func(s string) string {
+		rendered := inline(s, note)
+		if strings.Contains(rendered, "**") {
+			note("unpaired ** (bold that never closed)")
+		}
+		return rendered
+	}
 
 	lines := strings.Split(markdown, "\n")
 	inCode, inList, inQuote := false, false, false
@@ -101,6 +143,14 @@ func Render(markdown string) Rendered {
 			continue
 		}
 
+		// Raw HTML. Checked before everything else that could swallow the line,
+		// and reported rather than rendered: there is no honest way to show it,
+		// and the paragraph branch would print the tag source as visible text.
+		if htmlBlockRe.MatchString(trimmed) {
+			note("raw HTML (" + firstTag(trimmed) + ") — the renderer has no way to show it")
+			continue
+		}
+
 		if m := headingRe.FindStringSubmatch(trimmed); m != nil {
 			closeList()
 			closeQuote()
@@ -108,7 +158,7 @@ func Render(markdown string) Rendered {
 			title := stripInline(m[2])
 			anchor := Anchor(title)
 			r.Headings = append(r.Headings, Heading{Level: level, Text: title, Anchor: anchor})
-			fmt.Fprintf(&out, "<h%d id=%q>%s</h%d>\n", level, anchor, inline(m[2]), level)
+			fmt.Fprintf(&out, "<h%d id=%q>%s</h%d>\n", level, anchor, renderInline(m[2]), level)
 			text.WriteString(title + "\n")
 			continue
 		}
@@ -125,7 +175,7 @@ func Render(markdown string) Rendered {
 		if strings.HasPrefix(trimmed, "|") && i+1 < len(lines) && isTableSeparator(lines[i+1]) {
 			closeList()
 			closeQuote()
-			consumed := renderTable(&out, &text, lines[i:])
+			consumed := renderTable(&out, &text, lines[i:], renderInline)
 			i += consumed - 1
 			continue
 		}
@@ -136,13 +186,18 @@ func Render(markdown string) Rendered {
 				out.WriteString("<blockquote>\n")
 				inQuote = true
 			}
-			body := strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
-			out.WriteString("<p>" + inline(body) + "</p>\n")
+			body := quoteBody(trimmed)
+			for i+1 < len(lines) && strings.HasPrefix(strings.TrimSpace(lines[i+1]), ">") {
+				i++
+				body += " " + quoteBody(strings.TrimSpace(lines[i]))
+			}
+			out.WriteString("<p>" + renderInline(body) + "</p>\n")
 			text.WriteString(stripInline(body) + "\n")
 			continue
 		}
 
 		if m := bulletRe.FindStringSubmatch(line); m != nil {
+			noteIfNested(line, note)
 			if inList && listTag != "ul" {
 				closeList()
 			}
@@ -150,11 +205,14 @@ func Render(markdown string) Rendered {
 				out.WriteString("<ul>\n")
 				inList, listTag = true, "ul"
 			}
-			out.WriteString("<li>" + inline(m[1]) + "</li>\n")
-			text.WriteString(stripInline(m[1]) + "\n")
+			body, last := gatherItem(lines, i, m[1])
+			i = last
+			out.WriteString("<li>" + renderInline(body) + "</li>\n")
+			text.WriteString(stripInline(body) + "\n")
 			continue
 		}
 		if m := numberedRe.FindStringSubmatch(line); m != nil {
+			noteIfNested(line, note)
 			if inList && listTag != "ol" {
 				closeList()
 			}
@@ -162,33 +220,113 @@ func Render(markdown string) Rendered {
 				out.WriteString("<ol>\n")
 				inList, listTag = true, "ol"
 			}
-			out.WriteString("<li>" + inline(m[1]) + "</li>\n")
-			text.WriteString(stripInline(m[1]) + "\n")
-			continue
-		}
-
-		// A continuation line inside a list item, rather than a new paragraph.
-		if inList && strings.HasPrefix(line, "  ") {
-			out.WriteString(" " + inline(trimmed))
-			text.WriteString(stripInline(trimmed) + "\n")
+			body, last := gatherItem(lines, i, m[1])
+			i = last
+			out.WriteString("<li>" + renderInline(body) + "</li>\n")
+			text.WriteString(stripInline(body) + "\n")
 			continue
 		}
 
 		closeList()
 		closeQuote()
-		out.WriteString("<p>" + inline(trimmed) + "</p>\n")
-		text.WriteString(stripInline(trimmed) + "\n")
+		body := trimmed
+		for i+1 < len(lines) && !startsNewBlock(lines, i+1) {
+			i++
+			body += " " + strings.TrimSpace(lines[i])
+		}
+		out.WriteString("<p>" + renderInline(body) + "</p>\n")
+		text.WriteString(stripInline(body) + "\n")
 	}
 
 	closeList()
 	closeQuote()
 	if inCode {
-		r.Unsupported = append(r.Unsupported, "an unclosed code fence")
+		note("an unclosed code fence")
 	}
+
+	// Sorted, so a build failure names the same things in the same order twice
+	// running and a diff of two failures is readable.
+	r.Unsupported = make([]string, 0, len(unsupported))
+	for what := range unsupported {
+		r.Unsupported = append(r.Unsupported, what)
+	}
+	sort.Strings(r.Unsupported)
 
 	r.HTML = out.String()
 	r.Text = text.String()
 	return r
+}
+
+// A block's soft-wrapped lines are joined before any inline markup is rendered,
+// because markdown emphasis spans a line break and this renderer's input is
+// hard-wrapped prose. Rendering line by line meant a bold span the author wrapped
+// across two lines never paired, and the `**` showed up as literal text in the
+// shipped bundle — in eight of the nine pages. Joining is also what puts a list
+// item's continuation INSIDE its <li> rather than after it.
+
+// startsNewBlock reports whether the line at i begins something that cannot be
+// a continuation of the paragraph or list item being gathered.
+func startsNewBlock(lines []string, i int) bool {
+	line := lines[i]
+	t := strings.TrimSpace(line)
+	switch {
+	case t == "":
+	case strings.HasPrefix(t, "```"):
+	case htmlBlockRe.MatchString(t):
+	case headingRe.MatchString(t):
+	case t == "---" || t == "***" || t == "___":
+	case strings.HasPrefix(t, ">"):
+	case bulletRe.MatchString(line) || numberedRe.MatchString(line):
+	case strings.HasPrefix(t, "|") && i+1 < len(lines) && isTableSeparator(lines[i+1]):
+	default:
+		return false
+	}
+	return true
+}
+
+// gatherItem joins a list item with its indented continuation lines, reporting
+// the index of the last line it consumed. Continuation must be indented: an
+// unindented line after an item ends the list, the same boundary the renderer
+// drew before blocks were gathered.
+func gatherItem(lines []string, i int, first string) (string, int) {
+	body := first
+	for i+1 < len(lines) {
+		next := lines[i+1]
+		if startsNewBlock(lines, i+1) || strings.TrimLeft(next, " \t") == next {
+			break
+		}
+		i++
+		body += " " + strings.TrimSpace(next)
+	}
+	return body, i
+}
+
+// quoteBody strips one leading ">" from a block-quote line.
+func quoteBody(trimmed string) string {
+	return strings.TrimSpace(strings.TrimPrefix(trimmed, ">"))
+}
+
+// noteIfNested reports an indented list item. The renderer emits one flat list,
+// so a nested item would silently become a sibling of its own parent — the
+// hierarchy the author wrote would be gone, and the surrounding text would end
+// up directly inside the <ul>.
+func noteIfNested(line string, note func(string)) {
+	if len(line)-len(strings.TrimLeft(line, " \t")) >= 2 {
+		note("a nested list item — this renderer emits one flat list")
+	}
+}
+
+// firstTag names the tag in a raw-HTML line, so the build failure says which
+// one to remove rather than only that some HTML exists.
+func firstTag(line string) string {
+	if strings.HasPrefix(line, "<!--") {
+		return "<!-- -->"
+	}
+	end := strings.IndexAny(line, " \t>")
+	if end < 0 {
+		end = len(line)
+	}
+	return line[:end] + ">"
 }
 
 // isTableSeparator matches the |---|---| row that turns the line above it into
@@ -207,11 +345,11 @@ func isTableSeparator(line string) bool {
 }
 
 // renderTable emits one table and reports how many lines it consumed.
-func renderTable(out *strings.Builder, text *strings.Builder, lines []string) int {
+func renderTable(out *strings.Builder, text *strings.Builder, lines []string, renderInline func(string) string) int {
 	header := splitRow(lines[0])
 	out.WriteString("<div class=\"table-scroll\"><table>\n<thead><tr>")
 	for _, c := range header {
-		out.WriteString("<th>" + inline(c) + "</th>")
+		out.WriteString("<th>" + renderInline(c) + "</th>")
 		text.WriteString(stripInline(c) + " ")
 	}
 	out.WriteString("</tr></thead>\n<tbody>\n")
@@ -225,7 +363,7 @@ func renderTable(out *strings.Builder, text *strings.Builder, lines []string) in
 		}
 		out.WriteString("<tr>")
 		for _, c := range splitRow(s) {
-			out.WriteString("<td>" + inline(c) + "</td>")
+			out.WriteString("<td>" + renderInline(c) + "</td>")
 			text.WriteString(stripInline(c) + " ")
 		}
 		out.WriteString("</tr>\n")
@@ -244,20 +382,44 @@ func splitRow(line string) []string {
 	return parts
 }
 
+// codeMark delimits a lifted code span. NUL cannot appear in the escaped text —
+// html.EscapeString does not produce it and these documents do not contain it —
+// so a placeholder can never collide with document content, and it matches none
+// of the emphasis or link patterns.
+const codeMark = "\x00"
+
+func codePlaceholder(i int) string { return codeMark + strconv.Itoa(i) + codeMark }
+
 // inline renders inline markup. Escaping happens FIRST and the markup is
 // substituted into the escaped text, so no document content can inject HTML —
 // the pages are ours, but the rule costs nothing and removes the question.
-func inline(s string) string {
+func inline(s string, note func(string)) string {
 	out := html.EscapeString(s)
-	// Code first: its contents must not then be read as emphasis.
-	out = inlineCode.ReplaceAllString(out, "<code>$1</code>")
+
+	// Code spans are LIFTED OUT before anything else runs, then put back last.
+	// Wrapping them in <code> in place is not enough: the emphasis passes scan
+	// the whole string afterwards, so an asterisk inside a code span (the glob
+	// in `vpn.advanced.*`) would pair with an unrelated asterisk later in the
+	// line and open an <em> that closes outside the </code>. That produced
+	// invalid markup in the shipped bundle. Lifting also keeps link and image
+	// syntax inside a code span from being turned into a real link.
+	var spans []string
+	out = inlineCode.ReplaceAllStringFunc(out, func(m string) string {
+		spans = append(spans, inlineCode.FindStringSubmatch(m)[1])
+		return codePlaceholder(len(spans) - 1)
+	})
+
 	out = inlineImage.ReplaceAllString(out, `<img src="$2" alt="$1">`)
 	out = inlineLink.ReplaceAllStringFunc(out, func(m string) string {
 		g := inlineLink.FindStringSubmatch(m)
-		return fmt.Sprintf("<a href=%q>%s</a>", rewriteLink(g[2]), g[1])
+		return fmt.Sprintf("<a href=%q>%s</a>", rewriteLink(g[2], note), g[1])
 	})
 	out = inlineBold.ReplaceAllString(out, "<strong>$1</strong>")
 	out = inlineItalic.ReplaceAllString(out, "$1<em>$2</em>")
+
+	for i, span := range spans {
+		out = strings.ReplaceAll(out, codePlaceholder(i), "<code>"+span+"</code>")
+	}
 	return out
 }
 
@@ -265,9 +427,21 @@ func inline(s string) string {
 // A link to something not bundled is left as written; the browser refuses
 // anything that is not a local file, so it simply does nothing rather than
 // silently leaving the app.
-func rewriteLink(href string) string {
-	if strings.HasPrefix(href, "http://") || strings.HasPrefix(href, "https://") ||
-		strings.HasPrefix(href, "#") {
+//
+// A scheme outside linkSchemes is refused HERE, at build time, rather than left
+// for the app's navigation delegate to cancel. Defence in depth is the reason
+// the delegate exists, but a javascript: or data: href has no business being in
+// the bundle at all, and a build failure is how it gets removed.
+func rewriteLink(href string, note func(string)) string {
+	if scheme := schemeRe.FindString(href); scheme != "" {
+		name := strings.ToLower(strings.TrimSuffix(scheme, ":"))
+		if !linkSchemes[name] {
+			note("a " + name + ": link — only http, https, and mailto are allowed")
+			return "#"
+		}
+		return href
+	}
+	if strings.HasPrefix(href, "#") {
 		return href
 	}
 	path, frag, _ := strings.Cut(href, "#")

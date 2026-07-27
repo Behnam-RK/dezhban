@@ -107,8 +107,9 @@ below in [Exit-country policing](#exit-country-policing).
    the daemon discovers the new server socket, runs a geo lookup through the
    tunnel, and on a confirmed non-blocked exit **snaps the window shut early**,
    learns the endpoint, and restores GUARD. Total interaction required: zero.
-4. **Or nothing redials.** The window expires and the guard **fail-closes
-   and stays closed** — no second window until a tunnel actually comes back.
+4. **Or nothing redials.** The window expires and the guard
+   **fail-closes and stays closed** — no second window until a tunnel
+   actually comes back.
    A flapping tunnel doesn't get windows at all
    (`vpn.advanced.redialMinUptime`).
 

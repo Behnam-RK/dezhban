@@ -171,6 +171,124 @@ func TestFencedCodeIsVerbatim(t *testing.T) {
 	}
 }
 
+// TestEveryRealPageRendersCleanly is the test the synthetic subset sample above
+// cannot be: it runs the renderer over the pages that actually ship.
+//
+// Both checks failed before they existed. usage/getting-started.md — the first
+// page of the guided track — opened with a raw HTML banner that rendered as
+// three paragraphs of visible tag source, and usage/cli.md left literal ** in
+// the middle of a sentence. Render reported neither, so the build passed and the
+// bundle shipped wrong. Asserting on the rendered HTML, not just on Unsupported,
+// is what makes this independent of the reporting it is meant to police.
+func TestEveryRealPageRendersCleanly(t *testing.T) {
+	for _, page := range Pages {
+		data, err := os.ReadFile(filepath.Join(docsDir, filepath.FromSlash(page.Source)))
+		if err != nil {
+			t.Fatalf("%s: %v", page.Source, err)
+		}
+		r := Render(string(data))
+		if len(r.Unsupported) != 0 {
+			t.Errorf("%s: renderer reported %v", page.Source, r.Unsupported)
+		}
+		// A paragraph or list item opening with an escaped tag is markup that
+		// leaked through as text. Inline code legitimately contains &lt;, hence
+		// anchoring on the element boundary rather than searching for &lt;.
+		for _, leak := range []string{"<p>&lt;", "<li>&lt;"} {
+			if strings.Contains(r.HTML, leak) {
+				t.Errorf("%s: raw HTML rendered as visible text (%q)", page.Source, leak)
+			}
+		}
+		// Fenced code is verbatim and may legitimately contain **, so only the
+		// prose outside it is checked.
+		if strings.Contains(stripFences(r.HTML), "**") {
+			t.Errorf("%s: literal ** survived into the rendered page", page.Source)
+		}
+	}
+}
+
+// stripFences removes <pre> blocks, whose contents are verbatim by design.
+func stripFences(html string) string {
+	var b strings.Builder
+	for rest := html; ; {
+		start := strings.Index(rest, "<pre>")
+		if start < 0 {
+			b.WriteString(rest)
+			return b.String()
+		}
+		b.WriteString(rest[:start])
+		end := strings.Index(rest[start:], "</pre>")
+		if end < 0 {
+			return b.String()
+		}
+		rest = rest[start+end+len("</pre>"):]
+	}
+}
+
+// TestRenderReportsWhatItCannotShow pins the reporting itself. Each of these
+// rendered silently — and wrongly — before, which is the failure mode the whole
+// bundled-docs design depends on not having.
+func TestRenderReportsWhatItCannotShow(t *testing.T) {
+	cases := map[string]string{
+		"raw HTML block":      "<p align=\"center\">\n  <img src=\"x.png\">\n</p>\n",
+		"nested list item":    "- parent\n  - child\n",
+		"unpaired bold":       "A sentence with **one marker only.\n",
+		"javascript: link":    "A [trap](javascript:alert(1)) link.\n",
+		"unclosed code fence": "```sh\necho hi\n",
+	}
+	for name, md := range cases {
+		if r := Render(md); len(r.Unsupported) == 0 {
+			t.Errorf("%s was rendered without being reported:\n%s", name, r.HTML)
+		}
+	}
+	// A refused scheme must also not reach the href, so the bundle cannot carry
+	// the link even if someone ships past the build failure.
+	if r := Render("[trap](javascript:alert(1))\n"); strings.Contains(r.HTML, "javascript:") {
+		t.Errorf("a javascript: href survived into the rendered page:\n%s", r.HTML)
+	}
+}
+
+// TestInlineMarkupSpansSoftLineBreaks — these docs are hard-wrapped prose, so
+// emphasis routinely straddles a line break. Rendering line by line left the **
+// as literal text in eight of the nine bundled pages.
+func TestInlineMarkupSpansSoftLineBreaks(t *testing.T) {
+	r := Render("The guard **fail-closes\nand stays closed** afterwards.\n")
+	if !strings.Contains(r.HTML, "<strong>fail-closes and stays closed</strong>") {
+		t.Errorf("bold did not survive a soft line break:\n%s", r.HTML)
+	}
+	if len(r.Unsupported) != 0 {
+		t.Errorf("a soft-wrapped bold span was reported as unsupported: %v", r.Unsupported)
+	}
+}
+
+// A list item's continuation belongs INSIDE its <li>. Emitting it afterwards put
+// loose text directly inside the <ul>, which is invalid.
+func TestListItemContinuationStaysInsideTheItem(t *testing.T) {
+	r := Render("- first line\n  second line\n- next item\n")
+	if !strings.Contains(r.HTML, "<li>first line second line</li>") {
+		t.Errorf("continuation leaked out of its list item:\n%s", r.HTML)
+	}
+}
+
+// Emphasis must not reach inside a code span. `vpn.advanced.*` used to pair its
+// glob with a later asterisk and open an <em> that closed outside the </code>.
+func TestCodeSpansAreNotTouchedByEmphasis(t *testing.T) {
+	r := Render("Every `vpn.advanced.*` key, **\"Use Touch ID\"** and more.\n")
+	if !strings.Contains(r.HTML, "<code>vpn.advanced.*</code>") {
+		t.Errorf("a code span was rewritten by the emphasis passes:\n%s", r.HTML)
+	}
+	if strings.Contains(r.HTML, "<em>") {
+		t.Errorf("an asterisk inside a code span opened emphasis:\n%s", r.HTML)
+	}
+}
+
+// Bold containing italics is written throughout the docs.
+func TestItalicsInsideBold(t *testing.T) {
+	r := Render("**Endpoints are deliberately *not* required.**\n")
+	if !strings.Contains(r.HTML, "<strong>") || !strings.Contains(r.HTML, "<em>not</em>") {
+		t.Errorf("nested emphasis was not rendered:\n%s", r.HTML)
+	}
+}
+
 // The anchors have to match the ones written in the docs (and in DocAnchor), so
 // this pins the derivation rather than trusting it.
 func TestAnchorMatchesTheDocsConvention(t *testing.T) {

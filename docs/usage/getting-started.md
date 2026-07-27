@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="../../gui/artifacts/png/banner-1280x640.png" alt="Dezhban — system-wide network kill switch" width="640">
-</p>
-
 # Quick start
 
 Get dezhban protecting your machine in about ten minutes — without locking

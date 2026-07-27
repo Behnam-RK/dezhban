@@ -176,6 +176,18 @@ current as you land changes.
   schema the pane falls back to a plainer label rather than a stale value: less
   helpful, never wrong.
 
+- **The documentation bundled into the app now renders as written.** The subset
+  renderer degraded silently instead of refusing, so pages shipped wrong while
+  every test passed: Quick start — the first page of the guided track — opened
+  with three lines of raw HTML source shown as text, bold that the author had
+  wrapped across two lines left literal `**` in eight of the nine pages, nested
+  bullets flattened into their own parents, and an asterisk inside `` `code` ``
+  paired with an unrelated one to open emphasis that closed outside the tag.
+  Soft-wrapped lines are now joined before inline markup is read, a list item's
+  continuation stays inside the item, emphasis cannot reach into a code span,
+  and anything the renderer still cannot represent **fails the build** rather
+  than shipping — which is what the design claimed all along.
+
 - **A settings value can no longer be written under the wrong key.** The pane
   staged its twenty-five values as an array destructured by position, with only
   a count check — so inserting or reordering a key would have silently applied
