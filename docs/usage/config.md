@@ -319,12 +319,13 @@ adds a `note: <key> was normalised on write: <typed> → <stored>` line whenever
 the two differ, on both write paths (elevated and `--token-stdin`).
 
 `redialBudget` and `redialBudgetWindow` go one step further and **refuse** a
-`0` by name rather than normalising it. They are limits, not features, so an
-"off" would have to mean *no limit* — the opposite direction from every other
-`0` in this file, and the wrong thing for a security surface to offer. Raise the
-budget to relax the bound, or set `vpn.redialWindow` to `"0"` to turn the
-automatic redial window off outright. Full rationale:
-[ADR-0009](../adr/0009-redial-budget.md).
+`0` by name rather than normalising it — through `config set` *and* in the file
+itself, so hand editing and the command cannot mean different things. They are
+limits, not features, so an "off" would have to mean *no limit* — the opposite
+direction from every other `0` in this file, and the wrong thing for a security
+surface to offer. Raise the budget to relax the bound, or set
+`vpn.redialWindow` to `"0"` to turn the automatic redial window off outright.
+Full rationale: [ADR-0009](../adr/0009-redial-budget.md).
 
 | Field | Default | What it controls |
 |---|---|---|

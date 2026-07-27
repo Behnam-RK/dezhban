@@ -12,6 +12,32 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A refusal no longer names a time it has already gone past.** The "it can
+  relax again at 3:15PM" clause is decided when the tunnel drops and re-decided
+  only when it drops again, so a tunnel that stays down carried the old instant
+  indefinitely — `status` and the menubar app would still promise 3:15PM at
+  3:44PM, for a moment that had come and gone with nothing happening. Once the
+  stated time has passed, both surfaces now say the guard can relax again *the
+  next time your VPN tries to reconnect*, which is the thing actually being
+  waited for. A time in the past is worse than no time: it reads as a
+  commitment that was broken.
+
+- **The redial backoff no longer deepens on drops it refused.** A drop turned
+  away because the budget was spent still counted toward the consecutive-fast-drop
+  streak and pushed the cooldown out, so refusals compounded into a wait longer
+  than either bound had asked for — the guard kept holding after the budget had
+  already rolled over. Only a drop that actually receives a window advances the
+  backoff now, which is the rule the cooldown path already followed.
+
+- **`vpn.advanced.redialBudget` and `redialBudgetWindow` refuse a `"0"` written
+  in the config file**, not just one typed at `dezhban config set`. The file
+  previously accepted it and normalised it back to the default, so the same
+  value was a named error one way in and a silent discard the other. Both paths
+  now say the same thing: a limit has no "off" — raise it, or set
+  `vpn.redialWindow` to `"0"` to turn the automatic window off outright.
+
 ### Changed
 
 - **The glossary is now checked, not just written down.** It has always claimed
@@ -35,6 +61,13 @@ current as you land changes.
   "is dezhban running?"; and the app's panic tooltip and block hint dropped
   "daemon" and "egress". `status --json` keys are unchanged — they are stable
   identifiers, and the lint does not touch them.
+
+  The settings copy changed too. Every setting's one-line hint — the text
+  `dezhban config schema` prints and the macOS Settings pane shows beside each
+  row — lives in a table the lint had not been pointed at, because the `Printf`
+  that writes it is in a different package from the sentence itself. Six hints
+  said "daemon" or "relaxation" and the `strict` preset's summary said "zero
+  relaxation"; all seven now read in the same voice as the rest of the app.
 
 ### Added
 

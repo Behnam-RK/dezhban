@@ -298,10 +298,18 @@ func redialCause(s state.Snapshot) string {
 // automatic redial window was refused, so nothing will relax until the stated
 // time no matter how fast the VPN comes back. Empty when nothing refused.
 //
-// It always names an instant. "The guard is holding" on its own leaves a user
-// unable to tell a wait from a wall — the difference between "any moment now"
-// and "not for eleven minutes" is the whole reason the refusal is published at
-// all, and a surface that omits it may as well have stayed silent.
+// It always names WHAT IS BEING WAITED FOR. "The guard is holding" on its own
+// leaves a user unable to tell a wait from a wall — the difference between "any
+// moment now" and "not for eleven minutes" is the whole reason the refusal is
+// published at all, and a surface that omits it may as well have stayed silent.
+//
+// Which is why a passed deadline gets its own clause rather than the instant.
+// The refusal is published for the drop being carried and is only re-decided on
+// the next tunnel-down edge, so once nextEligible is behind the snapshot's own
+// clock the bound has lifted but nothing will act on it until the VPN tries
+// again. Reprinting the old instant then states a commitment that was never
+// kept, which is strictly worse than naming no time at all — the very failure
+// this sentence exists to prevent, inverted.
 //
 // Vocabulary is the glossary's, not the ledger's: "budget", never "quota"; the
 // window is "shorter", never "throttled"; and nothing here says "suppressed",
@@ -322,8 +330,12 @@ func redialRefusal(s state.Snapshot) string {
 		// time — an unrecognised reason is not a reason to be less useful.
 		why = "The guard is holding rather than opening a window for your VPN, so traffic stays cut"
 	}
-	if at := nextEligible(s); at != "" {
+	at, passed := nextEligible(s)
+	switch {
+	case at != "":
 		return why + ". It can relax again at " + at + "."
+	case passed:
+		return why + ". It can relax again the next time your VPN tries to reconnect."
 	}
 	return why + "."
 }
@@ -332,14 +344,28 @@ func redialRefusal(s state.Snapshot) string {
 // the same day-qualification rule as dropTime — a bare "3:04PM" for a time
 // tomorrow would understate the wait, which is the one thing this sentence
 // exists to state accurately.
-func nextEligible(s state.Snapshot) string {
+//
+// The second return distinguishes the two ways there is no instant to show. A
+// zero time means the writer never gave one (an older daemon, a hand-built
+// record) and the caller must say nothing; a time at or before the snapshot's
+// own clock means the bound has already lifted, and the caller says what is
+// actually being waited for instead. Rendering a past instant would be a
+// confident statement about help that was due and never came.
+func nextEligible(s state.Snapshot) (at string, passed bool) {
 	if s.Redial == nil || s.Redial.NextEligible.IsZero() {
-		return ""
+		return "", false
 	}
-	if !s.Time.IsZero() && !sameDay(s.Redial.NextEligible, s.Time) {
-		return s.Redial.NextEligible.Format(droppedFormat)
+	if s.Time.IsZero() {
+		// Nothing to compare against, so it cannot be known to be stale. Show it.
+		return s.Redial.NextEligible.Format(untilFormat), false
 	}
-	return s.Redial.NextEligible.Format(untilFormat)
+	if !s.Redial.NextEligible.After(s.Time) {
+		return "", true
+	}
+	if !sameDay(s.Redial.NextEligible, s.Time) {
+		return s.Redial.NextEligible.Format(droppedFormat), false
+	}
+	return s.Redial.NextEligible.Format(untilFormat), false
 }
 
 // droppedFormat qualifies a drop with the day it happened. Used once the drop is

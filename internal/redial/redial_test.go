@@ -355,3 +355,121 @@ func TestAnOpenEpisodeIsNeverAgedOut(t *testing.T) {
 		t.Errorf("remaining = %v, want %v once a settled episode ages out normally", r, s.Budget)
 	}
 }
+
+// A refusal gave the drop no help, so it must not deepen the backoff or push the
+// cooldown out. The cooldown path has always worked this way; this pins the same
+// rule for the budget path, which used to escalate before it refused. Left
+// unfixed, a run of refusals compounds into a wait no bound ever asked for: the
+// ledger rolls over and the guard keeps holding on a cooldown built entirely out
+// of drops it declined to assist with.
+func TestARefusedDropDoesNotDeepenTheBackoff(t *testing.T) {
+	s := defaults()
+	b := New()
+
+	// Spend the budget on healthy drops, so nothing is owed to the backoff yet.
+	// 2m of budget against a 30s window is exactly four full windows.
+	for i := range 4 {
+		at := t0.Add(time.Duration(i) * time.Second)
+		if g := b.Grant(at, 5*time.Minute, true, s); !g.OK() {
+			t.Fatalf("setup grant %d refused: %+v", i, g)
+		}
+		b.Close(at.Add(s.Window)) // ran to expiry, so it cost the whole grant
+	}
+	if r := b.Remaining(t0, s); r != 0 {
+		t.Fatalf("remaining = %v, want the budget fully spent before the real check", r)
+	}
+
+	// Now a run of FAST drops against an exhausted budget. Each is refused, and
+	// each must leave the backoff exactly where it found it.
+	for i := range 5 {
+		at := t0.Add(time.Duration(i+1) * time.Minute)
+		g := b.Grant(at, 2*time.Second, false, s)
+		if g.OK() {
+			t.Fatalf("drop %d opened a window against a spent budget: %+v", i, g)
+		}
+		if g.Reason != ReasonExhausted {
+			t.Errorf("drop %d reason = %q, want %q — a cooldown here would be the "+
+				"refusals scoring themselves", i, g.Reason, ReasonExhausted)
+		}
+		if b.ShortRun() != 0 {
+			t.Fatalf("drop %d deepened the backoff to %d; a refused drop got no help "+
+				"and must not be counted as one that did", i, b.ShortRun())
+		}
+	}
+}
+
+// The mirror: a GRANTED fast drop does commit the backoff. Without this the fix
+// above would read as "the backoff never engages", which is the behaviour
+// ADR-0009 replaced arriving by the back door.
+func TestAGrantedFastDropStillCommitsTheBackoff(t *testing.T) {
+	s := defaults()
+	b := New()
+
+	if g := b.Grant(t0, 2*time.Second, false, s); g.Reason != ReasonBackoff {
+		t.Fatalf("reason = %q, want %q", g.Reason, ReasonBackoff)
+	}
+	if b.ShortRun() != 1 {
+		t.Errorf("shortRun = %d, want 1", b.ShortRun())
+	}
+	// And the cooldown it armed refuses the very next drop.
+	if g := b.Grant(t0.Add(time.Second), 2*time.Second, false, s); g.Reason != ReasonCooldown {
+		t.Errorf("reason = %q, want %q — a granted fast drop must arm a cooldown", g.Reason, ReasonCooldown)
+	}
+}
+
+// vpn.redialWindow: "0" is the one way to turn trigger 2 off, and the ledger has
+// to refuse it outright rather than compute its way there. floorFor(0) is 0, so
+// falling through would append a zero-length episode and claim openIdx — a
+// refusal that looks like one while quietly holding a slot the next Close would
+// settle in place of a real window.
+func TestADisabledWindowIsRefusedWithoutTouchingTheLedger(t *testing.T) {
+	s := defaults()
+	s.Window = 0
+	b := New()
+
+	g := b.Grant(t0, 5*time.Minute, true, s)
+	if g.OK() {
+		t.Fatalf("a disabled window opened: %+v", g)
+	}
+	if g.Reason != ReasonDisabled {
+		t.Errorf("reason = %q, want %q", g.Reason, ReasonDisabled)
+	}
+	// Nothing was spent, and nothing is open for a later Close to settle.
+	if r := b.Remaining(t0, s); r != s.Budget {
+		t.Errorf("remaining = %v, want the budget untouched at %v", r, s.Budget)
+	}
+	b.Close(t0.Add(time.Minute))
+	if r := b.Remaining(t0.Add(time.Minute), s); r != s.Budget {
+		t.Errorf("remaining = %v after a stray Close, want %v", r, s.Budget)
+	}
+}
+
+// Granting with a window already open is a caller bug the run loop prevents, but
+// the consequence is silent and permanent: expire never ages out an unsettled
+// episode, so an orphan is charged its full grant for the life of the process
+// and the budget shrinks by that much forever. Grant settles it instead, which
+// keeps the guarantee inside this package rather than several hundred lines away
+// in the caller.
+func TestGrantSettlesAnOrphanedEpisode(t *testing.T) {
+	s := defaults()
+	b := New()
+
+	b.Grant(t0, 5*time.Minute, true, s) // opened, never closed
+	// Three seconds later a second drop arrives with the first still open.
+	at := t0.Add(3 * time.Second)
+	if g := b.Grant(at, 5*time.Minute, true, s); !g.OK() {
+		t.Fatalf("second grant refused: %+v", g)
+	}
+	// The orphan settled at what it actually cost (3s), not at its 30s grant, so
+	// the ledger holds 2m − 3s − 30s rather than 2m − 30s − 30s.
+	want := s.Budget - 3*time.Second - s.Window
+	if r := b.Remaining(at, s); r != want {
+		t.Errorf("remaining = %v, want %v — the orphan was charged its full grant", r, want)
+	}
+	// And exactly one episode is open: closing once must settle the second, and
+	// closing again must be the documented no-op.
+	b.Close(at.Add(s.Window))
+	if r := b.Remaining(at, s); r != want {
+		t.Errorf("remaining = %v after closing the live window, want %v", r, want)
+	}
+}

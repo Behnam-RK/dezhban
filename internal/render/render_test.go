@@ -166,6 +166,48 @@ func TestText(t *testing.T) {
 				"guard is holding and traffic stays cut.",
 		},
 		{
+			// The refusal is decided on a tunnel-down edge and re-decided only on
+			// the next one, but snapshots keep being published in between — so a
+			// tunnel that stays down carries this record long past its own
+			// deadline. Reprinting "3:19PM" at 3:44PM states a commitment that
+			// was never kept, which is worse than naming no time: it is the
+			// wait-versus-wall confusion this sentence exists to end, inverted.
+			// Name what is actually being waited for instead.
+			name: "refusal whose next-eligible time has already passed",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until.Add(40 * time.Minute),
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Drop:    &state.DropRecord{At: until},
+				Redial: &state.RedialState{
+					Reason:       "exhausted",
+					NextEligible: until.Add(15 * time.Minute),
+				},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN dropped at 3:04PM. Your VPN has dropped often enough to use up " +
+				"its redial budget, so the guard is holding and traffic stays cut. " +
+				"It can relax again the next time your VPN tries to reconnect.",
+		},
+		{
+			// The boundary itself counts as passed: at exactly nextEligible the
+			// bound has lifted, and "it can relax again at 3:19PM" printed at
+			// 3:19PM tells the user to wait for a moment that has arrived.
+			name: "refusal at exactly its next-eligible instant",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Redial:  &state.RedialState{Reason: "cooldown", NextEligible: until},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN keeps dropping, so dezhban is waiting before it relaxes the " +
+				"guard again — traffic stays cut. It can relax again the next time your VPN " +
+				"tries to reconnect.",
+		},
+		{
 			name:         "full block with country",
 			snap:         state.Snapshot{Posture: PostureFullBlock, CountryCode: "IR"},
 			wantKey:      KeyBlocked,

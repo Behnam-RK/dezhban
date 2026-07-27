@@ -966,3 +966,62 @@ func TestAllowLocalNetworkFalseRoundTrips(t *testing.T) {
 		t.Error("allowLocalNetwork came back enabled after a round trip")
 	}
 }
+
+// The two budget keys are the only durations in this config that REFUSE a
+// written "0" instead of treating it as an opt-out. `config set` already refuses
+// it (TestSetRedialBudgetZeroIsRefused); this pins the other way in, so hand
+// editing the file cannot mean something different from typing the command.
+//
+// Silently normalising a written "0" back to 2m would be the exact failure this
+// project calls its worst: a security setting accepted and then discarded, with
+// the user left believing the bound was lifted. It is a LIMIT, so "off" would
+// have to mean "no limit" — the opposite of what "0" means on every other key —
+// and there is no value that expresses it. Saying so is the only honest answer.
+func TestRedialBudgetZeroInTheFileIsRefused(t *testing.T) {
+	for _, key := range []string{"redialBudget", "redialBudgetWindow"} {
+		for _, val := range []string{"0", "0s", "-1m"} {
+			t.Run(key+"="+val, func(t *testing.T) {
+				p := filepath.Join(t.TempDir(), "c.json")
+				body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"advanced":{"` +
+					key + `":"` + val + `"}}}`
+				if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				_, err := Load(p)
+				if err == nil {
+					t.Fatalf("Load accepted %s: %q; a limit has no off, and normalising it "+
+						"away leaves the user believing the bound was lifted", key, val)
+				}
+				// The message has to name the key and offer the real alternative,
+				// or the refusal is just an obstacle.
+				if !strings.Contains(err.Error(), key) ||
+					!strings.Contains(err.Error(), "vpn.redialWindow") {
+					t.Errorf("error = %q, want it to name %s and point at vpn.redialWindow",
+						err, key)
+				}
+			})
+		}
+	}
+}
+
+// The mirror, and the reason the check is on the written string rather than on
+// the parsed value: an ABSENT key is the ordinary case for both of these, and
+// must still take its default rather than trip the refusal above.
+func TestAbsentRedialBudgetTakesTheDefault(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"advanced":{"commandFreshness":"15s"}}}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.VPN.Advanced.RedialBudget != defaultRedialBudget {
+		t.Errorf("redialBudget = %s, want default %s", cfg.VPN.Advanced.RedialBudget, defaultRedialBudget)
+	}
+	if cfg.VPN.Advanced.RedialBudgetWindow != defaultRedialBudgetWindow {
+		t.Errorf("redialBudgetWindow = %s, want default %s",
+			cfg.VPN.Advanced.RedialBudgetWindow, defaultRedialBudgetWindow)
+	}
+}

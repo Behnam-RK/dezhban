@@ -118,6 +118,13 @@ displaying them), `nextEligible`, `remainingSeconds` of budget, and `fastDrops`.
 An open window is reported by `state.switch` instead, never here. The sentence a
 person should read is already composed in `state.display.detail`.
 
+`nextEligible` is the earliest instant a window *could* open, not a scheduled
+event: the decision is only re-taken on the next tunnel-down edge, so a tunnel
+that stays down carries the refusal past its own deadline and nothing acts at
+that instant. A script should treat a `nextEligible` in the past as "the bound
+has lifted, waiting for the VPN to try again" — which is what
+`state.display.detail` then says, in place of naming a time that has gone by.
+
 ```sh
 dezhban status                                    # config + service + block state
 dezhban status --json                             # machine-readable (merges the state file)

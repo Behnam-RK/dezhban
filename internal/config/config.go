@@ -691,13 +691,24 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 		*dst = d
 		return nil
 	}
-	parseNonNegative := func(name, s string, dst *time.Duration) error {
+	// parsePositive is for a key that is a LIMIT rather than a feature. It refuses
+	// a written "0" (and any negative) by name, matching `config set` — which
+	// refuses the same value through setLimitDuration — so the two ways of
+	// setting one key cannot disagree about what it means.
+	//
+	// The guard is on `s`, not on the parsed value: an ABSENT key is the ordinary
+	// case and stays zero for Normalize to fill. Only a value someone actually
+	// wrote is judged, which is the difference between filling a default and
+	// discarding a decision.
+	parsePositive := func(name, s string, dst *time.Duration) error {
 		if err := parse(name, s, dst); err != nil {
 			return err
 		}
-		if *dst < 0 {
-			return fmt.Errorf("vpn.advanced.%s: must not be negative (got %s); it is a limit, "+
-				"not a feature — raise it to relax the bound, there is no \"off\"", name, *dst)
+		if s != "" && *dst <= 0 {
+			return fmt.Errorf("vpn.advanced.%s: must be positive (got %s); it is a limit, "+
+				"not a feature — there is no \"off\" for it. Raise it to relax the bound, "+
+				"or set vpn.redialWindow to \"0\" to turn the automatic redial window off "+
+				"entirely", name, s)
 		}
 		return nil
 	}
@@ -735,14 +746,17 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 	}
 	// The two budget keys take no Disabled sentinel (see Advanced.RedialBudget):
 	// they are limits, so "0" would have to mean "no limit", which is the opposite
-	// of what "0" means everywhere else in this config. A plain 0 is therefore an
-	// ordinary duration that Normalize replaces with the default. A NEGATIVE one is
-	// rejected by name rather than normalized, so anyone reaching for the sentinel
-	// convention is told it does not apply here instead of quietly getting 2m.
-	if err := parseNonNegative("redialBudget", fa.RedialBudget, &a.RedialBudget); err != nil {
+	// of what "0" means everywhere else in this config. Both a written "0" and a
+	// negative are therefore rejected BY NAME rather than normalized away, so
+	// anyone reaching for the sentinel convention is told it does not apply here
+	// instead of walking away believing the bound was lifted when it was quietly
+	// reset to 2m. `config set` refuses the same value for the same reason; a key
+	// that errors through one path and is silently discarded through the other is
+	// the worse half of both behaviours.
+	if err := parsePositive("redialBudget", fa.RedialBudget, &a.RedialBudget); err != nil {
 		return a, err
 	}
-	if err := parseNonNegative("redialBudgetWindow", fa.RedialBudgetWindow, &a.RedialBudgetWindow); err != nil {
+	if err := parsePositive("redialBudgetWindow", fa.RedialBudgetWindow, &a.RedialBudgetWindow); err != nil {
 		return a, err
 	}
 	a.LearnedMaxPerProfile = fa.LearnedMaxPerProfile
@@ -1074,9 +1088,13 @@ func normalizeAdvanced(a *Advanced) {
 	if a.RedialMinUptime == 0 {
 		a.RedialMinUptime = defaultRedialMinUptime
 	}
-	// `<= 0`, not `== 0`: unlike the three windows and RedialMinUptime above, these
-	// two take no Disabled sentinel, so there is nothing negative worth preserving
-	// (applyAdvanced rejects a negative outright).
+	// Reached only for an ABSENT key: unlike the three windows and RedialMinUptime
+	// above, these two take no Disabled sentinel, and applyAdvanced rejects any
+	// written "0" or negative by name rather than letting it arrive here. So this
+	// fills a default that was never set — it can no longer overwrite a decision.
+	// `<= 0` rather than `== 0` all the same, because a hand-built Config (a test,
+	// a caller assembling one in memory) never goes through applyAdvanced, and a
+	// zero budget means no automatic window at all.
 	if a.RedialBudget <= 0 {
 		a.RedialBudget = defaultRedialBudget
 	}

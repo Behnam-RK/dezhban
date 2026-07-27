@@ -27,6 +27,18 @@ import (
 // because a lint that quietly checks an empty list is worse than no lint.
 const heading = "## Words we do not use"
 
+// tableHeader is the first cell of the terms table's header row, and the parser
+// latches onto the separator that FOLLOWS it rather than onto the first
+// separator in the section.
+//
+// The section opens with a second table — the marker legend explaining ‡ and † —
+// so "first separator wins" would start reading terms out of the legend. Today
+// that is harmless only by accident: no legend row's first cell happens to
+// contain a double-quoted phrase. Anchoring on the header makes it structural,
+// so a quoted example added to the legend cannot inject a term that no one
+// wrote down as one.
+const tableHeader = "Don't say"
+
 const (
 	// contextual ("†") marks a row whose ban needs judgement rather than a
 	// string match — "Blocked" is correct in FULL BLOCK and wrong for STANDBY,
@@ -78,7 +90,15 @@ func Load(path string) ([]Term, error) {
 	defer f.Close()
 
 	var terms []Term
-	inSection, inTable := false, false
+	inSection, sawHeader, inTable := false, false, false
+	// foundTable is inTable's latch and is never reset. inTable itself is cleared
+	// by the next H2 — correctly, so a later section's table is not read as
+	// vocabulary — but the "did we find it at all" check below runs after the
+	// loop, so reusing inTable there would report a missing table for any page
+	// that simply continues past this section. That made the parse depend on the
+	// glossary's section ORDER, which nothing states and nobody would preserve on
+	// purpose.
+	foundTable := false
 	quoted := regexp.MustCompile(`"([^"]+)"`)
 
 	sc := bufio.NewScanner(f)
@@ -88,7 +108,7 @@ func Load(path string) ([]Term, error) {
 			// Any other H2 ends the section, so a table added later elsewhere on
 			// the page is not silently swept in.
 			inSection = line == heading
-			inTable = false
+			sawHeader, inTable = false, false
 			continue
 		}
 		if !inSection || !strings.HasPrefix(line, "|") {
@@ -98,10 +118,15 @@ func Load(path string) ([]Term, error) {
 		if len(cells) < 2 {
 			continue
 		}
-		// Skip the header and its |---|---| separator; the first data row follows.
+		// Wait for the terms table's own header, then for the |---|---| separator
+		// under it; the first data row follows. Anything before that — the marker
+		// legend and its own separator — is skipped rather than read as terms.
 		if !inTable {
-			if strings.HasPrefix(strings.TrimSpace(cells[0]), "---") {
-				inTable = true
+			switch {
+			case cells[0] == tableHeader:
+				sawHeader = true
+			case sawHeader && strings.HasPrefix(cells[0], "---"):
+				inTable, foundTable = true, true
 			}
 			continue
 		}
@@ -129,9 +154,10 @@ func Load(path string) ([]Term, error) {
 	if err := sc.Err(); err != nil {
 		return nil, err
 	}
-	if !inTable {
-		return nil, fmt.Errorf("%s: no %q table found — the lint reads it, so a rename here "+
-			"silently disables the check", path, heading)
+	if !foundTable {
+		return nil, fmt.Errorf("%s: no %q table with a %q column found — the lint reads it, "+
+			"so a rename of either the heading or the column silently disables the check",
+			path, heading, tableHeader)
 	}
 	if len(terms) == 0 {
 		return nil, fmt.Errorf("%s: the %q table parsed to zero terms", path, heading)
@@ -153,13 +179,14 @@ func compile(phrase string) (*regexp.Regexp, error) {
 // Check reports every banned phrase in text. Callers decide what counts as
 // user-facing; this only answers "does this string say a word we retired".
 //
-// copy says whether text is user-facing. False restricts the check to terms
-// wrong in both registers, so linting docs prose or a log line does not demand
-// the technical vocabulary be renamed too.
-func Check(text string, terms []Term, copy bool) []Hit {
+// userFacing says which register text is in. False restricts the check to terms
+// wrong in both, so linting docs prose or a log line does not demand the
+// technical vocabulary be renamed too. (Named for the register rather than as
+// `copy`, which would shadow the builtin in a function that may one day want it.)
+func Check(text string, terms []Term, userFacing bool) []Hit {
 	var hits []Hit
 	for _, t := range terms {
-		if t.CopyOnly && !copy {
+		if t.CopyOnly && !userFacing {
 			continue
 		}
 		if m := t.re.FindString(text); m != "" {

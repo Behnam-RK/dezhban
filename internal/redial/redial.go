@@ -32,6 +32,13 @@ const (
 	ReasonCooldown Reason = "cooldown"
 	// ReasonExhausted refuses because the rolling budget is spent.
 	ReasonExhausted Reason = "exhausted"
+	// ReasonDisabled refuses because the automatic window is off entirely
+	// (vpn.redialWindow: "0"). The run loop gates on that before ever calling
+	// Grant, so this is a direct caller's answer rather than one a user sees —
+	// it exists so the disabled case cannot fall through to opening a
+	// zero-length episode, which would look like a refusal while spending a
+	// ledger slot.
+	ReasonDisabled Reason = "disabled"
 )
 
 // MinGrant is the shortest window worth opening. Below this a window is all cost
@@ -125,6 +132,21 @@ func New() *Budget { return &Budget{openIdx: -1} }
 // deliberately checked before this is ever called, so that a suppressed drop
 // spends nothing.
 func (b *Budget) Grant(now time.Time, uptime time.Duration, goodExit bool, s Settings) Grant {
+	if s.Window <= 0 {
+		// The automatic window is off (vpn.redialWindow: "0"). Refuse before
+		// touching the ledger: floorFor(0) is 0, so falling through would append
+		// a zero-length episode and claim openIdx — a slot the next Close would
+		// settle in place of a real window.
+		return Grant{Reason: ReasonDisabled}
+	}
+	// Defensive, and deliberately not a precondition the caller is trusted with.
+	// The run loop checks windowActive before calling, but an episode left open
+	// here is never aged out — expire keeps unsettled ones on purpose — so an
+	// orphan would be charged its full grant for the rest of the process's life.
+	// Settling it costs a line and keeps the invariant inside the package.
+	if b.openIdx >= 0 {
+		b.Close(now)
+	}
 	b.expire(now, s.Interval)
 
 	// A drop inside the cooldown does NOT deepen the backoff. The cooldown is
@@ -135,22 +157,23 @@ func (b *Budget) Grant(now time.Time, uptime time.Duration, goodExit bool, s Set
 		return Grant{Reason: ReasonCooldown, NextEligible: b.coolUntil}
 	}
 
+	// Compute the backoff without committing it. Same principle as the cooldown
+	// return above, applied to the refusal below: a drop the budget turns away
+	// got no help either, so it must not deepen the backoff or push the cooldown
+	// out. Otherwise refusals would compound into a wait longer than the ledger
+	// alone ever asked for, and the guard would keep holding after the budget
+	// had already rolled over.
 	reason := ReasonFull
 	want := s.Window
-	if s.MinUptime > 0 && !goodExit && uptime > 0 && uptime < s.MinUptime {
-		b.shortRun++
+	shortRun := 0
+	fast := s.MinUptime > 0 && !goodExit && uptime > 0 && uptime < s.MinUptime
+	if fast {
+		shortRun = b.shortRun + 1
 		reason = ReasonBackoff
 		// Halve per consecutive fast drop, and cool for one full window per step
 		// so a pathological flap decays toward "cut and holding" rather than
 		// chaining. Both are derived from Window so there is one number to tune.
-		want = s.Window >> min(b.shortRun, backoffSteps)
-		if cool := s.Window * time.Duration(b.shortRun); cool > 0 {
-			// Never cool longer than a full refill — past that the budget has
-			// recovered anyway and the wait buys nothing.
-			b.coolUntil = now.Add(min(cool, s.Interval))
-		}
-	} else {
-		b.shortRun = 0
+		want = s.Window >> min(shortRun, backoffSteps)
 	}
 
 	floor := floorFor(s.Window)
@@ -166,6 +189,15 @@ func (b *Budget) Grant(now time.Time, uptime time.Duration, goodExit bool, s Set
 		want, reason = remaining, ReasonTruncated
 	}
 
+	// Past every refusal, so a window is definitely opening: commit the backoff.
+	b.shortRun = shortRun
+	if fast {
+		if cool := s.Window * time.Duration(shortRun); cool > 0 {
+			// Never cool longer than a full refill — past that the budget has
+			// recovered anyway and the wait buys nothing.
+			b.coolUntil = now.Add(min(cool, s.Interval))
+		}
+	}
 	b.episodes = append(b.episodes, episode{start: now, granted: want})
 	b.openIdx = len(b.episodes) - 1
 	return Grant{Duration: want, Reason: reason}

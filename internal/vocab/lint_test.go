@@ -47,9 +47,18 @@ var allowed = map[string]string{
 }
 
 // goScopes are the trees whose string literals reach a user. cmd/ is the CLI's
-// human output and internal/render composes the sentence every surface shows.
-// Nothing else in internal/ talks to a person.
-var goScopes = []string{"cmd", "internal/render"}
+// human output, internal/render composes the sentence every surface shows, and
+// internal/config holds the two tables whose prose IS the settings UI:
+// schema.go's Tunable.Label/Help (printed by `dezhban config schema` and shown
+// as each row's label and hint in the macOS Settings pane) and preset.go's
+// Summary/Cost (printed by `config preset list`/`show`).
+//
+// That last scope is easy to miss precisely because nothing in it prints:
+// `fmt.Printf("  %s\n", t.Help)` lives in cmd/, so a lint that follows the print
+// statement sees a format verb and declares the file clean while the sentence
+// itself sits in a package it never opens. Copy is where the words are, not
+// where the write call is.
+var goScopes = []string{"cmd", "internal/render", "internal/config"}
 
 // goExempt are files whose string literals are not copy at all. completion.go is
 // one big shell-script template: every "daemon" in it is `--no-daemon`, a flag
@@ -59,14 +68,17 @@ var goExempt = []string{"cmd/dezhban/completion.go"}
 
 // docScopes are the pages linted as prose. README and the intro docs are out:
 // "kill switch" is the correct name for what dezhban is when introducing it, and
-// the glossary says so.
+// the glossary says so. docs/adr is out for a stronger reason — an ADR is a
+// permanent record of a decision as it was made, and editing a shipped one to
+// satisfy a lint is the thing ADRs explicitly forbid. It is left off this list
+// rather than exempted below, so the omission is the decision rather than a
+// filter that only looks like coverage.
 var docScopes = []string{"docs/usage", "docs/concepts", "docs/contribute"}
 
-// docExempt are pages that describe the vocabulary rather than obey it, plus the
-// decision log. An ADR is a permanent record of a decision as it was made; it is
-// not copy, and editing shipped ones to satisfy a lint is the thing ADRs
-// explicitly forbid.
-var docExempt = []string{"docs/concepts/glossary.md", "docs/adr/"}
+// docExempt are pages that describe the vocabulary rather than obey it. The
+// glossary is the list; a page that quotes every banned word in order to ban it
+// cannot also be checked against itself.
+var docExempt = []string{"docs/concepts/glossary.md"}
 
 // TestTheGlossaryStillParses is separate from the lint itself so a broken table
 // fails as "the glossary changed shape", not as "zero violations found". A lint
@@ -236,24 +248,33 @@ func checkSwiftFile(t *testing.T, path string, terms []Term) {
 	}
 }
 
-// swiftLiterals pulls the double-quoted runs out of one line. Naive by design:
-// it does not understand escapes or multi-line literals, and a false positive
-// here costs a rewording while a parser costs a dependency.
+// swiftLiterals pulls the double-quoted runs out of one line, stopping at a
+// trailing `//` comment. Naive by design: it does not understand escapes or
+// multi-line literals, and a false positive here costs a rewording while a
+// parser costs a dependency.
+//
+// The `//` check runs only BETWEEN literals, never inside one, which is what
+// keeps a URL in a string ("https://…") from truncating the line it appears on.
+// checkSwiftFile drops whole-line comments before calling this; a comment
+// hanging off the end of a code line is the same register and needs the same
+// treatment — it is a note to a developer, not copy.
 func swiftLiterals(line string) []string {
 	var out []string
-	for {
-		start := strings.Index(line, `"`)
-		if start < 0 {
+	for i := 0; i < len(line); i++ {
+		if line[i] == '/' && i+1 < len(line) && line[i+1] == '/' {
 			return out
 		}
-		rest := line[start+1:]
-		end := strings.Index(rest, `"`)
+		if line[i] != '"' {
+			continue
+		}
+		end := strings.IndexByte(line[i+1:], '"')
 		if end < 0 {
 			return out
 		}
-		out = append(out, rest[:end])
-		line = rest[end+1:]
+		out = append(out, line[i+1:i+1+end])
+		i += end + 1
 	}
+	return out
 }
 
 // checkDoc lints prose. Code fences, tables and inline code are skipped: they

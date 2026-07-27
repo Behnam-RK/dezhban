@@ -151,7 +151,7 @@ var tunables = []Tunable{
 		Key:       "logLevel",
 		Label:     "Log level",
 		Kind:      KindString,
-		Help:      "How much the daemon writes to its log: debug, info, warn, or error.",
+		Help:      "How much dezhban writes to its log: debug, info, warn, or error.",
 		DocAnchor: anchorFields,
 	},
 
@@ -166,7 +166,7 @@ var tunables = []Tunable{
 		Key:       "vpn.endpoints",
 		Label:     "VPN server addresses",
 		Kind:      KindList,
-		Help:      "The addresses your VPN client dials. The guard keeps these reachable on the physical link so a dropped tunnel can redial without any relaxation.",
+		Help:      "The addresses your VPN client dials. The guard keeps these reachable on the physical link so a dropped tunnel can redial without opening a window.",
 		DocAnchor: anchorVPN,
 	},
 	{
@@ -263,14 +263,14 @@ var tunables = []Tunable{
 		Key:       "control.enabled",
 		Label:     "Control socket",
 		Kind:      KindBool,
-		Help:      "Lets an authorised local client ask the running daemon to act, instead of every command needing root.",
+		Help:      "Lets an authorised local client ask the running dezhban to act, instead of every command needing root.",
 		DocAnchor: anchorControl,
 	},
 	{
 		Key:       "control.socket",
 		Label:     "Control socket path",
 		Kind:      KindString,
-		Help:      "Where the control socket is bound. Empty means the daemon picks the path under its own state directory.",
+		Help:      "Where the control socket is bound. Empty means dezhban picks the path under its own state directory.",
 		DocAnchor: anchorControl,
 	},
 	{
@@ -284,14 +284,14 @@ var tunables = []Tunable{
 		Key:       "control.allowSwitchOps",
 		Label:     "Allow switch windows over the socket",
 		Kind:      KindBool,
-		Help:      "Lets opening and cancelling a switch window go through the daemon. Off makes those root-only again.",
+		Help:      "Lets opening and cancelling a switch window go through the control socket. Off makes those root-only again.",
 		DocAnchor: anchorControl,
 	},
 	{
 		Key:       "control.allowPauseOps",
 		Label:     "Allow pause over the socket",
 		Kind:      KindBool,
-		Help:      "Lets pause and resume go through the daemon. Independent of switch windows: turning one off leaves the other alone.",
+		Help:      "Lets pause and resume go through the control socket. Independent of switch windows: turning one off leaves the other alone.",
 		DocAnchor: anchorControl,
 	},
 	{
