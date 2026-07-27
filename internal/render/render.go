@@ -156,6 +156,13 @@ func postureDisplay(s state.Snapshot) Display {
 func guardDisplay(s state.Snapshot) Display {
 	if GuardHoldsDownedTunnel(s) {
 		detail := "Guard active, but no tunnel is up — all traffic is cut until your VPN redials."
+		if why := redialRefusal(s); why != "" {
+			// Replaces the sentence above rather than joining it. "…cut until your
+			// VPN redials" promises the wait ends on its own, which is exactly
+			// what a refusal makes untrue: nothing will relax until the stated
+			// time, however fast the VPN reconnects.
+			detail = why
+		}
 		if at := dropTime(s); at != "" {
 			detail = "Your VPN dropped at " + at + ". " + detail
 		}
@@ -285,6 +292,54 @@ func redialCause(s state.Snapshot) string {
 		return "Your VPN dropped at " + at + " and the guard relaxed so it can redial."
 	}
 	return "Your VPN dropped and the guard relaxed so it can redial."
+}
+
+// redialRefusal explains a guard that is holding rather than waiting: the
+// automatic redial window was refused, so nothing will relax until the stated
+// time no matter how fast the VPN comes back. Empty when nothing refused.
+//
+// It always names an instant. "The guard is holding" on its own leaves a user
+// unable to tell a wait from a wall — the difference between "any moment now"
+// and "not for eleven minutes" is the whole reason the refusal is published at
+// all, and a surface that omits it may as well have stayed silent.
+//
+// Vocabulary is the glossary's, not the ledger's: "budget", never "quota"; the
+// window is "shorter", never "throttled"; and nothing here says "suppressed",
+// which names the behaviour ADR-0009 replaced.
+func redialRefusal(s state.Snapshot) string {
+	if s.Redial == nil {
+		return ""
+	}
+	var why string
+	switch s.Redial.Reason {
+	case "exhausted":
+		why = "Your VPN has dropped often enough to use up its redial budget, so the guard is holding and traffic stays cut"
+	case "cooldown":
+		why = "Your VPN keeps dropping, so dezhban is waiting before it relaxes the guard again — traffic stays cut"
+	default:
+		// A reason this build does not know about. Say the part that is true of
+		// every refusal rather than inventing an explanation, and still name the
+		// time — an unrecognised reason is not a reason to be less useful.
+		why = "The guard is holding rather than opening a window for your VPN, so traffic stays cut"
+	}
+	if at := nextEligible(s); at != "" {
+		return why + ". It can relax again at " + at + "."
+	}
+	return why + "."
+}
+
+// nextEligible renders when a window could next open, in the same shape and with
+// the same day-qualification rule as dropTime — a bare "3:04PM" for a time
+// tomorrow would understate the wait, which is the one thing this sentence
+// exists to state accurately.
+func nextEligible(s state.Snapshot) string {
+	if s.Redial == nil || s.Redial.NextEligible.IsZero() {
+		return ""
+	}
+	if !s.Time.IsZero() && !sameDay(s.Redial.NextEligible, s.Time) {
+		return s.Redial.NextEligible.Format(droppedFormat)
+	}
+	return s.Redial.NextEligible.Format(untilFormat)
 }
 
 // droppedFormat qualifies a drop with the day it happened. Used once the drop is

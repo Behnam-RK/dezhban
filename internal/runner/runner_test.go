@@ -1595,7 +1595,7 @@ func TestLookupFailureClassification(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var got state.Snapshot
 			o := Options{Publish: func(s state.Snapshot) { got = s }}
-			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil, nil)
+			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil, nil, nil)
 
 			if hasErr := got.LookupErr != ""; hasErr != c.wantLookupErr {
 				t.Errorf("LookupErr set = %v, want %v (got %q)", hasErr, c.wantLookupErr, got.LookupErr)
@@ -1617,7 +1617,7 @@ func TestSuccessfulLookupSetsNoErrorFields(t *testing.T) {
 	var got state.Snapshot
 	o := Options{Publish: func(s state.Snapshot) { got = s }}
 	o.publish(false, false, monitor.Reading{CountryCode: "NL"}, nil, nil,
-		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil, nil)
+		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil, nil, nil)
 	if got.LookupErr != "" || got.ExitUnknown != "" {
 		t.Errorf("a successful lookup set LookupErr=%q ExitUnknown=%q, want both empty", got.LookupErr, got.ExitUnknown)
 	}

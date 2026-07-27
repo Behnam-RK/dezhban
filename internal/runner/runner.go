@@ -360,7 +360,7 @@ func anyTunnelUp(tunnels []state.Tunnel) bool {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord, hold *state.HoldState) {
+func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord, hold *state.HoldState, redialRefused *state.RedialState) {
 	if o.Publish == nil {
 		return
 	}
@@ -379,6 +379,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		Switch:              win,
 		Drop:                drop,
 		Hold:                hold,
+		Redial:              redialRefused,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -821,8 +822,14 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		return &state.HoldState{Armed: true, At: holdArmedAt}
 	}
+	// redialRefused is the standing refusal for the drop being carried: set when
+	// the ledger declines a window, cleared when one is granted and when a tunnel
+	// returns. Carried for the same reason lastDrop is — a refusal that was only
+	// logged is invisible to anyone looking at the app, and "the guard is holding"
+	// without "until when" leaves a wait indistinguishable from a wall.
+	var redialRefused *state.RedialState
 	snapshot := func() {
-		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState())
+		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState(), redialRefused)
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
 
@@ -1079,8 +1086,19 @@ func (o Options) runGuard(ctx context.Context) error {
 				"budget", s.Budget, "over", s.Interval,
 				"nextEligible", g.NextEligible,
 				"detail", detail)
+			redialRefused = &state.RedialState{
+				Reason:           string(g.Reason),
+				NextEligible:     g.NextEligible,
+				RemainingSeconds: redialLedger.Remaining(now, s).Seconds(),
+				FastDrops:        redialLedger.ShortRun(),
+			}
+			snapshot()
 			return
 		}
+		// A grant clears any standing refusal: the drop that was refused is over,
+		// and leaving the old one published would have the app explaining why
+		// nothing is happening while a window is open behind it.
+		redialRefused = nil
 		if g.Duration < s.Window {
 			o.Log.Info("redial window shortened",
 				"reason", string(g.Reason), "granted", g.Duration, "full", s.Window,
@@ -1785,6 +1803,12 @@ func (o Options) runGuard(ctx context.Context) error {
 				// the exit has been verified yet. Keeping it past that point
 				// would leave both surfaces narrating an event that has ended.
 				lastDrop = nil
+				// So is any refusal attached to it. The ledger keeps its own
+				// state — this only stops publishing an explanation for a cut
+				// that is over. Note the budget itself is deliberately NOT
+				// reset here: it is a rolling bound across drops, and a tunnel
+				// bouncing back up is exactly the flap it is there to ration.
+				redialRefused = nil
 				// A tunnel coming back also ends the intent behind "hold the
 				// line": the deliberate disconnect it was armed for is over.
 				// Leaving it armed would silently cut a LATER, accidental drop

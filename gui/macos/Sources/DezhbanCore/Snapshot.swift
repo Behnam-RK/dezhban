@@ -48,6 +48,29 @@ public struct HoldState: Codable {
     public let at: Date
 }
 
+/// The automatic redial window was REFUSED for the drop being carried — mirrors
+/// Go's `state.RedialState`. Present only while such a refusal stands; a granted
+/// window is reported by `switch` instead.
+///
+/// The app does not compose a sentence from these fields. `display.detail`
+/// already says it, rendered by the same Go code the CLI uses, so both surfaces
+/// say the same thing. This is here for anything that needs the facts rather
+/// than the prose — and because decoding what the daemon writes is how the
+/// contract stays honest.
+public struct RedialState: Codable {
+    /// Stable identifier: "cooldown" (backing off after fast drops) or
+    /// "exhausted" (the rolling budget is spent). Match on it, don't display it.
+    public let reason: String
+    /// Earliest instant a window could open. This is what makes a refusal
+    /// actionable — "the guard is holding" without it is a wall, not a wait.
+    public let nextEligible: Date
+    /// What is left of the rolling budget, in seconds.
+    public let remainingSeconds: Double
+    /// Consecutive fast drops behind the current backoff; absent when the budget
+    /// rather than the backoff is what refused.
+    public let fastDrops: Int?
+}
+
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.
 /// JSON keys match the lowerCamelCase struct tags in internal/state/state.go.
 public struct Snapshot: Codable {
@@ -75,6 +98,7 @@ public struct Snapshot: Codable {
     public let display: Display?          // the rendered sentence — nil from an older daemon
     public let drop: DropRecord?          // present from a tunnel drop until a tunnel is up again
     public let hold: HoldState?           // present only while "hold the line" is armed
+    public let redial: RedialState?       // present only while a redial window stands refused
 
     /// Wall-clock age of this snapshot.
     public var age: TimeInterval { Date().timeIntervalSince(time) }

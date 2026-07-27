@@ -430,6 +430,51 @@ manager, a reboot, and a VPN that has actually connected.
       ProtonVPN), reconnect until the store fills → the check reports rotation
       and leads with the hostname fix.
 
+## Redial budget and backoff
+
+The ledger is unit-tested in `internal/redial` against injected instants, so
+what needs a real host is the wiring: a real tunnel dropping, real timers, and
+both surfaces saying the same thing about it. See
+[ADR-0009](../adr/0009-redial-budget.md).
+
+- [ ] **Healthy drop, full window.** With the tunnel up longer than
+      `vpn.advanced.redialMinUptime`, disconnect the VPN → a window opens for
+      the full `vpn.redialWindow`, the log says `reason=full`, and reconnecting
+      snaps it shut early.
+- [ ] **Early close is nearly free.** After that reconnect, drop and redial
+      quickly several times. `status --json` must never show `state.redial`, and
+      the guard must keep granting windows — the budget measures exposure taken,
+      so fast successful redials barely touch it. If a handful of *successful*
+      redials exhaust the budget, credit-on-close is broken.
+- [ ] **Fast drops shorten, they do not suppress.** Force reconnects faster than
+      `redialMinUptime` with no good exit in between (a deliberately wrong
+      server works). Each drop must still get a window, each shorter than the
+      last (`reason=backoff`, `granted` falling), with a growing cooldown. A
+      drop that gets NO window at the first fast reconnect is the pre-ADR-0009
+      behaviour returning.
+- [ ] **Exhaustion holds, and says so.** Keep flapping until the log reads
+      `redial budget spent`. Traffic must stay cut, `status` must read
+      *"Your VPN has dropped often enough to use up its redial budget…"* with a
+      real time after "It can relax again at", and the menubar app must show the
+      **same sentence** — it renders `display.detail`, so a difference means
+      something is composing prose that shouldn't.
+- [ ] **The budget refills.** Wait out `vpn.advanced.redialBudgetWindow` with
+      the tunnel down, then drop again → a window opens. It must open no later
+      than the `nextEligible` the refusal named.
+- [ ] **Hold the line spends nothing.** `dezhban hold`, then drop → no window,
+      and `status --json` shows no `state.redial` (hold suppresses ahead of the
+      ledger, so nothing was refused and nothing was charged). Reconnect, drop
+      again → a full-length window, proving the budget was untouched.
+- [ ] **`vpn.redialWindow: "0"` still removes trigger 2 entirely**, budget
+      irrelevant; the manual switch window and `pause` still work.
+- [ ] **`redialBudget: "0"` is refused, not normalised.**
+      `sudo dezhban config set vpn.advanced.redialBudget=0` must exit non-zero
+      and leave the file unchanged — a limit has no "off", and silently storing
+      `2m` for a typed `0` is the failure this project treats as worst.
+- [ ] **Live reload lands on the next drop.** With the daemon running, lower
+      `redialBudget`, confirm `Saved and applied` lists it, then flap until
+      refusal — it must refuse against the NEW number without a restart.
+
 ## Upgrade
 
 macOS only, privileged (`dezhban upgrade download`/`apply`). See

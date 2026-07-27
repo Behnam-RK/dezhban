@@ -36,6 +36,14 @@ current as you land changes.
   runs out and the guard holds. Refusals say which bound refused and when a
   window can next open, in the logs and in `status`.
 
+  A refusal is published, not only logged: `status --json` gains `state.redial`
+  (the reason, when a window can next open, and what is left of the budget) for
+  as long as the refusal stands, and `status` and the menubar app both read
+  *"Your VPN has dropped often enough to use up its redial budget, so the guard
+  is holding and traffic stays cut. It can relax again at 3:15PM."* — the same
+  sentence, composed once. Without a time, "the guard is holding" leaves a wait
+  indistinguishable from a wall.
+
   Still trigger two, not a fourth trigger. `vpn.redialWindow: "0"` remains the
   one way to turn the automatic window off; `dezhban hold` still suppresses a
   single drop and spends nothing; `redialWindowMax` still caps any single

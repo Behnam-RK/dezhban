@@ -120,4 +120,33 @@ struct SnapshotTests {
         #expect(s.drop == nil)
         #expect(!s.holdArmed)
     }
+
+    @Test func decodesARefusedRedialWindow() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "drop": { "at": "2026-07-25T09:58:00Z" },
+          "redial": { "reason": "exhausted", "nextEligible": "2026-07-25T10:13:00Z",
+                      "remainingSeconds": 0 } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.redial?.reason == "exhausted")
+        #expect(s.redial?.remainingSeconds == 0)
+        // Omitted by the daemon when the budget, not the backoff, refused —
+        // `omitempty` on the Go side means absent, and absent must decode.
+        #expect(s.redial?.fastDrops == nil)
+    }
+
+    /// The additive rule again, for the field this release adds: every snapshot
+    /// an older daemon ever wrote lacks `redial`, and the app has to keep reading
+    /// them. Absent means "nothing refused", never "no budget" and never a
+    /// decode failure that would blank the menubar.
+    @Test func absentRedialIsNotAFailure() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "drop": { "at": "2026-07-25T09:58:00Z" } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.redial == nil)
+        #expect(s.drop?.at != nil)
+    }
 }

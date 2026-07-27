@@ -94,6 +94,11 @@ type Snapshot struct {
 	// an automatic redial window. Present only while armed. Additive field:
 	// absent from older snapshots, so nil means "not armed".
 	Hold *HoldState `json:"hold,omitempty"`
+	// Redial reports that the automatic redial window was REFUSED for the drop
+	// currently being carried, and when one could open instead. Present only
+	// while such a refusal stands. Additive field: absent from older snapshots,
+	// so nil means "nothing refused", never "no budget exists".
+	Redial *RedialState `json:"redial,omitempty"`
 	// Display is the rendered posture sentence — see internal/render, the
 	// package that composes it from this same Snapshot. Carried here for the
 	// one consumer that cannot call Go directly: the macOS menubar app reads
@@ -189,6 +194,34 @@ type HoldState struct {
 	Armed bool `json:"armed"`
 	// At is when it was armed.
 	At time.Time `json:"at"`
+}
+
+// RedialState is why the automatic redial window did not open for the drop being
+// carried, and when one could. It exists because a guard that silently declines
+// to help is the failure mode this project treats as worst: without it the only
+// difference between "your VPN has not redialed yet" and "dezhban will not let
+// it try again for eleven minutes" is a log line nobody is reading.
+//
+// A refusal only, never a grant. An open window is already reported by Switch,
+// and duplicating it here would give two fields one truth to disagree about.
+//
+// See docs/adr/0009-redial-budget.md for what does the refusing.
+type RedialState struct {
+	// Reason is the redial.Reason that refused, as a stable identifier
+	// ("cooldown", "exhausted"). Surfaces match on it; the sentence a user reads
+	// is composed in internal/render, never here.
+	Reason string `json:"reason"`
+	// NextEligible is the earliest instant a window could open. The whole point
+	// of publishing a refusal is that it comes with a "until when" — "the guard
+	// is holding" alone leaves the user unable to tell a wait from a wall.
+	NextEligible time.Time `json:"nextEligible"`
+	// RemainingSeconds is what is left of the rolling budget. Seconds rather
+	// than a Go duration string so a non-Go reader (the macOS app, jq) gets a
+	// number it can compare rather than "1m30s" it has to parse.
+	RemainingSeconds float64 `json:"remainingSeconds"`
+	// FastDrops is how many consecutive fast drops are behind the current
+	// backoff. Zero when the budget, not the backoff, is what refused.
+	FastDrops int `json:"fastDrops,omitempty"`
 }
 
 // Trigger values for SwitchState.Trigger. Stable identifiers — status --json

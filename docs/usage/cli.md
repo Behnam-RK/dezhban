@@ -109,6 +109,15 @@ menubar app uses to grey its icon. It is always present, so its absence means
 you are reading something other than this CLI's output — never "the snapshot is
 fresh".
 
+`state.redial` is present only when an automatic redial window was **refused**
+for the drop currently being carried, and it is how a script tells "the VPN has
+not come back yet" from "dezhban will not let it try again until 3:15PM". It
+carries `reason` (`"cooldown"` while backing off after fast drops, `"exhausted"`
+when the rolling budget is spent — stable identifiers, match on them rather than
+displaying them), `nextEligible`, `remainingSeconds` of budget, and `fastDrops`.
+An open window is reported by `state.switch` instead, never here. The sentence a
+person should read is already composed in `state.display.detail`.
+
 ```sh
 dezhban status                                    # config + service + block state
 dezhban status --json                             # machine-readable (merges the state file)
