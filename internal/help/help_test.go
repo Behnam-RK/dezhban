@@ -292,6 +292,22 @@ func TestRenderReportsWhatItCannotShow(t *testing.T) {
 	}
 }
 
+// TestRelativeLinkCannotClimbAboveTheRepoRoot pins rewriteLink's bound on ".."
+// segments: enough of them turn "docs/<dir>/<target>" into a path that climbs
+// past the repo root, which repoBase would otherwise turn into a URL pointing
+// outside the project (or nowhere). Refused the same way a disallowed scheme
+// is, rather than shipped.
+func TestRelativeLinkCannotClimbAboveTheRepoRoot(t *testing.T) {
+	md := "[trap](../../../../../../../etc/passwd)\n"
+	r := Render("usage/config.md", md)
+	if len(r.Unsupported) == 0 {
+		t.Fatalf("a link climbing above the repo root was rendered without being reported:\n%s", r.HTML)
+	}
+	if strings.Contains(r.HTML, "etc/passwd") {
+		t.Errorf("the climbing path survived into the rendered href:\n%s", r.HTML)
+	}
+}
+
 // TestInlineMarkupSpansSoftLineBreaks — these docs are hard-wrapped prose, so
 // emphasis routinely straddles a line break. Rendering line by line left the **
 // as literal text in eight of the nine bundled pages.

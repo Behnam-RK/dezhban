@@ -492,6 +492,15 @@ func rewriteLink(source, href string, note func(string)) string {
 	// the docs also link outside docs/ ("../../configs/dezhban.example.json").
 	repoPath := path.Join("docs", path.Dir(source), target)
 
+	// A link with enough "../" to climb past the repo root itself is refused
+	// rather than turned into a repoBase URL that climbs past it too — that
+	// would resolve to something outside the project, or nothing at all,
+	// which is the same class of bug a bad scheme is refused for above.
+	if strings.HasPrefix(repoPath, "../") {
+		note("a relative link (" + href + ") that climbs above the repository root")
+		return "#"
+	}
+
 	if inDocs, ok := strings.CutPrefix(repoPath, "docs/"); ok {
 		if _, bundled := PageBySource(inDocs); bundled {
 			if frag != "" {
