@@ -195,6 +195,13 @@ current as you land changes.
   a count check — so inserting or reordering a key would have silently applied
   one field's value to another setting. Values are now keyed throughout.
 
+- **`dezhban setup` no longer clears `vpn.autoDiscoverEndpoints` on Linux and
+  Windows.** Endpoint discovery is macOS-only, so the wizard does not ask about
+  it elsewhere — and an unasked question was read as "no" and written to the
+  config, quietly turning off a setting the user had set. The same class of bug
+  as the deleted profiles above: a question the wizard never put on screen now
+  leaves its key alone.
+
 ### Changed — BREAKING
 
 - **"reconnect" is now "redial" everywhere.** The codebase used both words for the

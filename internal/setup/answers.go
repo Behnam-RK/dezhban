@@ -92,6 +92,19 @@ func (a *Answers) Bool(id string) bool {
 	return false
 }
 
+// OptionalBool distinguishes "answered false" from "never asked". A question the
+// wizard did not put on screen — the macOS-only ones, on another platform — has
+// no binding at all, and Bool would report false for it, which Apply would then
+// write over whatever the user had configured.
+func (a *Answers) OptionalBool(id string) *bool {
+	p, ok := a.flag[id]
+	if !ok {
+		return nil
+	}
+	v := *p
+	return &v
+}
+
 func (a *Answers) List(id string) []string {
 	if p, ok := a.list[id]; ok {
 		return append([]string(nil), *p...)
@@ -138,8 +151,13 @@ type Input struct {
 	AutoMode           bool
 	Tunnels, Endpoints []string
 	Profiles           []config.Profile
-	AutoDiscover       bool
-	AllowPhysicalDNS   bool
+	// AutoDiscover is nil when the wizard never asked — the question is macOS-only,
+	// so on every other platform there is no answer to apply. Nil rather than
+	// false because Apply must leave an unasked key ALONE: writing false would
+	// silently clear a value the user set, which is the same failure that made
+	// re-running setup delete imported profiles (see mergeProfiles).
+	AutoDiscover     *bool
+	AllowPhysicalDNS bool
 }
 
 // Input folds the answers into the shape Apply writes.
@@ -166,9 +184,9 @@ func (a *Answers) Input(hysteresis string, profiles []config.Profile) Input {
 		Tunnels:      tunnels,
 		Endpoints:    SplitList(a.Text("endpoints")),
 		Profiles:     profiles,
-		// Absent on every platform but macOS, where the question is not asked —
-		// so the binding is missing and this reads false, which is the truth.
-		AutoDiscover:     a.Bool("autoDiscover"),
+		// Absent on every platform but macOS, where the question is not asked at
+		// all. Nil there, so Apply leaves the configured value untouched.
+		AutoDiscover:     a.OptionalBool("autoDiscover"),
 		AllowPhysicalDNS: a.Bool("allowPhysicalDNS"),
 	}
 }
@@ -202,7 +220,11 @@ func Apply(cfg *config.Config, in Input) {
 	}
 	cfg.VPN.Endpoints = in.Endpoints
 	cfg.VPN.Profiles = mergeProfiles(cfg.VPN.Profiles, in.Profiles)
-	cfg.VPN.AutoDiscoverEndpoints = in.AutoDiscover
+	// Only when the wizard asked. An unasked question leaves its key alone —
+	// the same rule ConfigureVPN applies to the whole VPN branch.
+	if in.AutoDiscover != nil {
+		cfg.VPN.AutoDiscoverEndpoints = *in.AutoDiscover
+	}
 	cfg.VPN.AllowPhysicalDNS = in.AllowPhysicalDNS
 }
 

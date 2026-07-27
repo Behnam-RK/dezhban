@@ -19,9 +19,12 @@ func TestApplyAutoMode(t *testing.T) {
 		Tunnels:          []string{"utun9"}, // must be ignored in auto mode
 		Endpoints:        []string{"vpn.example.com"},
 		Profiles:         []config.Profile{{Name: "home", Endpoints: []string{"203.0.113.7"}}},
-		AutoDiscover:     true,
+		AutoDiscover:     boolPtr(true),
 		AllowPhysicalDNS: true,
 	})
+	if !cfg.VPN.AutoDiscoverEndpoints {
+		t.Error("an answered autoDiscover should be applied")
+	}
 	if len(cfg.VPN.TunnelInterfaces) != 0 {
 		t.Errorf("auto mode must not pin interfaces, got %v", cfg.VPN.TunnelInterfaces)
 	}
@@ -38,6 +41,35 @@ func TestApplyAutoMode(t *testing.T) {
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("auto-mode config should validate: %v", err)
+	}
+}
+
+func boolPtr(v bool) *bool { return &v }
+
+// A question the wizard never put on screen must not have its key rewritten.
+// The autoDiscover question is macOS-only, so off macOS there is no binding for
+// it — and reading a missing binding as "false" meant re-running setup on Linux
+// silently cleared vpn.autoDiscoverEndpoints. Same failure as the one that used
+// to delete imported profiles: a value the user never touched, overwritten.
+func TestAnUnaskedQuestionLeavesItsKeyAlone(t *testing.T) {
+	cfg := config.Default()
+	cfg.VPN.AutoDiscoverEndpoints = true
+
+	qs := Questions(Options{Config: &cfg, GOOS: "linux", ConfigExisted: true})
+	for _, q := range qs {
+		if q.ID == "autoDiscover" {
+			t.Fatal("the autoDiscover question is macOS-only; this test assumes it is absent")
+		}
+	}
+
+	answers := NewAnswers(qs)
+	if answers.OptionalBool("autoDiscover") != nil {
+		t.Fatal("an unasked question should have no binding")
+	}
+	Apply(&cfg, answers.Input(strconv.Itoa(cfg.Hysteresis), nil))
+
+	if !cfg.VPN.AutoDiscoverEndpoints {
+		t.Error("vpn.autoDiscoverEndpoints was cleared by a wizard that never asked about it")
 	}
 }
 
