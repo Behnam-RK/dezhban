@@ -49,6 +49,8 @@ type LiveSettings struct {
 	RedialWindow            time.Duration
 	RedialWindowMax         time.Duration
 	RedialMinUptime         time.Duration
+	RedialBudget            time.Duration
+	RedialBudgetWindow      time.Duration
 	PauseMax                time.Duration
 	WindowDiscoveryInterval time.Duration
 
@@ -89,6 +91,8 @@ func (o Options) Live() LiveSettings {
 		RedialWindow:            o.RedialWindow,
 		RedialWindowMax:         o.RedialWindowMax,
 		RedialMinUptime:         o.RedialMinUptime,
+		RedialBudget:            o.RedialBudget,
+		RedialBudgetWindow:      o.RedialBudgetWindow,
 		PauseMax:                o.PauseMax,
 		WindowDiscoveryInterval: o.WindowDiscoveryInterval,
 		EndpointRefresh:         o.EndpointRefresh,

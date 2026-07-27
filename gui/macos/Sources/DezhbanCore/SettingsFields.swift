@@ -164,6 +164,13 @@ public struct SettingsFields {
     public var advRedialMinUptime: String {
         get { string("vpn.advanced.redialMinUptime") } set { setString("vpn.advanced.redialMinUptime", newValue) }
     }
+    public var advRedialBudget: String {
+        get { string("vpn.advanced.redialBudget") } set { setString("vpn.advanced.redialBudget", newValue) }
+    }
+    public var advRedialBudgetWindow: String {
+        get { string("vpn.advanced.redialBudgetWindow") }
+        set { setString("vpn.advanced.redialBudgetWindow", newValue) }
+    }
     public var advCommandFreshness: String {
         get { string("vpn.advanced.commandFreshness") } set { setString("vpn.advanced.commandFreshness", newValue) }
     }

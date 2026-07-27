@@ -155,6 +155,8 @@ func TestLiveCapturesEveryLiveSetting(t *testing.T) {
 		RedialWindow:            30 * time.Second,
 		RedialWindowMax:         10 * time.Minute,
 		RedialMinUptime:         15 * time.Second,
+		RedialBudget:            2 * time.Minute,
+		RedialBudgetWindow:      15 * time.Minute,
 		PauseMax:                30 * time.Minute,
 		WindowDiscoveryInterval: time.Second,
 		EndpointRefresh:         time.Minute,

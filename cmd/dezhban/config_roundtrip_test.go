@@ -54,6 +54,8 @@ var roundTripCases = map[string]roundTripCase{
 	"vpn.advanced.switchWindowMax":         {set: "4m", want: "4m0s"},
 	"vpn.advanced.redialWindowMax":         {set: "11m", want: "11m0s"},
 	"vpn.advanced.redialMinUptime":         {set: "20s", want: "20s"},
+	"vpn.advanced.redialBudget":            {set: "3m", want: "3m0s"},
+	"vpn.advanced.redialBudgetWindow":      {set: "20m", want: "20m0s"},
 	"vpn.advanced.commandFreshness":        {set: "45s", want: "45s"},
 	"vpn.advanced.windowDiscoveryInterval": {set: "2s", want: "2s"},
 	"vpn.advanced.tunnelPruneAfter":        {set: "90s", want: "1m30s"},
@@ -152,5 +154,37 @@ func TestSetRedialMinUptimeZeroDisables(t *testing.T) {
 	}
 	if v := configFields["vpn.advanced.redialMinUptime"].get(got); v != "0s" {
 		t.Errorf("get = %q, want \"0s\"", v)
+	}
+}
+
+// The mirror of the test above, and the reason it needs one of its own: the two
+// budget keys are the only durations here that REFUSE a "0" rather than treating
+// it as an opt-out or normalising it away. They are limits, so "off" would mean
+// "no limit" — the opposite of what "0" means on every other key — and a config
+// that accepted it would leave the user believing the bound was lifted when it
+// had been reset to 2m. Failing loudly is the whole point.
+func TestSetRedialBudgetZeroIsRefused(t *testing.T) {
+	for _, key := range []string{"vpn.advanced.redialBudget", "vpn.advanced.redialBudgetWindow"} {
+		t.Run(key, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "c.json")
+			base := config.Default()
+			base.VPN.TunnelInterfaces = []string{"utun3"}
+			if err := config.Save(p, &base); err != nil {
+				t.Fatal(err)
+			}
+			if code := cmdConfig([]string{"set", key + "=0", "--config", p}); code == 0 {
+				t.Fatalf("config set %s=0 exited 0, want a non-zero exit — a limit has no off", key)
+			}
+			// And the refusal must not have written anything: a rejected value that
+			// still lands on disk is worse than one silently normalised.
+			got, err := config.Load(p)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if v := configFields[key].get(got); v != configFields[key].get(&base) {
+				t.Errorf("%s = %q after a refused write, want the original %q",
+					key, v, configFields[key].get(&base))
+			}
+		})
 	}
 }

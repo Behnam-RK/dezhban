@@ -320,12 +320,33 @@ var tunables = []Tunable{
 	},
 	{
 		Key:        "vpn.advanced.redialMinUptime",
-		Label:      "Redial anti-flap uptime",
+		Label:      "Redial backoff threshold",
 		Kind:       KindDuration,
 		Advanced:   true,
 		Disablable: true,
-		Help:       "A tunnel that was up for less than this gets no automatic window, so a flapping VPN cannot chain windows into standing exposure. Off removes the gate.",
+		Help:       "A tunnel that was up for less than this still gets a window, but a shorter one for each consecutive fast drop, with a growing wait between them. Off gives every drop a full window until the budget runs out.",
 		DocAnchor:  anchorAdvanced,
+	},
+	// Not Disablable, unlike almost every other duration here. These two are
+	// limits, so an Off switch would have to mean "no limit" — the opposite of
+	// what Off means on every other row, and the wrong direction to offer on a
+	// security surface. Raise the budget to relax the bound; use
+	// `vpn.redialWindow: "0"` to turn the automatic window off outright.
+	{
+		Key:       "vpn.advanced.redialBudget",
+		Label:     "Redial budget",
+		Kind:      KindDuration,
+		Advanced:  true,
+		Help:      "Total time automatic redial windows may leave the guard relaxed per budget period. A window that closes early only spends what it used, so successful redials cost almost nothing. When it runs out the guard simply holds.",
+		DocAnchor: anchorAdvanced,
+	},
+	{
+		Key:       "vpn.advanced.redialBudgetWindow",
+		Label:     "Redial budget period",
+		Kind:      KindDuration,
+		Advanced:  true,
+		Help:      "The rolling period the redial budget is measured over. Each window's cost is returned once it falls out of this period.",
+		DocAnchor: anchorAdvanced,
 	},
 	{
 		Key:       "vpn.advanced.commandFreshness",

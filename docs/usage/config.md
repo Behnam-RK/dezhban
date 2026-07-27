@@ -304,7 +304,8 @@ An optional block for behaviors that are otherwise recommended defaults. Omit it
 entirely to keep the defaults; set only the knobs you need. Every field below is
 reachable with `dezhban config set vpn.advanced.<field>=<value>` — the same
 validated write-and-reload path as any other key — not just by hand-editing the
-file. `switchWindowMax`, `redialWindowMax`, `redialMinUptime`, and
+file. `switchWindowMax`, `redialWindowMax`, `redialMinUptime`, `redialBudget`,
+`redialBudgetWindow`, and
 `windowDiscoveryInterval` apply live; the rest (built into something the run
 loop constructs once at startup, or — for `windowProtocols`/`windowPorts` —
 only re-read when a switch window opens) need `dezhban restart` to take
@@ -317,6 +318,14 @@ replacement is not silent — `config set` echoes the value actually stored and
 adds a `note: <key> was normalised on write: <typed> → <stored>` line whenever
 the two differ, on both write paths (elevated and `--token-stdin`).
 
+`redialBudget` and `redialBudgetWindow` go one step further and **refuse** a
+`0` by name rather than normalising it. They are limits, not features, so an
+"off" would have to mean *no limit* — the opposite direction from every other
+`0` in this file, and the wrong thing for a security surface to offer. Raise the
+budget to relax the bound, or set `vpn.redialWindow` to `"0"` to turn the
+automatic redial window off outright. Full rationale:
+[ADR-0009](../adr/0009-redial-budget.md).
+
 | Field | Default | What it controls |
 |---|---|---|
 | `switchWindowMax` | `3m` | Hard cap on any MANUAL switch window (incl. `--for`). |
@@ -327,7 +336,9 @@ the two differ, on both write paths (elevated and `--token-stdin`).
 | `learnedEndpointTTL` | `720h` | How long an unused learned endpoint is kept. |
 | `learnedMaxPerProfile` | `16` | Cap on learned endpoints per profile (LRU). |
 | `promoteAfterRefreshes` | `3` | Consecutive sightings before a discovered endpoint is learned under normal guard. |
-| `redialMinUptime` | `15s` | Anti-flap gate on the automatic redial window: an auto-window opens only if the tunnel had been up at least this long (or a good exit was confirmed during that uptime). The first drop after startup is exempt — uptime before the daemon started is unknowable. `"0"` disables the gate. |
+| `redialMinUptime` | `15s` | Backoff seed for the automatic redial window: a tunnel that was up for less than this, with no good exit confirmed during that uptime, still gets a window — but a shorter one for each consecutive fast drop, with a growing wait between them. The first drop after startup is exempt — uptime before the daemon started is unknowable. `"0"` disables the backoff, so every qualifying drop gets a full window until the budget runs out. |
+| `redialBudget` | `2m` | Total time automatic redial windows may leave the guard relaxed within `redialBudgetWindow`. Debited when a window opens and **credited back when it closes early**, so a redial that succeeded in three seconds costs three seconds — the budget measures the exposure actually taken, not the exposure offered. When it can no longer afford a window the guard simply holds and traffic stays cut. Not disablable (see below). |
+| `redialBudgetWindow` | `15m` | The rolling period `redialBudget` is measured over. Each window's cost is returned as it falls out of the period, so a busy link recovers its allowance progressively rather than needing a full quiet stretch. Not disablable. |
 | `endpointWarnThreshold` | `256` | Union size at which `doctor` warns about rule-list bloat. |
 | `windowProtocols` | `[]` | Restrict a switch window to these protocols (e.g. `["udp"]`) instead of allowing all outbound. Empty allows all — only worth setting when every VPN you switch to uses a fixed protocol. |
 | `windowPorts` | `[]` | Restrict a switch window to these ports (e.g. `[51820]`) instead of allowing all outbound. Empty allows all — only worth setting when every VPN you switch to uses a fixed port set (e.g. WireGuard on 51820). |

@@ -34,6 +34,8 @@ func TestLiveSettingsFromMapsEveryField(t *testing.T) {
 	cfg.VPN.Advanced.SwitchWindowMax = 3 * time.Minute
 	cfg.VPN.Advanced.RedialWindowMax = 10 * time.Minute
 	cfg.VPN.Advanced.RedialMinUptime = 15 * time.Second
+	cfg.VPN.Advanced.RedialBudget = 2 * time.Minute
+	cfg.VPN.Advanced.RedialBudgetWindow = 15 * time.Minute
 	cfg.VPN.Advanced.WindowDiscoveryInterval = time.Second
 
 	got := reflect.ValueOf(liveSettingsFrom(&cfg))

@@ -220,10 +220,23 @@ type Options struct {
 	// The window closes early on a confirmed good exit (learning the new
 	// endpoint) and reverts fail-closed on expiry. <=0 → no automatic window.
 	RedialWindow time.Duration
-	// RedialMinUptime is the anti-flap gate: the auto-window opens only if
-	// the tunnel had been up at least this long, or a non-blocked exit was
-	// confirmed during that uptime. <=0 → gate off.
+	// RedialMinUptime seeds the redial backoff: a tunnel up for less than this,
+	// with no confirmed exit during that uptime, still gets a window but a
+	// shortened one, halved again per consecutive fast drop and followed by a
+	// growing cooldown. <=0 → no backoff, every qualifying drop gets a full
+	// window until RedialBudget runs out.
 	RedialMinUptime time.Duration
+	// RedialBudget / RedialBudgetWindow bound total automatic-window time within
+	// a rolling period (docs/adr/0009-redial-budget.md). Debited when a window
+	// opens and credited back when it closes early, so the ledger measures the
+	// exposure actually taken. When the budget cannot afford a window the guard
+	// simply holds — that refusal is the bound, and it is the only thing standing
+	// between a pathologically flapping link and standing exposure.
+	//
+	// Both are live-appliable, so the run loop must read them through its reload
+	// snapshot on every drop rather than capturing them at startup.
+	RedialBudget       time.Duration
+	RedialBudgetWindow time.Duration
 	// Watcher, when non-nil, emits tunnel up/down edges. In VPN mode a down edge
 	// can open the automatic redial window (see RedialWindow); the standing
 	// guard rule already cuts the drop itself with no leak. In legacy mode a down
@@ -1513,6 +1526,12 @@ func (o Options) runGuard(ctx context.Context) error {
 		o.AllowConfigOps = ls.AllowConfigOps
 		o.RedialWindow = ls.RedialWindow
 		o.RedialMinUptime = ls.RedialMinUptime
+		// The budget ledger reads these off `o` on every drop rather than holding
+		// its own copy, so a reload lands on the very next decision. A Budget that
+		// captured them at construction would keep enforcing the old numbers while
+		// `Saved and applied` claimed otherwise.
+		o.RedialBudget = ls.RedialBudget
+		o.RedialBudgetWindow = ls.RedialBudgetWindow
 		o.EndpointGrace = ls.EndpointGrace
 		o.SwitchWindow = ls.SwitchWindow
 		o.WindowDiscoveryInterval = ls.WindowDiscoveryInterval

@@ -223,13 +223,37 @@ type Advanced struct {
 	// EndpointWarnThreshold is the union-size at which doctor warns about
 	// rule-list bloat. Default 256.
 	EndpointWarnThreshold int
-	// RedialMinUptime is the anti-flap gate on the automatic redial
-	// window: an auto-window opens only if the tunnel had been up at least this
-	// long, or a non-blocked exit was confirmed during that uptime. Without it a
-	// VPN flapping up/down would chain windows and turn the guard into a sieve.
-	// Default 15s; an explicit "0" disables the gate (negative sentinel
-	// internally, same convention as VPN.RedialWindow).
+	// RedialMinUptime seeds the backoff on the automatic redial window: a tunnel
+	// that was up for less than this, with no confirmed exit during that uptime,
+	// still gets a window but a shortened one, halved again for each consecutive
+	// fast drop and followed by a growing cooldown. Default 15s; an explicit "0"
+	// disables the backoff so every qualifying drop gets a full window until
+	// RedialBudget runs out (negative sentinel internally, same convention as
+	// VPN.RedialWindow).
+	//
+	// It used to SUPPRESS the window outright, which meant a struggling VPN got
+	// no automatic help at all and the user had to run `dezhban switch` by hand
+	// — see docs/adr/0009-redial-budget.md for why that shape was both unbounded
+	// across drops and useless within a flap.
 	RedialMinUptime time.Duration
+	// RedialBudget is the total time automatic redial windows may leave the
+	// guard relaxed within RedialBudgetWindow. Debited when a window opens and
+	// credited back when it closes early, so a redial that succeeded in three
+	// seconds costs three seconds — the budget bounds exposure taken, not
+	// exposure offered. When it is spent the guard simply holds. Default 2m,
+	// i.e. four full windows' worth against the 30s default.
+	//
+	// NOT disablable: a "0" is coerced back to the default like any ordinary
+	// duration. On a limit, "off" would have to mean *no limit*, and an Off
+	// switch that removes a bound rather than a feature reads backwards on a
+	// security surface. `vpn.redialWindow: "0"` remains the one way to turn the
+	// automatic window off; set a large budget to opt out of the bound instead.
+	RedialBudget time.Duration
+	// RedialBudgetWindow is the rolling period RedialBudget applies to. Episodes
+	// are retired individually as each falls out of it, so a busy link recovers
+	// its allowance progressively rather than needing a full quiet period.
+	// Default 15m. Not disablable, for the same reason as RedialBudget.
+	RedialBudgetWindow time.Duration
 	// WindowProtocols / WindowPorts optionally restrict a switch window to the
 	// given protocols ("udp"/"tcp") and destination ports instead of allowing all
 	// outbound. Empty (default) = allow all outbound for the window's duration.
@@ -388,6 +412,8 @@ type fileAdvanced struct {
 	WindowProtocols         []string `json:"windowProtocols,omitempty"`
 	WindowPorts             []int    `json:"windowPorts,omitempty"`
 	RedialMinUptime         string   `json:"redialMinUptime,omitempty"`
+	RedialBudget            string   `json:"redialBudget,omitempty"`
+	RedialBudgetWindow      string   `json:"redialBudgetWindow,omitempty"`
 }
 
 // Default returns a Config with safe, security-first defaults.
@@ -665,6 +691,16 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 		*dst = d
 		return nil
 	}
+	parseNonNegative := func(name, s string, dst *time.Duration) error {
+		if err := parse(name, s, dst); err != nil {
+			return err
+		}
+		if *dst < 0 {
+			return fmt.Errorf("vpn.advanced.%s: must not be negative (got %s); it is a limit, "+
+				"not a feature — raise it to relax the bound, there is no \"off\"", name, *dst)
+		}
+		return nil
+	}
 	if err := parse("switchWindowMax", fa.SwitchWindowMax, &a.SwitchWindowMax); err != nil {
 		return a, err
 	}
@@ -692,10 +728,22 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 			return a, fmt.Errorf("vpn.advanced.redialMinUptime: must not be negative (got %s); use \"0\" to disable", d)
 		}
 		if d == 0 {
-			a.RedialMinUptime = Disabled // explicit opt-out of the anti-flap gate
+			a.RedialMinUptime = Disabled // explicit opt-out of the redial backoff
 		} else {
 			a.RedialMinUptime = d
 		}
+	}
+	// The two budget keys take no Disabled sentinel (see Advanced.RedialBudget):
+	// they are limits, so "0" would have to mean "no limit", which is the opposite
+	// of what "0" means everywhere else in this config. A plain 0 is therefore an
+	// ordinary duration that Normalize replaces with the default. A NEGATIVE one is
+	// rejected by name rather than normalized, so anyone reaching for the sentinel
+	// convention is told it does not apply here instead of quietly getting 2m.
+	if err := parseNonNegative("redialBudget", fa.RedialBudget, &a.RedialBudget); err != nil {
+		return a, err
+	}
+	if err := parseNonNegative("redialBudgetWindow", fa.RedialBudgetWindow, &a.RedialBudgetWindow); err != nil {
+		return a, err
 	}
 	a.LearnedMaxPerProfile = fa.LearnedMaxPerProfile
 	a.PromoteAfterRefreshes = fa.PromoteAfterRefreshes
@@ -840,6 +888,16 @@ func toFileAdvanced(a Advanced) *fileAdvanced {
 	}
 	if a.RedialMinUptime != defaultRedialMinUptime {
 		fa.RedialMinUptime = optDurString(a.RedialMinUptime)
+		nonDefault = true
+	}
+	// durString, not optDurString: these two carry no Disabled sentinel, so there
+	// is no "0" to render.
+	if a.RedialBudget != defaultRedialBudget {
+		fa.RedialBudget = durString(a.RedialBudget)
+		nonDefault = true
+	}
+	if a.RedialBudgetWindow != defaultRedialBudgetWindow {
+		fa.RedialBudgetWindow = durString(a.RedialBudgetWindow)
 		nonDefault = true
 	}
 	if !nonDefault {
@@ -1016,6 +1074,15 @@ func normalizeAdvanced(a *Advanced) {
 	if a.RedialMinUptime == 0 {
 		a.RedialMinUptime = defaultRedialMinUptime
 	}
+	// `<= 0`, not `== 0`: unlike the three windows and RedialMinUptime above, these
+	// two take no Disabled sentinel, so there is nothing negative worth preserving
+	// (applyAdvanced rejects a negative outright).
+	if a.RedialBudget <= 0 {
+		a.RedialBudget = defaultRedialBudget
+	}
+	if a.RedialBudgetWindow <= 0 {
+		a.RedialBudgetWindow = defaultRedialBudgetWindow
+	}
 	// Canonicalize protocol strings so validation and pf/nft/WFP rendering agree:
 	// the renderers emit these values verbatim, so a stray space or capital (" UDP",
 	// "Tcp") would otherwise leak into the ruleset. Normalize runs before Validate.
@@ -1056,6 +1123,12 @@ const (
 	defaultRedialMinUptime = 15 * time.Second
 	defaultPauseMax        = 30 * time.Minute
 	defaultEndpointGrace   = 15 * time.Minute
+
+	// 2m against the 30s default window is four full windows' worth per 15m, and
+	// credit-on-close means a healthy link that redials in seconds barely touches
+	// it — so the bound only bites a link that is genuinely failing.
+	defaultRedialBudget       = 2 * time.Minute
+	defaultRedialBudgetWindow = 15 * time.Minute
 
 	maxProfileName = 64
 
