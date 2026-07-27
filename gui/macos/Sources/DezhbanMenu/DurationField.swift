@@ -115,7 +115,8 @@ struct DurationField: View {
             case "vpn.pauseMax":
                 return "Off — pausing is unavailable, so there is no way to use your real IP on purpose."
             case "vpn.advanced.redialMinUptime":
-                return "Off — a flapping VPN can open a redial window on every drop."
+                return "Off — no backing off, so every drop gets a full-length window "
+                    + "until the redial budget runs out."
             default:
                 return "Off."
             }

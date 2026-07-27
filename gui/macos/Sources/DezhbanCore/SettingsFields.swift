@@ -27,6 +27,7 @@ public struct SettingsFields {
         "vpn.switchWindow", "vpn.redialWindow", "vpn.pauseMax", "vpn.endpointGrace",
         "vpn.endpointRefresh", "vpn.tunnelWatch",
         "vpn.advanced.switchWindowMax", "vpn.advanced.redialWindowMax", "vpn.advanced.redialMinUptime",
+        "vpn.advanced.redialBudget", "vpn.advanced.redialBudgetWindow",
         "vpn.advanced.commandFreshness", "vpn.advanced.windowDiscoveryInterval", "vpn.advanced.tunnelPruneAfter",
         "vpn.advanced.learnedEndpointTTL", "vpn.advanced.learnedMaxPerProfile", "vpn.advanced.promoteAfterRefreshes",
         "vpn.advanced.endpointWarnThreshold", "vpn.advanced.windowProtocols", "vpn.advanced.windowPorts",

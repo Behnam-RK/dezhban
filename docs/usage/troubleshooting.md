@@ -175,10 +175,19 @@ window](../concepts/modes.md#automatic-redial-window) (`vpn.redialWindow`, defau
 `30s`) opens on the drop so the client can redial anywhere; the new server is
 learned and the guard snaps back on a confirmed good exit. If you disabled it
 (`"0"`), redials to fresh servers need `dezhban switch` — that is the
-configured strict behavior, not a bug. If the window keeps getting suppressed in
-the logs, your tunnel is flapping faster than
-`vpn.advanced.redialMinUptime` (default `15s`) — fix the VPN, or lower/zero
-the gate if the flapping is expected.
+configured strict behavior, not a bug.
+
+If the logs say **`redial budget spent`** or **`backing off after consecutive
+fast drops`**, the windows are being rationed rather than refused outright: your
+tunnel is dropping again within `vpn.advanced.redialMinUptime` (default `15s`),
+so each window is shorter than the last, and the rolling
+`vpn.advanced.redialBudget` (default `2m` per `15m`) has run out. The log line
+carries `nextEligible` — the instant a window can open again. Fix the VPN if you
+can; if the flapping is expected, raise the budget or set `redialMinUptime` to
+`"0"` so every drop gets a full-length window until the budget runs out. Note
+that successful redials cost almost nothing (a window that closes early only
+spends what it used), so reaching the limit means the redials themselves are
+failing.
 
 **Confirming it is rotation.** `dezhban doctor`'s *learned endpoints* check reads
 the store and says which of the two opposite problems you have. "Every learned

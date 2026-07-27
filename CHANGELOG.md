@@ -14,6 +14,34 @@ current as you land changes.
 
 ### Added
 
+- **The automatic redial window now spends from a bounded budget**
+  (`vpn.advanced.redialBudget`, default `2m`, per
+  `vpn.advanced.redialBudgetWindow`, default `15m`). Two problems, opposite in
+  direction, went away together.
+
+  Total exposure across drops had no ceiling at all: every drop earned a fresh
+  30s, so a link dropping once a minute produced 30s of relaxed guard every
+  minute, indefinitely. It is now bounded, and the bound is measured in the
+  thing that matters — time actually relaxed. A window that closes early on a
+  successful redial only spends what it used, so a healthy link that drops
+  occasionally and reconnects in seconds will never approach the budget. The
+  limit bites a connection that is genuinely failing, which is when it should.
+
+  And a flapping tunnel used to get **no window at all**
+  (`vpn.advanced.redialMinUptime` suppressed it outright), which pushed exactly
+  the users with the worst connections onto `dezhban switch` by hand — a product
+  failure in a tool whose promise is minimum interaction. That setting now seeds
+  a *backoff* instead: a fast drop still gets a window, shorter for each
+  consecutive fast drop and with a growing wait between them, until the budget
+  runs out and the guard holds. Refusals say which bound refused and when a
+  window can next open, in the logs and in `status`.
+
+  Still trigger two, not a fourth trigger. `vpn.redialWindow: "0"` remains the
+  one way to turn the automatic window off; `dezhban hold` still suppresses a
+  single drop and spends nothing; `redialWindowMax` still caps any single
+  window. Rationale, and the four alternatives rejected:
+  [ADR-0009](docs/adr/0009-redial-budget.md).
+
 - **`dezhban doctor` answers "will dezhban need me again".** Three new checks,
   for the two complaints that are really the same complaint — being asked to do
   by hand what the guard exists to do for you.

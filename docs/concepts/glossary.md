@@ -93,6 +93,24 @@ healthy GUARD, so the VPN can redial. Trigger two, capped by
 `advanced.redialWindowMax`. Same machinery, same rails; only the trigger and
 the cap differ. User-facing: "Your VPN dropped — redialing".
 
+**Redial budget** — the rolling allowance of total redial-window time
+(`vpn.advanced.redialBudget`, per `vpn.advanced.redialBudgetWindow`) that
+trigger two spends from. It bounds how much a *series* of drops can cost, which
+the per-window cap alone cannot: `redialWindowMax` bounds one window, the budget
+bounds all of them. Debited when a window opens and credited back when it closes
+early, so it measures exposure taken rather than exposure offered. When it is
+spent the guard simply holds. Belongs to trigger two alone — never shared with
+the manual window or pause, for the same reason their caps are not shared. See
+[ADR-0009](../adr/0009-redial-budget.md). User-facing: "the redial budget is
+spent". Say **budget**, not "quota" or "allowance", and never "rate limit".
+
+**Backing off** — shortening each successive redial window, and waiting longer
+between them, while a tunnel keeps dropping faster than
+`vpn.advanced.redialMinUptime`. It **shortens**; it does not suppress. Say
+"backing off" or "a shorter window", never "the flap guard" or "suppressed" —
+those name the behaviour ADR-0009 replaced, in which a struggling VPN got no
+automatic help at all.
+
 **Pause** — a switch window opened by an explicit operator command
 (`dezhban pause`, or the app) to deliberately use the real ISP IP for a domestic-
 only service, not to connect a VPN. Trigger three, capped by its own

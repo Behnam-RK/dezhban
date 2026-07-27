@@ -110,8 +110,9 @@ below in [Exit-country policing](#exit-country-policing).
 4. **Or nothing redials.** The window expires and the guard
    **fail-closes and stays closed** — no second window until a tunnel
    actually comes back.
-   A flapping tunnel doesn't get windows at all
-   (`vpn.advanced.redialMinUptime`).
+   Windows spend from a rolling budget (`vpn.advanced.redialBudget`), so a
+   tunnel that keeps dropping gets shorter windows and eventually none —
+   the guard holds rather than relaxing over and over.
 
 Prefer the original strict behavior — a drop is cut and *stays* cut with zero
 relaxation? `vpn.redialWindow: "0"`.
