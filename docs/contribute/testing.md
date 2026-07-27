@@ -335,7 +335,7 @@ daemon's *behaviour* afterwards, never about what the file says.
 ## Recovery after a redial
 
 Privileged, on a real host with a real VPN. The point of these checks is the
-*wait*: what the user sees between redialing and protection coming back.
+*wait*: what the user sees between redialing and the guard coming back.
 
 - [ ] **Progress is visible.** Force FULL BLOCK (`--simulate-country IR`, or a
       real forbidden exit), then redial onto an allowed exit → `dezhban status`
@@ -671,7 +671,7 @@ end up typing a password.
       uninstall tears rules down before unload.
 - [ ] **Launch at login** toggles `SMAppService.mainApp.status` to `.enabled`, and
       the app relaunches after a logout/login cycle.
-- [ ] Protection fields seed from `dezhban config show` values; Apply raises the
+- [ ] Guard fields seed from `dezhban config show` values; Apply raises the
       restart-warning choice; "Save only" writes without restarting.
 - [ ] **Restart dezhban…** works with nothing else pending: a plain "are you
       sure?" during GUARD or STANDBY, but a stronger, `.critical` warning during

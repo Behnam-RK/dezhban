@@ -60,14 +60,14 @@ Usage:
 
 Commands:
   run         Run the monitor→decision→enforcement loop
-  block       Manually block network egress
+  block       Manually block all outbound traffic
   unblock     Remove dezhban's firewall rules
   status      Show version, config, and current state
   validate    Load and validate a config file (no root, no side effects)
   monitor     Live read-only view: IP, country, tunnel state, endpoints, verdict
   print-rules Print the firewall ruleset a block/guard would apply, without applying it
   doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
-  panic       Force-remove dezhban's rules even if the daemon is dead
+  panic       Force-remove dezhban's rules even if nothing is running
   install     Register dezhban as a boot-persistent OS service
   uninstall   Remove the OS service
   start       Start the installed service
@@ -89,13 +89,13 @@ Commands:
 Global flags:
   -v, --verbose   Override the configured log level to debug
   --no-sudo       Don't auto-elevate; print the root error instead
-  --no-daemon     Don't use the daemon's control socket; act on the firewall directly
+  --no-daemon     Don't use the control socket; act on the firewall directly
 
-block, unblock, switch, pause, resume and hold ask the running daemon over its
-control socket, which needs no password (see the "daemon control" line in
-dezhban status). With no daemon listening, block/unblock fall back to acting on
+block, unblock, switch, pause, resume and hold ask the running dezhban over its
+control socket, which needs no password (see the "control socket" line in
+dezhban status). With nothing listening, block/unblock fall back to acting on
 the firewall directly; switch/pause/resume/hold fall back to the root-owned
-command file, which needs a running daemon to consume it — either way, needing
+command file, which needs a running dezhban to consume it — either way, needing
 root.
 
 Privileged commands re-run themselves under sudo automatically when not root
@@ -782,8 +782,8 @@ func runDryRun(cfg *config.Config, log *slog.Logger, ov runOverrides) int {
 func cmdBlock(args []string) int {
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
-	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other egress)")
-	force := fs.Bool("force", false, "force a hard full block of all egress, bypassing the VPN guard state machine")
+	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other traffic)")
+	force := fs.Bool("force", false, "force a hard full block of all traffic, bypassing the VPN guard state machine")
 	_ = fs.Parse(args)
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
@@ -798,7 +798,7 @@ func cmdBlock(args []string) int {
 	if !noDaemon() && !*guard && !*force {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpBlock}); handled {
 			if code == 0 {
-				fmt.Println("blocked (via daemon) — held until `dezhban unblock`")
+				fmt.Println("blocked — held until `dezhban unblock`")
 			}
 			return code
 		}
@@ -1010,7 +1010,7 @@ func cmdUnblock(args []string) int {
 	if !noDaemon() && !*force {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpUnblock}); handled {
 			if code == 0 {
-				fmt.Println("unblocked (via daemon) — monitoring resumed")
+				fmt.Println("unblocked — monitoring resumed")
 			}
 			return code
 		}
@@ -1659,7 +1659,7 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 		if daemonLive {
 			c.Details = append(c.Details,
 				"",
-				"A daemon IS enforcing right now — this is about reboots, not about",
+				"dezhban IS enforcing right now — this is about reboots, not about",
 				"the guard being off today.")
 		}
 		c.Fixes = []string{"sudo dezhban install"}
@@ -1719,7 +1719,7 @@ func buildArmAtBootCheck(armAtBoot bool, haveTunnel bool, rec *armed.Record, loa
 			"",
 			"dezhban treats an unreadable record as \"no tunnel has ever been up\",",
 			"which is safe but means the next reboot waits for a live tunnel instead",
-			"of arming straight away. The daemon rewrites it the next time a tunnel",
+			"of arming straight away. dezhban rewrites it the next time a tunnel",
 			"comes up.",
 		}
 		return c
@@ -2215,7 +2215,7 @@ func cmdStatus(args []string) int {
 	fmt.Printf("%s — %s\n", disp.Headline, disp.Detail)
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
 	fmt.Println("service:         ", svc.Status())
-	fmt.Println("daemon control:  ", controlStatus(cfg))
+	fmt.Println("control socket:  ", controlStatus(cfg))
 	fmt.Println("poll interval:   ", cfg.PollInterval)
 	fmt.Println("hysteresis:      ", cfg.Hysteresis)
 	fmt.Println("blocked countries:", strings.Join(blocked, ", "))

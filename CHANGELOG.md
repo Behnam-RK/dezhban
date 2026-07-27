@@ -12,6 +12,30 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **The glossary is now checked, not just written down.** It has always claimed
+  to be the authority — "when user-facing copy and this page disagree, the copy
+  is wrong" — but nothing verified that, and the copy had drifted back to
+  "protection", "egress" and "daemon" in about forty places while the page said
+  not to.
+
+  `internal/vocab` parses the banned-word table out of
+  [docs/concepts/glossary.md](docs/concepts/glossary.md) itself and fails the
+  build, so there is one list and it is the one a human reads. Editing a row
+  changes what the build enforces. The Go side uses `go/parser` to tell a string
+  reaching stdout from one reaching a log, because those registers differ:
+  "daemon" is wrong on a button and exactly right in a log line. Two markers in
+  the table say where each row applies, and an exemption requires a written
+  reason, so an exception is a recorded decision rather than a silent dodge.
+
+  User-visible wording changed accordingly. `status` prints **`control socket:`**
+  instead of `daemon control:`; `block`/`unblock` no longer print "(via
+  daemon)"; refusals read `dezhban refused:`; "is the daemon running?" became
+  "is dezhban running?"; and the app's panic tooltip and block hint dropped
+  "daemon" and "egress". `status --json` keys are unchanged — they are stable
+  identifiers, and the lint does not touch them.
+
 ### Added
 
 - **The automatic redial window now spends from a bounded budget**

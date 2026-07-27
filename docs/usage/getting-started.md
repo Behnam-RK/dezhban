@@ -1,6 +1,6 @@
 # Quick start
 
-Get dezhban protecting your machine in about ten minutes — without locking
+Get the guard up on your machine in about ten minutes — without locking
 yourself out on the way there.
 
 **What it does:** dezhban makes sure your traffic can only leave this machine

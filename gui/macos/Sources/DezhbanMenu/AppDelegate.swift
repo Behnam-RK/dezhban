@@ -255,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panic.keyEquivalent = "o"
         panic.keyEquivalentModifierMask = [.command, .option]
         panic.isAlternate = true
-        panic.toolTip = "Removes every rule dezhban installed. Works with no daemon running."
+        panic.toolTip = "Removes every rule dezhban installed. Works even when nothing is running."
 
         menu.addItem(.separator())
 

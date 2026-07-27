@@ -52,9 +52,9 @@ Subcommands:
 
 Flags:
   --token-stdin     Read the control token from stdin and have the running
-                    daemon perform the write — no root, applied immediately.
-                    Falls back to a privileged write if no daemon answers; a
-                    daemon that REFUSES is reported, never routed around.
+                    running dezhban perform the write — no root, applied
+                    immediately. Falls back to a privileged write if nothing
+                    answers; a REFUSAL is reported, never routed around.
                     See 'dezhban token'.
   --json            ('preset list'/'preset show'/'preset diff'/'schema' only)
                     print machine-readable JSON instead of prose
@@ -612,7 +612,7 @@ func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code
 			verbosef("control socket: %s — falling back to a privileged write", resp.Error)
 			return 0, false
 		}
-		fmt.Fprintln(os.Stderr, "daemon refused:", resp.Error)
+		fmt.Fprintln(os.Stderr, "dezhban refused:", resp.Error)
 		return ExitDaemonRefused, true
 	}
 	reportWriteOutcome(resp.Applied, resp.NeedsRestart)
@@ -665,7 +665,7 @@ const restartMarker = "Restart dezhban to apply:"
 // write followed by a reload — so a config change reads identically either way.
 func reportWriteOutcome(applied, needsRestart []string) {
 	if len(applied) == 0 && len(needsRestart) == 0 {
-		fmt.Println("Saved. No change to what the daemon is enforcing.")
+		fmt.Println("Saved. No change to what dezhban is enforcing.")
 		return
 	}
 	if len(applied) > 0 {

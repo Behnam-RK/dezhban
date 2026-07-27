@@ -149,7 +149,7 @@ struct OverviewView: View {
         return HStack(spacing: 10) {
             Button("Block now") { AppActions.routine(["block"], "block") }
                 .disabled(blocked)
-                .help(state.routineHint("Cuts all egress and holds it until you unblock."))
+                .help(state.routineHint("Cuts all traffic and holds it until you unblock."))
             Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
                 .disabled(!(blocked || guardHolds))
                 .help(state.routineHint("Releases a manual block and resumes monitoring."))

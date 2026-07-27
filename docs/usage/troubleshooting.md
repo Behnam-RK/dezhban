@@ -266,7 +266,7 @@ reached, so routine ops fall back to the root path and prompt for a password.
 
 ```sh
 stat -f "%Sp %Su %Sg %N" /var/db/dezhban    # want: drwxr-xr-x root wheel
-dezhban status | grep "daemon control"      # want: reachable — routine ops need no password
+dezhban status | grep "control socket"      # want: reachable — routine ops need no password
 ```
 
 Starting the daemon repairs the mode automatically (`state.EnsureDir`). To fix it

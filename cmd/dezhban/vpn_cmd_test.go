@@ -26,7 +26,7 @@ func TestPrintSwitchStatus(t *testing.T) {
 		{
 			name: "no state file",
 			snap: nil,
-			want: "switch window: unknown (no state file; is the daemon running?)\n",
+			want: "switch window: unknown (no state file; is dezhban running?)\n",
 		},
 		{
 			name: "closed",

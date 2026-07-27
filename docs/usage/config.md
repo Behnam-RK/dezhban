@@ -161,7 +161,7 @@ not prompted for a password during normal use.** The CLI and the menubar app bot
 go through it; with no daemon listening they fall back to acting on the firewall
 directly, which does need root.
 
-`dezhban status` prints a `daemon control:` line telling you exactly which of the
+`dezhban status` prints a `control socket:` line telling you exactly which of the
 two you are in.
 
 | Field | Type | Default | Notes |

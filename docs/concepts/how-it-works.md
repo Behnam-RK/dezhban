@@ -31,7 +31,7 @@ document is bookkeeping around that one idea.
    `status` and the menubar app read), the persistent log
    (`/var/db/dezhban/logs/dezhban.log`, size-rotated, captured on every run),
    the root-only command file, and the admin-group control socket.
-4. **Apply the resting posture before the first poll.** In VPN guard mode
+4. **Apply the resting posture before the first poll.** Under the guard
    that's the GUARD ruleset (below) — applied *immediately*, so there is no
    startup gap. With `vpn.autoArm` and no tunnel present, the daemon instead
    parks in `standby` (nothing enforced) and arms itself the moment a VPN
@@ -74,7 +74,7 @@ A guard needs a tunnel to pass traffic through; without one it would block
 everything, which is not security but a host with no connectivity. So until a
 tunnel is both configured **and** observed up, the daemon rests in **STANDBY**:
 no rules installed, network fully open, and the UI saying plainly that it is not
-protecting. It arms itself the moment a VPN connects.
+guarding. It arms itself the moment a VPN connects.
 
 dezhban used to ship a second mode for hosts without a tunnel — a
 country-blocklist that polled your public IP and cut egress by destination. It is

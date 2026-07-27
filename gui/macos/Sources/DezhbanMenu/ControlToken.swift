@@ -108,7 +108,7 @@ enum ControlToken {
             &acError
         ) else {
             let err = acError?.takeRetainedValue()
-            return "could not create a biometric protection policy: \(err.map { String(describing: $0) } ?? "unknown")"
+            return "could not create a biometric policy: \(err.map { String(describing: $0) } ?? "unknown")"
         }
 
         remove() // replace, never accumulate a second item under the same account

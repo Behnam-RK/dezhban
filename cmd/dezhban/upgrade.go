@@ -41,13 +41,13 @@ tampering window signature verification exists to close.
 Self-apply is macOS only (Linux/Windows package managers own their own
 upgrade path — this repo does not reimplement apt/dnf/winget). "upgrade check"
 still works everywhere and is what the GUI polls in user context; the root
-daemon itself never makes this call (see CLAUDE.md's invariants).
+background service itself never makes this call (see CLAUDE.md's invariants).
 
 Applying is two separate steps on purpose (docs/usage/upgrade.md): running the
-.pkg's installer opens no gap at all — the current daemon keeps enforcing on
+.pkg's installer opens no gap at all — what is running keeps enforcing on
 its OLD inode while the new files land. Only ACTIVATING (the restart that
 actually runs the new binary) is the exposure, and it is gated: refused
-unless the daemon is in a healthy "guard" or "standby" posture, never during
+unless dezhban is in a healthy "guard" or "standby" posture, never during
 FULL BLOCK or an open switch window — re-checked at the instant of restart,
 not at download time. --no-activate applies without restarting; activate
 later with "sudo dezhban restart".`
@@ -230,7 +230,7 @@ func cmdUpgradeApply(args []string) int {
 		case update.StashPending:
 			fmt.Fprintln(os.Stderr, "upgrade apply: a previous upgrade is applied but NOT yet activated — its rollback stash is")
 			fmt.Fprintln(os.Stderr, "               still live at", stashDir)
-			fmt.Fprintln(os.Stderr, "               the running daemon is still the stashed version, so that stash is the only copy")
+			fmt.Fprintln(os.Stderr, "               the running version is still the stashed one, so that stash is the only copy")
 			fmt.Fprintln(os.Stderr, "               of it. finish that upgrade first — activate it with:")
 			fmt.Fprintln(os.Stderr, "                 sudo dezhban restart")
 			fmt.Fprintln(os.Stderr, "               once the new version is running, this command clears the stash for you.")
@@ -239,15 +239,15 @@ func cmdUpgradeApply(args []string) int {
 		case update.StashUnknown:
 			fmt.Fprintln(os.Stderr, "upgrade apply: a rollback stash from a previous upgrade is present at", stashDir)
 			fmt.Fprintln(os.Stderr, "               refusing, because it could not be compared against the running version — the")
-			fmt.Fprintln(os.Stderr, "               daemon may be stopped, too old to report one, or either side may be a dev build.")
-			fmt.Fprintln(os.Stderr, "               start the daemon ('sudo dezhban start') and retry, or resolve it by hand:")
+			fmt.Fprintln(os.Stderr, "               dezhban may be stopped, too old to report one, or either side may be a dev build.")
+			fmt.Fprintln(os.Stderr, "               start dezhban ('sudo dezhban start') and retry, or resolve it by hand:")
 			fmt.Fprintln(os.Stderr, "               confirm which version is running ('dezhban status'), and if it is the one you")
 			fmt.Fprintln(os.Stderr, "               want, discard the stash and retry:")
 			fmt.Fprintln(os.Stderr, "                 sudo rm -rf", stashDir)
 			fmt.Fprintln(os.Stderr, "               otherwise see docs/usage/upgrade.md for restoring from it by hand.")
 			return 1
 		}
-		fmt.Println("a rollback stash from a previous upgrade is present but obsolete — the running daemon is already")
+		fmt.Println("a rollback stash from a previous upgrade is present but obsolete — the running version is already")
 		fmt.Println("newer than what it holds, so that upgrade activated. clearing it before continuing.")
 		if err := update.ClearStash(stashDir); err != nil {
 			fmt.Fprintln(os.Stderr, "upgrade apply: could not clear the obsolete stash:", err)
@@ -287,7 +287,7 @@ func cmdUpgradeApply(args []string) int {
 		return 1
 	}
 	_ = os.RemoveAll(stageDir)
-	fmt.Println("applied — the new binary and app are on disk; the running daemon has not been touched yet")
+	fmt.Println("applied — the new binary and app are on disk; what is running has not been touched yet")
 
 	// Retired keys must never be silently dropped (the same rule that keeps
 	// vpn.enabled/failClosed/allowlist parsed-but-reported applies here): the
@@ -417,7 +417,7 @@ func activate(stashDir, version string) int {
 		fmt.Fprintln(os.Stderr, "warning: could not open the log file for the activation audit trail:", err)
 	}
 
-	fmt.Println("activating: restarting the daemon into the new version.")
+	fmt.Println("activating: restarting dezhban into the new version.")
 	fmt.Println("enforcement pauses for the duration of the restart — typically ~2s, up to 30s if teardown is slow.")
 	if log != nil {
 		log.Info("upgrade: activation window opening", "gateReason", gate.Reason, "posture", gate.Posture)

@@ -60,7 +60,7 @@ daemon** over its control socket and need no password at all:
 | `upgrade check` | **No** — read-only, no root. |
 | `upgrade download`, `upgrade apply` | Yes — root, macOS only. `download`'s staging directory is root-owned on purpose: a writable-by-anyone staging area would let a local user swap the verified `.pkg` before `apply` installs it. |
 
-`dezhban status` prints a `daemon control:` line saying which mode you're in.
+`dezhban status` prints a `control socket:` line saying which mode you're in.
 
 ### Touch ID
 
@@ -102,7 +102,7 @@ A manual `block` **holds**: the daemon suspends its geo state machine until you
 `status --json` embeds the daemon's last published snapshot under `state`,
 verbatim. **Check `stateStale` before trusting it.** A crashed or `SIGKILL`ed
 daemon leaves its last posture on disk indefinitely, so `state.posture` alone
-will report a host as protected long after enforcement stopped; `stateStale` is
+will report a host as guarded long after enforcement stopped; `stateStale` is
 `true` once the snapshot ages past 3× the poll interval (floored at 90s), which
 is the same threshold the prose `status` uses to print "Stopped" instead and the
 menubar app uses to grey its icon. It is always present, so its absence means

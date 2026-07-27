@@ -60,7 +60,7 @@ func cmdSwitch(args []string) int {
 	if !*doCancel {
 		if cfg, err := loadConfig(*cfgPath); err == nil && cfg.VPN.SwitchWindow <= 0 {
 			fmt.Fprintln(os.Stderr, "switch: manual switch windows are disabled by vpn.switchWindow: \"0\".")
-			fmt.Fprintln(os.Stderr, "        The guard has no sanctioned relaxation while that is set — this is a")
+			fmt.Fprintln(os.Stderr, "        Nothing can open a window while that is set — this is a")
 			fmt.Fprintln(os.Stderr, "        deliberate zero-leak posture. To connect a new VPN, either add its")
 			fmt.Fprintln(os.Stderr, "        server to vpn.endpoints, or set vpn.switchWindow to a duration (e.g. \"15s\").")
 			return 1
@@ -377,14 +377,14 @@ func waitForSwitch(statePath string) int {
 			return 0
 		}
 	}
-	fmt.Println("  (no window state observed — is the daemon running? try: sudo dezhban start)")
+	fmt.Println("  (no window state observed — is dezhban running? try: sudo dezhban start)")
 	return 0
 }
 
 func printSwitchStatus(statePath string) int {
 	snap, err := state.Read(statePath)
 	if err != nil {
-		fmt.Println("switch window: unknown (no state file; is the daemon running?)")
+		fmt.Println("switch window: unknown (no state file; is dezhban running?)")
 		return 0
 	}
 	if snap.Switch == nil || !snap.Switch.Open {
@@ -768,7 +768,7 @@ func mutateConfig(cfgPath string, fn func(*config.Config) error, okMsg string) i
 		return 1
 	}
 	fmt.Println("dezhban:", okMsg)
-	fmt.Println("restart the daemon to apply:  sudo dezhban stop && sudo dezhban start")
+	fmt.Println("restart dezhban to apply:  sudo dezhban stop && sudo dezhban start")
 	return 0
 }
 

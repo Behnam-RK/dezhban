@@ -18,8 +18,8 @@ Subcommands:
 
 The control token authorises the one control-socket op the socket's own group
 check is not a strong enough gate for: config-write, which changes settings that
-outlive the daemon. Everything else on the socket only moves between the
-daemon's fail-closed postures and needs no token.
+outlive the background service. Everything else on the socket only moves
+between dezhban's fail-closed postures and needs no token.
 
 Only the token's HASH is stored, root-owned. 'enroll' prints the token itself
 exactly once, on stdout — it is never recoverable afterwards. The macOS app
