@@ -49,6 +49,16 @@ Budget is debited when a window opens and **credited back when it closes early**
 so the ledger measures exposure actually taken, not exposure offered. A VPN that
 reconnects in three seconds costs three seconds.
 
+The backoff's cooldown is **cleared by evidence that the flap is over** — a
+confirmed non-blocked exit through the tunnel, or an uptime past
+`redialMinUptime` — and not merely by waiting it out. The same evidence already
+decides whether a drop counts as fast, and it has to be read in both places: a
+cooldown that outlives the flap refuses the drop of a tunnel that just
+demonstrably worked, and because a refusal is only re-decided on the next
+tunnel-down edge, that refusal stands until an operator opens a window by hand.
+Rationing a link that recovered is the interaction this ADR exists to remove. The
+rolling budget, not the cooldown, is the bound that must not be negotiable.
+
 This is still trigger 2. There is no fourth trigger.
 
 ## Alternatives considered

@@ -62,7 +62,28 @@ current as you land changes.
   on, and `status` compounded it by reporting that the guard could relax again
   "the next time your VPN tries to reconnect" — a promise nothing would ever
   keep. Turning the window off stays available and explicit
-  (`vpn.redialWindow: "0"`); turning it off by arithmetic does not.
+  (`vpn.redialWindow: "0"`); turning it off by arithmetic does not. The floor
+  follows a `vpn.redialWindow` set deliberately shorter than `5s`, which dezhban
+  honours as written — a budget that affords that shorter window is accepted
+  rather than refused against a minimum that does not apply to it.
+
+- **A tunnel that recovers is no longer held by the redial backoff's wait.** The
+  cooldown armed by a fast drop was checked before any evidence about the current
+  drop, so a tunnel that redialed, carried a confirmed exit, stayed up past
+  `vpn.advanced.redialMinUptime` and then dropped again was still refused a
+  window — with budget to spare. That refusal was not a short wait: it is only
+  re-decided on the next tunnel-down edge, so it stood until someone ran
+  `dezhban switch` by hand, which is the manual interaction the redial budget
+  exists to remove. A confirmed exit or a healthy uptime now clears the cooldown
+  outright, and the rolling budget — the bound that actually matters — is
+  unchanged.
+
+- **`state.redial.remainingSeconds` is now read from the live ledger** on every
+  snapshot instead of being frozen at the instant of the refusal. Episodes roll
+  out of the budget period while the cut lasts, so the published number stayed
+  behind the real one for as long as the tunnel was down and a script watching
+  it could not see the budget recover. `reason` and `nextEligible` are the
+  decision and still stand as decided.
 
 ### Changed
 

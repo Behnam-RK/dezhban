@@ -828,8 +828,25 @@ func (o Options) runGuard(ctx context.Context) error {
 	// logged is invisible to anyone looking at the app, and "the guard is holding"
 	// without "until when" leaves a wait indistinguishable from a wall.
 	var redialRefused *state.RedialState
+	// redialState re-reads the budget for each publish. The refusal is decided
+	// once, on the drop edge, but episodes keep rolling out of the interval while
+	// the tunnel stays down — so a RemainingSeconds frozen at refusal time would
+	// under-report the budget to every `status --json` reader for as long as the
+	// cut lasted. Reason and NextEligible are the decision and stay as decided.
+	//
+	// A copy, never a mutation of the carried record: the pointer has already been
+	// handed to Publish, and editing it in place would rewrite a value a consumer
+	// may still be holding.
+	redialState := func() *state.RedialState {
+		if redialRefused == nil {
+			return nil
+		}
+		r := *redialRefused
+		r.RemainingSeconds = redialLedger.Remaining(time.Now(), redialSettings()).Seconds()
+		return &r
+	}
 	snapshot := func() {
-		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState(), redialRefused)
+		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState(), redialState())
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
 
@@ -1094,11 +1111,13 @@ func (o Options) runGuard(ctx context.Context) error {
 				"budget", s.Budget, "over", s.Interval,
 				"nextEligible", g.NextEligible,
 				"detail", detail)
+			// No RemainingSeconds here: redialState fills it from the live ledger
+			// on every publish, because it keeps moving after this decision while
+			// Reason and NextEligible do not.
 			redialRefused = &state.RedialState{
-				Reason:           string(g.Reason),
-				NextEligible:     g.NextEligible,
-				RemainingSeconds: redialLedger.Remaining(now, s).Seconds(),
-				FastDrops:        redialLedger.ShortRun(),
+				Reason:       string(g.Reason),
+				NextEligible: g.NextEligible,
+				FastDrops:    redialLedger.ShortRun(),
 			}
 			snapshot()
 			return
@@ -1128,7 +1147,11 @@ func (o Options) runGuard(ctx context.Context) error {
 	// discovered endpoints stay in `endpoints` (grow-only during the window), so if
 	// a handshake was mid-flight the restored guard holds its endpoint open and the
 	// tunnel can still complete under GUARD.
-	closeWindowRevert := func(reason string) {
+	// now is threaded in rather than read here, so one turn of the loop settles
+	// the ledger at the same instant openWindow opened against. The package is
+	// clock-injected precisely so window accounting never depends on where in a
+	// function the clock happened to be read.
+	closeWindowRevert := func(now time.Time, reason string) {
 		rebuild()
 		target := guard
 		if windowPrevBlocked {
@@ -1157,7 +1180,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		// know whether this window was an automatic one — and the takeover case
 		// (a manual `switch` adopting an open auto window) still settles, clamped
 		// to what the budget granted rather than to the operator's longer cap.
-		redialLedger.Close(time.Now())
+		redialLedger.Close(now)
 		blocked = windowPrevBlocked
 		enfErr = nil
 		o.Log.Info(windowNoun()+" closed", "reason", reason, "posture", postureName(blocked, false, standby))
@@ -1219,7 +1242,10 @@ func (o Options) runGuard(ctx context.Context) error {
 		}()
 	}
 
-	finishCloseProbe := func(p probeOutcome) {
+	// now threaded in for the same reason as closeWindowRevert's: the early close
+	// is the case credit-on-close exists for, so the instant it settles at is
+	// part of the accounting, not an incidental clock read.
+	finishCloseProbe := func(now time.Time, p probeOutcome) {
 		probeInFlight = false
 		if !windowActive || len(tunnels) == 0 {
 			return
@@ -1251,7 +1277,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		// succeeded in three seconds must cost three seconds, not the whole grant.
 		// Without this the budget would punish exactly the outcome the window
 		// exists to produce.
-		redialLedger.Close(time.Now())
+		redialLedger.Close(now)
 		blocked = false
 		enfErr = nil
 		lastRes = monitor.Result{Reading: r}
@@ -1489,7 +1515,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			if windowTrigger == state.TriggerPause {
 				return reply(false, "a pause is open, not a switch window — use resume instead")
 			}
-			closeWindowRevert("cancelled (control socket)")
+			closeWindowRevert(time.Now(), "cancelled (control socket)")
 			if windowActive {
 				return reply(false, "cancel failed — window held open, revert is being retried")
 			}
@@ -1532,7 +1558,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			if !windowActive || windowTrigger != state.TriggerPause {
 				return reply(true, "") // already closed — the caller's intent already holds
 			}
-			closeWindowRevert("resumed (control socket)")
+			closeWindowRevert(time.Now(), "resumed (control socket)")
 			if windowActive {
 				return reply(false, "resume failed — pause held open, revert is being retried")
 			}
@@ -1886,7 +1912,7 @@ func (o Options) runGuard(ctx context.Context) error {
 					continue
 				}
 				if windowActive {
-					closeWindowRevert("cancelled")
+					closeWindowRevert(now, "cancelled")
 				}
 			case command.OpPause:
 				if standby {
@@ -1916,7 +1942,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				manualBlock = false
 			case command.OpResume:
 				if windowActive && windowTrigger == state.TriggerPause {
-					closeWindowRevert("resumed")
+					closeWindowRevert(now, "resumed")
 				}
 			case command.OpHoldArm:
 				// Same account the socket path gives, for the same reason as the
@@ -1949,10 +1975,10 @@ func (o Options) runGuard(ctx context.Context) error {
 			cr.Reply <- handleControl(cr.Req)
 		case <-windowTimerC:
 			if windowActive {
-				closeWindowRevert("expired")
+				closeWindowRevert(time.Now(), "expired")
 			}
 		case p := <-probeResC:
-			finishCloseProbe(p)
+			finishCloseProbe(time.Now(), p)
 		case <-winDiscC:
 			// Fast in-window discovery: grow the endpoint set as the new server's
 			// socket appears, then try to close.

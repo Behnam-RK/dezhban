@@ -215,9 +215,14 @@ type RedialState struct {
 	// of publishing a refusal is that it comes with a "until when" — "the guard
 	// is holding" alone leaves the user unable to tell a wait from a wall.
 	NextEligible time.Time `json:"nextEligible"`
-	// RemainingSeconds is what is left of the rolling budget. Seconds rather
-	// than a Go duration string so a non-Go reader (the macOS app, jq) gets a
-	// number it can compare rather than "1m30s" it has to parse.
+	// RemainingSeconds is what is left of the rolling budget AS OF THIS
+	// SNAPSHOT, not as of the refusal: episodes keep rolling out of the interval
+	// while the cut lasts, so this grows back on its own and a reader can watch
+	// it. Seconds rather than a Go duration string so a non-Go reader (the macOS
+	// app, jq) gets a number it can compare rather than "1m30s" it has to parse.
+	//
+	// Reason and NextEligible are the opposite: they are the decision that was
+	// made on the drop edge and do not move until the next one.
 	RemainingSeconds float64 `json:"remainingSeconds"`
 	// FastDrops is how many consecutive fast drops are behind the current
 	// backoff. Zero when the budget, not the backoff, is what refused.

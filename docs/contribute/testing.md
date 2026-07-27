@@ -452,6 +452,13 @@ both surfaces saying the same thing about it. See
       last (`reason=backoff`, `granted` falling), with a growing cooldown. A
       drop that gets NO window at the first fast reconnect is the pre-ADR-0009
       behaviour returning.
+- [ ] **A recovery clears the cooldown.** Immediately after one of those fast
+      drops — while the cooldown is still running — let the tunnel come back
+      properly and stay up past `redialMinUptime` (or long enough for the exit to
+      be confirmed), then drop it again. That drop must get a **full-length**
+      window, not `reason=cooldown`. A refusal here is the failure that pushed
+      recovering links onto `dezhban switch`: it is only re-decided on the next
+      down edge, so it does not resolve itself.
 - [ ] **Exhaustion holds, and says so.** Keep flapping until the log reads
       `redial budget spent`. Traffic must stay cut, `status` must read
       *"Your VPN has dropped often enough to use up its redial budget…"* with a

@@ -131,6 +131,81 @@ func TestHealthyUptimeResetsTheBackoff(t *testing.T) {
 	}
 }
 
+// A tunnel that came back and PROVED itself ends the flap the cooldown was
+// rationing, so the cooldown must not outlive it. This is the case that made the
+// backoff punish the connections it exists to help: the tunnel redialed, carried
+// a confirmed non-blocked exit, stayed up past the health threshold, and dropped
+// again while the previous cooldown still had a few seconds on it. Refusing
+// there is not a short wait — a refusal is only re-decided on the next
+// tunnel-down edge, so it stands until the operator opens a window by hand.
+func TestARecoveredTunnelIsNotHeldByTheCooldown(t *testing.T) {
+	s := defaults() // window 30s, minUptime 15s
+	b := New()
+
+	// A fast drop arms a 30s cooldown; the redial succeeds in 5s.
+	if g := b.Grant(t0, 5*time.Second, false, s); g.Reason != ReasonBackoff {
+		t.Fatalf("drop 1 reason = %q, want %q", g.Reason, ReasonBackoff)
+	}
+	b.Close(t0.Add(5 * time.Second))
+
+	// Up at +5s with a confirmed exit, drops at +27s: 22s of uptime, past the
+	// 15s threshold, and still three seconds inside the cooldown.
+	at := t0.Add(27 * time.Second)
+	g := b.Grant(at, 22*time.Second, true, s)
+	if !g.OK() {
+		t.Fatalf("a recovered tunnel was refused: reason=%q nextEligible=%v", g.Reason, g.NextEligible)
+	}
+	if g.Duration != s.Window {
+		t.Errorf("duration = %v, want the full %v — the drop was not fast", g.Duration, s.Window)
+	}
+	if g.Reason != ReasonFull {
+		t.Errorf("reason = %q, want %q", g.Reason, ReasonFull)
+	}
+	if b.ShortRun() != 0 {
+		t.Errorf("ShortRun = %d, want 0", b.ShortRun())
+	}
+	b.Close(at.Add(2 * time.Second))
+
+	// And the stale cooldown is gone rather than merely stepped over: a fast
+	// drop that follows is shortened by a backoff starting from scratch, not
+	// refused against the deadline the disproved flap left behind.
+	at = at.Add(4 * time.Second) // still before t0+30s, the old coolUntil
+	g = b.Grant(at, 2*time.Second, false, s)
+	if !g.OK() {
+		t.Fatalf("a stale cooldown outlived the recovery: reason=%q", g.Reason)
+	}
+	if g.Duration != 15*time.Second {
+		t.Errorf("duration = %v, want 15s — the backoff should restart at one step", g.Duration)
+	}
+}
+
+// The cooldown still bites when nothing proved the tunnel: an uptime under the
+// threshold with no confirmed exit is exactly the flap it rations, and clearing
+// it on evidence must not amount to clearing it on arrival.
+func TestTheCooldownStillHoldsWithoutEvidence(t *testing.T) {
+	s := defaults()
+	b := New()
+
+	b.Grant(t0, 5*time.Second, false, s)
+	b.Close(t0.Add(5 * time.Second))
+
+	at := t0.Add(10 * time.Second)
+	if g := b.Grant(at, 3*time.Second, false, s); g.OK() {
+		t.Errorf("a fast drop inside the cooldown opened a window: %+v", g)
+	} else if g.Reason != ReasonCooldown {
+		t.Errorf("reason = %q, want %q", g.Reason, ReasonCooldown)
+	}
+
+	// An unknowable uptime (up from before we were watching) is not evidence
+	// either — only a confirmed exit can clear the cooldown in that case.
+	if g := b.Grant(at, 0, false, s); g.Reason != ReasonCooldown {
+		t.Errorf("zero uptime: reason = %q, want %q", g.Reason, ReasonCooldown)
+	}
+	if g := b.Grant(at, 0, true, s); !g.OK() {
+		t.Errorf("a confirmed exit did not clear the cooldown: %+v", g)
+	}
+}
+
 // The bound the ADR exists to add: total open time inside the rolling interval
 // cannot exceed the budget, however many drops occur.
 func TestBudgetIsExhaustedAndHolds(t *testing.T) {

@@ -1369,10 +1369,22 @@ func validateSwitchWindow(v VPN) error {
 	// redial.Budget.nextEligible has nothing to wait for and answers "now", so
 	// `status` and the app tell the user it can relax again the next time the VPN
 	// reconnects — a promise nothing will ever keep.
-	if v.RedialWindow > 0 && v.Advanced.RedialBudget > 0 && v.Advanced.RedialBudget < minRedialGrant {
+	//
+	// The floor is what the LEDGER would actually refuse below, which is
+	// minRedialGrant only while the configured window is at least that long: a
+	// deliberately shorter vpn.redialWindow is honoured as-is (redial.floorFor),
+	// and a budget that affords it must not be rejected against a minimum that
+	// does not apply. Testing against the constant alone rejected a working
+	// 3s-window/4s-budget pair while telling the user a window "could never
+	// open", which was simply untrue — and an error that misstates the rule is
+	// its own small version of the failure this check exists to prevent.
+	// (Meaningless when RedialWindow is the negative Disabled sentinel, which is
+	// why the guard below tests it before ever reaching the comparison.)
+	floor := min(minRedialGrant, v.RedialWindow)
+	if v.RedialWindow > 0 && v.Advanced.RedialBudget > 0 && v.Advanced.RedialBudget < floor {
 		return fmt.Errorf("vpn.advanced.redialBudget %s is below the %s minimum window, so the "+
 			"automatic redial window could never open; raise it, or set vpn.redialWindow to \"0\" "+
-			"to turn the automatic window off deliberately", v.Advanced.RedialBudget, minRedialGrant)
+			"to turn the automatic window off deliberately", v.Advanced.RedialBudget, floor)
 	}
 	return nil
 }

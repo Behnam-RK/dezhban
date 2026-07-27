@@ -1080,6 +1080,31 @@ func TestABudgetAtTheFloorIsAccepted(t *testing.T) {
 	}
 }
 
+// The floor tracks the LEDGER's floor, not the constant. redial.floorFor honours
+// a vpn.redialWindow deliberately shorter than MinGrant as-is, so a budget that
+// affords that shorter window opens one — and rejecting it against a 5s minimum
+// that does not apply would refuse a working config while stating a reason that
+// is not true of it.
+func TestTheBudgetFloorFollowsAShortConfiguredWindow(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun4"}
+	cfg.VPN.RedialWindow = 3 * time.Second // below redial.MinGrant, honoured as-is
+	cfg.VPN.Advanced.RedialBudget = 4 * time.Second
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a budget that affords the configured 3s window was refused: %v", err)
+	}
+
+	// Below the configured window it genuinely cannot open one, and is refused.
+	cfg.VPN.Advanced.RedialBudget = 2 * time.Second
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a budget below the configured window validated clean")
+	}
+	if !strings.Contains(err.Error(), "3s") {
+		t.Errorf("the error quotes a floor the ledger does not use: %v", err)
+	}
+}
+
 // And the rule must not fire when the automatic window is already off outright:
 // with vpn.redialWindow disabled the budget is inert, so complaining about its
 // size would block a config that has no automatic window to break.

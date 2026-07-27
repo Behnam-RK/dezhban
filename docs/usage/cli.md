@@ -125,12 +125,13 @@ that instant. A script should treat a `nextEligible` in the past as "the bound
 has lifted, waiting for the VPN to try again" — which is what
 `state.display.detail` then says, in place of naming a time that has gone by.
 
-`remainingSeconds` is stale in the same way and for the same reason: it is what
-the budget held **at the moment of the refusal**, and the rolling period keeps
-turning underneath it. So it only ever *understates* what is actually left. Read
-it as "at least this much was free when dezhban last decided", not as a live
-gauge — there is no live gauge, because the budget is only consulted on a
-tunnel-down edge.
+`remainingSeconds` is **not** stale in that way: unlike `reason` and
+`nextEligible`, which are the decision and stay as decided, it is re-read from
+the ledger on every snapshot. Episodes roll out of the rolling period while the
+cut lasts, so it grows back on its own and a script can watch it recover. What it
+does not do is *cause* anything — the budget is still only consulted on a
+tunnel-down edge, so watching it reach a full window tells you a window would be
+granted, not that one is coming.
 
 ```sh
 dezhban status                                    # config + service + block state

@@ -189,6 +189,12 @@ that successful redials cost almost nothing (a window that closes early only
 spends what it used), so reaching the limit means the redials themselves are
 failing.
 
+You do not have to sit out a `backing off` wait: one reconnection that holds —
+long enough to clear `redialMinUptime`, or long enough for dezhban to confirm the
+exit — clears it, and the next drop starts from a full window again. A
+`redial budget spent` wait is the one that has to elapse, because the budget is
+the actual bound.
+
 **Confirming it is rotation.** `dezhban doctor`'s *learned endpoints* check reads
 the store and says which of the two opposite problems you have. "Every learned
 address … has aged out" means the addresses were learned and then discarded, and

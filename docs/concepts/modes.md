@@ -348,7 +348,11 @@ Safety rails, all non-negotiable:
   window — but a shorter one for each consecutive fast drop, with a growing
   wait between them. It used to get nothing at all, which pushed exactly the
   users with the worst connections onto the manual path
-  ([ADR-0009](../adr/0009-redial-budget.md)).
+  ([ADR-0009](../adr/0009-redial-budget.md)). The wait ends the moment the
+  tunnel proves itself — a confirmed exit, or an uptime past
+  `redialMinUptime` — rather than having to be sat out: a connection that
+  recovered is no longer the flap the backoff was rationing. The rolling
+  budget above still applies either way.
 - One window per drop: expiry does not re-open; the next window needs the
   tunnel to come back up first.
 - Capped by its own `advanced.redialWindowMax` (default 10m) — not

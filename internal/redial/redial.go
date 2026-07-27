@@ -149,11 +149,24 @@ func (b *Budget) Grant(now time.Time, uptime time.Duration, goodExit bool, s Set
 	}
 	b.expire(now, s.Interval)
 
+	// recovered is the evidence that the flap the cooldown is rationing is OVER:
+	// a confirmed non-blocked exit through the tunnel, or an uptime that cleared
+	// the health threshold. It is the same evidence that disqualifies `fast`
+	// below, and it must be read here too — a cooldown that outlives the flap
+	// refuses the drop of a tunnel that just demonstrably worked, and because a
+	// refusal is only re-decided on the next tunnel-down edge, that refusal is
+	// terminal until the operator opens a window by hand. Rationing a link that
+	// recovered is the manual interaction ADR-0009 exists to remove.
+	//
+	// A zero uptime means "up since before we were watching" — unknowable, so it
+	// is not evidence of anything and only goodExit can clear the cooldown then.
+	recovered := goodExit || (s.MinUptime > 0 && uptime >= s.MinUptime)
+
 	// A drop inside the cooldown does NOT deepen the backoff. The cooldown is
 	// already the response to the flap, and escalating on drops that were given
 	// no help would compound a punishment for something the guard declined to
 	// assist with — the backoff exists to ration windows, not to score drops.
-	if now.Before(b.coolUntil) {
+	if now.Before(b.coolUntil) && !recovered {
 		return Grant{Reason: ReasonCooldown, NextEligible: b.coolUntil}
 	}
 
@@ -197,6 +210,14 @@ func (b *Budget) Grant(now time.Time, uptime time.Duration, goodExit bool, s Set
 			// recovered anyway and the wait buys nothing.
 			b.coolUntil = now.Add(min(cool, s.Interval))
 		}
+	} else {
+		// A drop that was not fast resets the backoff completely, cooldown
+		// included. Clearing shortRun alone would leave a cooldown armed by a
+		// flap this very drop disproved, and the next fast drop would then be
+		// refused against a deadline nothing still justifies. Only reachable
+		// with time left on the clock via `recovered` above — past the deadline
+		// this is already a no-op.
+		b.coolUntil = time.Time{}
 	}
 	b.episodes = append(b.episodes, episode{start: now, granted: want})
 	b.openIdx = len(b.episodes) - 1

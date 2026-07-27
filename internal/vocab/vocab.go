@@ -176,8 +176,11 @@ func compile(phrase string) (*regexp.Regexp, error) {
 	return regexp.Compile(`(?i)\b` + strings.Join(parts, `\s+`) + `\b`)
 }
 
-// Check reports every banned phrase in text. Callers decide what counts as
-// user-facing; this only answers "does this string say a word we retired".
+// Check reports each banned term that appears in text — one Hit per term, at its
+// first occurrence, not one per occurrence. The message names the term and its
+// replacement, so a second hit on the same term would repeat the same advice
+// about the same string. Callers decide what counts as user-facing; this only
+// answers "does this string say a word we retired".
 //
 // userFacing says which register text is in. False restricts the check to terms
 // wrong in both, so linting docs prose or a log line does not demand the
