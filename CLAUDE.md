@@ -301,9 +301,13 @@ The design depends on these invariants (rationale in
   bundled page is moved, renamed, or written with markdown the subset renderer
   cannot show — and every `Tunable.DocAnchor` is checked to resolve against a
   real heading, so a contextual help link cannot rot into a silent no-op.
-  Concretely, a bundled page may not use **raw HTML** or **nested lists**; both
-  fail the build by name. Soft-wrapped emphasis is fine (blocks are joined before
-  inline markup is read). The rule that makes this safe is that the renderer
+  Concretely, a bundled page may not use **raw HTML**, **nested lists**, or a
+  **remote image**; all three fail the build by name. Soft-wrapped emphasis is
+  fine (blocks are joined before inline markup is read). **A relative link to a
+  doc that is not bundled is rewritten to point at the repository** — never left
+  as written, which resolved to a nonexistent file beside the bundle and made
+  every cross-reference to an ADR a dead click; `TestEveryLinkGoesSomewhere`
+  pins it. The rule that makes all of this safe is that the renderer
   must **refuse** what it cannot represent, never degrade quietly: silent
   degradation ships a wrong page while every test passes, which is exactly how
   the banner on Quick start reached users.

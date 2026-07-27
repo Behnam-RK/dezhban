@@ -44,7 +44,7 @@ func Build(docsDir, outDir string) ([]IndexEntry, error) {
 				"moving or renaming a doc means updating the manifest)", page.Source, err)
 		}
 
-		rendered := Render(string(data))
+		rendered := Render(page.Source, string(data))
 		if len(rendered.Unsupported) > 0 {
 			return nil, fmt.Errorf("%s uses markdown the help renderer cannot show: %s",
 				page.Source, strings.Join(rendered.Unsupported, ", "))
@@ -82,6 +82,22 @@ func document(page Page, r Rendered) string {
 	var b strings.Builder
 	b.WriteString("<!doctype html>\n<html lang=\"en\">\n<head>\n")
 	b.WriteString("<meta charset=\"utf-8\">\n")
+	// The pane's navigation delegate only sees NAVIGATIONS, so it is not what
+	// would stop an <img> or an @import from reaching the network. This is: the
+	// page itself declares that nothing but its own stylesheet may load. Three
+	// layers now say the same thing — the renderer refuses a remote src, the
+	// bundle test greps for one, and the page cannot execute it either — because
+	// the guarantee ("it never touches the network") is the reason this feature
+	// exists at all, and the pane is opened when there is no network to check.
+	//
+	// `file:` is named alongside 'self' deliberately. A page loaded from a file:
+	// URL has an opaque origin, so whether 'self' matches its own sibling
+	// stylesheet is a WebKit implementation detail — and a CSP that quietly
+	// blocked help.css would ship an unstyled help pane, which is a worse
+	// regression than the one this prevents. Naming the scheme keeps the part
+	// that matters (no http, no https, nothing off-disk) independent of that.
+	b.WriteString("<meta http-equiv=\"Content-Security-Policy\" " +
+		"content=\"default-src 'none'; style-src 'self' file:; img-src 'self' file:\">\n")
 	b.WriteString("<title>" + html.EscapeString(page.Title) + "</title>\n")
 	b.WriteString("<link rel=\"stylesheet\" href=\"help.css\">\n")
 	b.WriteString("</head>\n<body>\n")

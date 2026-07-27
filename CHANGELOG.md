@@ -208,6 +208,16 @@ current as you land changes.
   understated how long the host had been cut. It now reads "at 3:04PM on Jul 26"
   once the drop is no longer on the snapshot's own day.
 
+- **Links in the app's Help pane go somewhere.** The bundled pages cross-reference
+  the ADRs and the contributor docs thirty times over, and those deliberately do
+  not ship — so each of those links resolved to a file beside the bundle that does
+  not exist, and clicking one reported *"That link points outside the app:
+  file:///…/Contents/Resources/adr/0008-arm-at-boot.md"* with a Copy button that
+  copied exactly that. Every bundled page had them. A link to a document that is
+  not bundled now points at the repository, so the pane names a URL that works in
+  a browser; a link to a page that *is* bundled still opens it in place. The pane
+  still reaches the network for nothing.
+
 ### Changed — BREAKING
 
 - **"reconnect" is now "redial" everywhere.** The codebase used both words for the

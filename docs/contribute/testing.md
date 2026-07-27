@@ -666,6 +666,15 @@ traffic, so the check that matters is the one CI cannot run: with egress gone.
       it, so the highlighted row is the page being read.
 - [ ] A link that points off the bundle (an `https://` one in a doc) is refused
       in the pane and reported with a Copy link button — it must not navigate.
+- [ ] A link to a doc that is **not** bundled — the ADR references in Postures,
+      say — reports a `https://github.com/…` URL, not a `file:///…/Contents/…`
+      path. Every such link was a dead click reporting an internal path before
+      the renderer rewrote them.
+- [ ] Pages are **styled** — headings, table borders, code backgrounds, and the
+      dark-mode palette. The bundled pages carry a `Content-Security-Policy`, and
+      a `file:` origin is opaque, so a CSP that is too strict would silently drop
+      `help.css` and leave the pane readable but unstyled. Only a real WKWebView
+      shows this; the Go tests cannot.
 - [ ] Built from a checkout whose `docs/` was renamed under it, `task gui:build`
       **fails** rather than producing an app whose Help pane is missing a page.
 - [ ] The **?** beside a Settings field opens Help scrolled to that key's own

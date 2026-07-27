@@ -3,6 +3,7 @@ package help
 import (
 	"fmt"
 	"html"
+	"path"
 	"regexp"
 	"sort"
 	"strconv"
@@ -75,8 +76,28 @@ var (
 // contain the link in the first place.
 var linkSchemes = map[string]bool{"http": true, "https": true, "mailto": true}
 
+// repoBase is where a document that is NOT bundled lives instead. The docs
+// cross-reference the ADRs and the contributor docs constantly, and those
+// deliberately do not ship (see Pages) — so their links have to become
+// somewhere real. Left as written, they resolve to a file: path beside the
+// bundle that does not exist, and the pane reports "points outside the app"
+// with an internal path nobody can use.
+//
+// Pinned to main rather than the built tag on purpose: this is the only kind of
+// link the pane cannot follow, so it is a URL a reader copies into a browser
+// later, and a tag that has since been deleted or rewritten reads as a broken
+// project. The bundled pages themselves are always version-matched, which is
+// what the offline guarantee is actually about.
+const repoBase = "https://github.com/behnam-rk/dezhban/blob/main/"
+
 // Render converts one markdown document to HTML.
-func Render(markdown string) Rendered {
+//
+// source is the page's docs-relative path ("usage/cli.md"), which is what
+// relative links in it are resolved against — "../adr/0001.md" means something
+// different depending on the page it is written in. Empty source is for
+// rendering a fragment with no place in the manifest (tests): relative links
+// are then reported as unresolvable rather than guessed at.
+func Render(source, markdown string) Rendered {
 	var out strings.Builder
 	var text strings.Builder
 	r := Rendered{}
@@ -90,7 +111,7 @@ func Render(markdown string) Rendered {
 	// renderInline is the only way inline markup reaches the output, so every
 	// construct it cannot represent is reported from one place.
 	renderInline := func(s string) string {
-		rendered := inline(s, note)
+		rendered := inline(source, s, note)
 		if strings.Contains(rendered, "**") {
 			note("unpaired ** (bold that never closed)")
 		}
@@ -393,7 +414,7 @@ func codePlaceholder(i int) string { return codeMark + strconv.Itoa(i) + codeMar
 // inline renders inline markup. Escaping happens FIRST and the markup is
 // substituted into the escaped text, so no document content can inject HTML —
 // the pages are ours, but the rule costs nothing and removes the question.
-func inline(s string, note func(string)) string {
+func inline(source, s string, note func(string)) string {
 	out := html.EscapeString(s)
 
 	// Code spans are LIFTED OUT before anything else runs, then put back last.
@@ -409,10 +430,22 @@ func inline(s string, note func(string)) string {
 		return codePlaceholder(len(spans) - 1)
 	})
 
-	out = inlineImage.ReplaceAllString(out, `<img src="$2" alt="$1">`)
+	// An image is checked, not rewritten. It has no banner to fall back on the
+	// way a link does — the navigation delegate never sees a subresource load —
+	// so a remote src would be a silent network request from the one pane whose
+	// entire purpose is working with egress cut. Refused here rather than left
+	// to the bundle's self-contained test, so Render is safe on its own terms.
+	out = inlineImage.ReplaceAllStringFunc(out, func(m string) string {
+		g := inlineImage.FindStringSubmatch(m)
+		if schemeRe.MatchString(g[2]) || strings.HasPrefix(g[2], "//") {
+			note("a remote image (" + g[2] + ") — the pane must load nothing from the network")
+			return g[1]
+		}
+		return fmt.Sprintf("<img src=%q alt=%q>", g[2], g[1])
+	})
 	out = inlineLink.ReplaceAllStringFunc(out, func(m string) string {
 		g := inlineLink.FindStringSubmatch(m)
-		return fmt.Sprintf("<a href=%q>%s</a>", rewriteLink(g[2], note), g[1])
+		return fmt.Sprintf("<a href=%q>%s</a>", rewriteLink(source, g[2], note), g[1])
 	})
 	out = inlineBold.ReplaceAllString(out, "<strong>$1</strong>")
 	out = inlineItalic.ReplaceAllString(out, "$1<em>$2</em>")
@@ -432,7 +465,7 @@ func inline(s string, note func(string)) string {
 // for the app's navigation delegate to cancel. Defence in depth is the reason
 // the delegate exists, but a javascript: or data: href has no business being in
 // the bundle at all, and a build failure is how it gets removed.
-func rewriteLink(href string, note func(string)) string {
+func rewriteLink(source, href string, note func(string)) string {
 	if scheme := schemeRe.FindString(href); scheme != "" {
 		name := strings.ToLower(strings.TrimSuffix(scheme, ":"))
 		if !linkSchemes[name] {
@@ -444,22 +477,36 @@ func rewriteLink(href string, note func(string)) string {
 	if strings.HasPrefix(href, "#") {
 		return href
 	}
-	path, frag, _ := strings.Cut(href, "#")
-	// Links are written relative to the page they live in ("../adr/0001.md",
-	// "config.md"); resolve to the docs-relative form the manifest uses.
-	path = strings.TrimPrefix(path, "./")
-	for strings.HasPrefix(path, "../") {
-		path = strings.TrimPrefix(path, "../")
+	target, frag, _ := strings.Cut(href, "#")
+	if target == "" {
+		return href
 	}
-	for _, p := range Pages {
-		if p.Source == path || strings.HasSuffix(p.Source, "/"+path) {
+	if source == "" {
+		note("a relative link (" + href + ") in a page with no place in the manifest")
+		return href
+	}
+	// Links are written relative to the page they live in, so resolve against
+	// that page's own directory: "../adr/0001.md" from usage/config.md is a
+	// different file than the same text in concepts/modes.md. path.Join cleans
+	// the "../" segments, and the repo root is the frame of reference because
+	// the docs also link outside docs/ ("../../configs/dezhban.example.json").
+	repoPath := path.Join("docs", path.Dir(source), target)
+
+	if inDocs, ok := strings.CutPrefix(repoPath, "docs/"); ok {
+		if _, bundled := PageBySource(inDocs); bundled {
 			if frag != "" {
-				return OutputName(p.Source) + "#" + frag
+				return OutputName(inDocs) + "#" + frag
 			}
-			return OutputName(p.Source)
+			return OutputName(inDocs)
 		}
 	}
-	return href
+	// Not bundled. Point at the repository rather than leaving a path that
+	// resolves to nothing beside the bundle — see repoBase. The pane still
+	// cannot follow it, but it reports a URL the reader can actually use.
+	if frag != "" {
+		return repoBase + repoPath + "#" + frag
+	}
+	return repoBase + repoPath
 }
 
 // stripInline reduces a line to its words, for the search index.

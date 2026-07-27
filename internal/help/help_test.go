@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -138,7 +139,7 @@ func TestRenderCoversTheSubset(t *testing.T) {
 		"| Field | Default |\n|---|---|\n| `a` | `1s` |\n\n" +
 		"```sh\necho hi\n```\n\n" +
 		"---\n"
-	r := Render(md)
+	r := Render("usage/config.md", md)
 
 	if len(r.Unsupported) != 0 {
 		t.Fatalf("the subset renderer reported %v on its own subset", r.Unsupported)
@@ -162,7 +163,7 @@ func TestRenderCoversTheSubset(t *testing.T) {
 // Content inside a fence is verbatim: a shell example full of pipes and dashes
 // must not be read as a table, and markup in it must not be interpreted.
 func TestFencedCodeIsVerbatim(t *testing.T) {
-	r := Render("```sh\n| a | b |\n|---|---|\n**not bold**\n```\n")
+	r := Render("", "```sh\n| a | b |\n|---|---|\n**not bold**\n```\n")
 	if strings.Contains(r.HTML, "<table>") {
 		t.Error("a table inside a code fence was rendered as a table")
 	}
@@ -186,7 +187,7 @@ func TestEveryRealPageRendersCleanly(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", page.Source, err)
 		}
-		r := Render(string(data))
+		r := Render(page.Source, string(data))
 		if len(r.Unsupported) != 0 {
 			t.Errorf("%s: renderer reported %v", page.Source, r.Unsupported)
 		}
@@ -224,6 +225,50 @@ func stripFences(html string) string {
 	}
 }
 
+// TestEveryLinkGoesSomewhere — no bundled page may contain a link that resolves
+// to nothing.
+//
+// Thirty did. The docs cross-reference the ADRs and the contributor docs
+// constantly, and rewriteLink used to return an unmatched relative link
+// unchanged, so "../adr/0008-arm-at-boot.md" shipped verbatim and resolved
+// beside the bundle, where no such file exists. Clicking one produced "That link
+// points outside the app: file:///…/Contents/Resources/adr/0008-arm-at-boot.md"
+// — an internal path, on a Copy button that copied it. Every page had them, and
+// the only existing link assertion covered the case that DID resolve.
+//
+// The rule is checked against the built bundle rather than the renderer, because
+// "resolves to nothing" is a fact about the directory, not about the markdown.
+func TestEveryLinkGoesSomewhere(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Build(docsDir, dir); err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	href := regexp.MustCompile(`href="([^"]*)"`)
+	for _, page := range Pages {
+		name := OutputName(page.Source)
+		data, err := os.ReadFile(filepath.Join(dir, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, m := range href.FindAllStringSubmatch(string(data), -1) {
+			link := m[1]
+			switch {
+			case strings.HasPrefix(link, "#"), link == "help.css":
+				continue
+			case strings.HasPrefix(link, "https://"), strings.HasPrefix(link, "http://"),
+				strings.HasPrefix(link, "mailto:"):
+				// Off-bundle by design: the pane reports it and offers the URL.
+				continue
+			}
+			file, _, _ := strings.Cut(link, "#")
+			if _, err := os.Stat(filepath.Join(dir, file)); err != nil {
+				t.Errorf("%s links to %q, which is not in the bundle — it would resolve "+
+					"to a file that does not exist", page.Source, link)
+			}
+		}
+	}
+}
+
 // TestRenderReportsWhatItCannotShow pins the reporting itself. Each of these
 // rendered silently — and wrongly — before, which is the failure mode the whole
 // bundled-docs design depends on not having.
@@ -236,13 +281,13 @@ func TestRenderReportsWhatItCannotShow(t *testing.T) {
 		"unclosed code fence": "```sh\necho hi\n",
 	}
 	for name, md := range cases {
-		if r := Render(md); len(r.Unsupported) == 0 {
+		if r := Render("usage/config.md", md); len(r.Unsupported) == 0 {
 			t.Errorf("%s was rendered without being reported:\n%s", name, r.HTML)
 		}
 	}
 	// A refused scheme must also not reach the href, so the bundle cannot carry
 	// the link even if someone ships past the build failure.
-	if r := Render("[trap](javascript:alert(1))\n"); strings.Contains(r.HTML, "javascript:") {
+	if r := Render("usage/config.md", "[trap](javascript:alert(1))\n"); strings.Contains(r.HTML, "javascript:") {
 		t.Errorf("a javascript: href survived into the rendered page:\n%s", r.HTML)
 	}
 }
@@ -251,7 +296,7 @@ func TestRenderReportsWhatItCannotShow(t *testing.T) {
 // emphasis routinely straddles a line break. Rendering line by line left the **
 // as literal text in eight of the nine bundled pages.
 func TestInlineMarkupSpansSoftLineBreaks(t *testing.T) {
-	r := Render("The guard **fail-closes\nand stays closed** afterwards.\n")
+	r := Render("", "The guard **fail-closes\nand stays closed** afterwards.\n")
 	if !strings.Contains(r.HTML, "<strong>fail-closes and stays closed</strong>") {
 		t.Errorf("bold did not survive a soft line break:\n%s", r.HTML)
 	}
@@ -263,7 +308,7 @@ func TestInlineMarkupSpansSoftLineBreaks(t *testing.T) {
 // A list item's continuation belongs INSIDE its <li>. Emitting it afterwards put
 // loose text directly inside the <ul>, which is invalid.
 func TestListItemContinuationStaysInsideTheItem(t *testing.T) {
-	r := Render("- first line\n  second line\n- next item\n")
+	r := Render("", "- first line\n  second line\n- next item\n")
 	if !strings.Contains(r.HTML, "<li>first line second line</li>") {
 		t.Errorf("continuation leaked out of its list item:\n%s", r.HTML)
 	}
@@ -272,7 +317,7 @@ func TestListItemContinuationStaysInsideTheItem(t *testing.T) {
 // Emphasis must not reach inside a code span. `vpn.advanced.*` used to pair its
 // glob with a later asterisk and open an <em> that closed outside the </code>.
 func TestCodeSpansAreNotTouchedByEmphasis(t *testing.T) {
-	r := Render("Every `vpn.advanced.*` key, **\"Use Touch ID\"** and more.\n")
+	r := Render("", "Every `vpn.advanced.*` key, **\"Use Touch ID\"** and more.\n")
 	if !strings.Contains(r.HTML, "<code>vpn.advanced.*</code>") {
 		t.Errorf("a code span was rewritten by the emphasis passes:\n%s", r.HTML)
 	}
@@ -283,7 +328,7 @@ func TestCodeSpansAreNotTouchedByEmphasis(t *testing.T) {
 
 // Bold containing italics is written throughout the docs.
 func TestItalicsInsideBold(t *testing.T) {
-	r := Render("**Endpoints are deliberately *not* required.**\n")
+	r := Render("", "**Endpoints are deliberately *not* required.**\n")
 	if !strings.Contains(r.HTML, "<strong>") || !strings.Contains(r.HTML, "<em>not</em>") {
 		t.Errorf("nested emphasis was not rendered:\n%s", r.HTML)
 	}
