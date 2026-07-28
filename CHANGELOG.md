@@ -12,6 +12,8 @@ current as you land changes.
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-07-28
+
 ### Changed
 
 - **A refused redial is re-decided when its bound lifts, instead of waiting for
@@ -1700,7 +1702,8 @@ current as you land changes.
 - Cross-platform release build matrix (`task build:all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
-[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.8.0
 [0.7.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.7.0
 [0.6.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.6.0
 [0.5.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.5.0
