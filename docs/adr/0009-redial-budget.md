@@ -67,10 +67,13 @@ with 3:15PM instead. For the same reason an episode is retired *on* the boundary
 of the rolling period rather than strictly past it, so the published instant is
 one the ledger will actually honour.
 
-The instant is a **bound, not an appointment**, and both surfaces word it that
-way ("No window will open before 3:15PM"). A refused drop is **re-decided when
-that bound lifts**, from a timer in the run loop, so the instant is one the guard
-acts on rather than one it merely reports.
+A refused drop is **re-decided when that bound lifts**, from a timer in the run
+loop, so the instant is one the guard acts on rather than one it merely reports.
+Both surfaces therefore word it as an **attempt, not an outcome** ("dezhban tries
+again at 3:15PM — no window opens before then"): the re-decision consults the
+budget afresh and re-checks every precondition, so it may refuse again. Naming
+the attempt is the strongest true claim available; "the guard relaxes at 3:15PM"
+would not be.
 
 Without the re-decision the instant was inert. The decision was retaken only on
 the next tunnel-down edge, so a tunnel that could not come back on its own — a
@@ -81,9 +84,12 @@ a time that was never going to be honoured and then had to run `dezhban switch`.
 That is the manual interaction this ADR exists to remove, reintroduced by the
 bound meant to be safe.
 
-The copy still promises no more than the guard can deliver: the bound, that a
-held guard keeps passing known server addresses so the VPN's own redial is
-unaffected, and that a manual window is always available.
+The copy still promises no more than the guard can deliver: when dezhban itself
+tries again, that nothing opens before then, that a held guard keeps passing
+known server addresses so the VPN's own redial is unaffected meanwhile, and that
+a manual window is always available. Once the named instant has passed — the
+retry ran and refused again without a new time, or could not be scheduled — the
+sentence drops the instant rather than reprinting a moment that came and went.
 
 This is still trigger 2. There is no fourth trigger.
 

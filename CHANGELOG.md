@@ -31,16 +31,33 @@ current as you land changes.
 
 ### Fixed
 
-- **A refusal states its time as a bound, not an appointment.** "It can relax
-  again at 3:15PM" read as a scheduled event, and nothing is scheduled: the
-  decision is retaken only on the next tunnel-down edge, so nothing fires at
-  that instant — and if the tunnel cannot come back on its own, nothing fires
-  at all. Both surfaces now read *"No window will open before 3:15PM — your VPN
-  can still reconnect on its own, and you can open a window yourself at any
-  time"*: the bound, the fact that a held guard still passes known server
-  addresses so the VPN's own redial is unaffected, and the way out that always
-  works. `docs/usage/cli.md` already stated the caveat for scripts; a person
-  deserves it more, not less.
+- **A refusal states its time as an attempt, not an outcome.** "It can relax
+  again at 3:15PM" read as a promise the guard would be open then, which the
+  re-decision does not make: it consults the budget afresh and re-checks every
+  precondition, so it may refuse again. Both surfaces now read *"dezhban tries
+  again at 3:15PM — no window opens before then. Your VPN can still reconnect on
+  its own, and you can open a window yourself at any time"*: when dezhban itself
+  acts, the bound that goes with it, the fact that a held guard still passes
+  known server addresses so the VPN's own redial is unaffected meanwhile, and the
+  way out that always works. Once that instant has passed the sentence drops it
+  rather than reprinting a moment that came and went. `docs/usage/cli.md` states
+  the same caveat for scripts; a person deserves it more, not less.
+
+- **`doctor` no longer reports an unreadable boot service as a missing one.** On
+  macOS any failure to read the launchd plist — including a permission problem on
+  it or on `/Library/LaunchDaemons` — was reported as "not registered to start at
+  boot", telling a user whose service is installed and enforcing to reinstall it.
+  That is the same false negative the check exists to avoid, reached from the
+  other side. Only "the file is absent" now means absent; anything else reports
+  that the question cannot be answered without asking the service manager.
+
+- **A refusal no longer outlives the setting that justified it.** Reloading
+  `vpn.redialWindow` to `"0"` during a cut left the standing refusal published:
+  `status --json` kept reporting `redial.reason` with a `nextEligible` nothing
+  would ever act on, and both surfaces kept naming a time for a window that had
+  been switched off entirely — a promise nothing would keep, which is the exact
+  failure publishing the refusal exists to prevent. Turning the automatic window
+  off now drops the refusal and the timer behind it.
 
 - **A cooldown refusal now answers for the budget too.** `nextEligible` reported
   only the cooldown deadline, so a host that was backing off *and* out of budget
@@ -135,10 +152,11 @@ current as you land changes.
   cooldown armed by a fast drop was checked before any evidence about the current
   drop, so a tunnel that redialed, carried a confirmed exit, stayed up past
   `vpn.advanced.redialMinUptime` and then dropped again was still refused a
-  window — with budget to spare. That refusal was not a short wait: it is only
-  re-decided on the next tunnel-down edge, so it stood until someone ran
-  `dezhban switch` by hand, which is the manual interaction the redial budget
-  exists to remove. A confirmed exit or a healthy uptime now clears the cooldown
+  window — with budget to spare. The retry above would eventually re-ask, but not
+  before the whole remaining cooldown elapsed: a wait a recovered link never
+  earned, and on a slow flap long enough to send the user to `dezhban switch` by
+  hand, which is the manual interaction the redial budget exists to remove. A
+  confirmed exit or a healthy uptime now clears the cooldown
   outright, and the rolling budget — the bound that actually matters — is
   unchanged.
 
@@ -208,10 +226,10 @@ current as you land changes.
   (the reason, when a window can next open, and what is left of the budget) for
   as long as the refusal stands, and `status` and the menubar app both read
   *"Your VPN has dropped often enough to use up its redial budget, so the guard
-  is holding and traffic stays cut. No window will open before 3:15PM — your VPN
-  can still reconnect on its own, and you can open a window yourself at any
-  time."* — the same sentence, composed once. Without a time, "the guard is
-  holding" leaves a wait indistinguishable from a wall.
+  is holding and traffic stays cut. dezhban tries again at 3:15PM — no window
+  opens before then. Your VPN can still reconnect on its own, and you can open a
+  window yourself at any time."* — the same sentence, composed once. Without a
+  time, "the guard is holding" leaves a wait indistinguishable from a wall.
 
   Still trigger two, not a fourth trigger. `vpn.redialWindow: "0"` remains the
   one way to turn the automatic window off; `dezhban hold` still suppresses a

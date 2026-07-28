@@ -124,8 +124,9 @@ the bound lifts without needing the tunnel to drop again — which matters most
 when the tunnel cannot come back on its own. It is still a **bound, not a
 promise**: the re-decision may refuse again (the budget is consulted afresh), and
 the preconditions are re-checked, so a script should read it as "nothing before
-this time", never as "a window at this time". `state.display.detail` words it the
-same way ("No window will open before 3:15PM").
+this time, and an attempt at it", never as "a window at this time".
+`state.display.detail` words it the same way ("dezhban tries again at 3:15PM —
+no window opens before then").
 
 It answers for **both** bounds, not just whichever refused first: a host that is
 backing off *and* out of budget reports the later of the two, so the instant does

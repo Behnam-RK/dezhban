@@ -108,8 +108,8 @@ func TestText(t *testing.T) {
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "Your VPN dropped at 3:04PM. Your VPN has dropped often enough to use up " +
 				"its redial budget, so the guard is holding and traffic stays cut. " +
-				"No window will open before 3:19PM — your VPN can still reconnect on its own, " +
-				"and you can open a window yourself at any time.",
+				"dezhban tries again at 3:19PM — no window opens before then. Your VPN can " +
+				"still reconnect on its own, and you can open a window yourself at any time.",
 		},
 		{
 			name: "guard holds while backing off after fast drops",
@@ -127,9 +127,9 @@ func TestText(t *testing.T) {
 			wantKey:      KeyBlocked,
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "Your VPN dropped at 3:04PM. Your VPN keeps dropping, so dezhban is waiting " +
-				"before it relaxes the guard again — traffic stays cut. No window will open before " +
-				"3:05PM — your VPN can still reconnect on its own, and you can open a window " +
-				"yourself at any time.",
+				"before it relaxes the guard again — traffic stays cut. dezhban tries again at " +
+				"3:05PM — no window opens before then. Your VPN can still reconnect on its own, " +
+				"and you can open a window yourself at any time.",
 		},
 		{
 			// A refusal reason this build does not recognise, from a newer daemon
@@ -149,8 +149,9 @@ func TestText(t *testing.T) {
 			wantKey:      KeyBlocked,
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "The guard is holding rather than opening a window for your VPN, so " +
-				"traffic stays cut. No window will open before 3:04PM — your VPN can still " +
-				"reconnect on its own, and you can open a window yourself at any time.",
+				"traffic stays cut. dezhban tries again at 3:04PM — no window opens before then. " +
+				"Your VPN can still reconnect on its own, and you can open a window yourself at " +
+				"any time.",
 		},
 		{
 			// NextEligible is the sentence's reason for existing, but a snapshot
@@ -170,13 +171,14 @@ func TestText(t *testing.T) {
 				"guard is holding and traffic stays cut.",
 		},
 		{
-			// The refusal is decided on a tunnel-down edge and re-decided only on
-			// the next one, but snapshots keep being published in between — so a
-			// tunnel that stays down carries this record long past its own
-			// deadline. Reprinting "3:19PM" at 3:44PM states a commitment that
-			// was never kept, which is worse than naming no time: it is the
-			// wait-versus-wall confusion this sentence exists to end, inverted.
-			// Name what is actually being waited for instead.
+			// The run loop re-takes the decision at nextEligible, so a refusal
+			// still standing past its own instant means that retry ran and
+			// refused again without naming a new time, or could not be scheduled
+			// at all. Either way the printed time is a moment that came and
+			// went: reprinting "3:19PM" at 3:44PM states a commitment that was
+			// not kept, which is worse than naming no time — the wait-versus-wall
+			// confusion this sentence exists to end, inverted. Say what is still
+			// true instead: dezhban keeps deciding for itself.
 			name: "refusal whose next-eligible time has already passed",
 			snap: state.Snapshot{
 				Posture: PostureGuard,
@@ -192,11 +194,12 @@ func TestText(t *testing.T) {
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "Your VPN dropped at 3:04PM. Your VPN has dropped often enough to use up " +
 				"its redial budget, so the guard is holding and traffic stays cut. " +
-				"It can relax again the next time your VPN tries to reconnect.",
+				"dezhban re-checks on its own as soon as it can, and you can open a window " +
+				"yourself at any time.",
 		},
 		{
 			// The boundary itself counts as passed: at exactly nextEligible the
-			// bound has lifted, and "it can relax again at 3:19PM" printed at
+			// bound has lifted and the retry is due, so naming "3:19PM" at
 			// 3:19PM tells the user to wait for a moment that has arrived.
 			name: "refusal at exactly its next-eligible instant",
 			snap: state.Snapshot{
@@ -208,8 +211,8 @@ func TestText(t *testing.T) {
 			wantKey:      KeyBlocked,
 			wantHeadline: "VPN down — traffic cut",
 			wantDetail: "Your VPN keeps dropping, so dezhban is waiting before it relaxes the " +
-				"guard again — traffic stays cut. It can relax again the next time your VPN " +
-				"tries to reconnect.",
+				"guard again — traffic stays cut. dezhban re-checks on its own as soon as it " +
+				"can, and you can open a window yourself at any time.",
 		},
 		{
 			name:         "full block with country",

@@ -1642,8 +1642,12 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 
 	if !unit.Determinable {
 		c.Status = checkWarn
-		c.Summary = "cannot tell without the service manager on this platform."
-		c.Details = []string{"Ask it directly (needs root):"}
+		// Deliberately does not say "not installed" or name a platform: this is
+		// reached both where no unit file exists to read (Windows) and where one
+		// may exist but could not be read. Guessing between them is how a
+		// correctly-installed user gets told to reinstall.
+		c.Summary = "cannot tell without asking the service manager."
+		c.Details = []string{"Nothing readable here says what happens at boot. Ask it directly (needs root):"}
 		c.Fixes = []string{"sudo dezhban status"}
 		return c
 	}

@@ -153,10 +153,12 @@ func (b *Budget) Grant(now time.Time, uptime time.Duration, goodExit bool, s Set
 	// a confirmed non-blocked exit through the tunnel, or an uptime that cleared
 	// the health threshold. It is the same evidence that disqualifies `fast`
 	// below, and it must be read here too — a cooldown that outlives the flap
-	// refuses the drop of a tunnel that just demonstrably worked, and because a
-	// refusal is only re-decided on the next tunnel-down edge, that refusal is
-	// terminal until the operator opens a window by hand. Rationing a link that
-	// recovered is the manual interaction ADR-0009 exists to remove.
+	// refuses the drop of a tunnel that just demonstrably worked. The run loop's
+	// retry re-asks when the cooldown expires, so such a refusal is no longer
+	// terminal, but it still cuts the user off for the whole remaining cooldown
+	// — a wait a recovered link never earned, and one that on a slow flap is
+	// long enough to send them to `dezhban switch`. That is the manual
+	// interaction ADR-0009 exists to remove.
 	//
 	// A zero uptime means "up since before we were watching" — unknowable, so it
 	// is not evidence of anything and only goodExit can clear the cooldown then.

@@ -303,21 +303,22 @@ func redialCause(s state.Snapshot) string {
 // moment now" and "not for eleven minutes" is the whole reason the refusal is
 // published at all, and a surface that omits it may as well have stayed silent.
 //
-// But it names the instant as a BOUND, not as an appointment. Nothing in the
-// daemon fires at nextEligible: the decision is retaken only on the next
-// tunnel-down edge, so the time says when a window becomes possible, never when
-// one arrives. Wording it as an event would promise an unattended recovery the
-// run loop cannot deliver — worst in exactly the case the window exists for, a
-// rotated server address the endpoint pass does not cover, where the tunnel
-// cannot come back by itself and so no further edge is ever produced.
+// It names the instant as an ATTEMPT, not as an outcome. dezhban does re-take
+// the decision at nextEligible, from a timer in the run loop — so saying nothing
+// fires at it would understate what the guard actually does, and it did: this
+// sentence used to word the instant as a bound only ("No window will open
+// before …"), which was written when the time really was inert and left the
+// user with nothing but the manual escape hatch ADR-0009 exists to remove. But
+// the re-decision consults the budget afresh and re-checks every precondition,
+// so it may refuse again. "dezhban tries again at 3:15PM" is therefore the
+// strongest true claim available; "the guard relaxes at 3:15PM" would not be.
 //
-// Which is why a passed deadline gets its own clause rather than the instant.
-// The refusal is published for the drop being carried and is only re-decided on
-// the next tunnel-down edge, so once nextEligible is behind the snapshot's own
-// clock the bound has lifted but nothing will act on it until the VPN tries
-// again. Reprinting the old instant then states a commitment that was never
-// kept, which is strictly worse than naming no time at all — the very failure
-// this sentence exists to prevent, inverted.
+// A passed deadline still gets its own clause rather than the instant. Once
+// nextEligible is behind the snapshot's own clock, the re-decision has already
+// run and refused without naming a new time, or could not be scheduled at all —
+// either way the printed instant is a moment that came and went. Reprinting it
+// states a commitment that was not kept, which is strictly worse than naming no
+// time at all: the very failure this sentence exists to prevent, inverted.
 //
 // Vocabulary is the glossary's, not the ledger's: "budget", never "quota"; the
 // window is "shorter", never "throttled"; and nothing here says "suppressed",
@@ -341,22 +342,27 @@ func redialRefusal(s state.Snapshot) string {
 	at, passed := nextEligible(s)
 	switch {
 	case at != "":
-		// A LOWER BOUND, never an appointment. The instant is the earliest a
-		// window could open, and the run loop only re-decides on the next
-		// tunnel-down edge (maybeAutoWindow's sole call site) — so nothing fires
-		// at this time, and if the tunnel cannot come back on its own, nothing
-		// fires at all. "It can relax again at 3:15PM" read as a scheduled
-		// event and quietly promised an automatic recovery that was never
-		// coming; docs/usage/cli.md states the same caveat for scripts, and a
-		// human deserves it more, not less.
+		// An ATTEMPT at a named time, plus the bound that goes with it. The run
+		// loop re-takes the decision at this instant (retryAutoWindow, armed by
+		// grantAutoWindow on every refusal), so "dezhban tries again at 3:15PM"
+		// is true — but it may refuse again, so the sentence stops at the
+		// attempt and never says the guard WILL relax. docs/usage/cli.md states
+		// the same caveat for scripts; a human deserves it more, not less.
 		//
-		// So: the bound, the fact that the VPN's own redial is unaffected (the
-		// guard still passes known server addresses on the physical link — a
-		// held guard is not a stopped VPN), and the way out that always works.
-		return why + ". No window will open before " + at +
-			" — your VPN can still reconnect on its own, and you can open a window yourself at any time."
+		// So: when dezhban itself acts, that nothing opens before then, the fact
+		// that the VPN's own redial is unaffected meanwhile (the guard still
+		// passes known server addresses on the physical link — a held guard is
+		// not a stopped VPN), and the way out that always works.
+		return why + ". dezhban tries again at " + at +
+			" — no window opens before then. Your VPN can still reconnect on its own, " +
+			"and you can open a window yourself at any time."
 	case passed:
-		return why + ". It can relax again the next time your VPN tries to reconnect."
+		// The instant has gone by, so there is no attempt left to name: the
+		// re-decision has already run and refused without a new time, or none
+		// could be scheduled. Say what is still true — dezhban keeps deciding
+		// for itself — without inventing a second time it might miss too.
+		return why + ". dezhban re-checks on its own as soon as it can, " +
+			"and you can open a window yourself at any time."
 	}
 	return why + "."
 }

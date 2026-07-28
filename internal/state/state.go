@@ -225,11 +225,13 @@ type RedialState struct {
 	// ("cooldown", "exhausted"). Surfaces match on it; the sentence a user reads
 	// is composed in internal/render, never here.
 	Reason string `json:"reason"`
-	// NextEligible is the earliest instant a window could open — a bound, not an
-	// appointment: nothing fires at it, the decision is retaken on the next
-	// tunnel-down edge. The whole point of publishing a refusal is that it comes
-	// with an "until when" all the same — "the guard is holding" alone leaves
-	// the user unable to tell a wait from a wall.
+	// NextEligible is the earliest instant a window could open — a bound, not a
+	// promise. The run loop re-takes the decision when this instant arrives, so
+	// it is a time the guard acts on rather than one it merely reports; but the
+	// re-decision consults the budget afresh and re-checks every precondition,
+	// so it may refuse again. Read it as "nothing before this time", never as
+	// "a window at this time". Publishing it at all is the point — "the guard is
+	// holding" alone leaves the user unable to tell a wait from a wall.
 	//
 	// omitzero, not omitempty: omitempty does not omit a zero time.Time (a
 	// non-empty struct), so a writer without an instant would publish

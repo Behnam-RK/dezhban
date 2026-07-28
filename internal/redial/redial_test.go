@@ -212,8 +212,9 @@ func TestTheCooldownStillHoldsWithoutEvidence(t *testing.T) {
 // drop moves — the user is told 12:00:30, waits, and is told 12:15:00 instead.
 //
 // Stating a time the guard will not honour is worse than stating none: it is the
-// same failure as reporting a setting applied while the old one is enforced, and
-// internal/render leans on this instant being real ("It can relax again at …").
+// same failure as reporting a setting applied while the old one is enforced. Both
+// the run loop's retry timer and internal/render lean on this instant being real
+// — one arms against it, the other prints it ("dezhban tries again at …").
 func TestACooldownRefusalAlsoAnswersForTheBudget(t *testing.T) {
 	// A budget that affords the first window and then almost nothing: 17s buys
 	// the 15s first grant and leaves 2s, below the 5s floor.

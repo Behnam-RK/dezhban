@@ -1145,6 +1145,23 @@ func (o Options) runGuard(ctx context.Context) error {
 	// tunnel state, which has moved on by the time a retry fires.
 	grantAutoWindow := func(now time.Time, uptime time.Duration, goodExit bool, detail string) {
 		if !autoWindowPossible() {
+			// A precondition that held at the drop edge no longer does — reachable
+			// mainly through a reload setting vpn.redialWindow to "0" mid-cut. Any
+			// standing refusal is now VOID, not merely unanswered: it explains a
+			// wait against a bound that no longer governs anything, and its
+			// nextEligible names an instant nothing will act on. Leaving it
+			// published would have `status` and the app promise "dezhban tries
+			// again at 3:15PM" for the rest of the cut, when the automatic window
+			// has been switched off entirely — a promise nothing will keep, which
+			// is the failure the refusal was published to prevent, inverted.
+			if redialRefused != nil {
+				o.Log.Info("standing redial refusal dropped — the automatic window is no longer available",
+					"redialWindow", o.RedialWindow, "windowOpen", windowActive,
+					"standby", standby, "fullBlock", blocked)
+				redialRefused = nil
+				disarmRedialRetry()
+				snapshot()
+			}
 			return
 		}
 		s := redialSettings()
@@ -1193,8 +1210,19 @@ func (o Options) runGuard(ctx context.Context) error {
 		// which is the one thing credit-on-close exists to prevent, and the debit
 		// would otherwise sit unsettled until some later Grant charged it in full
 		// (expire never ages an open episode out, on purpose).
+		//
+		// Say so, too. This is the one outcome of a drop that neither opens a
+		// window nor publishes a refusal explaining why, so without a line here
+		// the ledger granted, the guard held, and nothing anywhere named the
+		// reason. No retry is armed on purpose: nothing is waiting on a bound to
+		// lift, the failure is the Backend's, and openWindow has already set
+		// enfErr so the posture the surfaces show is the enforcement error —
+		// which is the more urgent truth than a missing redial window. The next
+		// tunnel edge decides afresh.
 		if !windowActive {
 			redialLedger.Close(now)
+			o.Log.Warn("redial window granted but could not be applied — guard holds, traffic stays cut",
+				"granted", g.Duration, "reason", string(g.Reason), "detail", detail)
 		}
 	}
 
@@ -1786,6 +1814,18 @@ func (o Options) runGuard(ctx context.Context) error {
 		o.AllowPauseOps = ls.AllowPauseOps
 		o.AllowConfigOps = ls.AllowConfigOps
 		o.RedialWindow = ls.RedialWindow
+		// Turning the automatic window off voids any refusal explaining why one
+		// did not open: the bound it names no longer governs anything, and its
+		// nextEligible is an instant the run loop will never act on. grantAutoWindow
+		// also drops a void refusal when it is next asked, but that only happens if
+		// something asks — and disabling the window is precisely what stops the
+		// retry from getting that far. Clear it here, where the reason is known.
+		if o.RedialWindow <= 0 && redialRefused != nil {
+			o.Log.Info("standing redial refusal dropped — vpn.redialWindow is now off",
+				"reason", redialRefused.Reason)
+			redialRefused = nil
+			disarmRedialRetry()
+		}
 		o.RedialMinUptime = ls.RedialMinUptime
 		// The budget ledger reads these off `o` on every drop rather than holding
 		// its own copy, so a reload lands on the very next decision. A Budget that

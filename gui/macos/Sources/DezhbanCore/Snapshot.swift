@@ -91,18 +91,23 @@ public struct RedialState: Codable {
     /// Stable identifier: "cooldown" (backing off after fast drops) or
     /// "exhausted" (the rolling budget is spent). Match on it, don't display it.
     public let reason: String
-    /// Earliest instant a window could open — a bound, not an appointment:
-    /// nothing fires at it, the decision is retaken on the next tunnel-down
-    /// edge. This is what makes a refusal actionable all the same — "the guard
-    /// is holding" without it is a wall, not a wait.
+    /// Earliest instant a window could open — a bound, not a promise. dezhban
+    /// re-takes the decision when this instant arrives, so it is a time the
+    /// guard acts on rather than one it merely reports; but the re-decision
+    /// consults the budget afresh and may refuse again. This is what makes a
+    /// refusal actionable — "the guard is holding" without it is a wall, not a
+    /// wait.
     ///
-    /// Optional purely as a decode guard. The Go field has no `omitempty`, so a
-    /// zero `time.Time` would arrive as "0001-01-01T00:00:00Z", which
-    /// `ISO8601DateFormatter` refuses — and a throwing `Date` here fails the
-    /// WHOLE `Snapshot` decode, so `StateReader.decode` returns nil and the
-    /// menubar reads "stopped" while dezhban is enforcing. Both refusal paths
-    /// set a real instant today, so this is unreachable; it costs one `?` to
-    /// keep it that way, and the failure it prevents is silent and total.
+    /// Optional because the Go field is `omitzero`: a writer with no instant
+    /// omits the key rather than publishing "0001-01-01T00:00:00Z", and an
+    /// absent key is the one shape this decoder handles for free. The `?` is
+    /// what buys that — note it would NOT rescue a year-1 value that was
+    /// actually written, because `decode`'s custom date strategy throws on any
+    /// string `ISO8601DateFormatter` refuses whether the property is optional
+    /// or not, and one throwing `Date` fails the WHOLE `Snapshot` decode: then
+    /// `StateReader.decode` returns nil and the menubar reads "stopped" while
+    /// dezhban is enforcing. `omitzero` on the Go side is the guard; this is
+    /// the half that makes its output decode cleanly.
     public let nextEligible: Date?
     /// What is left of the rolling budget, in seconds.
     public let remainingSeconds: Double

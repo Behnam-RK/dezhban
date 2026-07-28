@@ -2,7 +2,11 @@
 
 package svc
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 // platformBoot reads a fixed system path, so the part worth pinning is the
 // parse: whether a launchd plist is read as "starts at boot" or not. Getting
@@ -64,5 +68,43 @@ func TestRunAtLoadParse(t *testing.T) {
 func TestBootIsDeterminableOnDarwin(t *testing.T) {
 	if u := Boot(); !u.Determinable {
 		t.Error("darwin reports the boot unit as undeterminable; the plist path is readable without root")
+	}
+}
+
+// "Could not read it" must never be published as "it is not there". A plist the
+// installer wrote but this process cannot open — a permission problem on the
+// file or on /Library/LaunchDaemons — used to read as Present:false, which
+// buildServiceCheck renders as "not registered to start at boot": a user whose
+// guard is installed and enforcing right now, told to reinstall it. That is the
+// same false negative Boot exists to avoid, reached from the other side, so only
+// fs.ErrNotExist may mean absent.
+func TestUnreadablePlistIsUndeterminableNotAbsent(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.plist")
+	if err := os.WriteFile(path, []byte("<plist><key>RunAtLoad</key><true/></plist>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Unreadable by mode. Skip when the test runs as root, which ignores the
+	// mode bits entirely and would read the file regardless.
+	if err := os.Chmod(path, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(path); err == nil {
+		t.Skip("running with privileges that ignore file modes; nothing to test")
+	}
+
+	u := bootFrom(path)
+	if u.Determinable {
+		t.Error("an unreadable plist reported a determinable answer; " +
+			"a read failure that is not ErrNotExist is not evidence of anything")
+	}
+	if u.Present {
+		t.Error("an unreadable plist reported Present; it was never read")
+	}
+
+	// The contrast that gives the above its meaning: genuinely absent stays
+	// determinable, so `doctor` can still say "not registered" when it is true.
+	if a := bootFrom(filepath.Join(dir, "nope.plist")); !a.Determinable || a.Present {
+		t.Errorf("an absent plist must stay determinable and not present, got %+v", a)
 	}
 }

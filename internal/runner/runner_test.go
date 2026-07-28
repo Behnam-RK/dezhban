@@ -1975,6 +1975,110 @@ func TestARefusedRedialRetriesWhenTheBudgetRefills(t *testing.T) {
 	}
 }
 
+// A refusal explains a wait against a bound. Turning the automatic window off
+// makes that explanation VOID, not merely unanswered: nothing governs the wait
+// any more and nextEligible names an instant nothing will act on.
+//
+// The failure this pins is the published promise, not the missing window. With
+// vpn.redialWindow reloaded to "0" the guard correctly holds — that is the
+// setting doing its job. What must not happen is `status --json` and the app
+// going on reporting "dezhban tries again at 3:15PM" for the rest of the cut,
+// for a window that has been switched off entirely. The retry cannot clear it
+// on its own: disabling the window is exactly what makes autoWindowPossible
+// false, so the re-decision returns before reaching the ledger.
+//
+// Same fixture as TestARefusedRedialRetriesWhenTheBudgetRefills, which is the
+// control: without the reload, that drop gets a window while the tunnel is down.
+func TestDisablingTheRedialWindowDropsAStandingRefusal(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+
+	// up, down (drop 1 spends the budget), up, then down for the rest of the run.
+	script := make([]bool, 0, 60)
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, false)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	script = append(script, false)
+
+	reloadC := make(chan LiveSettings, 1)
+	var (
+		mu       sync.Mutex
+		snaps    []state.Snapshot
+		disabled bool
+	)
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		ReloadC:            reloadC,
+	}
+	o.Publish = func(s state.Snapshot) {
+		mu.Lock()
+		defer mu.Unlock()
+		snaps = append(snaps, s)
+		// The moment a refusal is published, turn the automatic window off.
+		if s.Redial != nil && !disabled {
+			disabled = true
+			ls := o.Live()
+			ls.RedialWindow = -1 // the config.Disabled sentinel
+			select {
+			case reloadC <- ls:
+			default:
+			}
+		}
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !disabled {
+		t.Fatal("no refusal was ever published; the budget never ran out and this fixture tests nothing")
+	}
+	// The LAST LIVE snapshot, not the last one: shutdown publishes a terminal
+	// posture:"stopped" record that carries no refusal, and asserting on that
+	// would pass whether or not the refusal was ever dropped. This test failed to
+	// fail for exactly that reason before the distinction was made.
+	var last *state.Snapshot
+	for i := len(snaps) - 1; i >= 0; i-- {
+		if snaps[i].Posture != "stopped" {
+			last = &snaps[i]
+			break
+		}
+	}
+	if last == nil {
+		t.Fatal("every snapshot was the terminal stopped record; fixture proved nothing")
+	}
+	// The run is 600ms against a 120ms rolling period, so the bound the refusal
+	// named lifted long before the end. A refusal still standing at that point is
+	// one nothing will ever act on.
+	if last.Redial != nil {
+		t.Errorf("the automatic window is off but state.redial still reports %q with nextEligible %v — "+
+			"a refusal outliving the setting that justified it publishes a time nothing will honour",
+			last.Redial.Reason, last.Redial.NextEligible)
+	}
+	// And the window really is off: the setting must still be doing its job.
+	if last.Switch != nil && last.Switch.Open {
+		t.Error("a window is open after vpn.redialWindow was set to \"0\"")
+	}
+}
+
 // The retry must not multiply windows: one automatic window per drop is the
 // standing rule, and a retry that re-armed after its own window closed would
 // turn a single drop into a repeating relaxation.

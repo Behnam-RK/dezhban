@@ -30,9 +30,15 @@ type BootUnit struct {
 	// still not do this, which is the quiet failure worth naming: `start` works,
 	// every reboot comes up unguarded.
 	AtBoot bool
-	// Determinable is false when this platform offers no root-free way to tell,
+	// Determinable is false when there is no root-free way to tell ON THIS HOST,
 	// so a caller reports "cannot say" instead of reporting a false negative.
-	// Every other field is meaningless when this is false.
+	// Two causes, deliberately collapsed into one field because the caller's
+	// answer is the same for both: the platform keeps its registration
+	// somewhere unreadable (Windows), or the unit file exists but could not be
+	// read (a permission problem). What matters is that "could not look" is
+	// never published as "not installed" — a user whose guard is enforcing
+	// must not be told to reinstall it. Every other field is meaningless when
+	// this is false.
 	Determinable bool
 }
 

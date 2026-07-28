@@ -457,12 +457,12 @@ both surfaces saying the same thing about it. See
       properly and stay up past `redialMinUptime` (or long enough for the exit to
       be confirmed), then drop it again. That drop must get a **full-length**
       window, not `reason=cooldown`. A refusal here is the failure that pushed
-      recovering links onto `dezhban switch`: it is only re-decided on the next
-      down edge, so it does not resolve itself.
+      recovering links onto `dezhban switch`: the retry would eventually re-ask,
+      but not before the whole remaining cooldown a recovered link never earned.
 - [ ] **Exhaustion holds, and says so.** Keep flapping until the log reads
       `redial budget spent`. Traffic must stay cut, `status` must read
       *"Your VPN has dropped often enough to use up its redial budget…"* with a
-      real time after "No window will open before", and the menubar app must show
+      real time after "dezhban tries again at", and the menubar app must show
       the **same sentence** — it renders `display.detail`, so a difference means
       something is composing prose that shouldn't.
 - [ ] **The refusal re-decides itself.** From that exhausted state, leave the
