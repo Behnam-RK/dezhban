@@ -1298,6 +1298,37 @@ func (o Options) runGuard(ctx context.Context) error {
 		grantAutoWindow(now, dropUptime, dropGoodExit, dropDetail)
 	}
 
+	// resumeRedialRetry restores the pending re-decision that an armed hold
+	// consumed. Called when hold the line is CANCELLED, from both cancel paths.
+	//
+	// Hold may only ever subtract a relaxation, and this does not break that rule
+	// — it is the subtraction being taken back. Cancelling hold returns the drop
+	// to the decision it had already earned at its own edge; it admits no new
+	// cause, and every rail still applies because the work is done by the same
+	// retryAutoWindow the timer would have run. Still no fourth trigger.
+	//
+	// Without it, arming hold mid-cut and then changing your mind left the drop
+	// stranded for good: the retry fires once, is skipped by the hold, and
+	// disarms itself, and nothing re-arms it — so nothing re-decides until the
+	// next tunnel-down edge, which cannot arrive while the tunnel is already
+	// down. That is precisely the wall ADR-0009's retry exists to remove,
+	// reachable by using the feature that is meant to be the safe choice, and
+	// both surfaces went on saying "dezhban re-checks on its own as soon as it
+	// can" throughout.
+	//
+	// Only when nothing is armed. A hold cancelled BEFORE the deadline leaves the
+	// original timer running and correct; re-deciding then would ask against a
+	// bound that has not lifted yet.
+	resumeRedialRetry := func() {
+		if redialRetryC != nil {
+			return
+		}
+		// retryAutoWindow re-checks everything that matters — a refusal still
+		// standing, the tunnel still down, hold not armed — so there is no second
+		// copy of those conditions here to fall out of step with it.
+		retryAutoWindow(time.Now())
+	}
+
 	// closeWindowRevert reverts to the prior posture (expiry / cancel). Session-
 	// discovered endpoints stay in `endpoints` (grow-only during the window), so if
 	// a handshake was mid-flight the restored guard holds its endpoint open and the
@@ -1741,6 +1772,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			if holdArmed {
 				holdArmed = false
 				o.Log.Info("hold the line disarmed (control socket)")
+				resumeRedialRetry()
 			}
 			snapshot()
 			return reply(true, "")
@@ -2138,6 +2170,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				if holdArmed {
 					holdArmed = false
 					o.Log.Info("hold the line disarmed")
+					resumeRedialRetry()
 				}
 				snapshot()
 			default:

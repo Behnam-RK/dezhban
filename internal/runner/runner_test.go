@@ -2120,3 +2120,198 @@ func TestTheRetryStillOpensAtMostOneWindowPerDrop(t *testing.T) {
 			"the retry must not re-arm once a window has been granted", windows)
 	}
 }
+
+// Hold the line suppresses the RETRY, not just the drop edge. An operator who
+// arms it while already cut is saying "keep me cut", and a rule that may only
+// subtract a relaxation has to be able to subtract this one too — otherwise the
+// window the operator just refused arrives anyway a few seconds later, which
+// reads as the daemon overruling them.
+//
+// The flag is deliberately NOT spent here: it names the next drop, and a cut
+// already in progress is not one.
+func TestHoldArmedMidCutSuppressesTheRetry(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+
+	// Same fixture as TestARefusedRedialRetriesWhenTheBudgetRefills, whose pass
+	// is the control: without the hold, this drop DOES get a window from the
+	// retry while the tunnel is still down.
+	script := redialTwoDropScript()
+
+	var (
+		mu      sync.Mutex
+		refused bool
+		armed   bool
+	)
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		CommandPoll:        time.Millisecond,
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			defer mu.Unlock()
+			if s.Redial != nil {
+				refused = true
+			}
+		},
+	}
+	// Arm the moment a refusal stands, which is well before the retry deadline.
+	o.PollCommand = func() (command.Command, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if refused && !armed {
+			armed = true
+			return command.Command{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "arm"}, true
+		}
+		return command.Command{}, false
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !refused || !armed {
+		t.Fatalf("fixture never reached the state under test (refused=%v armed=%v)", refused, armed)
+	}
+	// The first drop's window is expected; the retry's second one is not.
+	windows := 0
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			windows++
+		}
+	}
+	if windows != 1 {
+		t.Errorf("got %d automatic windows, want 1 — the retry opened one despite "+
+			"hold the line being armed against the cut it was going to relax", windows)
+	}
+}
+
+// Cancelling hold the line gives the pending re-decision back. Hold only ever
+// SUBTRACTS a relaxation, so cancelling it must be able to restore what it took:
+// the drop already qualified as trigger 2 at its own edge, and the only thing
+// that had said no since was the operator, who has now changed their mind.
+//
+// Without this the retry fires once, is skipped by the hold, disarms itself, and
+// nothing re-arms it — so the drop stays cut until the next tunnel-down edge,
+// which cannot arrive while the tunnel is already down. That is the wall
+// ADR-0009's retry exists to remove, reachable by using the feature that is
+// meant to be the CAUTIOUS choice, and with both surfaces claiming throughout
+// that dezhban re-checks on its own.
+func TestCancellingHoldRestoresTheRetry(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+
+	script := redialTwoDropScript()
+
+	var (
+		mu       sync.Mutex
+		snaps    []state.Snapshot
+		refused  bool
+		armed    bool
+		canceled bool
+		start    = time.Now()
+	)
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		CommandPoll:        time.Millisecond,
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			defer mu.Unlock()
+			snaps = append(snaps, s)
+			if s.Redial != nil {
+				refused = true
+			}
+		},
+	}
+	o.PollCommand = func() (command.Command, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if refused && !armed {
+			armed = true
+			return command.Command{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "arm"}, true
+		}
+		// Cancel well AFTER the retry deadline (~120ms past the first window), so
+		// the retry has already fired and been consumed by the hold. That is the
+		// case with nothing left armed, and the one this test exists for.
+		if armed && !canceled && time.Since(start) > 300*time.Millisecond {
+			canceled = true
+			return command.Command{Op: command.OpHoldCancel, IssuedAt: time.Now(), Nonce: "cancel"}, true
+		}
+		return command.Command{}, false
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !refused || !armed || !canceled {
+		t.Fatalf("fixture never reached the state under test (refused=%v armed=%v canceled=%v)",
+			refused, armed, canceled)
+	}
+
+	// Find where hold went from armed to cancelled, then require a window after
+	// it — opened while the tunnel is still DOWN, so only the restored retry can
+	// account for it.
+	cancelIdx := -1
+	for i := 1; i < len(snaps); i++ {
+		prev, cur := snaps[i-1], snaps[i]
+		if prev.Hold != nil && prev.Hold.Armed && (cur.Hold == nil || !cur.Hold.Armed) {
+			cancelIdx = i
+		}
+	}
+	if cancelIdx < 0 {
+		t.Fatal("never observed hold going from armed to cancelled; fixture proved nothing")
+	}
+	for _, s := range snaps[cancelIdx:] {
+		if s.Switch == nil || !s.Switch.Open || anyTunnelUp(s.Tunnels) {
+			continue
+		}
+		if s.Switch.Trigger != state.TriggerAuto {
+			t.Errorf("window after the cancel has trigger %q, want %q — a restored retry "+
+				"is still trigger 2", s.Switch.Trigger, state.TriggerAuto)
+		}
+		return
+	}
+	t.Error("after hold the line was cancelled the refused drop never got a window: " +
+		"the retry the hold consumed is never restored, so nothing re-decides until the " +
+		"next tunnel-down edge, which cannot arrive while the tunnel is down")
+}
+
+// The drop shape both hold/retry tests above share with
+// TestARefusedRedialRetriesWhenTheBudgetRefills: up, down (drop 1 spends the
+// budget), up, then down for the rest of the run. Factored out so the control
+// and the two hold cases cannot drift into testing different fixtures.
+func redialTwoDropScript() []bool {
+	script := make([]bool, 0, 60)
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, false)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	return append(script, false)
+}

@@ -117,6 +117,19 @@ The rails that keep it from becoming one:
   "keep me cut"; the retry honours that and does not spend the flag, which names
   the next drop. Hold may only ever subtract a relaxation, so it must be able to
   subtract this one.
+
+  **And cancelling it gives the re-decision back**, which is the same rule read
+  in the other direction: the subtraction is being taken back, so what it took
+  must return. Without that, arming hold mid-cut and then changing your mind
+  stranded the drop for good — the retry fires once, the hold consumes it, the
+  timer disarms itself, and nothing re-arms it, so nothing re-decides until the
+  next tunnel-down edge, which cannot arrive while the tunnel is already down.
+  That is exactly the wall this ADR exists to remove, reachable by using the
+  feature that is meant to be the *cautious* choice, and with both surfaces
+  claiming throughout that dezhban re-checks on its own. Cancel therefore
+  re-asks — through the same `retryAutoWindow`, so every rail above still
+  applies — and only when nothing is armed, since a hold cancelled *before* the
+  deadline leaves the original timer running and correct.
 - **It is armed only for an instant in the future**, so a bound that has already
   lifted schedules nothing rather than spinning.
 

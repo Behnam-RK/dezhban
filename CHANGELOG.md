@@ -43,13 +43,28 @@ current as you land changes.
   rather than reprinting a moment that came and went. `docs/usage/cli.md` states
   the same caveat for scripts; a person deserves it more, not less.
 
-- **`doctor` no longer reports an unreadable boot service as a missing one.** On
-  macOS any failure to read the launchd plist — including a permission problem on
-  it or on `/Library/LaunchDaemons` — was reported as "not registered to start at
-  boot", telling a user whose service is installed and enforcing to reinstall it.
-  That is the same false negative the check exists to avoid, reached from the
-  other side. Only "the file is absent" now means absent; anything else reports
-  that the question cannot be answered without asking the service manager.
+- **`doctor` no longer reports an unreadable boot service as a missing one.** Any
+  failure to read the unit — a permission problem on the launchd plist or on
+  `/Library/LaunchDaemons`, on the systemd unit or on `/etc/systemd/system` — was
+  reported as "not registered to start at boot", telling a user whose service is
+  installed and enforcing to reinstall it. That is the same false negative the
+  check exists to avoid, reached from the other side. Only "the file is absent"
+  now means absent on either platform; anything else reports that the question
+  cannot be answered without asking the service manager. On Linux the rule also
+  covers the enablement symlink, where it matters more: an unreadable one used to
+  read as "installed, but not set to start at boot" for a service that *is*
+  enabled, sending the user to fix something that was not broken.
+
+- **Cancelling `dezhban hold` mid-cut no longer strands the drop.** Arming hold
+  while already cut correctly suppresses the pending re-decision — but cancelling
+  it did not give that re-decision back. The retry fires once, the hold consumes
+  it, the timer disarms itself, and nothing re-armed it, so the drop stayed cut
+  until the next tunnel-down edge — which cannot arrive while the tunnel is
+  already down. Changing your mind cost you the automatic recovery entirely, and
+  both surfaces went on saying dezhban re-checks on its own. Cancelling now
+  re-asks immediately, through the same path the timer would have used, so every
+  rail still applies. Hold only ever *subtracts* a relaxation; cancelling it is
+  that subtraction being taken back, not a fourth trigger.
 
 - **A refusal no longer outlives the setting that justified it.** Reloading
   `vpn.redialWindow` to `"0"` during a cut left the standing refusal published:

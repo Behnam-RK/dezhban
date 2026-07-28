@@ -207,7 +207,15 @@ The design depends on these invariants (rationale in
   suppresses trigger 2's **re-decision** (`retryAutoWindow`) — an operator who
   arms it mid-cut is saying "keep me cut", and a rule that may only subtract must
   be able to subtract that too — but is NOT spent there: the flag names the next
-  drop, and a cut already in progress is not one. Anything
+  drop, and a cut already in progress is not one. **Cancelling it must give that
+  re-decision back** (`resumeRedialRetry`, called from BOTH cancel paths), which
+  is the same "only subtracts" rule read backwards: the subtraction is being
+  taken back, so what it took has to return. Without it, arming hold mid-cut and
+  then changing your mind stranded the drop permanently — the retry fires once,
+  the hold consumes it, the timer disarms itself, nothing re-arms it, and the
+  next tunnel-down edge that would decide afresh can never arrive because the
+  tunnel is already down. Only when nothing is armed, though: a hold cancelled
+  *before* the deadline leaves the original timer running and correct. Anything
   added here must likewise only subtract.
 - **All three windows are independently disableable, and "disabled" must
   survive `Normalize`.** `vpn.switchWindow: "0"` removes trigger (1);

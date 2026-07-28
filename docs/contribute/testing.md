@@ -482,6 +482,14 @@ both surfaces saying the same thing about it. See
       window may open (`redial retry skipped` in the log). Then reconnect and
       drop: that drop must still be covered by hold — the retry honours the flag
       but does not spend it.
+- [ ] **Cancelling hold gives the re-decision back.** From that suppressed state
+      — retry already skipped, tunnel still down — run `dezhban hold --cancel`
+      once the budget has refilled. A window must open **immediately**, without
+      waiting for another drop. Nothing opening is the failure this check exists
+      for: it means the drop is stranded until an edge that cannot arrive, and
+      `status` will be claiming dezhban re-checks on its own while it does not.
+      Cancel *before* `nextEligible` instead and nothing should open early —
+      the original timer is still running and still governs.
 - [ ] **The budget refills.** Wait out `vpn.advanced.redialBudgetWindow` with
       the tunnel down, then drop again → a window opens. It must open no later
       than the `nextEligible` the refusal named.

@@ -447,6 +447,11 @@ tunnel is up again, and forgotten if the daemon restarts. A flag that survived a
 reboot would eventually cut an *accidental* drop off from the redial help it
 should have had.
 
+Arming it *during* a cut works too — it suppresses the pending retry, so a drop
+the budget already refused stays refused. Cancelling then puts you back exactly
+where you were: dezhban re-decides straight away, and opens a window if the
+budget now allows one. Changing your mind never costs you the recovery.
+
 ## Shell completion
 
 ```sh

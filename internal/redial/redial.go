@@ -256,14 +256,17 @@ func (b *Budget) Close(now time.Time) {
 // counts at its full grant: it is committed, and reporting it as free would let
 // a surface promise room that is already claimed.
 //
-// It MUTATES: expiring the ledger is what makes the answer current, so this
-// retires episodes that have rolled out of the interval. Harmless where it is
-// called — the run loop's single goroutine, the same one that owns every
-// Backend.Apply — but it is not the read-only accessor its name suggests, so do
-// not reach for it from anywhere else without moving the expiry out first.
+// Read-only, as its name says. It answers AS OF now — episodes that have rolled
+// out of the interval are excluded from the sum rather than retired from the
+// slice — so a display path can ask on every published snapshot without editing
+// the ledger a decision will later be made against. Grant is what actually
+// retires them, which is the one place the ledger should change.
+//
+// (It used to expire in place, which was safe only because every caller happened
+// to be on the run loop's single goroutine. Being safe by where it is called is
+// not the same as being safe, and the run loop calls this once per publish.)
 func (b *Budget) Remaining(now time.Time, s Settings) time.Duration {
-	b.expire(now, s.Interval)
-	return max(0, s.Budget-b.spent())
+	return max(0, s.Budget-b.spentAsOf(now, s.Interval))
 }
 
 // ShortRun is the number of consecutive fast drops behind the current backoff.
@@ -295,6 +298,39 @@ func (b *Budget) spent() time.Duration {
 	return total
 }
 
+// spentAsOf is spent for a caller that has NOT expired the ledger: it skips the
+// episodes expire would have retired, using the same rule (settled, and started
+// at or before now-interval), so the two cannot disagree about what is still on
+// the books. That equivalence is the point — a read-only caller must get the
+// number a decision would be made against, not a differently-aged one.
+func (b *Budget) spentAsOf(now time.Time, interval time.Duration) time.Duration {
+	if interval <= 0 {
+		return b.spent()
+	}
+	cutoff := now.Add(-interval)
+	var total time.Duration
+	for _, e := range b.episodes {
+		if retired(e, cutoff) {
+			continue
+		}
+		total += e.cost()
+	}
+	return total
+}
+
+// retired reports whether an episode has rolled out of the interval. The single
+// definition expire and spentAsOf share: a read that aged the ledger differently
+// from the write would report a budget no decision will honour, which is the
+// same class of lie as a nextEligible nothing acts on.
+//
+// An unsettled episode is a window that is open right now, so it is never aged
+// out however long it has been running — dropping it would lose the debit and
+// leave Close with nothing to settle, quietly making the longest windows the
+// cheapest ones.
+func retired(e episode, cutoff time.Time) bool {
+	return e.settled && !e.start.After(cutoff)
+}
+
 // expire drops episodes that started a full Interval ago or more. Inclusion is
 // by START time, so an episode straddling the boundary leaves the ledger whole
 // rather than being pro-rated — simpler, and it errs toward forgetting sooner,
@@ -315,11 +351,7 @@ func (b *Budget) expire(now time.Time, interval time.Duration) {
 	keep := b.episodes[:0]
 	openIdx := -1
 	for _, e := range b.episodes {
-		// An unsettled episode is a window that is open right now, so it is
-		// never aged out however long it has been running — dropping it would
-		// lose the debit and leave Close with nothing to settle, quietly making
-		// the longest windows the cheapest ones.
-		if e.settled && !e.start.After(cutoff) {
+		if retired(e, cutoff) {
 			continue
 		}
 		if !e.settled {
