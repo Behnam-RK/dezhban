@@ -7,6 +7,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	// Test-only, and it must stay test-only: production `config` depends on
+	// nothing but the standard library because nearly every other package
+	// imports it. internal/redial imports only "time", so there is no cycle to
+	// worry about here — see minRedialGrant.
+	"github.com/behnam-rk/dezhban/internal/redial"
 )
 
 func TestLoadMissingPathReturnsDefaults(t *testing.T) {
@@ -964,5 +970,150 @@ func TestAllowLocalNetworkFalseRoundTrips(t *testing.T) {
 	}
 	if again.VPN.AllowLocalNetwork {
 		t.Error("allowLocalNetwork came back enabled after a round trip")
+	}
+}
+
+// The two budget keys are the only durations in this config that REFUSE a
+// written "0" instead of treating it as an opt-out. `config set` already refuses
+// it (TestSetRedialBudgetZeroIsRefused); this pins the other way in, so hand
+// editing the file cannot mean something different from typing the command.
+//
+// Silently normalising a written "0" back to 2m would be the exact failure this
+// project calls its worst: a security setting accepted and then discarded, with
+// the user left believing the bound was lifted. It is a LIMIT, so "off" would
+// have to mean "no limit" — the opposite of what "0" means on every other key —
+// and there is no value that expresses it. Saying so is the only honest answer.
+func TestRedialBudgetZeroInTheFileIsRefused(t *testing.T) {
+	for _, key := range []string{"redialBudget", "redialBudgetWindow"} {
+		for _, val := range []string{"0", "0s", "-1m"} {
+			t.Run(key+"="+val, func(t *testing.T) {
+				p := filepath.Join(t.TempDir(), "c.json")
+				body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"advanced":{"` +
+					key + `":"` + val + `"}}}`
+				if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				_, err := Load(p)
+				if err == nil {
+					t.Fatalf("Load accepted %s: %q; a limit has no off, and normalising it "+
+						"away leaves the user believing the bound was lifted", key, val)
+				}
+				// The message has to name the key and offer the real alternative,
+				// or the refusal is just an obstacle.
+				if !strings.Contains(err.Error(), key) ||
+					!strings.Contains(err.Error(), "vpn.redialWindow") {
+					t.Errorf("error = %q, want it to name %s and point at vpn.redialWindow",
+						err, key)
+				}
+			})
+		}
+	}
+}
+
+// The mirror, and the reason the check is on the written string rather than on
+// the parsed value: an ABSENT key is the ordinary case for both of these, and
+// must still take its default rather than trip the refusal above.
+func TestAbsentRedialBudgetTakesTheDefault(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "c.json")
+	body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"advanced":{"commandFreshness":"15s"}}}`
+	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(p)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.VPN.Advanced.RedialBudget != defaultRedialBudget {
+		t.Errorf("redialBudget = %s, want default %s", cfg.VPN.Advanced.RedialBudget, defaultRedialBudget)
+	}
+	if cfg.VPN.Advanced.RedialBudgetWindow != defaultRedialBudgetWindow {
+		t.Errorf("redialBudgetWindow = %s, want default %s",
+			cfg.VPN.Advanced.RedialBudgetWindow, defaultRedialBudgetWindow)
+	}
+}
+
+// The validation rule below is only as good as the number behind it, and that
+// number lives in another package. If redial.MinGrant moves and this copy does
+// not, Validate starts accepting a budget the ledger will refuse forever — the
+// exact silent-disable this rule exists to prevent, reintroduced by a constant
+// nobody thought to grep for.
+func TestMinRedialGrantMatchesTheLedger(t *testing.T) {
+	if minRedialGrant != redial.MinGrant {
+		t.Fatalf("minRedialGrant = %s but redial.MinGrant = %s; the validation rule "+
+			"and the ledger disagree about the shortest window worth opening",
+			minRedialGrant, redial.MinGrant)
+	}
+}
+
+// A budget too small to afford even the shortest window turns the automatic
+// redial window off by arithmetic while the config still reads as though it is
+// on. Turning it off is fine — `vpn.redialWindow: "0"` is there for that — but
+// it has to be a decision, not a rounding error, so this is refused by name.
+func TestABudgetTooSmallToEverOpenIsRefused(t *testing.T) {
+	for _, budget := range []time.Duration{time.Second, redial.MinGrant - time.Nanosecond} {
+		cfg := Default()
+		cfg.VPN.TunnelInterfaces = []string{"utun4"}
+		cfg.VPN.RedialWindow = 30 * time.Second
+		cfg.VPN.Advanced.RedialBudget = budget
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatalf("redialBudget %s validated clean; the automatic window can never open", budget)
+		}
+		for _, want := range []string{"redialBudget", "vpn.redialWindow"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error for %s does not mention %q: %v", budget, want, err)
+			}
+		}
+	}
+}
+
+// The other side of the same rule: a budget at the floor is exactly enough for
+// one shortest window, so it is a legitimate — if severe — choice and must pass.
+// A rule that also refused this would be tightening past what it can justify.
+func TestABudgetAtTheFloorIsAccepted(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun4"}
+	cfg.VPN.RedialWindow = 30 * time.Second
+	cfg.VPN.Advanced.RedialBudget = redial.MinGrant
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a budget of exactly redial.MinGrant was refused: %v", err)
+	}
+}
+
+// The floor tracks the LEDGER's floor, not the constant. redial.floorFor honours
+// a vpn.redialWindow deliberately shorter than MinGrant as-is, so a budget that
+// affords that shorter window opens one — and rejecting it against a 5s minimum
+// that does not apply would refuse a working config while stating a reason that
+// is not true of it.
+func TestTheBudgetFloorFollowsAShortConfiguredWindow(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun4"}
+	cfg.VPN.RedialWindow = 3 * time.Second // below redial.MinGrant, honoured as-is
+	cfg.VPN.Advanced.RedialBudget = 4 * time.Second
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("a budget that affords the configured 3s window was refused: %v", err)
+	}
+
+	// Below the configured window it genuinely cannot open one, and is refused.
+	cfg.VPN.Advanced.RedialBudget = 2 * time.Second
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("a budget below the configured window validated clean")
+	}
+	if !strings.Contains(err.Error(), "3s") {
+		t.Errorf("the error quotes a floor the ledger does not use: %v", err)
+	}
+}
+
+// And the rule must not fire when the automatic window is already off outright:
+// with vpn.redialWindow disabled the budget is inert, so complaining about its
+// size would block a config that has no automatic window to break.
+func TestTheBudgetFloorIsMootWhenTheWindowIsDisabled(t *testing.T) {
+	cfg := Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun4"}
+	cfg.VPN.RedialWindow = Disabled
+	cfg.VPN.Advanced.RedialBudget = time.Second
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("the budget floor fired on a config with no automatic window: %v", err)
 	}
 }

@@ -336,9 +336,23 @@ Safety rails, all non-negotiable:
   an explicit operator command), never while another window is already open.
 - Only on an **observed** tunnel drop: a tunnel that was never actually seen up
   gets no window.
-- **Anti-flap gate** (`vpn.advanced.redialMinUptime`, default `15s`): a
-  tunnel that keeps bouncing with no confirmed exit stops earning windows, so a
-  broken VPN cannot turn the guard into a sieve.
+- **A rolling budget bounds the total** (`vpn.advanced.redialBudget`, default
+  `2m`, per `vpn.advanced.redialBudgetWindow`, default `15m`): windows spend
+  from it, so a broken VPN cannot turn the guard into a sieve however many
+  times it drops. A window that closes early only spends what it used, so a
+  healthy link that redials in seconds barely touches the budget — the bound
+  only bites a connection that is genuinely failing. When it can no longer
+  afford a window, the guard holds and traffic stays cut.
+- **Backing off** (`vpn.advanced.redialMinUptime`, default `15s`): a tunnel
+  that drops again after less than this, with no confirmed exit, still gets a
+  window — but a shorter one for each consecutive fast drop, with a growing
+  wait between them. It used to get nothing at all, which pushed exactly the
+  users with the worst connections onto the manual path
+  ([ADR-0009](../adr/0009-redial-budget.md)). The wait ends the moment the
+  tunnel proves itself — a confirmed exit, or an uptime past
+  `redialMinUptime` — rather than having to be sat out: a connection that
+  recovered is no longer the flap the backoff was rationing. The rolling
+  budget above still applies either way.
 - One window per drop: expiry does not re-open; the next window needs the
   tunnel to come back up first.
 - Capped by its own `advanced.redialWindowMax` (default 10m) — not

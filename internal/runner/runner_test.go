@@ -105,6 +105,17 @@ func failResult() monitor.Result {
 
 func discardLog() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
 
+// A redial budget generous enough, at these millisecond test durations, that the
+// ledger never refuses. Every test asserting some OTHER precondition of the
+// automatic window sets these, so it cannot pass for the wrong reason: an
+// Options with a redial window but no budget opens NOTHING (a zero budget can
+// afford no window), and a test expecting no window would then agree with itself
+// while proving nothing. Tests about the budget itself set their own numbers.
+const (
+	testRedialBudget       = 10 * time.Second
+	testRedialBudgetWindow = time.Minute
+)
+
 // oneHostAL is a non-empty allowlist so the legacy mid-block refresh re-Blocks
 // (an empty refresh is deliberately skipped — see TestLegacyRefreshSkipWhenEmpty).
 func equal(a, b []string) bool {
@@ -1029,15 +1040,17 @@ func TestVPNAutoRedialWindowOpensAndExpires(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:      steadyMonitor{cc: "US"},
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      edgeWatcher(5),
-		RedialWindow: 50 * time.Millisecond,
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(5),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1077,15 +1090,17 @@ func TestTunnelDropPublishesTheCutBeforeRelaxing(t *testing.T) {
 	var mu sync.Mutex
 	var snaps []state.Snapshot
 	o := Options{
-		Monitor:      steadyMonitor{cc: "US"},
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      edgeWatcher(5),
-		RedialWindow: 50 * time.Millisecond,
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(5),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
 		Publish: func(s state.Snapshot) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -1159,15 +1174,17 @@ func TestDropRecordClearsWhenTheTunnelReturns(t *testing.T) {
 	var mu sync.Mutex
 	var snaps []state.Snapshot
 	o := Options{
-		Monitor:      steadyMonitor{cc: "US"},
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      watcher,
-		RedialWindow: 10 * time.Millisecond,
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            watcher,
+		RedialWindow:       10 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
 		Publish: func(s state.Snapshot) {
 			mu.Lock()
 			defer mu.Unlock()
@@ -1214,16 +1231,18 @@ func TestHoldTheLineSuppressesTheRedialWindow(t *testing.T) {
 	cmds := []command.Command{{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "hold-1"}}
 	sent := 0
 	o := Options{
-		Monitor:      steadyMonitor{cc: "US"},
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      edgeWatcher(8),
-		RedialWindow: 50 * time.Millisecond,
-		CommandPoll:  time.Millisecond,
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(8),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
+		CommandPoll:        time.Millisecond,
 		PollCommand: func() (command.Command, bool) {
 			if sent < len(cmds) {
 				c := cmds[sent]
@@ -1251,17 +1270,19 @@ func TestWithoutHoldTheSameDropOpensAWindow(t *testing.T) {
 	defer cancel()
 
 	o := Options{
-		Monitor:      steadyMonitor{cc: "US"},
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      edgeWatcher(8),
-		RedialWindow: 50 * time.Millisecond,
-		CommandPoll:  time.Millisecond,
-		PollCommand:  func() (command.Command, bool) { return command.Command{}, false },
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(8),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
+		CommandPoll:        time.Millisecond,
+		PollCommand:        func() (command.Command, bool) { return command.Command{}, false },
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1307,16 +1328,18 @@ func TestHoldTheLineIsSpentByTheDropItCovers(t *testing.T) {
 	cmds := []command.Command{{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "hold-1"}}
 	sent := 0
 	o := Options{
-		Monitor:      steadyMonitor{cc: "US"},
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      watcher,
-		RedialWindow: 30 * time.Millisecond,
-		CommandPoll:  time.Millisecond,
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            watcher,
+		RedialWindow:       30 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
+		CommandPoll:        time.Millisecond,
 		PollCommand: func() (command.Command, bool) {
 			if sent < len(cmds) {
 				c := cmds[sent]
@@ -1365,19 +1388,21 @@ func TestManualTakeoverKeepsAutoWindowExposureCap(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:         steadyMonitor{cc: "US"},
-		Decider:         decision.New([]string{"IR"}, 1),
-		Backend:         be,
-		Log:             discardLog(),
-		Interval:        time.Millisecond,
-		Tunnels:         []string{"utun4"},
-		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:         edgeWatcher(2),        // drops at ~2ms, opening the AUTO window
-		RedialWindow:    15 * time.Millisecond, // auto window's own initial duration
-		RedialWindowMax: 30 * time.Millisecond, // the correct cap for this episode
-		SwitchWindow:    time.Second,           // manual switch windows enabled at all
-		SwitchWindowMax: 10 * time.Second,      // deliberately far larger than the auto cap
-		CommandPoll:     10 * time.Millisecond,
+		Monitor:            steadyMonitor{cc: "US"},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(2),        // drops at ~2ms, opening the AUTO window
+		RedialWindow:       15 * time.Millisecond, // auto window's own initial duration
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
+		RedialWindowMax:    30 * time.Millisecond, // the correct cap for this episode
+		SwitchWindow:       time.Second,           // manual switch windows enabled at all
+		SwitchWindowMax:    10 * time.Second,      // deliberately far larger than the auto cap
+		CommandPoll:        10 * time.Millisecond,
 		PollCommand: scriptedCommands(
 			// Arrives ~10ms in, while the auto window (opened ~2ms, due 15ms
 			// later) is still active — a takeover, not a fresh open. clampWindow
@@ -1406,15 +1431,17 @@ func TestVPNAutoWindowRequiresObservedUp(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:      steadyFailMonitor{},
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      downWatcher(),
-		RedialWindow: 50 * time.Millisecond,
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            downWatcher(),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1444,33 +1471,70 @@ func flapWatcher() *netdetect.Watcher {
 	}
 }
 
-// The anti-flap gate: a drop after an observed up-streak shorter than
-// RedialMinUptime, with no confirmed exit, must NOT get an auto window.
-// (The first drop after an armed start is different: uptime before the daemon
-// started is unknowable, so it gets the benefit of the doubt — see
-// TestVPNAutoRedialWindowOpensAndExpires.)
-func TestVPNAutoWindowFlapGuard(t *testing.T) {
+// The inversion ADR-0009 exists for. A drop after an up-streak shorter than
+// RedialMinUptime, with no confirmed exit, used to get NO window at all — so a
+// struggling VPN got no automatic help at exactly the moment it needed it, and
+// the user had to run `dezhban switch` by hand. That is a product failure in a
+// tool whose whole promise is minimum interaction, so a fast drop now still gets
+// a window; it is the rolling budget, not the uptime, that eventually refuses.
+//
+// How much SHORTER the backed-off window is belongs to internal/redial, which
+// tests the arithmetic directly. This test owns the wiring: that a fast drop
+// reaches the ledger at all and that the ledger's grant opens a real window.
+func TestVPNAutoWindowFastDropStillGetsAWindow(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:         steadyFailMonitor{},
-		Decider:         decision.New([]string{"IR"}, 1),
-		Backend:         be,
-		Log:             discardLog(),
-		Interval:        time.Millisecond,
-		Tunnels:         []string{"utun4"},
-		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:         flapWatcher(),
-		RedialWindow:    50 * time.Millisecond,
-		RedialMinUptime: 10 * time.Second,
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            flapWatcher(),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
+		RedialMinUptime:    10 * time.Second, // every drop here counts as fast
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if !containsCall(be.calls, "apply-switch") {
+		t.Fatalf("a fast drop got no redial window; the backoff is suppressing again "+
+			"instead of shortening. calls = %v", be.calls)
+	}
+}
+
+// The other half: the budget, not the uptime, is what refuses. Same fixture,
+// same fast drop, but a budget too small to afford a window — the guard must
+// hold and traffic stay cut. This is the bound ADR-0009 adds; without it the
+// automatic window is unbounded across drops, which is what ships today.
+func TestVPNAutoWindowRefusedWhenBudgetCannotAffordIt(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            flapWatcher(),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       time.Millisecond, // cannot afford even one window
+		RedialBudgetWindow: testRedialBudgetWindow,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range be.calls {
 		if c == "apply-switch" {
-			t.Fatalf("flap guard failed: window opened after a ~3ms observed uptime with no confirmed exit; calls = %v", be.calls)
+			t.Fatalf("a window opened on a budget that could not afford it; calls = %v", be.calls)
 		}
 	}
 }
@@ -1482,15 +1546,17 @@ func TestVPNAutoWindowNotFromFullBlock(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
 	o := Options{
-		Monitor:      steadyMonitor{cc: "IR"}, // forbidden exit → FULL BLOCK at startup
-		Decider:      decision.New([]string{"IR"}, 1),
-		Backend:      be,
-		Log:          discardLog(),
-		Interval:     time.Millisecond,
-		Tunnels:      []string{"utun4"},
-		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
-		Watcher:      edgeWatcher(5),
-		RedialWindow: 50 * time.Millisecond,
+		Monitor:            steadyMonitor{cc: "IR"}, // forbidden exit → FULL BLOCK at startup
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(5),
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
 	}
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
@@ -1529,7 +1595,7 @@ func TestLookupFailureClassification(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var got state.Snapshot
 			o := Options{Publish: func(s state.Snapshot) { got = s }}
-			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil, nil)
+			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil, nil, nil)
 
 			if hasErr := got.LookupErr != ""; hasErr != c.wantLookupErr {
 				t.Errorf("LookupErr set = %v, want %v (got %q)", hasErr, c.wantLookupErr, got.LookupErr)
@@ -1551,7 +1617,7 @@ func TestSuccessfulLookupSetsNoErrorFields(t *testing.T) {
 	var got state.Snapshot
 	o := Options{Publish: func(s state.Snapshot) { got = s }}
 	o.publish(false, false, monitor.Reading{CountryCode: "NL"}, nil, nil,
-		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil, nil)
+		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil, nil, nil)
 	if got.LookupErr != "" || got.ExitUnknown != "" {
 		t.Errorf("a successful lookup set LookupErr=%q ExitUnknown=%q, want both empty", got.LookupErr, got.ExitUnknown)
 	}
@@ -1600,4 +1666,652 @@ func TestProbeFallsBackToLiftWhenNoProviders(t *testing.T) {
 	if strings.Join(be.calls, ",") != strings.Join(want, ",") {
 		t.Errorf("fallback probe calls = %v, want %v (lift then re-cut)", be.calls, want)
 	}
+}
+
+// --- the redial ledger's debit/credit pairing at the runner seam ---
+
+// firstWindowFailsBackend fails the FIRST window-open Apply and succeeds after,
+// so a test can observe what the ledger did about a window that never opened.
+type firstWindowFailsBackend struct {
+	mu     sync.Mutex
+	calls  []string
+	failed bool
+}
+
+func (b *firstWindowFailsBackend) Apply(p firewall.Policy) error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch p.Mode {
+	case firewall.ModeGuard:
+		b.calls = append(b.calls, "apply-guard")
+	case firewall.ModeSwitchWindow:
+		if !b.failed {
+			b.failed = true
+			b.calls = append(b.calls, "apply-switch-failed")
+			return errors.New("pfctl said no")
+		}
+		b.calls = append(b.calls, "apply-switch")
+	default:
+		b.calls = append(b.calls, "apply-fullblock")
+	}
+	return nil
+}
+func (b *firstWindowFailsBackend) Block(a firewall.Allowlist) error { return nil }
+func (b *firstWindowFailsBackend) Unblock() error                   { return nil }
+func (b *firstWindowFailsBackend) Cleanup() error                   { return nil }
+func (b *firstWindowFailsBackend) seen() []string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return append([]string(nil), b.calls...)
+}
+
+// twoDropWatcher goes up, down, up, down — two separate drops, so a test can ask
+// what the SECOND one was allowed to do.
+func twoDropWatcher() *netdetect.Watcher {
+	n := 0
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			n++
+			if (n > 5 && n <= 8) || (n > 20 && n <= 24) {
+				return netdetect.TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+			}
+			return netdetect.TunnelState{}
+		},
+	}
+}
+
+// A window whose rules never landed cost the user nothing, so it must cost the
+// budget nothing. The grant is debited before Backend.Apply runs — it has to be,
+// the decision comes first — so a failed Apply would otherwise leave the debit
+// standing with no window to close it, and expire deliberately never ages an
+// open episode out. The budget here affords exactly one window: if the failed
+// open is charged, the second drop gets nothing.
+func TestAFailedOpenCostsTheBudgetNothing(t *testing.T) {
+	be := &firstWindowFailsBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            twoDropWatcher(),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       20 * time.Millisecond, // room for exactly one window
+		RedialBudgetWindow: time.Minute,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	calls := be.seen()
+	var failed, opened int
+	for _, c := range calls {
+		switch c {
+		case "apply-switch-failed":
+			failed++
+		case "apply-switch":
+			opened++
+		}
+	}
+	if failed == 0 {
+		t.Fatalf("the fixture never attempted a window open, so nothing is proven; calls = %v", calls)
+	}
+	if opened == 0 {
+		t.Errorf("the second drop got no window: the first open FAILED (no rules applied, "+
+			"no exposure taken) yet the budget was charged for it. The ledger is measuring "+
+			"exposure OFFERED, which is what credit-on-close exists to prevent. calls = %v", calls)
+	}
+}
+
+// docs/usage/cli.md promises a reader that an open window is reported by
+// state.switch "instead, never here", and tells scripts to match on
+// .redial.reason. A manual switch opened over a standing refusal used to publish
+// both at once — the guard relaxed and, in the same snapshot, an explanation of
+// why it was holding until 3:15PM.
+func TestAnOpenWindowIsNeverPublishedBesideARefusal(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	var mu sync.Mutex
+	var snaps []state.Snapshot
+	sent := false
+
+	o := Options{
+		Monitor:   steadyFailMonitor{},
+		Decider:   decision.New([]string{"IR"}, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:   flapWatcher(),
+		// Too small to afford any window, so the drop is refused and the
+		// refusal stands while the tunnel stays down.
+		RedialWindow:       50 * time.Millisecond,
+		RedialBudget:       time.Millisecond,
+		RedialBudgetWindow: time.Minute,
+		SwitchWindow:       80 * time.Millisecond,
+		SwitchWindowMax:    time.Minute,
+		CommandPoll:        5 * time.Millisecond,
+		// Open a manual window only once a refusal has actually been published,
+		// so the two really do overlap rather than racing.
+		PollCommand: func() (command.Command, bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			if sent {
+				return command.Command{}, false
+			}
+			for _, s := range snaps {
+				if s.Redial != nil {
+					sent = true
+					return command.Command{Op: command.OpOpenSwitchWindow}, true
+				}
+			}
+			return command.Command{}, false
+		},
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			snaps = append(snaps, s)
+			mu.Unlock()
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	var refusals, both int
+	for _, s := range snaps {
+		if s.Redial == nil {
+			continue
+		}
+		refusals++
+		if s.Switch != nil {
+			both++
+			t.Logf("posture=%q switch.trigger=%q redial.reason=%q",
+				s.Posture, s.Switch.Trigger, s.Redial.Reason)
+		}
+	}
+	if refusals == 0 {
+		t.Fatal("no refusal was ever published, so the overlap could not occur; nothing is proven")
+	}
+	if both > 0 {
+		t.Errorf("%d snapshot(s) carry BOTH state.switch and state.redial — a script matching "+
+			"on .redial.reason sees the guard holding while a window is open", both)
+	}
+}
+
+// redialScriptWatcher replays a fixed up/down script, one entry per sample,
+// holding the last entry forever. Unlike edgeWatcher it can produce a tunnel
+// that comes back and drops AGAIN, which is what it takes to exhaust the redial
+// budget; unlike recovery_test.go's scriptedWatcher it needs no test goroutine
+// driving it, because the behaviour under test happens on its own with no
+// further input. Each run is at least as long as netdetect's down debounce
+// (2 samples) so every edge is actually emitted.
+func redialScriptWatcher(script []bool) *netdetect.Watcher {
+	n := 0
+	return &netdetect.Watcher{
+		Interval: time.Millisecond,
+		Sample: func([]string) netdetect.TunnelState {
+			up := script[len(script)-1]
+			if n < len(script) {
+				up = script[n]
+			}
+			n++
+			if up {
+				return netdetect.TunnelState{Up: true, Name: "utun4", Names: []string{"utun4"}}
+			}
+			return netdetect.TunnelState{}
+		},
+	}
+}
+
+// A refusal names an instant the guard can relax again; this is the test that it
+// is a time the guard ACTS on rather than one it merely reports.
+//
+// The decision used to be retaken only on the next tunnel-down edge, so a tunnel
+// that could not come back by itself — the rotated-server-address case the window
+// exists for — produced no further edge, and the refusal stood until an operator
+// ran `dezhban switch`. The budget refilling changed nothing on its own.
+//
+// The script drops twice: the first drop spends the budget, the second is refused
+// against it. Then the tunnel stays DOWN, so any window that opens after that can
+// only have come from the retry — there is no second up edge to trigger one.
+func TestARefusedRedialRetriesWhenTheBudgetRefills(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	// up ~15ms, down (drop 1), up again ~15ms, then down forever (drop 2).
+	script := make([]bool, 0, 60)
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, false)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	script = append(script, false)
+
+	var (
+		mu    sync.Mutex
+		snaps []state.Snapshot
+	)
+	o := Options{
+		// The lookup always fails, so no confirmed exit ever closes a window
+		// early — every window costs its full grant, which is what makes the
+		// budget reachable inside a test's lifetime.
+		Monitor:      steadyFailMonitor{},
+		Decider:      decision.New([]string{"IR"}, 1),
+		Backend:      be,
+		Log:          discardLog(),
+		Interval:     time.Millisecond,
+		Tunnels:      []string{"utun4"},
+		Endpoints:    []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:      redialScriptWatcher(script),
+		RedialWindow: 20 * time.Millisecond,
+		// Room for one full window and no more, refilling 120ms after the first
+		// window opened.
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			defer mu.Unlock()
+			snaps = append(snaps, s)
+		},
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	// A refusal must have been published, or the test proved nothing.
+	refusedAt := -1
+	for i, s := range snaps {
+		if s.Redial != nil {
+			refusedAt = i
+			break
+		}
+	}
+	if refusedAt < 0 {
+		t.Fatal("no redial refusal was ever published; the budget never ran out and this fixture tests nothing")
+	}
+
+	// After the refusal, a window must open while the tunnel is still DOWN. With
+	// no further up edge in the script, the retry is the only thing that could
+	// have opened it.
+	reopened := false
+	for _, s := range snaps[refusedAt:] {
+		if s.Switch == nil || !s.Switch.Open {
+			continue
+		}
+		if s.Switch.Trigger != state.TriggerAuto {
+			t.Errorf("window after the refusal has trigger %q, want %q — the retry must stay trigger 2",
+				s.Switch.Trigger, state.TriggerAuto)
+		}
+		if anyTunnelUp(s.Tunnels) {
+			continue // a window with a tunnel up cannot be attributed to the retry
+		}
+		reopened = true
+		// The refusal must be gone: a window is open, so nothing is being held.
+		if s.Redial != nil {
+			t.Errorf("a window is open but state.redial still reports %q — "+
+				"exactly one of the two may be present", s.Redial.Reason)
+		}
+		break
+	}
+	if !reopened {
+		t.Error("the refused drop never got a window once the budget refilled — " +
+			"nextEligible is being published as a time nothing acts on")
+	}
+}
+
+// A refusal explains a wait against a bound. Turning the automatic window off
+// makes that explanation VOID, not merely unanswered: nothing governs the wait
+// any more and nextEligible names an instant nothing will act on.
+//
+// The failure this pins is the published promise, not the missing window. With
+// vpn.redialWindow reloaded to "0" the guard correctly holds — that is the
+// setting doing its job. What must not happen is `status --json` and the app
+// going on reporting "dezhban tries again at 3:15PM" for the rest of the cut,
+// for a window that has been switched off entirely. The retry cannot clear it
+// on its own: disabling the window is exactly what makes autoWindowPossible
+// false, so the re-decision returns before reaching the ledger.
+//
+// Same fixture as TestARefusedRedialRetriesWhenTheBudgetRefills, which is the
+// control: without the reload, that drop gets a window while the tunnel is down.
+func TestDisablingTheRedialWindowDropsAStandingRefusal(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+
+	// up, down (drop 1 spends the budget), up, then down for the rest of the run.
+	script := make([]bool, 0, 60)
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, false)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	script = append(script, false)
+
+	reloadC := make(chan LiveSettings, 1)
+	var (
+		mu       sync.Mutex
+		snaps    []state.Snapshot
+		disabled bool
+	)
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		ReloadC:            reloadC,
+	}
+	o.Publish = func(s state.Snapshot) {
+		mu.Lock()
+		defer mu.Unlock()
+		snaps = append(snaps, s)
+		// The moment a refusal is published, turn the automatic window off.
+		if s.Redial != nil && !disabled {
+			disabled = true
+			ls := o.Live()
+			ls.RedialWindow = -1 // the config.Disabled sentinel
+			select {
+			case reloadC <- ls:
+			default:
+			}
+		}
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !disabled {
+		t.Fatal("no refusal was ever published; the budget never ran out and this fixture tests nothing")
+	}
+	// The LAST LIVE snapshot, not the last one: shutdown publishes a terminal
+	// posture:"stopped" record that carries no refusal, and asserting on that
+	// would pass whether or not the refusal was ever dropped. This test failed to
+	// fail for exactly that reason before the distinction was made.
+	var last *state.Snapshot
+	for i := len(snaps) - 1; i >= 0; i-- {
+		if snaps[i].Posture != "stopped" {
+			last = &snaps[i]
+			break
+		}
+	}
+	if last == nil {
+		t.Fatal("every snapshot was the terminal stopped record; fixture proved nothing")
+	}
+	// The run is 600ms against a 120ms rolling period, so the bound the refusal
+	// named lifted long before the end. A refusal still standing at that point is
+	// one nothing will ever act on.
+	if last.Redial != nil {
+		t.Errorf("the automatic window is off but state.redial still reports %q with nextEligible %v — "+
+			"a refusal outliving the setting that justified it publishes a time nothing will honour",
+			last.Redial.Reason, last.Redial.NextEligible)
+	}
+	// And the window really is off: the setting must still be doing its job.
+	if last.Switch != nil && last.Switch.Open {
+		t.Error("a window is open after vpn.redialWindow was set to \"0\"")
+	}
+}
+
+// The retry must not multiply windows: one automatic window per drop is the
+// standing rule, and a retry that re-armed after its own window closed would
+// turn a single drop into a repeating relaxation.
+func TestTheRetryStillOpensAtMostOneWindowPerDrop(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// Up briefly, then down for the rest of the run: exactly one drop.
+	script := []bool{true, true, true, true, true, false}
+
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 60 * time.Millisecond,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	windows := 0
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			windows++
+		}
+	}
+	// One drop, one window. The budget refills repeatedly inside this run, so a
+	// retry that re-armed after its own window closed would show up here as many.
+	if windows != 1 {
+		t.Errorf("one drop opened %d automatic windows, want exactly 1 — "+
+			"the retry must not re-arm once a window has been granted", windows)
+	}
+}
+
+// Hold the line suppresses the RETRY, not just the drop edge. An operator who
+// arms it while already cut is saying "keep me cut", and a rule that may only
+// subtract a relaxation has to be able to subtract this one too — otherwise the
+// window the operator just refused arrives anyway a few seconds later, which
+// reads as the daemon overruling them.
+//
+// The flag is deliberately NOT spent here: it names the next drop, and a cut
+// already in progress is not one.
+func TestHoldArmedMidCutSuppressesTheRetry(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 600*time.Millisecond)
+	defer cancel()
+
+	// Same fixture as TestARefusedRedialRetriesWhenTheBudgetRefills, whose pass
+	// is the control: without the hold, this drop DOES get a window from the
+	// retry while the tunnel is still down.
+	script := redialTwoDropScript()
+
+	var (
+		mu      sync.Mutex
+		refused bool
+		armed   bool
+	)
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		CommandPoll:        time.Millisecond,
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			defer mu.Unlock()
+			if s.Redial != nil {
+				refused = true
+			}
+		},
+	}
+	// Arm the moment a refusal stands, which is well before the retry deadline.
+	o.PollCommand = func() (command.Command, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if refused && !armed {
+			armed = true
+			return command.Command{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "arm"}, true
+		}
+		return command.Command{}, false
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !refused || !armed {
+		t.Fatalf("fixture never reached the state under test (refused=%v armed=%v)", refused, armed)
+	}
+	// The first drop's window is expected; the retry's second one is not.
+	windows := 0
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			windows++
+		}
+	}
+	if windows != 1 {
+		t.Errorf("got %d automatic windows, want 1 — the retry opened one despite "+
+			"hold the line being armed against the cut it was going to relax", windows)
+	}
+}
+
+// Cancelling hold the line gives the pending re-decision back. Hold only ever
+// SUBTRACTS a relaxation, so cancelling it must be able to restore what it took:
+// the drop already qualified as trigger 2 at its own edge, and the only thing
+// that had said no since was the operator, who has now changed their mind.
+//
+// Without this the retry fires once, is skipped by the hold, disarms itself, and
+// nothing re-arms it — so the drop stays cut until the next tunnel-down edge,
+// which cannot arrive while the tunnel is already down. That is the wall
+// ADR-0009's retry exists to remove, reachable by using the feature that is
+// meant to be the CAUTIOUS choice, and with both surfaces claiming throughout
+// that dezhban re-checks on its own.
+func TestCancellingHoldRestoresTheRetry(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 700*time.Millisecond)
+	defer cancel()
+
+	script := redialTwoDropScript()
+
+	var (
+		mu       sync.Mutex
+		snaps    []state.Snapshot
+		refused  bool
+		armed    bool
+		canceled bool
+		start    = time.Now()
+	)
+	o := Options{
+		Monitor:            steadyFailMonitor{},
+		Decider:            decision.New([]string{"IR"}, 1),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            redialScriptWatcher(script),
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		CommandPoll:        time.Millisecond,
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			defer mu.Unlock()
+			snaps = append(snaps, s)
+			if s.Redial != nil {
+				refused = true
+			}
+		},
+	}
+	o.PollCommand = func() (command.Command, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		if refused && !armed {
+			armed = true
+			return command.Command{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "arm"}, true
+		}
+		// Cancel well AFTER the retry deadline (~120ms past the first window), so
+		// the retry has already fired and been consumed by the hold. That is the
+		// case with nothing left armed, and the one this test exists for.
+		if armed && !canceled && time.Since(start) > 300*time.Millisecond {
+			canceled = true
+			return command.Command{Op: command.OpHoldCancel, IssuedAt: time.Now(), Nonce: "cancel"}, true
+		}
+		return command.Command{}, false
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !refused || !armed || !canceled {
+		t.Fatalf("fixture never reached the state under test (refused=%v armed=%v canceled=%v)",
+			refused, armed, canceled)
+	}
+
+	// Find where hold went from armed to cancelled, then require a window after
+	// it — opened while the tunnel is still DOWN, so only the restored retry can
+	// account for it.
+	cancelIdx := -1
+	for i := 1; i < len(snaps); i++ {
+		prev, cur := snaps[i-1], snaps[i]
+		if prev.Hold != nil && prev.Hold.Armed && (cur.Hold == nil || !cur.Hold.Armed) {
+			cancelIdx = i
+		}
+	}
+	if cancelIdx < 0 {
+		t.Fatal("never observed hold going from armed to cancelled; fixture proved nothing")
+	}
+	for _, s := range snaps[cancelIdx:] {
+		if s.Switch == nil || !s.Switch.Open || anyTunnelUp(s.Tunnels) {
+			continue
+		}
+		if s.Switch.Trigger != state.TriggerAuto {
+			t.Errorf("window after the cancel has trigger %q, want %q — a restored retry "+
+				"is still trigger 2", s.Switch.Trigger, state.TriggerAuto)
+		}
+		return
+	}
+	t.Error("after hold the line was cancelled the refused drop never got a window: " +
+		"the retry the hold consumed is never restored, so nothing re-decides until the " +
+		"next tunnel-down edge, which cannot arrive while the tunnel is down")
+}
+
+// The drop shape both hold/retry tests above share with
+// TestARefusedRedialRetriesWhenTheBudgetRefills: up, down (drop 1 spends the
+// budget), up, then down for the rest of the run. Factored out so the control
+// and the two hold cases cannot drift into testing different fixtures.
+func redialTwoDropScript() []bool {
+	script := make([]bool, 0, 60)
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, false)
+	}
+	for i := 0; i < 15; i++ {
+		script = append(script, true)
+	}
+	return append(script, false)
 }

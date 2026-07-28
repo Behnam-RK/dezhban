@@ -10,7 +10,13 @@ public struct Tunnel: Codable {
 /// An open switch window — mirrors Go's `state.SwitchState`.
 public struct SwitchState: Codable {
     public let open: Bool
-    public let until: Date
+    /// The window's deadline, absent when the writer had none. Optional to match
+    /// Go's `omitzero`: publishing a zero `time.Time` would emit a year-1
+    /// timestamp the ISO8601 decoder refuses, and one unreadable date fails the
+    /// WHOLE Snapshot decode — the menubar would read "stopped" while dezhban is
+    /// enforcing. `render.windowDisplay` already omits the deadline clause in
+    /// this case; a countdown with no deadline is simply not shown.
+    public let until: Date?
     public let profile: String?
     /// "manual" (operator command), "auto" (automatic redial window opened by a
     /// tunnel drop), or "pause" (deliberate operator pause). Absent from older
@@ -18,6 +24,26 @@ public struct SwitchState: Codable {
     public let trigger: String?
 
     public var isAutoRedial: Bool { trigger == "auto" }
+
+    /// Seconds left on the window as of `now`, or nil when the writer published
+    /// no deadline. One helper rather than an `if let` at each of the five
+    /// display sites, so they cannot drift on what a missing deadline means:
+    /// every one of them drops the countdown and keeps the rest of the label. A
+    /// window with no stated end is still an open window, and saying "0:00 left"
+    /// would be a countdown to a moment nobody wrote down.
+    public func timeLeft(asOf now: Date) -> TimeInterval? {
+        guard let until else { return nil }
+        return max(0, until.timeIntervalSince(now))
+    }
+
+    /// The " (2:31 left)" a button title carries, or "" when there is no
+    /// deadline to count down to. Separate from timeLeft because the three
+    /// button sites all want exactly this and would otherwise each spell the
+    /// same optional-to-string dance.
+    public func leftSuffix(asOf now: Date) -> String {
+        guard let left = timeLeft(asOf: now) else { return "" }
+        return " (\(PostureUI.mmss(left)) left)"
+    }
 
     /// A pause is a deliberate drop to the real ISP IP, not a VPN problem, so it
     /// reads and looks different from the other two even though all three share
@@ -33,7 +59,9 @@ public struct SwitchState: Codable {
 /// It carries the moment and nothing else — see Go's DropRecord for why a "was
 /// traffic cut" companion flag could not be rendered truthfully.
 public struct DropRecord: Codable {
-    public let at: Date
+    /// Optional to match Go's `omitzero` — see `SwitchState.until` for why a
+    /// zero date must arrive as an absent key rather than as year 1.
+    public let at: Date?
 }
 
 /// "Hold the line" is armed — mirrors Go's `state.HoldState`. The next tunnel
@@ -45,7 +73,47 @@ public struct DropRecord: Codable {
 /// introducing a new colour.
 public struct HoldState: Codable {
     public let armed: Bool
-    public let at: Date
+    /// Optional to match Go's `omitzero` — see `SwitchState.until`. Nothing
+    /// displays it; `armed` is the whole signal.
+    public let at: Date?
+}
+
+/// The automatic redial window was REFUSED for the drop being carried — mirrors
+/// Go's `state.RedialState`. Present only while such a refusal stands; a granted
+/// window is reported by `switch` instead.
+///
+/// The app does not compose a sentence from these fields. `display.detail`
+/// already says it, rendered by the same Go code the CLI uses, so both surfaces
+/// say the same thing. This is here for anything that needs the facts rather
+/// than the prose — and because decoding what the daemon writes is how the
+/// contract stays honest.
+public struct RedialState: Codable {
+    /// Stable identifier: "cooldown" (backing off after fast drops) or
+    /// "exhausted" (the rolling budget is spent). Match on it, don't display it.
+    public let reason: String
+    /// Earliest instant a window could open — a bound, not a promise. dezhban
+    /// re-takes the decision when this instant arrives, so it is a time the
+    /// guard acts on rather than one it merely reports; but the re-decision
+    /// consults the budget afresh and may refuse again. This is what makes a
+    /// refusal actionable — "the guard is holding" without it is a wall, not a
+    /// wait.
+    ///
+    /// Optional because the Go field is `omitzero`: a writer with no instant
+    /// omits the key rather than publishing "0001-01-01T00:00:00Z", and an
+    /// absent key is the one shape this decoder handles for free. The `?` is
+    /// what buys that — note it would NOT rescue a year-1 value that was
+    /// actually written, because `decode`'s custom date strategy throws on any
+    /// string `ISO8601DateFormatter` refuses whether the property is optional
+    /// or not, and one throwing `Date` fails the WHOLE `Snapshot` decode: then
+    /// `StateReader.decode` returns nil and the menubar reads "stopped" while
+    /// dezhban is enforcing. `omitzero` on the Go side is the guard; this is
+    /// the half that makes its output decode cleanly.
+    public let nextEligible: Date?
+    /// What is left of the rolling budget, in seconds.
+    public let remainingSeconds: Double
+    /// Consecutive fast drops behind the current backoff; absent when the budget
+    /// rather than the backoff is what refused.
+    public let fastDrops: Int?
 }
 
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.
@@ -75,6 +143,7 @@ public struct Snapshot: Codable {
     public let display: Display?          // the rendered sentence — nil from an older daemon
     public let drop: DropRecord?          // present from a tunnel drop until a tunnel is up again
     public let hold: HoldState?           // present only while "hold the line" is armed
+    public let redial: RedialState?       // present only while a redial window stands refused
 
     /// Wall-clock age of this snapshot.
     public var age: TimeInterval { Date().timeIntervalSince(time) }

@@ -12,7 +12,270 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **A refused redial is re-decided when its bound lifts, instead of waiting for
+  another drop.** `nextEligible` named an instant nothing acted on: the decision
+  was retaken only on the next tunnel-down edge, so a tunnel that could not come
+  back on its own — a rotated server address the endpoint pass does not cover,
+  which is exactly the case the automatic window exists for — produced no further
+  edge, the refusal stood indefinitely, and the budget refilling changed nothing.
+  The stated time now has a timer behind it.
+
+  Still trigger two, and still no fourth trigger: the drop qualified at its own
+  edge and only the budget or cooldown said no, so re-asking when that expires
+  completes a decision already earned. Every rail holds — one automatic window
+  per drop, the same cap, the same ledger, all preconditions re-checked, and
+  `dezhban hold` suppresses the re-decision without being spent by it. See
+  [ADR-0009](docs/adr/0009-redial-budget.md).
+
+### Fixed
+
+- **A refusal states its time as an attempt, not an outcome.** "It can relax
+  again at 3:15PM" read as a promise the guard would be open then, which the
+  re-decision does not make: it consults the budget afresh and re-checks every
+  precondition, so it may refuse again. Both surfaces now read *"dezhban tries
+  again at 3:15PM — no window opens before then. Your VPN can still reconnect on
+  its own, and you can open a window yourself at any time"*: when dezhban itself
+  acts, the bound that goes with it, the fact that a held guard still passes
+  known server addresses so the VPN's own redial is unaffected meanwhile, and the
+  way out that always works. Once that instant has passed the sentence drops it
+  rather than reprinting a moment that came and went. `docs/usage/cli.md` states
+  the same caveat for scripts; a person deserves it more, not less.
+
+- **`doctor` no longer reports an unreadable boot service as a missing one.** Any
+  failure to read the unit — a permission problem on the launchd plist or on
+  `/Library/LaunchDaemons`, on the systemd unit or on `/etc/systemd/system` — was
+  reported as "not registered to start at boot", telling a user whose service is
+  installed and enforcing to reinstall it. That is the same false negative the
+  check exists to avoid, reached from the other side. Only "the file is absent"
+  now means absent on either platform; anything else reports that the question
+  cannot be answered without asking the service manager. On Linux the rule also
+  covers the enablement symlink, where it matters more: an unreadable one used to
+  read as "installed, but not set to start at boot" for a service that *is*
+  enabled, sending the user to fix something that was not broken.
+
+- **Cancelling `dezhban hold` mid-cut no longer strands the drop.** Arming hold
+  while already cut correctly suppresses the pending re-decision — but cancelling
+  it did not give that re-decision back. The retry fires once, the hold consumes
+  it, the timer disarms itself, and nothing re-armed it, so the drop stayed cut
+  until the next tunnel-down edge — which cannot arrive while the tunnel is
+  already down. Changing your mind cost you the automatic recovery entirely, and
+  both surfaces went on saying dezhban re-checks on its own. Cancelling now
+  re-asks immediately, through the same path the timer would have used, so every
+  rail still applies. Hold only ever *subtracts* a relaxation; cancelling it is
+  that subtraction being taken back, not a fourth trigger.
+
+- **A refusal no longer outlives the setting that justified it.** Reloading
+  `vpn.redialWindow` to `"0"` during a cut left the standing refusal published:
+  `status --json` kept reporting `redial.reason` with a `nextEligible` nothing
+  would ever act on, and both surfaces kept naming a time for a window that had
+  been switched off entirely — a promise nothing would keep, which is the exact
+  failure publishing the refusal exists to prevent. Turning the automatic window
+  off now drops the refusal and the timer behind it.
+
+- **A cooldown refusal now answers for the budget too.** `nextEligible` reported
+  only the cooldown deadline, so a host that was backing off *and* out of budget
+  was told 3:00PM, waited, and was told 3:15PM instead — the moving deadline the
+  published refusal exists to avoid. It reports the later of the two bounds now.
+
+- **The budget's rolling period is honoured on its boundary.** An episode exactly
+  one period old was still counted, so the instant `nextEligible` published was
+  one tick before the ledger could actually afford a window: the drop that
+  arrived at the promised time was refused and handed a new one.
+
+- **`state.redial.nextEligible` is omitted rather than published as a zero
+  timestamp.** `omitempty` does not omit a zero `time.Time`, so a writer without
+  an instant would have emitted `"0001-01-01T00:00:00Z"` — which the macOS app's
+  ISO8601 decoder refuses, failing the *whole* snapshot decode and reading as
+  "stopped" while dezhban was enforcing. The field is `omitzero`, and the app
+  decodes it as optional.
+
+- **Four control-socket refusals said "daemon" or "egress" to the user.**
+  `dezhban pause` in standby answered *"standby — egress is already open"*, and a
+  runner without a reload hook answered *"this daemon cannot reload its
+  configuration"*. These reach the user verbatim after `dezhban refused:`, so
+  they are copy — `internal/runner` is now in the vocabulary lint's Go scope, and
+  the startup lockout refusal no longer says "egress" either.
+
+- **Three glossary rows enforced nothing, and the app's alert copy was
+  unreadable to the lint.** Any banned phrase ending in punctuation — every row
+  naming a config key, e.g. `"Enable VPN guard (vpn.enabled)"` — compiled to a
+  regex with a trailing `\b` that cannot match, so the row parsed, counted, and
+  checked nothing. Word-boundary anchors are now applied only where there is a
+  word to anchor against, and `TestEveryTermMatchesItself` fails any row that
+  cannot find itself. Separately, the Swift scanner could not see multi-line
+  (`"""`) literals at all — the fences carry no content and the content lines
+  carry no quotes — so two user-facing alerts told people about "the daemon"
+  while the lint reported the file clean. Both are fixed; the alerts now say
+  "dezhban".
+
+- **A refusal no longer names a time it has already gone past.** The "it can
+  relax again at 3:15PM" clause is decided when the tunnel drops and re-decided
+  only when it drops again, so a tunnel that stays down carried the old instant
+  indefinitely — `status` and the menubar app would still promise 3:15PM at
+  3:44PM, for a moment that had come and gone with nothing happening. Once the
+  stated time has passed, both surfaces now say the guard can relax again *the
+  next time your VPN tries to reconnect*, which is the thing actually being
+  waited for. A time in the past is worse than no time: it reads as a
+  commitment that was broken.
+
+- **The redial backoff no longer deepens on drops it refused.** A drop turned
+  away because the budget was spent still counted toward the consecutive-fast-drop
+  streak and pushed the cooldown out, so refusals compounded into a wait longer
+  than either bound had asked for — the guard kept holding after the budget had
+  already rolled over. Only a drop that actually receives a window advances the
+  backoff now, which is the rule the cooldown path already followed.
+
+- **`vpn.advanced.redialBudget` and `redialBudgetWindow` refuse a `"0"` written
+  in the config file**, not just one typed at `dezhban config set`. The file
+  previously accepted it and normalised it back to the default, so the same
+  value was a named error one way in and a silent discard the other. Both paths
+  now say the same thing: a limit has no "off" — raise it, or set
+  `vpn.redialWindow` to `"0"` to turn the automatic window off outright.
+
+- **A redial window whose firewall rules failed to install no longer costs the
+  budget anything.** The grant is debited before the rules are applied — the
+  decision has to come first — so an `Apply` that errored left the debit standing
+  with no window to close it, and the ledger deliberately never ages out an open
+  episode. A single failed open could therefore spend the whole budget and refuse
+  every later drop, for exposure that never happened. The grant is credited back
+  in full when the open fails, which is what "the budget measures exposure taken,
+  not exposure offered" was supposed to mean all along.
+
+- **`status --json` no longer reports an open window and a standing refusal at
+  the same time.** Opening a manual `switch` or a `pause` over a refused drop
+  left `state.redial` published beside `state.switch`, so a script matching on
+  `.redial.reason` — which [the CLI reference](docs/usage/cli.md) tells it to do
+  — saw the guard holding until 3:15PM while the guard was in fact relaxed. Any
+  window opening now clears the refusal, whatever its trigger. The sentence a
+  person reads was never affected.
+
+- **`vpn.advanced.redialBudget` below `5s` is refused** while the automatic
+  window is enabled, instead of validating clean. `5s` is the shortest window
+  dezhban will open, so a smaller budget can never afford one: the automatic
+  redial window was off permanently while the config still read as though it were
+  on, and `status` compounded it by reporting that the guard could relax again
+  "the next time your VPN tries to reconnect" — a promise nothing would ever
+  keep. Turning the window off stays available and explicit
+  (`vpn.redialWindow: "0"`); turning it off by arithmetic does not. The floor
+  follows a `vpn.redialWindow` set deliberately shorter than `5s`, which dezhban
+  honours as written — a budget that affords that shorter window is accepted
+  rather than refused against a minimum that does not apply to it.
+
+- **A tunnel that recovers is no longer held by the redial backoff's wait.** The
+  cooldown armed by a fast drop was checked before any evidence about the current
+  drop, so a tunnel that redialed, carried a confirmed exit, stayed up past
+  `vpn.advanced.redialMinUptime` and then dropped again was still refused a
+  window — with budget to spare. The retry above would eventually re-ask, but not
+  before the whole remaining cooldown elapsed: a wait a recovered link never
+  earned, and on a slow flap long enough to send the user to `dezhban switch` by
+  hand, which is the manual interaction the redial budget exists to remove. A
+  confirmed exit or a healthy uptime now clears the cooldown
+  outright, and the rolling budget — the bound that actually matters — is
+  unchanged.
+
+- **`state.redial.remainingSeconds` is now read from the live ledger** on every
+  snapshot instead of being frozen at the instant of the refusal. Episodes roll
+  out of the budget period while the cut lasts, so the published number stayed
+  behind the real one for as long as the tunnel was down and a script watching
+  it could not see the budget recover. `reason` and `nextEligible` are the
+  decision and still stand as decided.
+
+### Changed
+
+- **The glossary is now checked, not just written down.** It has always claimed
+  to be the authority — "when user-facing copy and this page disagree, the copy
+  is wrong" — but nothing verified that, and the copy had drifted back to
+  "protection", "egress" and "daemon" in about forty places while the page said
+  not to.
+
+  `internal/vocab` parses the banned-word table out of
+  [docs/concepts/glossary.md](docs/concepts/glossary.md) itself and fails the
+  build, so there is one list and it is the one a human reads. Editing a row
+  changes what the build enforces. The Go side uses `go/parser` to tell a string
+  reaching stdout from one reaching a log, because those registers differ:
+  "daemon" is wrong on a button and exactly right in a log line. Two markers in
+  the table say where each row applies, and an exemption requires a written
+  reason, so an exception is a recorded decision rather than a silent dodge.
+
+  User-visible wording changed accordingly. `status` prints **`control socket:`**
+  instead of `daemon control:`; `block`/`unblock` no longer print "(via
+  daemon)"; refusals read `dezhban refused:`; "is the daemon running?" became
+  "is dezhban running?"; and the app's panic tooltip and block hint dropped
+  "daemon" and "egress". `status --json` keys are unchanged — they are stable
+  identifiers, and the lint does not touch them.
+
+  The settings copy changed too. Every setting's one-line hint — the text
+  `dezhban config schema` prints and the macOS Settings pane shows beside each
+  row — lives in a table the lint had not been pointed at, because the `Printf`
+  that writes it is in a different package from the sentence itself. Six hints
+  said "daemon" or "relaxation" and the `strict` preset's summary said "zero
+  relaxation"; all seven now read in the same voice as the rest of the app.
+
 ### Added
+
+- **The automatic redial window now spends from a bounded budget**
+  (`vpn.advanced.redialBudget`, default `2m`, per
+  `vpn.advanced.redialBudgetWindow`, default `15m`). Two problems, opposite in
+  direction, went away together.
+
+  Total exposure across drops had no ceiling at all: every drop earned a fresh
+  30s, so a link dropping once a minute produced 30s of relaxed guard every
+  minute, indefinitely. It is now bounded, and the bound is measured in the
+  thing that matters — time actually relaxed. A window that closes early on a
+  successful redial only spends what it used, so a healthy link that drops
+  occasionally and reconnects in seconds will never approach the budget. The
+  limit bites a connection that is genuinely failing, which is when it should.
+
+  And a flapping tunnel used to get **no window at all**
+  (`vpn.advanced.redialMinUptime` suppressed it outright), which pushed exactly
+  the users with the worst connections onto `dezhban switch` by hand — a product
+  failure in a tool whose promise is minimum interaction. That setting now seeds
+  a *backoff* instead: a fast drop still gets a window, shorter for each
+  consecutive fast drop and with a growing wait between them, until the budget
+  runs out and the guard holds. Refusals say which bound refused and when a
+  window can next open, in the logs and in `status`.
+
+  A refusal is published, not only logged: `status --json` gains `state.redial`
+  (the reason, when a window can next open, and what is left of the budget) for
+  as long as the refusal stands, and `status` and the menubar app both read
+  *"Your VPN has dropped often enough to use up its redial budget, so the guard
+  is holding and traffic stays cut. dezhban tries again at 3:15PM — no window
+  opens before then. Your VPN can still reconnect on its own, and you can open a
+  window yourself at any time."* — the same sentence, composed once. Without a
+  time, "the guard is holding" leaves a wait indistinguishable from a wall.
+
+  Still trigger two, not a fourth trigger. `vpn.redialWindow: "0"` remains the
+  one way to turn the automatic window off; `dezhban hold` still suppresses a
+  single drop and spends nothing; `redialWindowMax` still caps any single
+  window. Rationale, and the four alternatives rejected:
+  [ADR-0009](docs/adr/0009-redial-budget.md).
+
+- **`dezhban doctor` answers "will dezhban need me again".** Three new checks,
+  for the two complaints that are really the same complaint — being asked to do
+  by hand what the guard exists to do for you.
+
+  *Boot service* says whether a reboot brings the guard back at all, separating
+  "nothing is registered", "registered but not set to start at boot", and "both
+  fine, and enforcing right now" — the last one matters because it rules
+  enforcement out and leaves the menubar app's login item, which has an entirely
+  different fix. It reads the service unit rather than asking the service
+  manager, so it stays truthful for a normal user: on macOS an unprivileged
+  status query cannot see the system domain and reports a running daemon as
+  absent.
+
+  *Arm at boot* says whether the next reboot arms the guard immediately or opens
+  into standby. `vpn.armAtBoot` may only arm when a tunnel has been observed up
+  at least once on this host, and that half fails silently — the setting reads
+  "on" the whole time — so the check names which half is missing.
+
+  *Learned endpoints* reads the store the guard redials through and tells apart
+  the two opposite reasons a drop keeps needing a window by hand: addresses that
+  were learned and then aged out (retain them longer), or a VPN that rotates its
+  server address (retaining more only delays it — a hostname re-resolves and
+  follows the rotation). All three are informational and never change the exit
+  code; the macOS Diagnostics pane shows them alongside the rest.
 
 - **`dezhban config schema` describes every setting**, so you can ask what a key
   is instead of reading source. For each one it prints the label, its default,

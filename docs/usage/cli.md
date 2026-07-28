@@ -60,7 +60,7 @@ daemon** over its control socket and need no password at all:
 | `upgrade check` | **No** — read-only, no root. |
 | `upgrade download`, `upgrade apply` | Yes — root, macOS only. `download`'s staging directory is root-owned on purpose: a writable-by-anyone staging area would let a local user swap the verified `.pkg` before `apply` installs it. |
 
-`dezhban status` prints a `daemon control:` line saying which mode you're in.
+`dezhban status` prints a `control socket:` line saying which mode you're in.
 
 ### Touch ID
 
@@ -102,12 +102,53 @@ A manual `block` **holds**: the daemon suspends its geo state machine until you
 `status --json` embeds the daemon's last published snapshot under `state`,
 verbatim. **Check `stateStale` before trusting it.** A crashed or `SIGKILL`ed
 daemon leaves its last posture on disk indefinitely, so `state.posture` alone
-will report a host as protected long after enforcement stopped; `stateStale` is
+will report a host as guarded long after enforcement stopped; `stateStale` is
 `true` once the snapshot ages past 3× the poll interval (floored at 90s), which
 is the same threshold the prose `status` uses to print "Stopped" instead and the
 menubar app uses to grey its icon. It is always present, so its absence means
 you are reading something other than this CLI's output — never "the snapshot is
 fresh".
+
+`state.redial` is present only when an automatic redial window was **refused**
+for the drop currently being carried, and it is how a script tells "the VPN has
+not come back yet" from "dezhban will not let it try again until 3:15PM". It
+carries `reason` (`"cooldown"` while backing off after fast drops, `"exhausted"`
+when the rolling budget is spent — stable identifiers, match on them rather than
+displaying them), `nextEligible`, `remainingSeconds` of budget, and `fastDrops`.
+An open window is reported by `state.switch` instead, never here. The sentence a
+person should read is already composed in `state.display.detail`.
+
+`nextEligible` is the earliest instant a window *could* open. dezhban re-takes
+the decision when that instant arrives, so a refused drop gets its window once
+the bound lifts without needing the tunnel to drop again — which matters most
+when the tunnel cannot come back on its own. It is still a **bound, not a
+promise**: the re-decision may refuse again (the budget is consulted afresh), and
+the preconditions are re-checked, so a script should read it as "nothing before
+this time, and an attempt at it", never as "a window at this time".
+`state.display.detail` words it the same way ("dezhban tries again at 3:15PM —
+no window opens before then").
+
+It answers for **both** bounds, not just whichever refused first: a host that is
+backing off *and* out of budget reports the later of the two, so the instant does
+not move when the next drop arrives. The key is **omitted** when the writer had
+no instant to give — never published as a zero timestamp, which every reader
+would have to special-case. Treat absent as "no time known" and say nothing.
+
+A `nextEligible` in the past means the re-decision has already run and refused
+again without naming a new time, or that nothing could be scheduled; treat it as
+"the bound has lifted, waiting for the VPN to try again", which is what
+`state.display.detail` then says in place of a time that has gone by.
+
+A refused drop still gets **at most one** automatic window: the re-decision stops
+once a window is granted, and an expired window never re-opens.
+
+`remainingSeconds` is **not** stale in that way: unlike `reason` and
+`nextEligible`, which are the decision and stay as decided, it is re-read from
+the ledger on every snapshot. Episodes roll out of the rolling period while the
+cut lasts, so it grows back on its own and a script can watch it recover. What it
+does not do is *cause* anything — the budget is still only consulted on a
+tunnel-down edge, so watching it reach a full window tells you a window would be
+granted, not that one is coming.
 
 ```sh
 dezhban status                                    # config + service + block state
@@ -152,6 +193,16 @@ snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`. `doctor
 app's Diagnostics pane) that needs to render them itself rather than parse
 text. See [config.md](config.md) for the full field reference and
 [troubleshooting.md](troubleshooting.md) for the lockout-recovery runbook.
+
+Beyond the lockout checks, `doctor` answers **will dezhban need me again**:
+whether a reboot brings the guard back (*boot service*, *arm at boot*) and
+whether a VPN drop can redial on its own (*learned endpoints*). Those three are
+informational — they never change the exit code, because none of them is a
+guard about to fail closed — but they are where the "I have to turn it on
+again" and "every drop needs a manual window" complaints get diagnosed. The
+boot-service check reads the service unit rather than asking the service
+manager, so it stays truthful without root: on macOS an unprivileged status
+query cannot see the system domain and reports a running daemon as absent.
 
 ## Create & manage the config
 
@@ -395,6 +446,11 @@ It is one-shot on purpose: spent by the drop it covers, disarmed as soon as a
 tunnel is up again, and forgotten if the daemon restarts. A flag that survived a
 reboot would eventually cut an *accidental* drop off from the redial help it
 should have had.
+
+Arming it *during* a cut works too — it suppresses the pending retry, so a drop
+the budget already refused stays refused. Cancelling then puts you back exactly
+where you were: dezhban re-decides straight away, and opens a window if the
+budget now allows one. Changing your mind never costs you the recovery.
 
 ## Shell completion
 

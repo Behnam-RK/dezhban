@@ -94,6 +94,11 @@ type Snapshot struct {
 	// an automatic redial window. Present only while armed. Additive field:
 	// absent from older snapshots, so nil means "not armed".
 	Hold *HoldState `json:"hold,omitempty"`
+	// Redial reports that the automatic redial window was REFUSED for the drop
+	// currently being carried, and when one could open instead. Present only
+	// while such a refusal stands. Additive field: absent from older snapshots,
+	// so nil means "nothing refused", never "no budget exists".
+	Redial *RedialState `json:"redial,omitempty"`
 	// Display is the rendered posture sentence — see internal/render, the
 	// package that composes it from this same Snapshot. Carried here for the
 	// one consumer that cannot call Go directly: the macOS menubar app reads
@@ -138,8 +143,15 @@ type PendingFlip struct {
 
 // SwitchState describes an open switch window for observers (status, menubar).
 type SwitchState struct {
-	Open    bool      `json:"open"`
-	Until   time.Time `json:"until"`
+	Open bool `json:"open"`
+	// Until is the window's deadline. omitzero for the reason given on
+	// RedialState.NextEligible: a zero time.Time marshals to year 1, which the
+	// macOS app's ISO8601 decoder refuses, and one unreadable date fails the
+	// WHOLE Snapshot decode. render.windowDisplay already treats a zero Until as
+	// "no deadline to show" rather than as an error, so the zero case is one this
+	// codebase considers reachable — it must not be the one that blanks the
+	// menubar.
+	Until   time.Time `json:"until,omitzero"`
 	Profile string    `json:"profile,omitempty"`
 	// Trigger says what opened the window: TriggerManual (operator command) or
 	// TriggerAuto (automatic redial window on a tunnel drop). Additive field —
@@ -167,8 +179,12 @@ type SwitchState struct {
 // since" nor "not cut" describes what followed. What a reader needs from a drop
 // is WHEN — the posture fields already say what is happening now.
 type DropRecord struct {
-	// At is when the tunnel was observed down.
-	At time.Time `json:"at"`
+	// At is when the tunnel was observed down. omitzero for the reason given on
+	// RedialState.NextEligible — render.dropTime already treats a zero as "no
+	// drop time to show", so publishing it as a year-1 timestamp would turn a
+	// clause this codebase knows how to omit into a total decode failure in the
+	// app.
+	At time.Time `json:"at,omitzero"`
 }
 
 // HoldState reports that "hold the line" is armed: the next tunnel drop will
@@ -187,8 +203,55 @@ type HoldState struct {
 	// Armed is true from the moment it is armed until the drop it covers, an
 	// explicit cancel, or a tunnel coming back up.
 	Armed bool `json:"armed"`
-	// At is when it was armed.
-	At time.Time `json:"at"`
+	// At is when it was armed. omitzero for the reason given on
+	// RedialState.NextEligible: no reader needs the instant (the app shows only
+	// that hold is armed), so a zero must cost a missing key rather than the
+	// whole snapshot.
+	At time.Time `json:"at,omitzero"`
+}
+
+// RedialState is why the automatic redial window did not open for the drop being
+// carried, and when one could. It exists because a guard that silently declines
+// to help is the failure mode this project treats as worst: without it the only
+// difference between "your VPN has not redialed yet" and "dezhban will not let
+// it try again for eleven minutes" is a log line nobody is reading.
+//
+// A refusal only, never a grant. An open window is already reported by Switch,
+// and duplicating it here would give two fields one truth to disagree about.
+//
+// See docs/adr/0009-redial-budget.md for what does the refusing.
+type RedialState struct {
+	// Reason is the redial.Reason that refused, as a stable identifier
+	// ("cooldown", "exhausted"). Surfaces match on it; the sentence a user reads
+	// is composed in internal/render, never here.
+	Reason string `json:"reason"`
+	// NextEligible is the earliest instant a window could open — a bound, not a
+	// promise. The run loop re-takes the decision when this instant arrives, so
+	// it is a time the guard acts on rather than one it merely reports; but the
+	// re-decision consults the budget afresh and re-checks every precondition,
+	// so it may refuse again. Read it as "nothing before this time", never as
+	// "a window at this time". Publishing it at all is the point — "the guard is
+	// holding" alone leaves the user unable to tell a wait from a wall.
+	//
+	// omitzero, not omitempty: omitempty does not omit a zero time.Time (a
+	// non-empty struct), so a writer without an instant would publish
+	// "0001-01-01T00:00:00Z". Every reader then has to special-case year 1, and
+	// the macOS app's ISO8601 decoder simply refuses it — failing the WHOLE
+	// Snapshot decode, which reads as "stopped" while dezhban is enforcing. An
+	// absent key is the one shape every consumer already handles.
+	NextEligible time.Time `json:"nextEligible,omitzero"`
+	// RemainingSeconds is what is left of the rolling budget AS OF THIS
+	// SNAPSHOT, not as of the refusal: episodes keep rolling out of the interval
+	// while the cut lasts, so this grows back on its own and a reader can watch
+	// it. Seconds rather than a Go duration string so a non-Go reader (the macOS
+	// app, jq) gets a number it can compare rather than "1m30s" it has to parse.
+	//
+	// Reason and NextEligible are the opposite: they are the decision that was
+	// made on the drop edge and do not move until the next one.
+	RemainingSeconds float64 `json:"remainingSeconds"`
+	// FastDrops is how many consecutive fast drops are behind the current
+	// backoff. Zero when the budget, not the backoff, is what refused.
+	FastDrops int `json:"fastDrops,omitempty"`
 }
 
 // Trigger values for SwitchState.Trigger. Stable identifiers — status --json

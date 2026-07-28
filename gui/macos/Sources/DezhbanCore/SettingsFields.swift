@@ -27,6 +27,7 @@ public struct SettingsFields {
         "vpn.switchWindow", "vpn.redialWindow", "vpn.pauseMax", "vpn.endpointGrace",
         "vpn.endpointRefresh", "vpn.tunnelWatch",
         "vpn.advanced.switchWindowMax", "vpn.advanced.redialWindowMax", "vpn.advanced.redialMinUptime",
+        "vpn.advanced.redialBudget", "vpn.advanced.redialBudgetWindow",
         "vpn.advanced.commandFreshness", "vpn.advanced.windowDiscoveryInterval", "vpn.advanced.tunnelPruneAfter",
         "vpn.advanced.learnedEndpointTTL", "vpn.advanced.learnedMaxPerProfile", "vpn.advanced.promoteAfterRefreshes",
         "vpn.advanced.endpointWarnThreshold", "vpn.advanced.windowProtocols", "vpn.advanced.windowPorts",
@@ -163,6 +164,13 @@ public struct SettingsFields {
     }
     public var advRedialMinUptime: String {
         get { string("vpn.advanced.redialMinUptime") } set { setString("vpn.advanced.redialMinUptime", newValue) }
+    }
+    public var advRedialBudget: String {
+        get { string("vpn.advanced.redialBudget") } set { setString("vpn.advanced.redialBudget", newValue) }
+    }
+    public var advRedialBudgetWindow: String {
+        get { string("vpn.advanced.redialBudgetWindow") }
+        set { setString("vpn.advanced.redialBudgetWindow", newValue) }
     }
     public var advCommandFreshness: String {
         get { string("vpn.advanced.commandFreshness") } set { setString("vpn.advanced.commandFreshness", newValue) }

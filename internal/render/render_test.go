@@ -88,6 +88,133 @@ func TestText(t *testing.T) {
 				". Guard active, but no tunnel is up — all traffic is cut until your VPN redials.",
 		},
 		{
+			// The refusal REPLACES "…until your VPN redials" rather than joining
+			// it. That clause promises the wait ends by itself, which a refusal
+			// makes false: nothing relaxes until the stated time however fast the
+			// VPN comes back. Two sentences saying opposite things is worse than
+			// either alone.
+			name: "guard holds because the redial budget is spent",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Drop:    &state.DropRecord{At: until},
+				Redial: &state.RedialState{
+					Reason:       "exhausted",
+					NextEligible: until.Add(15 * time.Minute),
+				},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN dropped at 3:04PM. Your VPN has dropped often enough to use up " +
+				"its redial budget, so the guard is holding and traffic stays cut. " +
+				"dezhban tries again at 3:19PM — no window opens before then. Your VPN can " +
+				"still reconnect on its own, and you can open a window yourself at any time.",
+		},
+		{
+			name: "guard holds while backing off after fast drops",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Drop:    &state.DropRecord{At: until},
+				Redial: &state.RedialState{
+					Reason:       "cooldown",
+					NextEligible: until.Add(time.Minute),
+					FastDrops:    2,
+				},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN dropped at 3:04PM. Your VPN keeps dropping, so dezhban is waiting " +
+				"before it relaxes the guard again — traffic stays cut. dezhban tries again at " +
+				"3:05PM — no window opens before then. Your VPN can still reconnect on its own, " +
+				"and you can open a window yourself at any time.",
+		},
+		{
+			// A refusal reason this build does not recognise, from a newer daemon
+			// writing the same file. Say the part true of every refusal instead of
+			// inventing an explanation — and still name the time, because an
+			// unfamiliar reason is no excuse to be less useful.
+			name: "guard holds for an unrecognised reason",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Redial: &state.RedialState{
+					Reason:       "something-newer",
+					NextEligible: until.Add(30 * time.Second),
+				},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "The guard is holding rather than opening a window for your VPN, so " +
+				"traffic stays cut. dezhban tries again at 3:04PM — no window opens before then. " +
+				"Your VPN can still reconnect on its own, and you can open a window yourself at " +
+				"any time.",
+		},
+		{
+			// NextEligible is the sentence's reason for existing, but a snapshot
+			// can arrive without it (an older writer, a hand-built record). Drop
+			// the clause rather than rendering a zero time as "12:00AM", which
+			// would be a confident lie about when help arrives.
+			name: "refusal without a next-eligible time",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Redial:  &state.RedialState{Reason: "exhausted"},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN has dropped often enough to use up its redial budget, so the " +
+				"guard is holding and traffic stays cut.",
+		},
+		{
+			// The run loop re-takes the decision at nextEligible, so a refusal
+			// still standing past its own instant means that retry ran and
+			// refused again without naming a new time, or could not be scheduled
+			// at all. Either way the printed time is a moment that came and
+			// went: reprinting "3:19PM" at 3:44PM states a commitment that was
+			// not kept, which is worse than naming no time — the wait-versus-wall
+			// confusion this sentence exists to end, inverted. Say what is still
+			// true instead: dezhban keeps deciding for itself.
+			name: "refusal whose next-eligible time has already passed",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until.Add(40 * time.Minute),
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Drop:    &state.DropRecord{At: until},
+				Redial: &state.RedialState{
+					Reason:       "exhausted",
+					NextEligible: until.Add(15 * time.Minute),
+				},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN dropped at 3:04PM. Your VPN has dropped often enough to use up " +
+				"its redial budget, so the guard is holding and traffic stays cut. " +
+				"dezhban re-checks on its own as soon as it can, and you can open a window " +
+				"yourself at any time.",
+		},
+		{
+			// The boundary itself counts as passed: at exactly nextEligible the
+			// bound has lifted and the retry is due, so naming "3:19PM" at
+			// 3:19PM tells the user to wait for a moment that has arrived.
+			name: "refusal at exactly its next-eligible instant",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Time:    until,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: false}},
+				Redial:  &state.RedialState{Reason: "cooldown", NextEligible: until},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "VPN down — traffic cut",
+			wantDetail: "Your VPN keeps dropping, so dezhban is waiting before it relaxes the " +
+				"guard again — traffic stays cut. dezhban re-checks on its own as soon as it " +
+				"can, and you can open a window yourself at any time.",
+		},
+		{
 			name:         "full block with country",
 			snap:         state.Snapshot{Posture: PostureFullBlock, CountryCode: "IR"},
 			wantKey:      KeyBlocked,

@@ -96,7 +96,7 @@ func controlStatus(cfg *config.Config) string {
 	case errors.Is(err, control.ErrForbidden):
 		return fmt.Sprintf("forbidden (%s) — socket exists but you are not in the %q group; routine ops need sudo", path, cfg.Control.Group)
 	case err != nil || !resp.OK:
-		return fmt.Sprintf("unreachable (%s) — daemon not running; routine ops need sudo", path)
+		return fmt.Sprintf("unreachable (%s) — dezhban is not running; routine ops need sudo", path)
 	}
 	s := fmt.Sprintf("reachable (%s, group %q) — routine ops need no password", path, cfg.Control.Group)
 	if !cfg.Control.AllowSwitchOps {
@@ -152,7 +152,7 @@ func tryControl(cfgPath string, req control.Request) (code int, handled bool) {
 			verbosef("control socket: %s — falling back to direct/root path", resp.Error)
 			return 0, false
 		}
-		fmt.Fprintln(os.Stderr, "daemon refused:", resp.Error)
+		fmt.Fprintln(os.Stderr, "dezhban refused:", resp.Error)
 		return ExitDaemonRefused, true
 	}
 	return 0, true
@@ -180,7 +180,7 @@ func notifyReload(cfgPath string) {
 		return
 	}
 	if !resp.OK {
-		fmt.Fprintln(os.Stderr, "Saved, but the running daemon did not reload:", resp.Error)
+		fmt.Fprintln(os.Stderr, "Saved, but the running dezhban did not reload:", resp.Error)
 		// Deliberately not restartMarker: no key list is known here, and the marker
 		// is a machine-read contract (see its doc comment) that must never appear
 		// without the keys it promises.

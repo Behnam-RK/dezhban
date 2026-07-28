@@ -68,6 +68,8 @@ func KeyValues(c *Config) map[string]string {
 		"vpn.advanced.switchWindowMax":         dur(adv.SwitchWindowMax),
 		"vpn.advanced.redialWindowMax":         dur(adv.RedialWindowMax),
 		"vpn.advanced.redialMinUptime":         dur(adv.RedialMinUptime),
+		"vpn.advanced.redialBudget":            dur(adv.RedialBudget),
+		"vpn.advanced.redialBudgetWindow":      dur(adv.RedialBudgetWindow),
 		"vpn.advanced.commandFreshness":        dur(adv.CommandFreshness),
 		"vpn.advanced.windowDiscoveryInterval": dur(adv.WindowDiscoveryInterval),
 		"vpn.advanced.tunnelPruneAfter":        dur(adv.TunnelPruneAfter),
@@ -158,6 +160,8 @@ var liveKeys = map[string]bool{
 	"vpn.advanced.switchWindowMax":         true,
 	"vpn.advanced.redialWindowMax":         true,
 	"vpn.advanced.redialMinUptime":         true,
+	"vpn.advanced.redialBudget":            true,
+	"vpn.advanced.redialBudgetWindow":      true,
 	"vpn.advanced.windowDiscoveryInterval": true,
 }
 
@@ -241,6 +245,8 @@ func MergeLive(base, cur *Config) *Config {
 	out.VPN.Advanced.SwitchWindowMax = cur.VPN.Advanced.SwitchWindowMax
 	out.VPN.Advanced.RedialWindowMax = cur.VPN.Advanced.RedialWindowMax
 	out.VPN.Advanced.RedialMinUptime = cur.VPN.Advanced.RedialMinUptime
+	out.VPN.Advanced.RedialBudget = cur.VPN.Advanced.RedialBudget
+	out.VPN.Advanced.RedialBudgetWindow = cur.VPN.Advanced.RedialBudgetWindow
 	out.VPN.Advanced.WindowDiscoveryInterval = cur.VPN.Advanced.WindowDiscoveryInterval
 
 	return &out

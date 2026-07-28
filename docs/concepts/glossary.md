@@ -93,6 +93,24 @@ healthy GUARD, so the VPN can redial. Trigger two, capped by
 `advanced.redialWindowMax`. Same machinery, same rails; only the trigger and
 the cap differ. User-facing: "Your VPN dropped — redialing".
 
+**Redial budget** — the rolling allowance of total redial-window time
+(`vpn.advanced.redialBudget`, per `vpn.advanced.redialBudgetWindow`) that
+trigger two spends from. It bounds how much a *series* of drops can cost, which
+the per-window cap alone cannot: `redialWindowMax` bounds one window, the budget
+bounds all of them. Debited when a window opens and credited back when it closes
+early, so it measures exposure taken rather than exposure offered. When it is
+spent the guard simply holds. Belongs to trigger two alone — never shared with
+the manual window or pause, for the same reason their caps are not shared. See
+[ADR-0009](../adr/0009-redial-budget.md). User-facing: "the redial budget is
+spent". Say **budget**, not "quota" or "allowance", and never "rate limit".
+
+**Backing off** — shortening each successive redial window, and waiting longer
+between them, while a tunnel keeps dropping faster than
+`vpn.advanced.redialMinUptime`. It **shortens**; it does not suppress. Say
+"backing off" or "a shorter window", never "the flap guard" or "suppressed" —
+those name the behaviour ADR-0009 replaced, in which a struggling VPN got no
+automatic help at all.
+
 **Pause** — a switch window opened by an explicit operator command
 (`dezhban pause`, or the app) to deliberately use the real ISP IP for a domestic-
 only service, not to connect a VPN. Trigger three, capped by its own
@@ -211,16 +229,34 @@ hatch must never depend on the thing it is escaping from.
 
 ## Words we do not use
 
+**This table is machine-read.** `internal/vocab` parses it and fails the build,
+so it is not only prose: every double-quoted phrase in the **Don't say** column
+becomes a check. Editing a phrase changes what the build enforces. Two markers
+say where each row applies, because [the rule](#the-rule) is that the registers
+differ in notation — a word banned from a button is often exactly right in a log:
+
+| Marker | Where it is enforced |
+|---|---|
+| *(none)* | Everywhere the lint looks: user-facing copy **and** the prose in these docs. The word is wrong in both registers. |
+| ‡ | **User-facing copy only** — the macOS app's strings, the CLI's human output, `internal/render`. Correct in the technical register, which includes these docs, logs, `--json`, and config keys. |
+| † | **Not linted.** The ban needs judgement no string match can supply, so the row is guidance for a reviewer. |
+
+Comments, tests, `--json` field values and struct tags are exempt everywhere:
+they are identifiers or notes to developers, not copy.
+
 | Don't say | Say | Why |
 |---|---|---|
 | "Legacy mode", "country-blocklist mode", "VPN guard mode" | *(nothing)* | There is one mode. See [ADR-0001](../adr/0001-single-guard-mode.md). |
-| "Protection" / "protected" / "secured" | "the guard" / "guard active" | One word for one concept. The drift this page ends. |
-| "Stop kill switch" | "Guard down" (app) / "Turn off the guard" (prose) | Name the action, not the machinery. |
-| "The daemon isn't running" (in the app) | "The guard is off" | Users do not have daemons. They have a guard. |
+| "Protection" / "protected" / "protecting" / "secured" | "the guard" / "guard active" | One word for one concept. The drift this page ends — wrong in both registers, which is why it carries no marker. |
+| ‡ "Stop kill switch" | "Guard down" (app) / "Turn off the guard" (prose) | Name the action, not the machinery. Fine in prose *about* the product. |
+| ‡ "Daemon" | "dezhban" / "the background service" | Users do not have daemons. They have a guard. Correct in logs, `--json`, and these docs — never in copy a user reads. |
 | "Enable VPN guard (vpn.enabled)" | "Turn on the guard" | Drop the config key, keep the domain word. |
-| "Blocked" for STANDBY | "Standby — nothing is being blocked" | Nothing is blocked in standby. The icon must agree. |
-| "Safe" / "Secure" as a preset name | Name the trade | A security tool states costs beside benefits. |
+| † "Blocked" for STANDBY | "Standby — nothing is being blocked" | Nothing is blocked in standby, and the icon must agree — but "blocked" is correct in FULL BLOCK, so no matcher can call it. |
+| † "Safe" / "Secure" as a preset name | Name the trade | A security tool states costs beside benefits. The words are fine in a sentence and wrong as a label; only a reader can tell which. |
 | "Autodetect tunnel interface (vpn.autoDetect)" | "Find my VPN tunnel automatically" | Drop the key and the word *interface*; keep *tunnel*. |
 | "Tunnel interfaces (comma-sep)" | "Your VPN tunnel" + token field | Serialised forms are not a UI. |
-| "Egress blocked" | "Traffic cut" | *Egress* is a technical word; a security tool's copy should read to someone who just wants their real IP hidden. |
-| "Not protecting" | "Standby — nothing is being blocked" | "Protecting" is the word this page retired; say what state the guard is in. |
+| ‡ "Egress" | "traffic" / "traffic cut" | *Egress* is a technical word; copy should read to someone who just wants their real IP hidden. It is the right word in these docs and in the code. |
+| ‡ "Relaxation" | "window" — "switch window", "redial window" | The mechanism's name, not the user's. A user is told a *window* is open and when it closes; ADRs and architecture docs say "relaxation" freely. |
+| ‡ "guard is disarmed", "not enforcing" | "standby" | There is a named posture for this; two more phrases for it is two more things to learn. Phrased narrowly on purpose: *disarm* is the right verb for hold the line, which really is an armed flag — what is wrong is using it for the guard's resting state. |
+| † "Peer", "server" (for the address) | "endpoint" / "VPN server address" | One word for the thing the guard must pass. Not linted, and it cannot be: the replacement wording contains "server" itself — what is banned is *server* standing alone for an address, which only a reader can judge. |
+| † "utun", "interface" (for the tunnel) | "tunnel" / "your VPN tunnel" | `utun4` is an implementation detail and *interface* is the word this page dropped. Not linted: "physical interface" is correct, and a bare `utun` appears legitimately in examples of what Detect finds. |

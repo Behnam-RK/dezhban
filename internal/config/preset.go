@@ -54,7 +54,7 @@ func Presets() []Preset {
 	return []Preset{
 		{
 			Name:    "strict",
-			Summary: "Zero relaxation: every window disabled, exit checks fastest.",
+			Summary: "No windows at all: every window disabled, exit checks fastest.",
 			Cost: "Connecting a new VPN or reconnecting after a drop needs the server's " +
 				"address in vpn.endpoints ahead of time — there is no window to redial or " +
 				"switch through. Pausing to use your real IP is unavailable. A VPN endpoint " +

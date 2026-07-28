@@ -335,7 +335,7 @@ daemon's *behaviour* afterwards, never about what the file says.
 ## Recovery after a redial
 
 Privileged, on a real host with a real VPN. The point of these checks is the
-*wait*: what the user sees between redialing and protection coming back.
+*wait*: what the user sees between redialing and the guard coming back.
 
 - [ ] **Progress is visible.** Force FULL BLOCK (`--simulate-country IR`, or a
       real forbidden exit), then redial onto an allowed exit → `dezhban status`
@@ -393,6 +393,119 @@ Per OS, privileged:
       restart-on-failure brings it back and it re-enforces.
 - [ ] **`restart` applies the restart-required keys** (most keys apply live — see
       the section below), and `start` and `stop` are idempotent.
+
+## Unattended recovery (`doctor`'s boot and retention checks)
+
+Unprivileged, but they need real machine state CI has none of — a service
+manager, a reboot, and a VPN that has actually connected.
+
+- [ ] **Boot service, honestly reported without root.** With the service
+      installed and running, `dezhban doctor` **as a normal user** reports
+      *boot service: registered to start at boot, and enforcing now*. This is
+      the regression that matters: the check reads the unit file precisely
+      because an unprivileged `launchctl` query cannot see the system domain and
+      would report a live daemon as not installed.
+- [ ] **Boot service, absent.** `sudo dezhban uninstall` → the check warns and
+      offers `dezhban install`. If a daemon is still running by hand, it also
+      says so rather than reading as "the guard is off".
+- [ ] **Not at boot.** Edit `RunAtLoad` to `<false/>` in
+      `/Library/LaunchDaemons/dezhban.plist` (Linux: `systemctl disable
+      dezhban`) → the check warns that every reboot comes up unguarded.
+      Reinstall to restore.
+- [ ] **Arm at boot, precondition met.** After a VPN has been up once,
+      `<state dir>/armed.json` has `tunnelEverUp: true`, the check reports the
+      first/last times, and a reboot arms the guard before the VPN connects.
+- [ ] **Arm at boot, precondition missing.** Remove `armed.json` → the check
+      warns that no tunnel has been observed, and a reboot opens into standby.
+      Connect the VPN once → the file returns and the check goes green.
+- [ ] **Arm at boot, record corrupt.** Write `{` into `armed.json` → the check
+      warns with the parse error and dezhban still starts (a corrupt record is
+      "never armed", never a crash).
+- [ ] **Learned endpoints, healthy.** After a normal drop and redial, the check
+      reports addresses retained and a drop that can redial without a window.
+- [ ] **Learned endpoints, aged out.** Set
+      `vpn.advanced.learnedEndpointTTL=1s`, wait, re-run → the check warns they
+      aged out and offers the retention knob, **not** the rotation advice.
+- [ ] **Learned endpoints, rotating.** On a rotating-pool VPN (NordVPN,
+      ProtonVPN), reconnect until the store fills → the check reports rotation
+      and leads with the hostname fix.
+
+## Redial budget and backoff
+
+The ledger is unit-tested in `internal/redial` against injected instants, so
+what needs a real host is the wiring: a real tunnel dropping, real timers, and
+both surfaces saying the same thing about it. See
+[ADR-0009](../adr/0009-redial-budget.md).
+
+- [ ] **Healthy drop, full window.** With the tunnel up longer than
+      `vpn.advanced.redialMinUptime`, disconnect the VPN → a window opens for
+      the full `vpn.redialWindow`, the log says `reason=full`, and reconnecting
+      snaps it shut early.
+- [ ] **Early close is nearly free.** After that reconnect, drop and redial
+      quickly several times. `status --json` must never show `state.redial`, and
+      the guard must keep granting windows — the budget measures exposure taken,
+      so fast successful redials barely touch it. If a handful of *successful*
+      redials exhaust the budget, credit-on-close is broken.
+- [ ] **Fast drops shorten, they do not suppress.** Force reconnects faster than
+      `redialMinUptime` with no good exit in between (a deliberately wrong
+      server works). Each drop must still get a window, each shorter than the
+      last (`reason=backoff`, `granted` falling), with a growing cooldown. A
+      drop that gets NO window at the first fast reconnect is the pre-ADR-0009
+      behaviour returning.
+- [ ] **A recovery clears the cooldown.** Immediately after one of those fast
+      drops — while the cooldown is still running — let the tunnel come back
+      properly and stay up past `redialMinUptime` (or long enough for the exit to
+      be confirmed), then drop it again. That drop must get a **full-length**
+      window, not `reason=cooldown`. A refusal here is the failure that pushed
+      recovering links onto `dezhban switch`: the retry would eventually re-ask,
+      but not before the whole remaining cooldown a recovered link never earned.
+- [ ] **Exhaustion holds, and says so.** Keep flapping until the log reads
+      `redial budget spent`. Traffic must stay cut, `status` must read
+      *"Your VPN has dropped often enough to use up its redial budget…"* with a
+      real time after "dezhban tries again at", and the menubar app must show
+      the **same sentence** — it renders `display.detail`, so a difference means
+      something is composing prose that shouldn't.
+- [ ] **The refusal re-decides itself.** From that exhausted state, leave the
+      tunnel **down and untouched** — do not reconnect, do not run anything. At
+      the `nextEligible` the refusal named, a window must open on its own
+      (`REDIAL WINDOW OPEN` in the log, `state.switch.trigger` = `auto`). This is
+      the whole point of publishing an instant: before the retry timer existed,
+      nothing acted at that time and the host stayed cut until someone ran
+      `dezhban switch`. Verify with the VPN client stopped, so no reconnection
+      can be confused for the cause.
+- [ ] **One window per drop, even with the retry.** Let that window expire with
+      the tunnel still down. Nothing may open a second one, however long you
+      wait and however much budget has refilled — the next window requires a new
+      drop. A repeating window here is the retry re-arming after a grant.
+- [ ] **Hold suppresses the re-decision.** Reach an exhausted refusal again, then
+      run `dezhban hold` while the tunnel is still down. At `nextEligible` no
+      window may open (`redial retry skipped` in the log). Then reconnect and
+      drop: that drop must still be covered by hold — the retry honours the flag
+      but does not spend it.
+- [ ] **Cancelling hold gives the re-decision back.** From that suppressed state
+      — retry already skipped, tunnel still down — run `dezhban hold --cancel`
+      once the budget has refilled. A window must open **immediately**, without
+      waiting for another drop. Nothing opening is the failure this check exists
+      for: it means the drop is stranded until an edge that cannot arrive, and
+      `status` will be claiming dezhban re-checks on its own while it does not.
+      Cancel *before* `nextEligible` instead and nothing should open early —
+      the original timer is still running and still governs.
+- [ ] **The budget refills.** Wait out `vpn.advanced.redialBudgetWindow` with
+      the tunnel down, then drop again → a window opens. It must open no later
+      than the `nextEligible` the refusal named.
+- [ ] **Hold the line spends nothing.** `dezhban hold`, then drop → no window,
+      and `status --json` shows no `state.redial` (hold suppresses ahead of the
+      ledger, so nothing was refused and nothing was charged). Reconnect, drop
+      again → a full-length window, proving the budget was untouched.
+- [ ] **`vpn.redialWindow: "0"` still removes trigger 2 entirely**, budget
+      irrelevant; the manual switch window and `pause` still work.
+- [ ] **`redialBudget: "0"` is refused, not normalised.**
+      `sudo dezhban config set vpn.advanced.redialBudget=0` must exit non-zero
+      and leave the file unchanged — a limit has no "off", and silently storing
+      `2m` for a typed `0` is the failure this project treats as worst.
+- [ ] **Live reload lands on the next drop.** With the daemon running, lower
+      `redialBudget`, confirm `Saved and applied` lists it, then flap until
+      refusal — it must refuse against the NEW number without a restart.
 
 ## Upgrade
 
@@ -590,7 +703,7 @@ end up typing a password.
       uninstall tears rules down before unload.
 - [ ] **Launch at login** toggles `SMAppService.mainApp.status` to `.enabled`, and
       the app relaunches after a logout/login cycle.
-- [ ] Protection fields seed from `dezhban config show` values; Apply raises the
+- [ ] Guard fields seed from `dezhban config show` values; Apply raises the
       restart-warning choice; "Save only" writes without restarting.
 - [ ] **Restart dezhban…** works with nothing else pending: a plain "are you
       sure?" during GUARD or STANDBY, but a stronger, `.critical` warning during

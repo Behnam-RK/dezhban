@@ -255,7 +255,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         panic.keyEquivalent = "o"
         panic.keyEquivalentModifierMask = [.command, .option]
         panic.isAlternate = true
-        panic.toolTip = "Removes every rule dezhban installed. Works with no daemon running."
+        panic.toolTip = "Removes every rule dezhban installed. Works even when nothing is running."
 
         menu.addItem(.separator())
 
@@ -271,12 +271,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Pause entry) — `resume` is the only way to end one early, so a pause
         // gets its own item instead of the generic Cancel one.
         if let sw = s?.switch, sw.open, sw.isPause {
-            let left = max(0, sw.until.timeIntervalSinceNow)
-            addAction("Resume now (\(PostureUI.mmss(left)) left)", #selector(resumeNow), enabled: isRunning)
+            addAction("Resume now" + sw.leftSuffix(asOf: Date()), #selector(resumeNow), enabled: isRunning)
                 .toolTip = AppState.shared.routineHint("Ends the pause early and re-arms the guard.")
         } else if let sw = s?.switch, sw.open {
-            let left = max(0, sw.until.timeIntervalSinceNow)
-            addAction("Cancel VPN switch (\(PostureUI.mmss(left)) left)", #selector(cancelSwitch),
+            addAction("Cancel VPN switch" + sw.leftSuffix(asOf: Date()), #selector(cancelSwitch),
                       enabled: isRunning)
                 .toolTip = AppState.shared.routineHint("Closes the window and restores the guard.")
         } else {

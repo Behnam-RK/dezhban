@@ -158,32 +158,7 @@ struct SettingsView: View {
                             .foregroundStyle(.secondary)
                     }
                 }
-                Section {
-                    DisclosureGroup("Advanced") {
-                        Text("Touch only if you know why. These override recommended defaults, and the "
-                            + "three caps below bound how much exposure the settings above can ever "
-                            + "cause — lowering one narrows the choices they offer.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                        durationField("vpn.advanced.switchWindowMax", "Switch window cap", text: $fields.advSwitchWindowMax)
-                        durationField("vpn.advanced.redialWindowMax", "Redial window cap", text: $fields.advRedialWindowMax)
-                        durationField("vpn.advanced.redialMinUptime", "Redial anti-flap uptime", text: $fields.advRedialMinUptime)
-                        durationField("vpn.advanced.commandFreshness", "Command freshness", text: $fields.advCommandFreshness)
-                        durationField("vpn.advanced.windowDiscoveryInterval", "Window discovery interval", text: $fields.advWindowDiscoveryInterval)
-                        durationField("vpn.advanced.tunnelPruneAfter", "Tunnel prune delay", text: $fields.advTunnelPruneAfter)
-                        durationField("vpn.advanced.learnedEndpointTTL", "Learned address lifetime", text: $fields.advLearnedEndpointTTL)
-                        schemaField("vpn.advanced.learnedMaxPerProfile", "Learned addresses per profile",
-                                    text: $fields.advLearnedMaxPerProfile)
-                        schemaField("vpn.advanced.promoteAfterRefreshes", "Sightings before an address is learned",
-                                    text: $fields.advPromoteAfterRefreshes)
-                        schemaField("vpn.advanced.endpointWarnThreshold", "Address-bloat warning threshold",
-                                    text: $fields.advEndpointWarnThreshold)
-                        schemaField("vpn.advanced.windowProtocols", "Window protocols (comma-sep)",
-                                    text: $fields.advWindowProtocols)
-                        schemaField("vpn.advanced.windowPorts", "Window ports (comma-sep)",
-                                    text: $fields.advWindowPorts)
-                    }
-                }
+                Section { advancedGroup }
                 Section {
                     LabeledContent("Config file") {
                         // `configPath`, never DezhbanCLI.resolvedConfigPath(): a body
@@ -408,6 +383,43 @@ struct SettingsView: View {
                 .textCase(nil)
         }
         .padding(.bottom, 2)
+    }
+
+    /// The Advanced disclosure, kept out of `body` deliberately: every row here
+    /// is a `durationField`/`schemaField` call the type-checker has to solve, and
+    /// inlining the lot pushed `body` past the solver's budget — the compiler
+    /// said so by name. A separate property is the cheap fix, and it means adding
+    /// the next tunable costs a line rather than a build failure.
+    @ViewBuilder private var advancedGroup: some View {
+        DisclosureGroup("Advanced") {
+            Text("Touch only if you know why. These override recommended defaults. The caps "
+                + "and budgets below bound how much exposure the settings above can ever "
+                + "cause — lowering one narrows the choices they offer.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            durationField("vpn.advanced.switchWindowMax", "Switch window cap", text: $fields.advSwitchWindowMax)
+            durationField("vpn.advanced.redialWindowMax", "Redial window cap", text: $fields.advRedialWindowMax)
+            durationField("vpn.advanced.redialMinUptime", "Redial backoff threshold", text: $fields.advRedialMinUptime)
+            durationField("vpn.advanced.redialBudget", "Redial budget", text: $fields.advRedialBudget)
+            durationField("vpn.advanced.redialBudgetWindow", "Redial budget period",
+                          text: $fields.advRedialBudgetWindow)
+            durationField("vpn.advanced.commandFreshness", "Command freshness", text: $fields.advCommandFreshness)
+            durationField("vpn.advanced.windowDiscoveryInterval", "Window discovery interval",
+                          text: $fields.advWindowDiscoveryInterval)
+            durationField("vpn.advanced.tunnelPruneAfter", "Tunnel prune delay", text: $fields.advTunnelPruneAfter)
+            durationField("vpn.advanced.learnedEndpointTTL", "Learned address lifetime",
+                          text: $fields.advLearnedEndpointTTL)
+            schemaField("vpn.advanced.learnedMaxPerProfile", "Learned addresses per profile",
+                        text: $fields.advLearnedMaxPerProfile)
+            schemaField("vpn.advanced.promoteAfterRefreshes", "Sightings before an address is learned",
+                        text: $fields.advPromoteAfterRefreshes)
+            schemaField("vpn.advanced.endpointWarnThreshold", "Address-bloat warning threshold",
+                        text: $fields.advEndpointWarnThreshold)
+            schemaField("vpn.advanced.windowProtocols", "Window protocols (comma-sep)",
+                        text: $fields.advWindowProtocols)
+            schemaField("vpn.advanced.windowPorts", "Window ports (comma-sep)",
+                        text: $fields.advWindowPorts)
+        }
     }
 
     /// A duration setting as a menu of real choices rather than a text field

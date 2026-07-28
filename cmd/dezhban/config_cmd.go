@@ -52,9 +52,9 @@ Subcommands:
 
 Flags:
   --token-stdin     Read the control token from stdin and have the running
-                    daemon perform the write — no root, applied immediately.
-                    Falls back to a privileged write if no daemon answers; a
-                    daemon that REFUSES is reported, never routed around.
+                    running dezhban perform the write — no root, applied
+                    immediately. Falls back to a privileged write if nothing
+                    answers; a REFUSAL is reported, never routed around.
                     See 'dezhban token'.
   --json            ('preset list'/'preset show'/'preset diff'/'schema' only)
                     print machine-readable JSON instead of prose
@@ -362,11 +362,23 @@ var configFields = map[string]configField{
 				return err
 			}
 			if c.VPN.Advanced.RedialMinUptime == 0 {
-				// "0" means the anti-flap gate is off, not "reset to default" — same
+				// "0" means the redial backoff is off, not "reset to default" — same
 				// explicit-opt-out sentinel as the three windows.
 				c.VPN.Advanced.RedialMinUptime = config.Disabled
 			}
 			return nil
+		},
+	},
+	"vpn.advanced.redialBudget": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.RedialBudget.String() },
+		set: func(c *config.Config, v string) error {
+			return setLimitDuration(&c.VPN.Advanced.RedialBudget, v, "vpn.advanced.redialBudget")
+		},
+	},
+	"vpn.advanced.redialBudgetWindow": {
+		get: func(c *config.Config) string { return c.VPN.Advanced.RedialBudgetWindow.String() },
+		set: func(c *config.Config, v string) error {
+			return setLimitDuration(&c.VPN.Advanced.RedialBudgetWindow, v, "vpn.advanced.redialBudgetWindow")
 		},
 	},
 	"vpn.advanced.commandFreshness": {
@@ -600,7 +612,7 @@ func tryConfigWrite(cfgPath string, pairs map[string]string, token string) (code
 			verbosef("control socket: %s — falling back to a privileged write", resp.Error)
 			return 0, false
 		}
-		fmt.Fprintln(os.Stderr, "daemon refused:", resp.Error)
+		fmt.Fprintln(os.Stderr, "dezhban refused:", resp.Error)
 		return ExitDaemonRefused, true
 	}
 	reportWriteOutcome(resp.Applied, resp.NeedsRestart)
@@ -653,7 +665,7 @@ const restartMarker = "Restart dezhban to apply:"
 // write followed by a reload — so a config change reads identically either way.
 func reportWriteOutcome(applied, needsRestart []string) {
 	if len(applied) == 0 && len(needsRestart) == 0 {
-		fmt.Println("Saved. No change to what the daemon is enforcing.")
+		fmt.Println("Saved. No change to what dezhban is enforcing.")
 		return
 	}
 	if len(applied) > 0 {
@@ -1464,6 +1476,25 @@ func setDuration(dst *time.Duration, v string) error {
 	d, err := time.ParseDuration(strings.TrimSpace(v))
 	if err != nil {
 		return fmt.Errorf("expected a duration like \"30s\": %w", err)
+	}
+	*dst = d
+	return nil
+}
+
+// setLimitDuration is setDuration for a key that is a LIMIT rather than a
+// feature. "0" is refused by name instead of being accepted and then silently
+// restored to the default by Normalize: on every other duration here "0" means
+// off, so someone typing it deserves to be told that off is not a thing a bound
+// can be, rather than to walk away believing the limit was lifted.
+func setLimitDuration(dst *time.Duration, v string, key string) error {
+	var d time.Duration
+	if err := setDuration(&d, v); err != nil {
+		return err
+	}
+	if d <= 0 {
+		return fmt.Errorf("%s is a limit, not a feature — there is no \"off\" for it. "+
+			"Raise it to relax the bound, or set vpn.redialWindow to \"0\" to turn the "+
+			"automatic redial window off entirely", key)
 	}
 	*dst = d
 	return nil

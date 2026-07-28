@@ -58,6 +58,36 @@ If you need the real ISP IP for a domestic-only site rather than turning
 anything off, use a bounded [`pause`](cli.md#pause-the-guard-temporarily)
 instead — it re-arms itself, so there's nothing to remember to undo.
 
+## I have to turn dezhban on again after every reboot
+
+The opposite complaint to the one above, and it has three different causes that
+look identical from the outside. `doctor` tells them apart — no root needed:
+
+```sh
+dezhban doctor
+```
+
+**"boot service: not registered to start at boot."** Nothing is asking the OS to
+launch dezhban, so a reboot leaves the host unguarded until you start it by
+hand. `sudo dezhban install` registers it. The variant *"installed, but not set
+to start at boot"* means the service unit exists with the wrong options —
+`sudo dezhban install` rewrites it.
+
+**"arm at boot: … it cannot arm."** The boot service is fine, but
+[`vpn.armAtBoot`](config.md) cannot take effect. It may only arm the guard at
+startup when a configured tunnel has been observed up at least once on this host
+([ADR-0008](../adr/0008-arm-at-boot.md)) — arming without that would fail closed
+on a machine whose VPN has never worked, which is a lockout by design. Connect
+your VPN once with dezhban running and the observation persists from then on.
+If the check instead reports the record could not be read, the daemon rewrites
+it the next time a tunnel comes up.
+
+**Both are healthy, but you still see nothing after logging in.** Then the guard
+*is* up and what is missing is the menubar app, which is a login-item question,
+not an enforcement one — add Dezhban.app under System Settings → General →
+Login Items. `dezhban status` from a terminal confirms the guard is enforcing
+without it.
+
 ## VPN guard: tunnel dies, DNS fails ("no such host"), country lookups time out
 
 Symptom (from the daemon log):
@@ -145,10 +175,47 @@ window](../concepts/modes.md#automatic-redial-window) (`vpn.redialWindow`, defau
 `30s`) opens on the drop so the client can redial anywhere; the new server is
 learned and the guard snaps back on a confirmed good exit. If you disabled it
 (`"0"`), redials to fresh servers need `dezhban switch` — that is the
-configured strict behavior, not a bug. If the window keeps getting suppressed in
-the logs, your tunnel is flapping faster than
-`vpn.advanced.redialMinUptime` (default `15s`) — fix the VPN, or lower/zero
-the gate if the flapping is expected.
+configured strict behavior, not a bug.
+
+If the logs say **`redial budget spent`** or **`backing off after consecutive
+fast drops`**, the windows are being rationed rather than refused outright: your
+tunnel is dropping again within `vpn.advanced.redialMinUptime` (default `15s`),
+so each window is shorter than the last, and the rolling
+`vpn.advanced.redialBudget` (default `2m` per `15m`) has run out. The log line
+carries `nextEligible` — the instant a window can open again. Fix the VPN if you
+can; if the flapping is expected, raise the budget or set `redialMinUptime` to
+`"0"` so every drop gets a full-length window until the budget runs out. Note
+that successful redials cost almost nothing (a window that closes early only
+spends what it used), so reaching the limit means the redials themselves are
+failing.
+
+You do not have to sit out a `backing off` wait: one reconnection that holds —
+long enough to clear `redialMinUptime`, or long enough for dezhban to confirm the
+exit — clears it, and the next drop starts from a full window again. A
+`redial budget spent` wait is the one that has to elapse, because the budget is
+the actual bound.
+
+**You do not have to do anything when it elapses, either.** dezhban re-takes the
+decision at the `nextEligible` instant it reported, so a drop that was refused
+gets its window as soon as the bound lifts — the tunnel does not have to drop
+again first. That matters when the tunnel cannot come back on its own, which is
+the rotation case below. The re-decision may refuse again if the budget is still
+short, and it is skipped entirely while `dezhban hold` is armed, which is the
+point of arming it. One drop still earns at most one automatic window.
+
+**Confirming it is rotation.** `dezhban doctor`'s *learned endpoints* check reads
+the store and says which of the two opposite problems you have. "Every learned
+address … has aged out" means the addresses were learned and then discarded, and
+retaining them longer (`vpn.advanced.learnedEndpointTTL`) removes the
+interaction. "… looks like it rotates its server address" means the store is
+full of addresses seen for the first time recently, so retaining more only
+delays the problem — name the server by **hostname** instead, which dezhban
+re-resolves on `vpn.endpointRefresh` and follows the rotation rather than
+chasing it:
+
+```sh
+dezhban vpn add work --endpoint vpn.example.net
+```
 
 ### Note for NetworkExtension VPNs (macOS)
 
@@ -213,7 +280,7 @@ reached, so routine ops fall back to the root path and prompt for a password.
 
 ```sh
 stat -f "%Sp %Su %Sg %N" /var/db/dezhban    # want: drwxr-xr-x root wheel
-dezhban status | grep "daemon control"      # want: reachable — routine ops need no password
+dezhban status | grep "control socket"      # want: reachable — routine ops need no password
 ```
 
 Starting the daemon repairs the mode automatically (`state.EnsureDir`). To fix it

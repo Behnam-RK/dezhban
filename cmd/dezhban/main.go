@@ -60,14 +60,14 @@ Usage:
 
 Commands:
   run         Run the monitor→decision→enforcement loop
-  block       Manually block network egress
+  block       Manually block all outbound traffic
   unblock     Remove dezhban's firewall rules
   status      Show version, config, and current state
   validate    Load and validate a config file (no root, no side effects)
   monitor     Live read-only view: IP, country, tunnel state, endpoints, verdict
   print-rules Print the firewall ruleset a block/guard would apply, without applying it
   doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
-  panic       Force-remove dezhban's rules even if the daemon is dead
+  panic       Force-remove dezhban's rules even if nothing is running
   install     Register dezhban as a boot-persistent OS service
   uninstall   Remove the OS service
   start       Start the installed service
@@ -89,13 +89,13 @@ Commands:
 Global flags:
   -v, --verbose   Override the configured log level to debug
   --no-sudo       Don't auto-elevate; print the root error instead
-  --no-daemon     Don't use the daemon's control socket; act on the firewall directly
+  --no-daemon     Don't use the control socket; act on the firewall directly
 
-block, unblock, switch, pause, resume and hold ask the running daemon over its
-control socket, which needs no password (see the "daemon control" line in
-dezhban status). With no daemon listening, block/unblock fall back to acting on
+block, unblock, switch, pause, resume and hold ask the running dezhban over its
+control socket, which needs no password (see the "control socket" line in
+dezhban status). With nothing listening, block/unblock fall back to acting on
 the firewall directly; switch/pause/resume/hold fall back to the root-owned
-command file, which needs a running daemon to consume it — either way, needing
+command file, which needs a running dezhban to consume it — either way, needing
 root.
 
 Privileged commands re-run themselves under sudo automatically when not root
@@ -636,6 +636,8 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		RedialWindow:            cfg.VPN.RedialWindow,
 		RedialWindowMax:         adv.RedialWindowMax,
 		RedialMinUptime:         adv.RedialMinUptime,
+		RedialBudget:            adv.RedialBudget,
+		RedialBudgetWindow:      adv.RedialBudgetWindow,
 		Learn:                   learnHook,
 		PollCommand:             pollCommand,
 		Publish:                 publish,
@@ -690,6 +692,8 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 		RedialWindow:            cfg.VPN.RedialWindow,
 		RedialWindowMax:         adv.RedialWindowMax,
 		RedialMinUptime:         adv.RedialMinUptime,
+		RedialBudget:            adv.RedialBudget,
+		RedialBudgetWindow:      adv.RedialBudgetWindow,
 		PauseMax:                cfg.VPN.PauseMax,
 		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
@@ -778,8 +782,8 @@ func runDryRun(cfg *config.Config, log *slog.Logger, ov runOverrides) int {
 func cmdBlock(args []string) int {
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
-	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other egress)")
-	force := fs.Bool("force", false, "force a hard full block of all egress, bypassing the VPN guard state machine")
+	guard := fs.Bool("guard", false, "apply the VPN interface guard (pass tunnel + endpoint, block other traffic)")
+	force := fs.Bool("force", false, "force a hard full block of all traffic, bypassing the VPN guard state machine")
 	_ = fs.Parse(args)
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
@@ -794,7 +798,7 @@ func cmdBlock(args []string) int {
 	if !noDaemon() && !*guard && !*force {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpBlock}); handled {
 			if code == 0 {
-				fmt.Println("blocked (via daemon) — held until `dezhban unblock`")
+				fmt.Println("blocked — held until `dezhban unblock`")
 			}
 			return code
 		}
@@ -1006,7 +1010,7 @@ func cmdUnblock(args []string) int {
 	if !noDaemon() && !*force {
 		if code, handled := tryControl(*cfgPath, control.Request{Op: control.OpUnblock}); handled {
 			if code == 0 {
-				fmt.Println("unblocked (via daemon) — monitoring resumed")
+				fmt.Println("unblocked — monitoring resumed")
 			}
 			return code
 		}
@@ -1622,12 +1626,257 @@ func buildLockoutCheck(tunnels []string) doctorCheck {
 	}
 }
 
+// buildServiceCheck answers "will dezhban be there after I reboot". Pure — the
+// caller supplies the unit facts (svc.Boot) and whether a daemon looks alive
+// right now (the same staleness rule `status` and the app use).
+//
+// The two questions are deliberately separate. "Something is enforcing now" and
+// "something will enforce after a reboot" have different answers and different
+// fixes, and conflating them is what makes the reported symptom — "I have to
+// turn it on again after every reboot" — so hard to place: it is equally
+// consistent with no boot service, a boot service that is installed but not
+// enabled, and a perfectly good boot service whose only absentee is the menubar
+// app at login. This check separates the three by name.
+func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
+	c := doctorCheck{Name: "service", Status: checkOK}
+
+	if !unit.Determinable {
+		c.Status = checkWarn
+		// Deliberately does not say "not installed" or name a platform: this is
+		// reached both where no unit file exists to read (Windows) and where one
+		// may exist but could not be read. Guessing between them is how a
+		// correctly-installed user gets told to reinstall.
+		c.Summary = "cannot tell without asking the service manager."
+		c.Details = []string{"Nothing readable here says what happens at boot. Ask it directly (needs root):"}
+		c.Fixes = []string{"sudo dezhban status"}
+		return c
+	}
+
+	switch {
+	case !unit.Present:
+		c.Status = checkWarn
+		c.Summary = "not registered to start at boot."
+		c.Details = []string{
+			fmt.Sprintf("No service unit at %s, so nothing", unit.Path),
+			"arms the guard after a reboot until you start dezhban by hand.",
+		}
+		if daemonLive {
+			c.Details = append(c.Details,
+				"",
+				"dezhban IS enforcing right now — this is about reboots, not about",
+				"the guard being off today.")
+		}
+		c.Fixes = []string{"sudo dezhban install"}
+
+	case !unit.AtBoot:
+		c.Status = checkWarn
+		c.Summary = "installed, but not set to start at boot."
+		c.Details = []string{
+			fmt.Sprintf("%s exists but does not ask", unit.Path),
+			"the service manager to start dezhban at boot, so `start` works and",
+			"every reboot comes up unguarded. Reinstalling rewrites the unit:",
+		}
+		c.Fixes = []string{"sudo dezhban install"}
+
+	case !daemonLive:
+		c.Status = checkWarn
+		c.Summary = "set to start at boot, but nothing is enforcing right now."
+		c.Details = []string{
+			"The next reboot will arm the guard. Until then this host is unguarded.",
+		}
+		c.Fixes = []string{"sudo dezhban start"}
+
+	default:
+		c.Summary = "registered to start at boot, and enforcing now."
+		// The point of saying this out loud: it rules out the enforcement
+		// explanation for "I have to turn it on after every reboot" and leaves
+		// only the presentation one, which has an entirely different fix.
+		c.Details = []string{
+			"If the menubar app is missing after a login, that is a login-item",
+			"question — the guard is already up without it.",
+		}
+	}
+	return c
+}
+
+// buildArmAtBootCheck reports whether the NEXT boot arms the guard immediately
+// or opens into standby until a live tunnel probe succeeds. Pure.
+//
+// vpn.armAtBoot may only override standby's live probe when an endpoint is known
+// AND a configured tunnel has been observed up at least once on this host — the
+// second half being the fact armed.json persists (ADR-0008). Both halves are
+// silent when they fail: the setting reads as "on" in the config while the
+// precondition behind it never holds, and every reboot re-opens for however long
+// the VPN takes to redial. Naming which half is missing is this check's whole job.
+func buildArmAtBootCheck(armAtBoot bool, haveTunnel bool, rec *armed.Record, loadErr error, path string) doctorCheck {
+	c := doctorCheck{Name: "armAtBoot", Status: checkOK}
+
+	// A corrupt record is not a crash — armed.Load hands back a zero value so
+	// the daemon treats the host as never having seen a tunnel — but it IS the
+	// state in which arm-at-boot silently stops working, so it outranks the
+	// config setting below.
+	if loadErr != nil {
+		c.Status = checkWarn
+		c.Summary = "the arm-at-boot record could not be read; boot will fall back to standby."
+		c.Details = []string{
+			loadErr.Error(),
+			"",
+			"dezhban treats an unreadable record as \"no tunnel has ever been up\",",
+			"which is safe but means the next reboot waits for a live tunnel instead",
+			"of arming straight away. dezhban rewrites it the next time a tunnel",
+			"comes up.",
+		}
+		return c
+	}
+
+	if !armAtBoot {
+		c.Status = checkWarn
+		c.Summary = "off — after a reboot the guard waits for a live tunnel before arming."
+		c.Details = []string{
+			"That leaves a gap between boot and the VPN connecting, during which",
+			"traffic uses your real address. Turning it on closes the gap on a host",
+			"whose VPN has already worked once.",
+		}
+		c.Fixes = []string{"sudo dezhban config set vpn.armAtBoot=true"}
+		return c
+	}
+
+	if !rec.TunnelEverUp {
+		c.Status = checkWarn
+		c.Summary = "on, but no tunnel has been observed up yet, so it cannot arm."
+		c.Details = []string{
+			fmt.Sprintf("The record at %s has not seen a tunnel come up on this host.", path),
+			"Arm-at-boot needs that observation — arming without it would fail closed",
+			"on a machine that has never had a working VPN, which is a lockout by",
+			"design rather than a guard.",
+			"",
+		}
+		if haveTunnel {
+			c.Details = append(c.Details,
+				"Connect your VPN once with dezhban running and this becomes permanent.")
+		} else {
+			c.Details = append(c.Details,
+				"Configure a tunnel first, then connect it once with dezhban running.")
+		}
+		return c
+	}
+
+	c.Summary = "on — the next reboot arms the guard without waiting for a tunnel."
+	c.Details = []string{
+		fmt.Sprintf("A tunnel was first seen up %s and last seen %s.",
+			rec.FirstUp.Local().Format(time.RFC1123), rec.LastUp.Local().Format(time.RFC1123)),
+	}
+	return c
+}
+
+// buildEndpointRetentionCheck reports on the learned-endpoint store, which is
+// what lets a dropped tunnel redial with no window at all: the guard passes
+// known server addresses on the physical link, so a drop whose endpoint is still
+// known needs no relaxation and no interaction. Pure.
+//
+// When someone is being forced to open a window by hand after every drop, the
+// cause is almost always in here, and it is one of two opposite things:
+// retention that is too short (addresses were learned and then thrown away), or
+// a VPN that rotates its server address (they were learned and are simply never
+// the same twice). The remedies point in opposite directions, so the check names
+// which one it is rather than printing counts and leaving the reader to guess.
+func buildEndpointRetentionCheck(store *learned.Store, loadErr error, ttl time.Duration, maxPerProfile int, staticEndpoints int, now time.Time) doctorCheck {
+	c := doctorCheck{Name: "endpointRetention", Status: checkOK}
+
+	if loadErr != nil {
+		c.Status = checkWarn
+		c.Summary = "the learned-endpoint store could not be read; every drop starts from nothing."
+		c.Details = []string{loadErr.Error()}
+		return c
+	}
+
+	total := 0
+	for _, e := range store.Entries {
+		total += len(e.Endpoints)
+	}
+	if total == 0 {
+		if staticEndpoints > 0 {
+			c.Summary = "nothing learned yet — the configured server addresses cover the guard."
+			return c
+		}
+		c.Status = checkWarn
+		c.Summary = "nothing learned, and no server address configured either."
+		c.Details = []string{
+			"A drop has no known address to redial through, so it needs a window",
+			"every time. Naming the server once removes the interaction entirely.",
+		}
+		c.Fixes = []string{"dezhban vpn add <name> --endpoint <host-or-ip>"}
+		return c
+	}
+
+	var rotating, staleOnly []string
+	for _, e := range store.Entries {
+		fresh, recentlyNew := 0, 0
+		for _, ep := range e.Endpoints {
+			if ttl <= 0 || now.Sub(ep.LastSeen) <= ttl {
+				fresh++
+			}
+			// A FirstSeen inside the retention window means this address is not
+			// one dezhban has been reusing — it is one it met for the first time
+			// recently. Many of those at once is what rotation looks like from
+			// in here; the store cannot report addresses it has already pruned,
+			// so first-sightings are the honest proxy for churn.
+			if ttl <= 0 || now.Sub(ep.FirstSeen) <= ttl {
+				recentlyNew++
+			}
+		}
+		c.Details = append(c.Details, fmt.Sprintf("%s — %d stored, %d within the %s retention window",
+			e.Name, len(e.Endpoints), fresh, ttl))
+
+		switch {
+		case fresh == 0:
+			staleOnly = append(staleOnly, e.Name)
+		case maxPerProfile > 0 && len(e.Endpoints) >= maxPerProfile && recentlyNew > maxPerProfile/2:
+			rotating = append(rotating, e.Name)
+		}
+	}
+
+	switch {
+	case len(staleOnly) > 0:
+		c.Status = checkWarn
+		c.Summary = fmt.Sprintf("every learned address for %s has aged out.", strings.Join(staleOnly, ", "))
+		c.Details = append(c.Details, "",
+			"They were learned and then discarded, so the next drop redials with",
+			"nothing known and needs a window. Retaining them for longer removes",
+			"that interaction.")
+		c.Fixes = []string{"sudo dezhban config set vpn.advanced.learnedEndpointTTL=720h"}
+
+	case len(rotating) > 0:
+		c.Status = checkWarn
+		c.Summary = fmt.Sprintf("%s looks like it rotates its server address.", strings.Join(rotating, ", "))
+		c.Details = append(c.Details, "",
+			"The store is full and most of what is in it was seen for the first time",
+			"recently, which means the address is rarely the same twice. Retaining",
+			"more of them only delays the problem — a hostname is the real fix,",
+			"because dezhban re-resolves it on vpn.endpointRefresh and follows the",
+			"rotation instead of chasing it.")
+		c.Fixes = []string{
+			"dezhban vpn add <name> --endpoint <server-hostname>",
+			"sudo dezhban config set vpn.advanced.learnedMaxPerProfile=32",
+		}
+
+	default:
+		c.Summary = fmt.Sprintf("%d address(es) retained — a drop can redial without a window.", total)
+	}
+	return c
+}
+
 // runDoctor builds the report: validates config, lists tunnel interfaces and
 // their subnets, and flags any endpoint that sits inside a tunnel's own subnet
 // (a guaranteed lockout). With discover=true it additionally runs the
 // macOS-only best-effort hunt for the connected VPN's real server IP,
-// automating the manual netstat/scutil dance. No I/O of its own beyond what
-// resolveTunnels/resolveEndpointsOnce/netdetect already do — no printing.
+// automating the manual netstat/scutil dance.
+//
+// Its I/O is what resolveTunnels/resolveEndpointsOnce/netdetect do, plus three
+// unprivileged reads of files dezhban itself owns — the state snapshot, the
+// arm-at-boot record, and the learned-endpoint store. Every check derived from
+// those is built by a pure function taking the loaded value, so the diagnosis
+// is testable without any of them existing. No printing.
 func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport {
 	var checks []doctorCheck
 
@@ -1655,6 +1904,29 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 	if lockout {
 		checks = append(checks, buildLockoutCheck(tunnels))
 	}
+
+	// Will this host guard itself again after a reboot, and can a drop redial
+	// without asking anyone? Both are answered from unprivileged reads —
+	// svc.Boot reads the unit file rather than querying the service manager
+	// (which cannot answer truthfully to a non-root caller on macOS), and the
+	// two daemon-owned records are 0644 exactly so the CLI can read them.
+	//
+	// Informational, like touchID: none of these is a lockout risk, so none of
+	// them moves the exit code. They diagnose interaction that should not have
+	// been necessary, not a guard that is about to fail closed.
+	now := time.Now()
+	snap, snapErr := state.Read(defaultStatePath())
+	daemonLive := snapErr == nil && !render.IsStale(snap, now)
+	checks = append(checks, buildServiceCheck(svc.Boot(), daemonLive))
+
+	armedPath := defaultArmedPath()
+	armedRec, armedErr := armed.Load(armedPath)
+	checks = append(checks, buildArmAtBootCheck(cfg.VPN.ArmAtBoot, len(tunnels) > 0, armedRec, armedErr, armedPath))
+
+	store, learnedErr := learned.Load(defaultLearnedPath())
+	checks = append(checks, buildEndpointRetentionCheck(store, learnedErr,
+		cfg.VPN.Advanced.LearnedEndpointTTL, cfg.VPN.Advanced.LearnedMaxPerProfile,
+		len(cfg.VPN.Endpoints), now))
 
 	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI
 	// actions) authenticate through sudo, and sudo only offers Touch ID when
@@ -1712,6 +1984,26 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 	// the two conditions the daemon refuses to start on, so doctor must agree
 	// with it.
 	return doctorReport{Checks: checks, OK: !(lockout || len(bad) > 0)}
+}
+
+// unattendedSections are the checks that answer "will dezhban need me again" —
+// after a reboot, or after the next drop. Grouped because they read as one
+// question and print as one block.
+var unattendedSections = []struct{ name, heading string }{
+	{"service", "boot service"},
+	{"armAtBoot", "arm at boot"},
+	{"endpointRetention", "learned endpoints"},
+}
+
+// sectionedChecks names every check printDoctor has a hand-written section for.
+// The leftover printer at the bottom of printDoctor is a safety net for a check
+// added without one — TestEveryCheckHasASection pins that runDoctor never
+// actually needs it, so a new check gets a considered place in the layout
+// instead of being appended, unformatted, after `discover`.
+var sectionedChecks = []string{
+	"config", "tunnels", "endpoints", "lockout",
+	"service", "armAtBoot", "endpointRetention",
+	"touchID", "discover",
 }
 
 // printDoctor renders a doctorReport in the text layout `doctor` has always
@@ -1780,6 +2072,25 @@ func printDoctor(r doctorReport) {
 		}
 	}
 	fmt.Println()
+
+	// The three "will this need me again" checks share one shape — heading,
+	// summary, details, fixes — so they share one printer rather than three
+	// copies that would drift apart the first time one of them grew a line.
+	for _, s := range unattendedSections {
+		c, ok := get(s.name)
+		if !ok {
+			continue
+		}
+		fmt.Printf("%s: %s\n", s.heading, c.Summary)
+		printDetails(c.Details)
+		if len(c.Fixes) > 0 {
+			fmt.Println()
+			for _, f := range c.Fixes {
+				fmt.Printf("    %s\n", f)
+			}
+		}
+		fmt.Println()
+	}
 
 	if touchID, ok := get("touchID"); ok {
 		fmt.Printf("touch id: %s\n", touchID.Summary)
@@ -1908,7 +2219,7 @@ func cmdStatus(args []string) int {
 	fmt.Printf("%s — %s\n", disp.Headline, disp.Detail)
 	fmt.Println("privileged:      ", privilege.IsPrivileged())
 	fmt.Println("service:         ", svc.Status())
-	fmt.Println("daemon control:  ", controlStatus(cfg))
+	fmt.Println("control socket:  ", controlStatus(cfg))
 	fmt.Println("poll interval:   ", cfg.PollInterval)
 	fmt.Println("hysteresis:      ", cfg.Hysteresis)
 	fmt.Println("blocked countries:", strings.Join(blocked, ", "))
