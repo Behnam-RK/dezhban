@@ -19,6 +19,15 @@ import (
 // (-v, --no-sudo, --no-daemon) is reset first so tests stay order-independent
 // regardless of what ran before them — run() itself never resets it, since a
 // real process only calls it once.
+//
+// Because it swaps the process-global os.Stdout/os.Stderr, no test in this
+// file may call t.Parallel().
+//
+// Each pipe is drained by its own goroutine STARTED BEFORE run(), never read
+// after it returns: a pipe holds only a fixed kernel buffer (64 KiB on Linux,
+// smaller on macOS), so a command that prints more than that — `config
+// schema`, `completion zsh`, `print-rules` on a large config — would block
+// forever inside run() with nothing reading the other end.
 func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	t.Helper()
 	verbose, noSudo, noDaemonFlag = false, false, false
@@ -32,16 +41,28 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	if err != nil {
 		t.Fatal(err)
 	}
+
+	drain := func(r *os.File) <-chan string {
+		ch := make(chan string, 1)
+		go func() {
+			data, _ := io.ReadAll(r)
+			_ = r.Close()
+			ch <- string(data)
+		}()
+		return ch
+	}
+	outCh, errCh := drain(outR), drain(errR)
+
 	os.Stdout, os.Stderr = outW, errW
 	defer func() { os.Stdout, os.Stderr = oldOut, oldErr }()
 
 	code = run(args)
 
+	// Closing the write ends is what ends each ReadAll — do it before
+	// receiving, or the drains never see EOF.
 	_ = outW.Close()
 	_ = errW.Close()
-	outData, _ := io.ReadAll(outR)
-	errData, _ := io.ReadAll(errR)
-	return string(outData), string(errData), code
+	return <-outCh, <-errCh, code
 }
 
 // testConfigPath writes a valid, self-contained config to a temp file and

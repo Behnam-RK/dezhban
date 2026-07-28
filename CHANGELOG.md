@@ -63,9 +63,11 @@ current as you land changes.
   said otherwise. `block`, `unblock`, `switch`, `pause`, `resume` route over
   the control socket before ever needing root; `sudo` in front of them was
   actively counterproductive; it re-execs as root, which then pays the very
-  password prompt the socket exists to avoid. Trimmed from README.md and the
-  user-facing `docs/usage/` and `docs/concepts/` pages; ADRs, contributor
-  docs, and every `curl | sudo bash` install line are untouched by design.
+  password prompt the socket exists to avoid. Trimmed from the user-facing
+  `docs/usage/` pages; ADRs, contributor docs, and every `curl | sudo bash`
+  install line are untouched by design, and the `sudo` still shown on `panic`,
+  `setup`, `run`, and the service lifecycle is correct — those genuinely need
+  root.
 
 ## [0.8.0] - 2026-07-28
 

@@ -36,13 +36,17 @@ note() { echo "==> $*"; }
 
 # --- interactive discipline -----------------------------------------------
 # stdin IS the script text itself when piped (`curl | sudo bash`), so any
-# prompt reads /dev/tty directly, and only when one exists, stdout is a real
-# terminal, and the caller hasn't opted out. Every function below degrades
-# silently with no prompt at all when this is 0 — that is the load-bearing
-# property: a provisioner, CI job, or `curl | sudo bash` must see byte-for-byte
-# today's non-interactive behavior.
+# prompt reads /dev/tty directly. But the DECISION to prompt at all keys on
+# `-t 0`, not `-t 1`: a piped install still has this terminal as its stdout,
+# so testing stdout would make `curl | sudo bash` interactive — the exact
+# thing every comment, doc, and changelog entry here promises it is not.
+# stdin is the only stream that actually distinguishes the two invocations.
+# /dev/tty must also be readable and the caller must not have opted out.
+# Every function below degrades silently with no prompt at all when this is
+# 0 — that is the load-bearing property: a provisioner, CI job, or
+# `curl | sudo bash` must see byte-for-byte today's non-interactive behavior.
 interactive=0
-if [ -r /dev/tty ] && [ -t 1 ] && [ "${DEZHBAN_ASSUME_YES:-0}" != "1" ]; then
+if [ -t 0 ] && [ -r /dev/tty ] && [ "${DEZHBAN_ASSUME_YES:-0}" != "1" ]; then
 	interactive=1
 fi
 
@@ -79,6 +83,11 @@ confirm() {
 # /dev/tty, reads a choice into VAR (1-based). Not interactive: VAR is always
 # 1 — every menu below puts the today-equivalent action first, so this is the
 # same rule confirm/ask follow, just for a multi-way choice.
+#
+# Unrecognised input is NOT re-prompted: each caller's `case` simply falls
+# through to option 1. That is safe by construction because option 1 is always
+# the non-destructive install/upgrade — a typo can never land on "uninstall",
+# which additionally requires typing the word out in full.
 menu() {
 	_menu_prompt="$1"; _menu_var="$2"; shift 2
 	if [ "$interactive" != 1 ]; then
@@ -381,17 +390,35 @@ verify "$asset"
 [ "$install_app" = 1 ] && verify "Dezhban-macos.app.zip"
 
 # --- 4. install -----------------------------------------------------------
-# If a service is already running (an upgrade over a live install), the new
-# binary is installed regardless — overwriting a running executable's file is
-# safe on unix; the old daemon keeps enforcing on its old inode until it
-# actually restarts. But STOPPING/RESTARTING it is gated on the same
-# activation rule `dezhban upgrade apply` honours (docs/adr/0007): a restart
-# must never happen through FULL BLOCK or an open switch window, since that
-# would lift a block on a forbidden-country exit — the one thing this tool
-# exists to prevent. Checked as late as possible, right before the stop, not
-# back when was_running was first read — the posture can change during the
-# download above. No override: an operator who wants to force it already has
+# The CLI lands FIRST, before anything is stopped. If a service is already
+# running (an upgrade over a live install) that is safe: overwriting a running
+# executable's file is safe on unix, and the old daemon keeps enforcing on its
+# old inode until it actually restarts.
+step "installing the CLI to /usr/local/bin/dezhban"
+install -m 0755 "$tmp/$asset" /usr/local/bin/dezhban.new
+mv -f /usr/local/bin/dezhban.new /usr/local/bin/dezhban
+
+# Same enforcement as the .app below, and it matters just as much here: a
+# quarantined bare executable is refused on exec too (not only bundles), so a
+# flagged binary would fail as a launchd-started daemon — i.e. the kill switch
+# silently never comes up. Cheap no-op when the flag was never set.
+[ "$goos" = darwin ] && { xattr -d com.apple.quarantine /usr/local/bin/dezhban 2>/dev/null || true; }
+
+# STOPPING/RESTARTING a live daemon, unlike installing the file, is gated on
+# the same activation rule `dezhban upgrade apply` honours (docs/adr/0007): a
+# restart must never happen through FULL BLOCK or an open switch window, since
+# that would lift a block on a forbidden-country exit — the one thing this tool
+# exists to prevent. No override: an operator who wants to force it already has
 # `sudo dezhban restart`, typed by name.
+#
+# Asked as late as possible — the posture can change during the download above,
+# so this must not reuse the answer from when was_running was first read. It is
+# asked of the NEWLY INSTALLED binary, deliberately: `upgrade can-activate`
+# ships for the first time with this very change, so the previously-installed
+# binary would answer "unknown subcommand" on every upgrade from an older
+# release and no live daemon would ever be restarted again. The new binary
+# reads the same daemon-written state snapshot the old one does, so asking it
+# is both correct and the only version-independent option.
 restart_after=0
 if [ "$was_running" = 1 ]; then
 	if gate_msg="$(/usr/local/bin/dezhban upgrade can-activate 2>&1)"; then
@@ -406,16 +433,6 @@ if [ "$restart_after" = 1 ]; then
 	step "stopping the running service for the upgrade"
 	/usr/local/bin/dezhban --no-sudo stop || true
 fi
-
-step "installing the CLI to /usr/local/bin/dezhban"
-install -m 0755 "$tmp/$asset" /usr/local/bin/dezhban.new
-mv -f /usr/local/bin/dezhban.new /usr/local/bin/dezhban
-
-# Same enforcement as the .app below, and it matters just as much here: a
-# quarantined bare executable is refused on exec too (not only bundles), so a
-# flagged binary would fail as a launchd-started daemon — i.e. the kill switch
-# silently never comes up. Cheap no-op when the flag was never set.
-[ "$goos" = darwin ] && { xattr -d com.apple.quarantine /usr/local/bin/dezhban 2>/dev/null || true; }
 
 if [ "$install_app" = 1 ]; then
 	step "installing the menubar app to /Applications/Dezhban.app"

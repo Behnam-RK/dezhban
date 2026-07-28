@@ -316,15 +316,19 @@ tasks:
 
   test:cover:
     desc: 'Run the suite with coverage and enforce .testcoverage.yml'
+    vars:
+      # Pinned, never @latest: the gate decides whether CI goes red, so a new
+      # upstream release must not be able to change that verdict without a
+      # commit here. Bump deliberately. Keep in sync with .github/workflows/ci.yml.
+      COVERAGE_TOOL: github.com/vladopajic/go-test-coverage/v2@v2.19.0
     cmds:
       - go test ./... -coverprofile=cover.out
-      - |
-        gobin="$(go env GOPATH)/bin"
-        if [ ! -x "$gobin/go-test-coverage" ]; then
-          echo "installing go-test-coverage..."
-          go install github.com/vladopajic/go-test-coverage/v2@latest
-        fi
-        "$gobin/go-test-coverage" --config=.testcoverage.yml
+      # Unconditional install, not "skip if the binary exists": `go install` is
+      # a fast no-op once the module is cached, and skipping would silently keep
+      # whatever version a developer installed first — which is exactly what the
+      # pin above exists to prevent.
+      - go install {{.COVERAGE_TOOL}}
+      - '"$(go env GOPATH)/bin/go-test-coverage" --config=.testcoverage.yml'
 
   lint:
     cmds:

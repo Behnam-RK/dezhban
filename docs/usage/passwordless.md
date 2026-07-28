@@ -6,23 +6,32 @@ running daemon over its **control socket** instead, and the daemon performs
 them. Whether that path is open for you depends on one setting:
 `control.group`.
 
-## Why this isn't on by default
+## Is it already on?
 
-By default `control.group` is empty, which means the socket is root-only
-(mode `0600`). Every routine command then falls back to `sudo`, which is why
-a fresh install still asks for a password for things that feel like they
-shouldn't need it. Turning this on is one line.
+It depends on your OS. `control.group` defaults to `"admin"` on macOS, where
+that group exists on every install and is exactly the set of accounts that can
+already `sudo` — so **on macOS this is on out of the box** and there is
+nothing to do. Off macOS it defaults to empty, because there is no single
+portable name for "the admins" (Debian calls it `sudo`, Fedora calls it
+`wheel`), and empty means the socket is root-only (mode `0600`). Every routine
+command then falls back to `sudo`, which is why a fresh Linux install still
+asks for a password for things that feel like they shouldn't need it. Turning
+it on is one line.
+
+Either way, `dezhban doctor`'s `control:` line is the authority on which state
+you're actually in — skip to [Turn it on](#turn-it-on)'s verification steps if
+you just want to check.
 
 ## Turn it on
 
 First, identify your system's existing administrators group — the same one
 that already lets you run `sudo` at all:
 
-| System | Group |
-|---|---|
-| Debian, Ubuntu | `sudo` |
-| Fedora, RHEL, Arch, openSUSE | `wheel` |
-| macOS | `admin` |
+| System | Group | Default |
+|---|---|---|
+| Debian, Ubuntu | `sudo` | not set |
+| Fedora, RHEL, Arch, openSUSE | `wheel` | not set |
+| macOS | `admin` | **already set** |
 
 Point `control.group` at it:
 

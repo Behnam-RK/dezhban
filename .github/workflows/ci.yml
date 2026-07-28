@@ -50,11 +50,14 @@ jobs:
         run: go test -race ./...
       # Coverage gate once (ubuntu): enforces .testcoverage.yml's per-package
       # floors so coverage cannot regress. See docs/contribute/testing.md's
-      # Unit test policy for what counts.
+      # Unit test policy for what counts. The tool version is PINNED, never
+      # @latest — this gate decides whether CI goes red, so an upstream release
+      # must not be able to change that verdict with no commit here. Keep in
+      # sync with Taskfile.yml's test:cover.
       - if: matrix.os == 'ubuntu-latest'
         run: |
           go test ./... -coverprofile=cover.out
-          go install github.com/vladopajic/go-test-coverage/v2@latest
+          go install github.com/vladopajic/go-test-coverage/v2@v2.19.0
           "$(go env GOPATH)/bin/go-test-coverage" --config=.testcoverage.yml
       # Keep the windows backend compiling even though we don't test it yet (see
       # the matrix comment). Vet, not just build: it type-checks the _windows.go
