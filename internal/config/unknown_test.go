@@ -36,6 +36,7 @@ func retiredKeys(cfg *Config) []string {
 // default. For a window that someone deliberately disabled, that quietly
 // re-enables a relaxation of the guard.
 func TestUnknownKeysAreReported(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{
 	  "pollInterval": "20s",
 	  "notAKey": true,
@@ -53,6 +54,7 @@ func TestUnknownKeysAreReported(t *testing.T) {
 // A renamed key has to say what replaced it. "not recognised" sends someone
 // hunting through docs for a key that simply moved.
 func TestRenamedKeysPointAtTheirReplacement(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{"vpn": {"reconnectWindow": "0"}}`)
 
 	var found bool
@@ -77,6 +79,7 @@ func TestRenamedKeysPointAtTheirReplacement(t *testing.T) {
 // class of failure as silently discarding one, and the more dangerous
 // direction: they stop looking while the value is in force.
 func TestMiscasedAutodetectIsReportedAsHavingTakenEffect(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{"vpn": {"autodetect": false}}`)
 
 	// The value is live: vpn.autoDetect defaults to TRUE, so a silently
@@ -110,6 +113,7 @@ func TestMiscasedAutodetectIsReportedAsHavingTakenEffect(t *testing.T) {
 // miscased key has to be reported: the report is the only thing that tells an
 // operator their config has two keys fighting over one setting.
 func TestBothAutoDetectSpellingsPresentIsReported(t *testing.T) {
+	t.Parallel()
 	for _, body := range []string{
 		`{"vpn": {"autodetect": true, "autoDetect": false}}`,
 		`{"vpn": {"autoDetect": false, "autodetect": true}}`,
@@ -127,6 +131,7 @@ func TestBothAutoDetectSpellingsPresentIsReported(t *testing.T) {
 // failure this file exists to prevent, just one JSON container type away from
 // where it was already caught for vpn/vpn.advanced/control.
 func TestUnknownKeysInsideProfilesAreReported(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{
 	  "vpn": {
 	    "profiles": [
@@ -151,6 +156,7 @@ func TestUnknownKeysInsideProfilesAreReported(t *testing.T) {
 // ifaceHint set on ANY profile must be told so, with the index that pinpoints
 // which entry.
 func TestOldIfaceHintInsideAProfileIsReportedAsRenamed(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{
 	  "vpn": {
 	    "profiles": [
@@ -180,6 +186,8 @@ func TestOldIfaceHintInsideAProfileIsReportedAsRenamed(t *testing.T) {
 // one map entry rather than needing one per index. Uses a synthetic entry
 // (saved/restored) rather than depending on any real rename existing.
 func TestRenamedKeyInsideAnArrayElementIsNormalised(t *testing.T) {
+	// No t.Parallel(): mutates the package-level renamedKeys map directly, which
+	// races with any parallel sibling test reading it via lookupRenamed.
 	const oldKey, newKey = "vpn.profiles[].syntheticOld", "vpn.profiles[].syntheticNew"
 	renamedKeys[oldKey] = newKey
 	t.Cleanup(func() { delete(renamedKeys, oldKey) })
@@ -200,6 +208,7 @@ func TestRenamedKeyInsideAnArrayElementIsNormalised(t *testing.T) {
 // setting is running, which is the lie this whole file exists to prevent,
 // reached from the one direction the case-folding branch didn't cover.
 func TestMiscasedRetiredKeyIsNotReportedAsLive(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{
 	  "FailClosed": true,
 	  "vpn": { "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "Enabled": false }
@@ -219,6 +228,7 @@ func TestMiscasedRetiredKeyIsNotReportedAsLive(t *testing.T) {
 // outcomes, which is exactly the accident TestRenameHintSurvivesAMiscasedParent
 // Block pins for the neighbouring lookup.
 func TestMiscasedRetiredKeyUnderAMiscasedParentIsNotReportedAsLive(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{"VPN": {"Enabled": true}}`)
 	assertReportedRetired(t, cfg, "VPN.Enabled")
 }
@@ -248,6 +258,7 @@ func assertReportedRetired(t *testing.T, cfg *Config, miscased string) {
 // schema's own name — a leaf-only fix would still emit "VPN.profiles", which
 // exists nowhere and leaves the one actionable part of the line wrong.
 func TestCanonicalSpellingIsSchemaCasedAtEveryLevel(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{"VPN": {"Profiles": [{"name": "w", "endpoints": ["1.2.3.4"]}]}}`)
 
 	want := map[string]string{"VPN": `"vpn"`, "VPN.Profiles": `"vpn.profiles"`}
@@ -277,6 +288,7 @@ func TestCanonicalSpellingIsSchemaCasedAtEveryLevel(t *testing.T) {
 // while the value is in force. Both halves are asserted together on purpose:
 // the value landing, and the report admitting it.
 func TestMiscasedKeysTakeEffectAndAreReportedAsSuch(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{
 	  "pollinterval": "1h",
 	  "vpn": { "PAUSEMAX": "2h", "advanced": { "RedialMinUptime": "0s" } }
@@ -312,6 +324,7 @@ func TestMiscasedKeysTakeEffectAndAreReportedAsSuch(t *testing.T) {
 // vpn, so a typo nested under it is just as inert as one under the correctly
 // spelled block, and just as much worth reporting.
 func TestTyposUnderAMiscasedBlockAreStillReported(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{"VPN": {"tunnelInterfaces": ["utun4"], "nonsenseKey": 1}}`)
 
 	got := retiredKeys(cfg)
@@ -325,6 +338,7 @@ func TestTyposUnderAMiscasedBlockAreStillReported(t *testing.T) {
 
 // A valid config must stay quiet, or the report becomes noise nobody reads.
 func TestKnownKeysAreNotReportedAsUnknown(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{
 	  "pollInterval": "20s",
 	  "hysteresis": 2,
@@ -347,6 +361,7 @@ func TestKnownKeysAreNotReportedAsUnknown(t *testing.T) {
 // report's line order stops matching the file's, and "the third one" no longer
 // means the third line. See sortKey.
 func TestArrayIndexedKeysSortNumerically(t *testing.T) {
+	t.Parallel()
 	var profiles []string
 	for i := range 12 {
 		profiles = append(profiles, `{"name":"p`+strconv.Itoa(i)+`","endpoints":["198.51.100.1"],"ifaceHint":"wg"}`)
@@ -381,6 +396,7 @@ func TestArrayIndexedKeysSortNumerically(t *testing.T) {
 // both spellings — a renamed key has no struct field for the decoder's
 // case-insensitive fallback to land on — so the hint is right either way.
 func TestRenameHintSurvivesAMiscasedParentBlock(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"vpn.profiles[1].ifaceHint", // exact
 		"VPN.profiles[1].ifaceHint", // parent miscased
@@ -400,6 +416,7 @@ func TestRenameHintSurvivesAMiscasedParentBlock(t *testing.T) {
 // End to end through the loader: the note a user actually reads for a miscased
 // parent block must carry the replacement name.
 func TestMiscasedParentBlockStillReportsTheRename(t *testing.T) {
+	t.Parallel()
 	cfg := loadFromJSON(t, `{"VPN": {"profiles": [{"name":"a","endpoints":["1.2.3.4"],"ifaceHint":"wg"}]}}`)
 	var found bool
 	for _, r := range cfg.Retired {

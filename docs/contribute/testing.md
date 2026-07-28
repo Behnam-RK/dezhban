@@ -29,6 +29,38 @@ decoding, posture→icon derivation, settings-field batching). `DezhbanMenu`
 itself (the AppKit/SwiftUI executable, elevation, CLI shell-out) has no test
 target — see Known gaps.
 
+## Unit test policy
+
+Rules for `go test ./...` — the part of the suite that runs in CI, with no
+root and no real firewall. `task test:cover` enforces the coverage floors in
+`.testcoverage.yml`; these rules keep what counts toward them honest.
+
+- **No `time.Sleep` in a test.** Poll for the condition with a bounded
+  deadline, or inject a clock the way `internal/redial` and `internal/decision`
+  already do. A sleep either wastes wall-clock waiting past the real moment or
+  races it — neither proves the behaviour happened. **Exception:** a test whose
+  whole point is a wall-clock duration itself — e.g. proving a reply survives
+  arriving *after* an internal deadline has passed
+  (`TestSlowRunLoopStillGetsItsReplyThrough`) — may sleep past that real
+  duration, because the delay is the scenario, not a wait for one. Comment why
+  when you reach for this.
+- **`t.Parallel()` by default.** Add it to every new test unless the test uses
+  `t.Setenv` or otherwise mutates process-global state (`t.Setenv` itself
+  already fails if paired with `t.Parallel()`, which is the tell).
+- **Table-driven once there are ≥3 similar cases; a plain `t.Run` below that.**
+  A table with one or two rows is indirection with nothing to show for it.
+- **Assert observable behaviour, not call arguments.** Prefer "the firewall
+  policy now blocks egress" over "`Apply` was called with these exact flags" —
+  the latter breaks on refactors and proves nothing about correctness.
+- **Every gate or refusal needs a negative case.** If code can say no
+  (`CanActivate`, `canElevate`, a disabled window, a policy switch), a test
+  must prove it actually says no, not just that it says yes when allowed.
+- **Invariant-pin tests are named contracts — extend them, never restructure.**
+  `TestWindowDisableMatrix`, `TestEveryLinkGoesSomewhere`,
+  `TestPauseMaxDefaultAndDisableSentinel`, and others like them each pin one
+  specific past bug. Add a case to cover new ground; don't rewrite them to "clean
+  up" — the name and the shape are the point.
+
 ## Enforcement — all platforms
 
 - [ ] **Block cuts egress.** `sudo dezhban block` → general egress dies

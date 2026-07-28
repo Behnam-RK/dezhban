@@ -7,6 +7,7 @@ import (
 )
 
 func TestPresetsAreWellFormed(t *testing.T) {
+	t.Parallel()
 	for _, p := range Presets() {
 		t.Run(p.Name, func(t *testing.T) {
 			if p.Summary == "" {
@@ -31,6 +32,7 @@ func TestPresetsAreWellFormed(t *testing.T) {
 // config — the round-trip a preset must survive before it's ever offered to
 // a user.
 func TestPresetApplyValidates(t *testing.T) {
+	t.Parallel()
 	base := Default()
 	base.VPN.Endpoints = []string{"203.0.113.9"} // a config with a known endpoint validates cleanly
 	Normalize(&base)
@@ -50,6 +52,7 @@ func TestPresetApplyValidates(t *testing.T) {
 }
 
 func TestStrictPresetDisablesAllThreeWindowsAndSurvivesNormalize(t *testing.T) {
+	t.Parallel()
 	base := Default()
 	strict, _ := PresetByName("strict")
 	cfg, err := strict.apply(base)
@@ -72,6 +75,7 @@ func TestStrictPresetDisablesAllThreeWindowsAndSurvivesNormalize(t *testing.T) {
 // TestBalancedPresetMatchesDefault pins that the shipped defaults and the
 // middle preset can never silently disagree.
 func TestBalancedPresetMatchesDefault(t *testing.T) {
+	t.Parallel()
 	def := Default()
 	Normalize(&def)
 
@@ -85,6 +89,7 @@ func TestBalancedPresetMatchesDefault(t *testing.T) {
 }
 
 func TestPresetDriftEmptyForExactMatch(t *testing.T) {
+	t.Parallel()
 	base := Default()
 	relaxed, _ := PresetByName("relaxed")
 	cfg, err := relaxed.apply(base)
@@ -99,6 +104,7 @@ func TestPresetDriftEmptyForExactMatch(t *testing.T) {
 }
 
 func TestPresetDriftNamesExactlyTheDivergentKeys(t *testing.T) {
+	t.Parallel()
 	base := Default()
 	balanced, _ := PresetByName("balanced")
 	cfg, err := balanced.apply(base)
@@ -120,6 +126,7 @@ func TestPresetDriftNamesExactlyTheDivergentKeys(t *testing.T) {
 }
 
 func TestMatchPresetReportsCustomWhenDrifted(t *testing.T) {
+	t.Parallel()
 	base := Default()
 	balanced, _ := PresetByName("balanced")
 	cfg, err := balanced.apply(base)
@@ -135,6 +142,7 @@ func TestMatchPresetReportsCustomWhenDrifted(t *testing.T) {
 }
 
 func TestMatchPresetFindsExactMatch(t *testing.T) {
+	t.Parallel()
 	def := Default()
 	Normalize(&def)
 	if name, exact := MatchPreset(&def); !exact || name != "balanced" {
@@ -143,6 +151,7 @@ func TestMatchPresetFindsExactMatch(t *testing.T) {
 }
 
 func TestPresetByNameIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
 	if _, ok := PresetByName("STRICT"); !ok {
 		t.Error("PresetByName(\"STRICT\") not found")
 	}
@@ -158,6 +167,7 @@ func TestPresetByNameIsCaseInsensitive(t *testing.T) {
 // time. And the preset must NOT resolve it by raising the cap: the cap is the
 // operator's own ceiling on a sanctioned relaxation of the guard.
 func TestPresetConflictsAgainstLoweredAdvancedCaps(t *testing.T) {
+	t.Parallel()
 	base := Default()
 	Normalize(&base)
 	if got := PresetConflicts(&base, mustPreset(t, "relaxed")); len(got) != 0 {
@@ -195,6 +205,7 @@ func TestPresetConflictsAgainstLoweredAdvancedCaps(t *testing.T) {
 // or applying a "strictness" macro would silently raise a ceiling the operator
 // set by hand.
 func TestPresetsNeverSetTheAdvancedCaps(t *testing.T) {
+	t.Parallel()
 	for _, k := range presetKeys {
 		if k == "vpn.advanced.switchWindowMax" || k == "vpn.advanced.redialWindowMax" {
 			t.Errorf("presetKeys contains %q — a preset must never widen a cap the operator set", k)

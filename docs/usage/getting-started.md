@@ -138,9 +138,9 @@ A brand-new VPN server can't complete its handshake through a closed guard, so
 open a short window for it:
 
 ```sh
-sudo dezhban switch                  # opens a window — connect it in its own app now
+dezhban switch                       # opens a window — connect it in its own app now
 dezhban switch --status              # is one open?
-sudo dezhban switch --cancel         # close it early
+dezhban switch --cancel              # close it early
 ```
 
 The window closes itself as soon as a good exit is confirmed, and expires on its

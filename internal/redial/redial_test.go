@@ -22,6 +22,7 @@ var t0 = time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
 // The ordinary drop: a tunnel that was up long enough gets the whole window and
 // arms no cooldown. This is the case the budget must not make worse.
 func TestHealthyDropGetsTheFullWindow(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -41,6 +42,7 @@ func TestHealthyDropGetsTheFullWindow(t *testing.T) {
 // — is not flapping, however short the uptime. Treating it as a flap would back
 // off from a VPN that is working.
 func TestConfirmedExitIsNotAFlap(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -54,6 +56,7 @@ func TestConfirmedExitIsNotAFlap(t *testing.T) {
 // The old anti-flap gate refused outright, which pushed the user onto the manual
 // path at exactly the moment the automatic one was most useful.
 func TestFastDropIsShortenedNotRefused(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -72,6 +75,7 @@ func TestFastDropIsShortenedNotRefused(t *testing.T) {
 // Consecutive fast drops halve the window and lengthen the cooldown, so a
 // pathological flap decays toward "cut and holding" instead of chaining windows.
 func TestConsecutiveFastDropsBackOff(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -113,6 +117,7 @@ func TestConsecutiveFastDropsBackOff(t *testing.T) {
 // A healthy uptime clears the backoff. Without this a single bad afternoon would
 // keep shortening windows for a VPN that had since recovered.
 func TestHealthyUptimeResetsTheBackoff(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -139,6 +144,7 @@ func TestHealthyUptimeResetsTheBackoff(t *testing.T) {
 // there is not a short wait — a refusal is only re-decided on the next
 // tunnel-down edge, so it stands until the operator opens a window by hand.
 func TestARecoveredTunnelIsNotHeldByTheCooldown(t *testing.T) {
+	t.Parallel()
 	s := defaults() // window 30s, minUptime 15s
 	b := New()
 
@@ -183,6 +189,7 @@ func TestARecoveredTunnelIsNotHeldByTheCooldown(t *testing.T) {
 // threshold with no confirmed exit is exactly the flap it rations, and clearing
 // it on evidence must not amount to clearing it on arrival.
 func TestTheCooldownStillHoldsWithoutEvidence(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -216,6 +223,7 @@ func TestTheCooldownStillHoldsWithoutEvidence(t *testing.T) {
 // the run loop's retry timer and internal/render lean on this instant being real
 // — one arms against it, the other prints it ("dezhban tries again at …").
 func TestACooldownRefusalAlsoAnswersForTheBudget(t *testing.T) {
+	t.Parallel()
 	// A budget that affords the first window and then almost nothing: 17s buys
 	// the 15s first grant and leaves 2s, below the 5s floor.
 	s := Settings{
@@ -256,6 +264,7 @@ func TestACooldownRefusalAlsoAnswersForTheBudget(t *testing.T) {
 // The bound the ADR exists to add: total open time inside the rolling interval
 // cannot exceed the budget, however many drops occur.
 func TestBudgetIsExhaustedAndHolds(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	s.MinUptime = 0 // isolate the budget from the backoff
 	b := New()
@@ -297,6 +306,7 @@ func TestBudgetIsExhaustedAndHolds(t *testing.T) {
 // costs. Charging the offer would punish the successful redial — the exact
 // outcome the window exists to produce.
 func TestEarlyCloseCreditsTheUnusedRemainder(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	s.MinUptime = 0
 	b := New()
@@ -320,6 +330,7 @@ func TestEarlyCloseCreditsTheUnusedRemainder(t *testing.T) {
 // An open window is committed, not free. Reporting it as available would let a
 // surface promise room that is already claimed.
 func TestAnOpenWindowCountsAtItsFullGrant(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	s.MinUptime = 0
 	b := New()
@@ -335,6 +346,7 @@ func TestAnOpenWindowCountsAtItsFullGrant(t *testing.T) {
 // is merely busy gets help back promptly instead of waiting for a full period of
 // silence.
 func TestBudgetRefillsPerEpisode(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	s.MinUptime = 0
 	b := New()
@@ -374,6 +386,7 @@ func TestBudgetRefillsPerEpisode(t *testing.T) {
 // leaving a client time to hand-shake. Refusing keeps the remainder for a drop
 // that can use it.
 func TestASliverIsRefusedRatherThanSpent(t *testing.T) {
+	t.Parallel()
 	s := Settings{Window: 30 * time.Second, Budget: 33 * time.Second, Interval: 15 * time.Minute}
 	b := New()
 
@@ -394,6 +407,7 @@ func TestASliverIsRefusedRatherThanSpent(t *testing.T) {
 // A budget that can afford something, but less than a full window, opens for
 // what it has — truncation is honest, and the client may well redial inside it.
 func TestAPartialBudgetTruncatesTheWindow(t *testing.T) {
+	t.Parallel()
 	s := Settings{Window: 30 * time.Second, Budget: 50 * time.Second, Interval: 15 * time.Minute}
 	b := New()
 
@@ -415,6 +429,7 @@ func TestAPartialBudgetTruncatesTheWindow(t *testing.T) {
 // asked — because MinGrant said so — would be the mirror image of silently
 // discarding a security setting.
 func TestAShortConfiguredWindowIsHonoured(t *testing.T) {
+	t.Parallel()
 	s := Settings{Window: 2 * time.Second, Budget: time.Minute, Interval: 15 * time.Minute, MinUptime: 15 * time.Second}
 	b := New()
 
@@ -427,6 +442,7 @@ func TestAShortConfiguredWindowIsHonoured(t *testing.T) {
 // sentinel, so "0" must mean every qualifying drop gets a full window until the
 // budget itself runs out.
 func TestBackoffDisabledByZeroMinUptime(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	s.MinUptime = 0
 	b := New()
@@ -444,6 +460,7 @@ func TestBackoffDisabledByZeroMinUptime(t *testing.T) {
 // Close with nothing open is a no-op, so the run loop's close paths need no
 // "was this an automatic window" bookkeeping of their own.
 func TestCloseWithNothingOpenIsHarmless(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 	b.Close(t0)
@@ -459,6 +476,7 @@ func TestCloseWithNothingOpenIsHarmless(t *testing.T) {
 // but it is the only way to reach the case, and "the longest windows are free"
 // is not an acceptable answer to it.
 func TestAnOpenEpisodeIsNeverAgedOut(t *testing.T) {
+	t.Parallel()
 	s := Settings{Window: 30 * time.Second, Budget: 2 * time.Minute, Interval: 10 * time.Second}
 	b := New()
 
@@ -485,6 +503,7 @@ func TestAnOpenEpisodeIsNeverAgedOut(t *testing.T) {
 // ledger rolls over and the guard keeps holding on a cooldown built entirely out
 // of drops it declined to assist with.
 func TestARefusedDropDoesNotDeepenTheBackoff(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -524,6 +543,7 @@ func TestARefusedDropDoesNotDeepenTheBackoff(t *testing.T) {
 // above would read as "the backoff never engages", which is the behaviour
 // ADR-0009 replaced arriving by the back door.
 func TestAGrantedFastDropStillCommitsTheBackoff(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 
@@ -545,6 +565,7 @@ func TestAGrantedFastDropStillCommitsTheBackoff(t *testing.T) {
 // refusal that looks like one while quietly holding a slot the next Close would
 // settle in place of a real window.
 func TestADisabledWindowIsRefusedWithoutTouchingTheLedger(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	s.Window = 0
 	b := New()
@@ -573,6 +594,7 @@ func TestADisabledWindowIsRefusedWithoutTouchingTheLedger(t *testing.T) {
 // keeps the guarantee inside this package rather than several hundred lines away
 // in the caller.
 func TestGrantSettlesAnOrphanedEpisode(t *testing.T) {
+	t.Parallel()
 	s := defaults()
 	b := New()
 

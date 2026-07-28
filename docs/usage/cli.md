@@ -44,7 +44,9 @@ need no path at all.
 ## Do I need a password?
 
 Mostly, no. Once the daemon is running, the commands you use day to day go **to the
-daemon** over its control socket and need no password at all:
+daemon** over its control socket and need no password at all — provided
+`control.group` is set, which it is by default on macOS but not on Linux; see
+[passwordless.md](passwordless.md) to turn it on there:
 
 | Command | Needs a password? |
 |---|---|
@@ -57,7 +59,7 @@ daemon** over its control socket and need no password at all:
 | `config show`/`path`/`schema`, `config preset list`/`show`/`diff`, `setup --questions` | **No** — read-only; they report the config (or what the wizard would ask), they don't change it. |
 | `token status` | **No** — reports whether a control token is enrolled; the answer is not itself a secret. |
 | `token enroll`, `token forget` | Yes — the token's hash lives in the daemon's root-owned state dir, because anything that could rewrite it could nominate its own token. Once, at setup. |
-| `upgrade check` | **No** — read-only, no root. |
+| `upgrade check`, `upgrade can-activate` | **No** — read-only, no root. `can-activate` reports whether a restart could activate right now — the same gate `apply`'s activation step uses (see [upgrade.md](upgrade.md)); `scripts/install.sh` checks it before restarting a running daemon. |
 | `upgrade download`, `upgrade apply` | Yes — root, macOS only. `download`'s staging directory is root-owned on purpose: a writable-by-anyone staging area would let a local user swap the verified `.pkg` before `apply` installs it. |
 
 `dezhban status` prints a `control socket:` line saying which mode you're in.
@@ -157,9 +159,9 @@ dezhban run --dry-run                             # poll & print country, no fir
 sudo dezhban run --config /etc/dezhban/dezhban.json
 
 # manual block / override
-sudo dezhban block   --config configs/dezhban.example.json
-sudo dezhban block   --force                      # cut ALL egress, ignore detection
-sudo dezhban unblock
+dezhban block        --config configs/dezhban.example.json
+dezhban block        --force                      # cut ALL egress, ignore detection
+dezhban unblock
 sudo dezhban panic                                # standalone teardown, no daemon needed
 ```
 
@@ -373,9 +375,9 @@ dezhban vpn import ~/wg0.conf          # WireGuard .conf / OpenVPN .ovpn / V2Ray
 dezhban vpn list                        # profiles + learned endpoints + active state
 
 # A brand-new VPN whose server dezhban has never seen:
-sudo dezhban switch                     # open a window (5s default); connect it in its app now
-sudo dezhban switch --for 90s --name windscribe   # custom duration + attribution
-sudo dezhban switch --cancel            # close the window early
+dezhban switch                          # open a window (5s default); connect it in its app now
+dezhban switch --for 90s --name windscribe        # custom duration + attribution
+dezhban switch --cancel                 # close the window early
 dezhban switch --status                 # is a window open?
 sudo dezhban vpn promote <name>         # make a learned endpoint permanent (see: vpn list)
 sudo dezhban vpn forget <name>          # drop a learned endpoint
@@ -404,8 +406,8 @@ service that refuses a foreign VPN exit:
 
 ```sh
 dezhban pause --list       # the offered lengths, and what each is for
-sudo dezhban pause 15m     # real IP for 15 minutes, capped by vpn.pauseMax
-sudo dezhban resume        # end it early
+dezhban pause 15m          # real IP for 15 minutes, capped by vpn.pauseMax
+dezhban resume             # end it early
 ```
 
 Unlike `switch`, this doesn't wait for a VPN — it just opens egress for the given
@@ -491,20 +493,24 @@ while blocked, the rules persist by design (a kill switch must not fail open); u
 ## Upgrade
 
 ```sh
-dezhban upgrade check              # no root — is a newer release out?
+dezhban upgrade check                    # no root — is a newer release out?
+dezhban upgrade can-activate --json      # no root — could a restart activate right now?
 sudo dezhban upgrade download       # macOS only — fetch + verify the .pkg
 sudo dezhban upgrade apply           # macOS only — install it, then activate
 sudo dezhban upgrade apply --no-activate   # install without restarting
 ```
 
-`check` works on every platform and is read-only. `download`/`apply` are
-macOS only — Linux and Windows package managers own their own upgrade path.
-`apply` installs the `.pkg` (zero enforcement gap) and then, unless
-`--no-activate`, restarts into it — but only when the daemon's posture makes
-that safe (healthy `guard` or `standby`; never `full-block` or an open
-switch window). See [docs/upgrade.md](upgrade.md) for the full design: why
-it's split this way, the activation gate, rollback, and the menubar app's
-**About → Updates** panel.
+`check` and `can-activate` work on every platform and are read-only.
+`download`/`apply` are macOS only — Linux and Windows package managers own
+their own upgrade path. `apply` installs the `.pkg` (zero enforcement gap)
+and then, unless `--no-activate`, restarts into it — but only when the
+daemon's posture makes that safe (healthy `guard` or `standby`; never
+`full-block` or an open switch window). `can-activate` reports that same
+verdict without applying anything — `scripts/install.sh`'s upgrade path
+checks it before restarting a service that was already running, so it can
+never lift a block by accident. See [docs/upgrade.md](upgrade.md) for the
+full design: why it's split this way, the activation gate, rollback, and the
+menubar app's **About → Updates** panel.
 
 ## macOS app
 

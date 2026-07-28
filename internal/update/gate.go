@@ -10,9 +10,9 @@ import (
 
 // GateResult explains an activation gate decision.
 type GateResult struct {
-	OK      bool
-	Reason  string // human-readable, always set
-	Posture string // the snapshot's posture, "" if no snapshot was read at all
+	OK      bool   `json:"ok"`
+	Reason  string `json:"reason"`            // human-readable, always set
+	Posture string `json:"posture,omitempty"` // the snapshot's posture, "" if no snapshot was read at all
 }
 
 // CanActivate reports whether restarting into a newly-applied version is safe

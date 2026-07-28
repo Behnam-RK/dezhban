@@ -263,6 +263,11 @@ func TestSlowRunLoopStillGetsItsReplyThrough(t *testing.T) {
 
 	// Answer from the run loop only after the old connection-wide deadline would
 	// have fired. The reply must still arrive intact.
+	//
+	// Deliberate exception to the no-sleep test policy: the delay past
+	// connDeadline IS the scenario under test, not a wait for one — there is
+	// no condition to poll for, and shortening it would silently stop
+	// exercising the regression this test exists to catch.
 	go func() {
 		select {
 		case cr := <-srv.Requests():

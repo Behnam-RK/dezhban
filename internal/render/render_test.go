@@ -8,6 +8,7 @@ import (
 )
 
 func TestText(t *testing.T) {
+	t.Parallel()
 	until := time.Date(2026, 7, 25, 15, 4, 0, 0, time.UTC)
 	// A minute before the window's deadline, so a case carrying both can tell
 	// the drop time and the close time apart.
@@ -369,6 +370,7 @@ func TestText(t *testing.T) {
 // posture string this package does not recognise — the error is more urgent
 // than any posture prose, recognised or not.
 func TestTextEnforcementErrWinsOverUnknownPosture(t *testing.T) {
+	t.Parallel()
 	got := Text(state.Snapshot{Posture: "some-future-posture", EnforcementErr: "backend refused"})
 	if got.Key != KeyWarning || got.Headline != "Enforcement failed" || got.Detail != "backend refused" {
 		t.Errorf("got %+v, want the enforcement-failed display regardless of posture", got)
@@ -381,6 +383,7 @@ func TestTextEnforcementErrWinsOverUnknownPosture(t *testing.T) {
 // sentence, right before "(profile …)"), and no appended lookup/hysteresis
 // note (which would land between that sentence and the caller's clause).
 func TestPostureIgnoresEnforcementErrAndNotes(t *testing.T) {
+	t.Parallel()
 	until := time.Date(2026, 7, 25, 15, 4, 0, 0, time.UTC)
 	snap := state.Snapshot{
 		Posture:        PostureSwitchWindow,
@@ -404,6 +407,7 @@ func TestPostureIgnoresEnforcementErrAndNotes(t *testing.T) {
 }
 
 func TestStaleThreshold(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		poll int
@@ -424,6 +428,7 @@ func TestStaleThreshold(t *testing.T) {
 }
 
 func TestIsStale(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 7, 25, 12, 0, 0, 0, time.UTC)
 
 	fresh := state.Snapshot{Time: now.Add(-30 * time.Second), PollIntervalSeconds: 15}

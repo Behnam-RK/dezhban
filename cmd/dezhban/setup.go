@@ -175,7 +175,7 @@ func cmdSetup(args []string) int {
 		fmt.Println("later, enable it with: sudo dezhban install && sudo dezhban start")
 	}
 	if answers.Bool("configureVPN") {
-		fmt.Println("to connect a brand-new VPN whose server isn't known yet: sudo dezhban switch, then connect it.")
+		fmt.Println("to connect a brand-new VPN whose server isn't known yet: dezhban switch, then connect it.")
 	}
 	return 0
 }

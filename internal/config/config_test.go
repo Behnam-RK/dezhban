@@ -16,6 +16,7 @@ import (
 )
 
 func TestLoadMissingPathReturnsDefaults(t *testing.T) {
+	t.Parallel()
 	cfg, err := Load(filepath.Join(t.TempDir(), "does-not-exist.json"))
 	if err != nil {
 		t.Fatalf("Load: %v", err)
@@ -26,6 +27,7 @@ func TestLoadMissingPathReturnsDefaults(t *testing.T) {
 }
 
 func TestLoadOverlaysAndNormalizes(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{
 		"pollInterval": "5s",
@@ -58,6 +60,7 @@ func TestLoadOverlaysAndNormalizes(t *testing.T) {
 }
 
 func TestLoadVPNBlock(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{
 		"vpn": {
@@ -86,6 +89,7 @@ func TestLoadVPNBlock(t *testing.T) {
 }
 
 func TestLoadVPNHostnamesAndDefaults(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{
 		"vpn": {
@@ -119,6 +123,7 @@ func TestLoadVPNHostnamesAndDefaults(t *testing.T) {
 }
 
 func TestLoadVPNCadenceDefaults(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -138,6 +143,7 @@ func TestLoadVPNCadenceDefaults(t *testing.T) {
 
 // Auto-discovery with no hand-typed endpoint is a valid zero-config setup.
 func TestLoadVPNAutoDiscoverNoEndpoints(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "autoDiscoverEndpoints": true}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -149,6 +155,7 @@ func TestLoadVPNAutoDiscoverNoEndpoints(t *testing.T) {
 }
 
 func TestClassifyTarget(t *testing.T) {
+	t.Parallel()
 	cases := map[string]targetKind{
 		"203.0.113.5":             kindIP,
 		"2001:db8::1":             kindIP,
@@ -172,6 +179,7 @@ func TestClassifyTarget(t *testing.T) {
 }
 
 func TestValidateErrors(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"bad interval":         `{"pollInterval": "0s"}`,
 		"bad hyst":             `{"hysteresis": 0}`,
@@ -208,6 +216,7 @@ func TestValidateErrors(t *testing.T) {
 // Save then Load must reproduce the same validated Config. Both configs pass
 // through the Load pipeline so nil/empty-slice representations match.
 func TestSaveLoadRoundTrip(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"legacy": `{
 			"pollInterval": "5s",
@@ -290,6 +299,7 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 // otherwise re-enabling the guard later would fail validation or lock the host
 // out. Regression test for toFileConfig dropping the vpn block when !Enabled.
 func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
+	t.Parallel()
 	cfg := Default()
 	cfg.VPN = VPN{
 		TunnelInterfaces: []string{"utun4"},
@@ -319,6 +329,7 @@ func TestSavePreservesVPNFieldsWhenDisabled(t *testing.T) {
 // normalization lives in config.Normalize and runs on every write path, so
 // callers (config set, the setup wizard) don't each re-implement it.
 func TestSaveNormalizesCountries(t *testing.T) {
+	t.Parallel()
 	cfg := Default()
 	cfg.BlockedCountries = []string{" ir ", "IR", "ru"}
 	path := filepath.Join(t.TempDir(), "cfg.json")
@@ -336,6 +347,7 @@ func TestSaveNormalizesCountries(t *testing.T) {
 
 // Save must reject an invalid Config rather than persist it.
 func TestSaveValidates(t *testing.T) {
+	t.Parallel()
 	bad := Default()
 	bad.PollInterval = 0
 	if err := Save(filepath.Join(t.TempDir(), "x.json"), &bad); err == nil {
@@ -344,6 +356,7 @@ func TestSaveValidates(t *testing.T) {
 }
 
 func TestLoadInvalidJSON(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
 		t.Fatal(err)
@@ -354,6 +367,7 @@ func TestLoadInvalidJSON(t *testing.T) {
 }
 
 func TestLoadVPNProfilesAndSwitchWindow(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{
 		"vpn": {
@@ -394,6 +408,7 @@ func TestLoadVPNProfilesAndSwitchWindow(t *testing.T) {
 // A config with no vpn.advanced block gets every knob defaulted; an explicit
 // block overrides only the fields it sets.
 func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	defPath := filepath.Join(dir, "def.json")
 	if err := os.WriteFile(defPath, []byte(`{"vpn":{"enabled":true,"endpoints":["1.2.3.4"]}}`), 0o600); err != nil {
@@ -440,6 +455,7 @@ func TestLoadVPNAdvancedDefaultsAndOverride(t *testing.T) {
 }
 
 func TestEffectiveEndpoints(t *testing.T) {
+	t.Parallel()
 	cfg := Default()
 	cfg.VPN.Endpoints = []string{"1.1.1.1", "dup.example.com"}
 	cfg.VPN.Profiles = []Profile{
@@ -456,6 +472,7 @@ func TestEffectiveEndpoints(t *testing.T) {
 // A profiles-only config (no flat endpoints, no autoDiscover) is valid because
 // the union has endpoints.
 func TestValidateProfilesOnlyValid(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn":{"enabled":true,"profiles":[{"name":"a","endpoints":["1.2.3.4"]}]}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -470,6 +487,7 @@ func TestValidateProfilesOnlyValid(t *testing.T) {
 // confusing derived switchWindow range: the advanced block is validated before
 // switchWindow is bounded against it.
 func TestValidateAdvancedBeforeSwitchWindow(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"switchWindow":"2m","advanced":{"switchWindowMax":"5s"}}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -487,6 +505,7 @@ func TestValidateAdvancedBeforeSwitchWindow(t *testing.T) {
 // Normalize must canonicalize windowProtocols (trim + lowercase) so the pf/nft/WFP
 // renderers, which emit the strings verbatim, never receive " UDP" or "Tcp".
 func TestNormalizeWindowProtocols(t *testing.T) {
+	t.Parallel()
 	cfg := Default()
 	cfg.VPN.Advanced.WindowProtocols = []string{"  UDP", "Tcp"}
 	Normalize(&cfg)
@@ -503,6 +522,7 @@ func TestNormalizeWindowProtocols(t *testing.T) {
 // --- automatic redial window config ---
 
 func TestRedialWindowDefaultsAndDisable(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	write := func(name, body string) string {
 		p := filepath.Join(dir, name)
@@ -562,6 +582,7 @@ func TestRedialWindowDefaultsAndDisable(t *testing.T) {
 // endpointGrace and autoArm must survive a save/load round-trip — a saved
 // config silently dropping them is how the GUI "reset to zero" bug happened.
 func TestSavePreservesEndpointGraceAndAutoArm(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "endpointGrace": "42m", "autoArm": true}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -593,6 +614,7 @@ func TestSavePreservesEndpointGraceAndAutoArm(t *testing.T) {
 // silently coerced back to a default is a security setting accepted, discarded,
 // and never reported.
 func TestPauseMaxDefaultAndDisableSentinel(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn": {"tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -635,6 +657,7 @@ func TestPauseMaxDefaultAndDisableSentinel(t *testing.T) {
 // key must agree — see docs/adr/0008-arm-at-boot.md), and an explicit false
 // must survive a save/load round-trip rather than being silently reset.
 func TestArmAtBootDefaultTrueAndRoundTrips(t *testing.T) {
+	t.Parallel()
 	if !Default().VPN.ArmAtBoot {
 		t.Error("Default().VPN.ArmAtBoot = false, want true")
 	}
@@ -680,6 +703,7 @@ func TestArmAtBootDefaultTrueAndRoundTrips(t *testing.T) {
 // An absent endpointGrace now normalizes to the effective 15m default so
 // observers (GUI, config show) see the real value instead of 0.
 func TestEndpointGraceDefaultVisible(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn": {"enabled": true, "tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -701,6 +725,7 @@ func TestEndpointGraceDefaultVisible(t *testing.T) {
 // sentinel; this asserts the pair now behaves the same and that disabling one
 // never disables the other.
 func TestWindowDisableMatrix(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name                      string
 		body                      string
@@ -737,6 +762,7 @@ func TestWindowDisableMatrix(t *testing.T) {
 // values well under the old 10s/5s floors must validate, right up to their
 // (now independent) caps.
 func TestWindowNoFloor(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "cfg.json")
 	body := `{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"3s","redialWindow":"1s"}}`
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
@@ -758,6 +784,7 @@ func TestWindowNoFloor(t *testing.T) {
 // is a deliberate "block nothing" and must never be overridden. Both must
 // survive a save/load round-trip.
 func TestBlockedCountriesDefaultVsExplicitEmpty(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 
 	absent := filepath.Join(dir, "absent.json")
@@ -801,6 +828,7 @@ func TestBlockedCountriesDefaultVsExplicitEmpty(t *testing.T) {
 // A disabled switchWindow must round-trip as "0", not as the default it would
 // have been coerced to.
 func TestDisabledSwitchWindowRoundTrips(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(t.TempDir(), "in.json")
 	if err := os.WriteFile(src, []byte(`{"vpn":{"endpoints":["1.2.3.4"],"switchWindow":"0"}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -827,6 +855,7 @@ func TestDisabledSwitchWindowRoundTrips(t *testing.T) {
 // file behind their back. Silently accepting a discarded security setting is
 // the failure mode this whole mechanism exists to prevent.
 func TestLegacyConfigMigrates(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "legacy.json")
 	body := `{
 		"pollInterval": "30s",
@@ -922,6 +951,7 @@ func TestLegacyConfigMigrates(t *testing.T) {
 // it wrong in the "explicit false" direction silently re-opens the LAN for
 // someone who deliberately closed it on an untrusted network.
 func TestAllowLocalNetworkTriState(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		body string
@@ -952,6 +982,7 @@ func TestAllowLocalNetworkTriState(t *testing.T) {
 // An explicit false must also survive a save/reload round trip, or `config set`
 // on any unrelated key would quietly re-open the LAN.
 func TestAllowLocalNetworkFalseRoundTrips(t *testing.T) {
+	t.Parallel()
 	src := filepath.Join(t.TempDir(), "in.json")
 	if err := os.WriteFile(src, []byte(`{"vpn":{"endpoints":["1.2.3.4"],"allowLocalNetwork":false}}`), 0o600); err != nil {
 		t.Fatal(err)
@@ -984,6 +1015,7 @@ func TestAllowLocalNetworkFalseRoundTrips(t *testing.T) {
 // have to mean "no limit" — the opposite of what "0" means on every other key —
 // and there is no value that expresses it. Saying so is the only honest answer.
 func TestRedialBudgetZeroInTheFileIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, key := range []string{"redialBudget", "redialBudgetWindow"} {
 		for _, val := range []string{"0", "0s", "-1m"} {
 			t.Run(key+"="+val, func(t *testing.T) {
@@ -1014,6 +1046,7 @@ func TestRedialBudgetZeroInTheFileIsRefused(t *testing.T) {
 // the parsed value: an ABSENT key is the ordinary case for both of these, and
 // must still take its default rather than trip the refusal above.
 func TestAbsentRedialBudgetTakesTheDefault(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "c.json")
 	body := `{"vpn":{"enabled":true,"endpoints":["1.2.3.4"],"advanced":{"commandFreshness":"15s"}}}`
 	if err := os.WriteFile(p, []byte(body), 0o600); err != nil {
@@ -1038,6 +1071,7 @@ func TestAbsentRedialBudgetTakesTheDefault(t *testing.T) {
 // exact silent-disable this rule exists to prevent, reintroduced by a constant
 // nobody thought to grep for.
 func TestMinRedialGrantMatchesTheLedger(t *testing.T) {
+	t.Parallel()
 	if minRedialGrant != redial.MinGrant {
 		t.Fatalf("minRedialGrant = %s but redial.MinGrant = %s; the validation rule "+
 			"and the ledger disagree about the shortest window worth opening",
@@ -1050,6 +1084,7 @@ func TestMinRedialGrantMatchesTheLedger(t *testing.T) {
 // on. Turning it off is fine — `vpn.redialWindow: "0"` is there for that — but
 // it has to be a decision, not a rounding error, so this is refused by name.
 func TestABudgetTooSmallToEverOpenIsRefused(t *testing.T) {
+	t.Parallel()
 	for _, budget := range []time.Duration{time.Second, redial.MinGrant - time.Nanosecond} {
 		cfg := Default()
 		cfg.VPN.TunnelInterfaces = []string{"utun4"}
@@ -1071,6 +1106,7 @@ func TestABudgetTooSmallToEverOpenIsRefused(t *testing.T) {
 // one shortest window, so it is a legitimate — if severe — choice and must pass.
 // A rule that also refused this would be tightening past what it can justify.
 func TestABudgetAtTheFloorIsAccepted(t *testing.T) {
+	t.Parallel()
 	cfg := Default()
 	cfg.VPN.TunnelInterfaces = []string{"utun4"}
 	cfg.VPN.RedialWindow = 30 * time.Second
@@ -1086,6 +1122,7 @@ func TestABudgetAtTheFloorIsAccepted(t *testing.T) {
 // that does not apply would refuse a working config while stating a reason that
 // is not true of it.
 func TestTheBudgetFloorFollowsAShortConfiguredWindow(t *testing.T) {
+	t.Parallel()
 	cfg := Default()
 	cfg.VPN.TunnelInterfaces = []string{"utun4"}
 	cfg.VPN.RedialWindow = 3 * time.Second // below redial.MinGrant, honoured as-is
@@ -1109,6 +1146,7 @@ func TestTheBudgetFloorFollowsAShortConfiguredWindow(t *testing.T) {
 // with vpn.redialWindow disabled the budget is inert, so complaining about its
 // size would block a config that has no automatic window to break.
 func TestTheBudgetFloorIsMootWhenTheWindowIsDisabled(t *testing.T) {
+	t.Parallel()
 	cfg := Default()
 	cfg.VPN.TunnelInterfaces = []string{"utun4"}
 	cfg.VPN.RedialWindow = Disabled

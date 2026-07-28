@@ -314,6 +314,18 @@ tasks:
     cmds:
       - go test ./...
 
+  test:cover:
+    desc: 'Run the suite with coverage and enforce .testcoverage.yml'
+    cmds:
+      - go test ./... -coverprofile=cover.out
+      - |
+        gobin="$(go env GOPATH)/bin"
+        if [ ! -x "$gobin/go-test-coverage" ]; then
+          echo "installing go-test-coverage..."
+          go install github.com/vladopajic/go-test-coverage/v2@latest
+        fi
+        "$gobin/go-test-coverage" --config=.testcoverage.yml
+
   lint:
     cmds:
       - |

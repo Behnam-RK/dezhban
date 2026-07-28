@@ -16,6 +16,7 @@ import (
 // no help, and no default for any surface to show; a Tunable for a key KeyValues
 // does not carry would describe something nobody can set.
 func TestTunablesCoverEverySettableKey(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	Normalize(&c)
 	settable := KeyValues(&c)
@@ -44,6 +45,7 @@ func TestTunablesCoverEverySettableKey(t *testing.T) {
 // If Tunables ever grew a hand-written Default, this is what would catch it
 // disagreeing with what you actually get by setting nothing.
 func TestTunableDefaultsMatchANormalizedDefaultConfig(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	Normalize(&c)
 	want := KeyValues(&c)
@@ -61,6 +63,7 @@ func TestTunableDefaultsMatchANormalizedDefaultConfig(t *testing.T) {
 // path reports it as restart-required is the same failure as claiming a change
 // applied when the old value is still being enforced.
 func TestTunableRestartClassificationMatchesReload(t *testing.T) {
+	t.Parallel()
 	for _, tun := range Tunables() {
 		want := restartReasonFor(tun.Key)
 		if tun.RestartReason != want {
@@ -75,6 +78,7 @@ func TestTunableRestartClassificationMatchesReload(t *testing.T) {
 // TestTunableCapKeysResolve — a cap is a key rather than a number precisely so a
 // surface can read the live ceiling, which only works if the key exists.
 func TestTunableCapKeysResolve(t *testing.T) {
+	t.Parallel()
 	for _, tun := range Tunables() {
 		if tun.CapKey == "" {
 			continue
@@ -100,6 +104,7 @@ func TestTunableCapKeysResolve(t *testing.T) {
 // that promise is only honest if the negative sentinel actually survives
 // Normalize instead of being coerced back to the default.
 func TestDisablableKeysSurviveNormalize(t *testing.T) {
+	t.Parallel()
 	// Field accessors kept test-local: the production key→field table lives in
 	// cmd/dezhban's configFields, and internal/config must not depend on it.
 	fields := map[string]func(*Config) *time.Duration{
@@ -143,6 +148,7 @@ func TestDisablableKeysSurviveNormalize(t *testing.T) {
 // NOT marked Disablable must be one where Normalize really does restore the
 // default, so no surface offers an "Off" that would silently do nothing.
 func TestNonDisablableDurationsCoerceZeroToTheirDefault(t *testing.T) {
+	t.Parallel()
 	for _, tun := range Tunables() {
 		if tun.Kind != KindDuration || tun.Disablable {
 			continue
@@ -156,6 +162,7 @@ func TestNonDisablableDurationsCoerceZeroToTheirDefault(t *testing.T) {
 // TestTunableMetadataIsComplete — every field a surface relies on is populated,
 // and the ones that are meaningful for only one Kind stay empty elsewhere.
 func TestTunableMetadataIsComplete(t *testing.T) {
+	t.Parallel()
 	for _, tun := range Tunables() {
 		if tun.Label == "" {
 			t.Errorf("%s: no Label", tun.Key)
@@ -192,6 +199,7 @@ func TestTunableMetadataIsComplete(t *testing.T) {
 // TestTunableKeysAreSorted — TunableKeys promises a stable order to CLI help and
 // tests, which is only useful if it is actually stable.
 func TestTunableKeysAreSorted(t *testing.T) {
+	t.Parallel()
 	keys := TunableKeys()
 	if len(keys) != len(tunables) {
 		t.Fatalf("TunableKeys returned %d keys, want %d", len(keys), len(tunables))
@@ -206,6 +214,7 @@ func TestTunableKeysAreSorted(t *testing.T) {
 // TestTunablesReturnsACopy — a surface that mutates what it is handed must not
 // change what the next caller sees.
 func TestTunablesReturnsACopy(t *testing.T) {
+	t.Parallel()
 	first := Tunables()
 	first[0].Label = "mutated"
 	if Tunables()[0].Label == "mutated" {

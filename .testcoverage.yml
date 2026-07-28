@@ -1,0 +1,38 @@
+# go-test-coverage config (github.com/vladopajic/go-test-coverage). Dev-only
+# tool, installed on demand by `task test:cover` and CI — never added to
+# go.mod. See docs/contribute/testing.md's "Unit test policy".
+#
+# Thresholds below are today's real, measured coverage per package (`go test
+# ./... -cover`), rounded down for margin — not an aspirational number. The
+# point of the gate is to stop coverage from REGRESSING, not to pretend every
+# package is already where it should be. Raise a package's own threshold
+# whenever a change pushes its real coverage up; that is the intended way
+# this file grows over time.
+profile: cover.out
+threshold:
+  package: 60
+  total: 55
+override:
+  # OS-boundary packages: what they DO is verified by
+  # docs/contribute/testing.md's privileged, on-host checklist, not go test.
+  # Forcing these toward the default package threshold would mean asserting on
+  # exact pfctl/nft/launchd argv strings — change detectors that break on
+  # harmless refactors and prove nothing about correctness.
+  - path: ^internal/firewall$ # shells out to pfctl/nft/netsh
+    threshold: 35
+  - path: ^internal/svc$ # wraps kardianos/service -> launchd/systemd/Windows SCM
+    threshold: 5
+  - path: ^internal/netdetect$ # reads real network interfaces and routes
+    threshold: 50
+  # cmd/dezhban mixes a testable read-only CLI surface (see
+  # cmd/dezhban/harness_test.go's runCLI, and the plan functions pulled out of
+  # cmdBlock/cmdRun) with privileged commands that re-exec sudo, install an OS
+  # service, or call firewall.Apply directly. Those stay uncovered by design.
+  - path: ^cmd/dezhban$
+    threshold: 35
+exclude:
+  # Unlike override (package paths, exact match), exclude matches FILE paths —
+  # a trailing $ here would never match a real .go file, so these are prefixes.
+  paths:
+    - ^internal/privilege/ # Geteuid wrapper + a Windows syscall
+    - ^tools/ # build/dev tooling, never shipped
