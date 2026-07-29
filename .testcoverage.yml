@@ -8,6 +8,15 @@
 # package is already where it should be. Raise a package's own threshold
 # whenever a change pushes its real coverage up; that is the intended way
 # this file grows over time.
+#
+# THE NUMBERS ARE LINUX NUMBERS, because the gate runs only on ubuntu (see
+# .github/workflows/ci.yml). Two packages are build-tagged and therefore
+# genuinely different bodies of code per OS — internal/firewall compiles
+# pf_darwin.go on macOS and nft_linux.go on Linux, internal/netdetect compiles
+# discover_darwin.go vs the much smaller discover_other.go. `task test:cover`
+# on a Mac measures those files, not the ones CI will. If a local run passes
+# and CI's gate fails (or vice versa) on one of those two, that is why, and
+# the number to record here is CI's.
 profile: cover.out
 threshold:
   package: 60

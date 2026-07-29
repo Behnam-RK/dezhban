@@ -1722,38 +1722,65 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 	return c
 }
 
+// setGroupFix is the runnable `config set` line that points control.group at
+// this host's existing administrators group — the one fix for every "no group
+// is configured" branch below. It keeps `sudo`: config writes are in the
+// privileged set (they need an enrolled control token, not just group
+// membership), and a check that exists to explain a password prompt must not
+// model a command that would fail without one.
+func setGroupFix() string {
+	if runtime.GOOS == "darwin" {
+		return "sudo dezhban config set control.group admin"
+	}
+	return "sudo dezhban config set control.group sudo   # or wheel, whichever your distro uses"
+}
+
 // buildControlCheck reports whether routine ops (block/unblock/switch/pause/
 // resume/hold) will ask for a password over the control socket — the
 // passwordless path's own diagnostic. Pure: resp/probeErr are the result of
 // probeControl(cfg), already run by the caller, so the branches are directly
-// testable without a real socket. Mirrors controlStatus's own three-way
+// testable without a real socket. Mirrors controlStatus's own four-way
 // distinction (disabled / forbidden / unreachable / reachable) rather than
 // reusing its prose, so this stays a structured doctorCheck instead of a
-// second renderer reparsing a sentence to guess a status.
+// second renderer reparsing a sentence to guess a status — splitting
+// "reachable" once more, since a reachable socket with no group configured is
+// still a password prompt and has its own fix.
+//
+// The doc pointer is a Detail, never a Fix: Fixes are runnable commands the GUI
+// badges as such, so "see docs/usage/passwordless.md" dressed as one reads as a
+// command to type. Where a real command exists it is the Fix; where it doesn't
+// — adding yourself to a unix group is usermod on Linux and dseditgroup on
+// macOS, neither safe to hand someone unprompted — the branch carries prose and
+// no Fix at all.
 func buildControlCheck(cfg *config.Config, resp control.Response, probeErr error) doctorCheck {
 	c := doctorCheck{Name: "control", Status: checkOK}
 	path := controlSocketPath(cfg)
+	const seeDoc = "To turn the passwordless path on, see docs/usage/passwordless.md."
 
 	switch {
 	case !cfg.Control.Enabled:
 		c.Status = checkWarn
 		c.Summary = "disabled (control.enabled=false) — routine ops need sudo."
-		c.Fixes = []string{"dezhban config set control.enabled true"}
+		c.Fixes = []string{"sudo dezhban config set control.enabled true"}
 	case errors.Is(probeErr, control.ErrForbidden):
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("reachable (%s), but you are not in the %q group — routine ops need sudo.", path, cfg.Control.Group)
-		c.Fixes = []string{"see docs/usage/passwordless.md"}
+		c.Details = []string{
+			fmt.Sprintf("Add your account to %q the normal way for this OS, then log out and back in — group membership is read at login, not live.", cfg.Control.Group),
+			seeDoc,
+		}
 	case probeErr != nil || !resp.OK:
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("unreachable (%s) — dezhban is not running; routine ops need sudo.", path)
 		if cfg.Control.Group == "" {
-			c.Details = []string{"no group is configured either — once running, an unprivileged caller would still need sudo."}
-			c.Fixes = []string{"see docs/usage/passwordless.md"}
+			c.Details = []string{"no group is configured either — once running, an unprivileged caller would still need sudo.", seeDoc}
+			c.Fixes = []string{setGroupFix()}
 		}
 	case cfg.Control.Group == "":
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("reachable (%s), but no group is configured — routine ops need sudo.", path)
-		c.Fixes = []string{"see docs/usage/passwordless.md"}
+		c.Details = []string{seeDoc}
+		c.Fixes = []string{setGroupFix()}
 	default:
 		c.Summary = fmt.Sprintf("reachable (%s, group %q) — routine ops need no password.", path, cfg.Control.Group)
 	}
@@ -2007,7 +2034,15 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 		cfg.VPN.Advanced.LearnedEndpointTTL, cfg.VPN.Advanced.LearnedMaxPerProfile,
 		len(cfg.VPN.Endpoints), now))
 
-	controlResp, controlErr := probeControl(cfg)
+	// Probe only when the socket is supposed to exist. buildControlCheck's
+	// disabled branch discards resp/probeErr anyway, and controlReachable and
+	// controlStatus short-circuit the same way rather than dialing a path the
+	// config says nothing should be listening on.
+	var controlResp control.Response
+	var controlErr error
+	if cfg.Control.Enabled {
+		controlResp, controlErr = probeControl(cfg)
+	}
 	checks = append(checks, buildControlCheck(cfg, controlResp, controlErr))
 
 	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI

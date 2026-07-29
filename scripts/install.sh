@@ -329,6 +329,9 @@ trap 'rm -rf "$tmp"' EXIT
 
 step "downloading $asset $tag"
 dl "$asset"
+# Not dl(): SHA256SUMS is a few hundred bytes, and dl's interactive branch would
+# flash a progress bar that finishes before it can be read. Same URL shape,
+# always quiet.
 curl -fsSL -o "$tmp/SHA256SUMS" "$GH/releases/download/$tag/SHA256SUMS"
 if [ "$install_app" = 1 ]; then
 	step "downloading Dezhban-macos.app.zip"
@@ -502,7 +505,6 @@ fi
 echo
 if [ "$mode" = fresh ]; then
 	echo "dezhban $version installed."
-	echo "next steps:"
 	# Explicitly gated on interactive, not just confirm()'s own default: a
 	# piped/non-interactive run must never launch an interactive wizard, no
 	# matter what a "default yes" would otherwise imply.
@@ -510,11 +512,16 @@ if [ "$mode" = fresh ]; then
 	if [ "$interactive" = 1 ]; then
 		confirm "Run the setup wizard now? (VPN, tunnel interfaces, blocked countries)" Y && setup_now=1
 	fi
+	# The wizard runs BEFORE the "next steps" heading, never under it: it is
+	# pages of its own interactive output, so a heading printed first has
+	# scrolled off by the time it exits, and the steps that follow it would
+	# read as part of the wizard.
 	if [ "$setup_now" = 1 ]; then
 		/usr/local/bin/dezhban setup < /dev/tty
-	else
-		echo "  dezhban setup   # configure: VPN, tunnel interfaces, blocked countries"
+		echo
 	fi
+	echo "next steps:"
+	[ "$setup_now" = 1 ] || echo "  dezhban setup   # configure: VPN, tunnel interfaces, blocked countries"
 	if [ "$install_service" = 1 ]; then
 		echo "  sudo dezhban start   # arm the kill switch"
 	else

@@ -146,15 +146,15 @@ func TestTunnelUpWhileBlockedProbesUntilTheGuardIsRestored(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, o) }()
 
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
 	if !waitFor(t, snaps, func(s state.Snapshot) bool { return s.Posture == "full-block" }) {
 		t.Fatal("never reached FULL BLOCK on a blocked exit")
 	}
 
 	// The VPN redials onto an allowed exit: drop, then up.
 	mon.cc = "US"
-	tun.send(netdetect.TunnelState{Up: false, Detail: "dropped"})
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
+	tun.send(t, netdetect.TunnelState{Up: false, Detail: "dropped"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
 
 	if !waitFor(t, snaps, func(s state.Snapshot) bool { return s.Posture == "guard" }) {
 		t.Fatal("the guard was never restored; a tunnel-up edge in FULL BLOCK must probe for recovery " +
@@ -187,15 +187,15 @@ func TestNoAccelerationWhenProbingWouldHaveToLiftTheGuard(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, o) }()
 
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
 	if !waitFor(t, snaps, func(s state.Snapshot) bool { return s.Posture == "full-block" }) {
 		t.Fatal("never reached FULL BLOCK")
 	}
 
 	before := mon.n.Load()
 	mon.cc = "US"
-	tun.send(netdetect.TunnelState{Up: false, Detail: "dropped"})
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
+	tun.send(t, netdetect.TunnelState{Up: false, Detail: "dropped"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
 
 	// Absence assertion: no provider pass means acceleration must not start.
 	// Poll the window an accelerated cadence would have used, failing as soon
@@ -247,7 +247,8 @@ func (s *scriptedWatcher) watcher() *netdetect.Watcher {
 	}
 }
 
-func (s *scriptedWatcher) send(st netdetect.TunnelState) {
+func (s *scriptedWatcher) send(t *testing.T, st netdetect.TunnelState) {
+	t.Helper()
 	s.mu.Lock()
 	s.last = st
 	s.mu.Unlock()
@@ -255,9 +256,19 @@ func (s *scriptedWatcher) send(st netdetect.TunnelState) {
 	// netdetect's default DownDebounce is 2; wait for a few more samples of
 	// the new state to clear it and register as a real edge, bounded by a
 	// generous deadline for a slow CI runner.
+	//
+	// The counter is read AFTER the unlock on purpose: Sample increments before
+	// it takes the mutex, so every sample counted from here on acquires the
+	// lock after this write and therefore observes the new state. Timing out is
+	// a hard failure, not a silent pass — a send that never registered leaves
+	// the test asserting on an edge that was never delivered, and the resulting
+	// failure names the wrong thing.
 	target := s.samples.Load() + 3
 	deadline := time.Now().Add(2 * time.Second)
-	for s.samples.Load() < target && time.Now().Before(deadline) {
+	for s.samples.Load() < target {
+		if time.Now().After(deadline) {
+			t.Fatalf("watcher never sampled the new tunnel state (up=%v) enough times to clear the down debounce", st.Up)
+		}
 		time.Sleep(time.Millisecond)
 	}
 }

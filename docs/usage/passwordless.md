@@ -94,6 +94,12 @@ entirely, no matter how `control.group` is set:
   its own service lifecycle.
 - `vpn add`, `vpn remove`, `vpn promote`, `vpn forget`, `vpn import` — these
   write to files the daemon owns.
+- `config set`, `config edit`, `config preset apply` — including the very
+  `sudo dezhban config set control.group …` this page opens with. Group
+  membership is not enough for a config write: that path wants an enrolled
+  control token, so without one it falls back to `sudo` no matter what
+  `control.group` says. Reading the config (`config show`/`path`/`schema`,
+  `preset list`/`show`/`diff`) needs nothing.
 - `token enroll`, `token forget` — the control token that lets a *macOS Touch
   ID* prompt substitute for `sudo` on config writes; enrolling one is itself
   a privileged, once-per-setup action.
@@ -108,7 +114,8 @@ this page is only about the routine ops that don't have to.
 ## Troubleshooting
 
 - **`disabled (control.enabled=false)`** — the socket itself is off:
-  `dezhban config set control.enabled true`.
+  `sudo dezhban config set control.enabled true`. Config writes keep their
+  `sudo` on purpose — see [What still needs root](#what-still-needs-root-and-why).
 - **`unreachable`** — no daemon is listening yet. Start one
   (`sudo dezhban start`), or check that `control.socket` (if you've set a
   custom path) actually exists.

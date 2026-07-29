@@ -20,8 +20,11 @@ import (
 // regardless of what ran before them — run() itself never resets it, since a
 // real process only calls it once.
 //
-// Because it swaps the process-global os.Stdout/os.Stderr, no test in this
-// file may call t.Parallel().
+// Because it swaps the process-global os.Stdout/os.Stderr, no test in package
+// main may call t.Parallel() — not just the ones in this file. A parallel test
+// anywhere in the package runs concurrently with these, and would both race on
+// those two variables and have its own output swallowed by whichever pipe was
+// installed at the time.
 //
 // Each pipe is drained by its own goroutine STARTED BEFORE run(), never read
 // after it returns: a pipe holds only a fixed kernel buffer (64 KiB on Linux,
@@ -66,10 +69,14 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
 }
 
 // testConfigPath writes a valid, self-contained config to a temp file and
-// returns its path. config.Default()'s own provider/endpoint set is empty, so
-// this touches no network by default; a case that needs to exercise a real
-// network-bound path (there are none in this file) would have to opt in
-// explicitly.
+// returns its path.
+//
+// config.Default() carries no endpoints, but it DOES carry real geo providers
+// (ipinfo.io and friends) — so "no network" holds because none of the commands
+// exercised here performs a country lookup, not because the config is inert.
+// `monitor` is the one that would, which is why TestCmdMonitorNoProviders
+// overrides Providers with an unrecognized URL rather than relying on the
+// default. Any new case reaching a lookup path must do the same.
 func testConfigPath(t *testing.T, mutate func(*config.Config)) string {
 	t.Helper()
 	cfg := config.Default()
