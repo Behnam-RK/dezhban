@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync"
 	"sync/atomic"
@@ -264,13 +265,8 @@ func (s *scriptedWatcher) send(t *testing.T, st netdetect.TunnelState) {
 	// the test asserting on an edge that was never delivered, and the resulting
 	// failure names the wrong thing.
 	target := s.samples.Load() + 3
-	deadline := time.Now().Add(2 * time.Second)
-	for s.samples.Load() < target {
-		if time.Now().After(deadline) {
-			t.Fatalf("watcher never sampled the new tunnel state (up=%v) enough times to clear the down debounce", st.Up)
-		}
-		time.Sleep(time.Millisecond)
-	}
+	pollUntil(t, 2*time.Second, func() bool { return s.samples.Load() >= target },
+		fmt.Sprintf("watcher never sampled the new tunnel state (up=%v) enough times to clear the down debounce", st.Up))
 }
 
 // waitFor drains snapshots until one satisfies pred, or the deadline passes.

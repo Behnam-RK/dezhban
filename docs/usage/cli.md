@@ -508,7 +508,7 @@ daemon's posture makes that safe (healthy `guard` or `standby`; never
 `full-block` or an open switch window). `can-activate` reports that same
 verdict without applying anything — `scripts/install.sh`'s upgrade path
 checks it before restarting a service that was already running, so it can
-never lift a block by accident. See [docs/upgrade.md](upgrade.md) for the
+never lift a block by accident. See [docs/usage/upgrade.md](upgrade.md) for the
 full design: why it's split this way, the activation gate, rollback, and the
 menubar app's **About → Updates** panel.
 

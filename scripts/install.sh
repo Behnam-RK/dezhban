@@ -484,7 +484,17 @@ fi
 
 if [ "$restart_after" = 1 ]; then
 	step "restarting the service"
-	/usr/local/bin/dezhban --no-sudo start
+	# The one step in this script whose failure leaves the host LESS protected
+	# than when it started: the stop above already ran, so the daemon's deferred
+	# Cleanup removed every rule. Bare, `set -e` would abort here silently — no
+	# message, no footer, exit 1 — and the user would be left with a disarmed
+	# kill switch and no reason to suspect it. Say so explicitly instead, and
+	# name the one command that fixes it.
+	/usr/local/bin/dezhban --no-sudo start || die \
+"the service was stopped for the upgrade but did NOT come back — dezhban is not enforcing right now.
+       The new build is installed correctly; only the restart failed. Start it with:
+         sudo dezhban start
+       If that also fails, check 'sudo dezhban doctor' and the service log."
 fi
 
 # The uninstaller comes from the SAME tag being installed — same guarantee the
@@ -516,8 +526,20 @@ if [ "$mode" = fresh ]; then
 	# pages of its own interactive output, so a heading printed first has
 	# scrolled off by the time it exits, and the steps that follow it would
 	# read as part of the wizard.
+	#
+	# A wizard the user cancels (Ctrl-C, or any non-zero exit) must not take the
+	# rest of this script with it: under `set -e` a bare call would abort before
+	# "next steps" and the uninstall hint ever print, so a completed install
+	# would look like a failed one and the user would never be told to run
+	# `dezhban start`. Clearing setup_now also puts the `dezhban setup` line back
+	# into the footer below, which is exactly right — the config still isn't
+	# written.
 	if [ "$setup_now" = 1 ]; then
-		/usr/local/bin/dezhban setup < /dev/tty
+		if ! /usr/local/bin/dezhban setup < /dev/tty; then
+			setup_now=0
+			echo
+			note "the setup wizard did not finish — dezhban itself installed fine; nothing was configured"
+		fi
 		echo
 	fi
 	echo "next steps:"

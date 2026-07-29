@@ -58,6 +58,14 @@ current as you land changes.
   — a running process keeps its old inode), but the stop/restart is skipped on
   refusal, leaving the old build enforcing until `sudo dezhban restart`
   succeeds on its own. No override, matching `upgrade apply`'s own rule.
+- **`scripts/install.sh` could finish with the kill switch disarmed and say
+  nothing.** When an upgrade restarted a running daemon, the `start` was
+  unguarded: under `set -e` a failure aborted the script with no message at
+  all — after the `stop` had already run, so every firewall rule was gone.
+  The install looked like it had merely "failed" while the host was in fact
+  left unprotected. It now stops with an explicit warning that names the
+  exposure and the command that ends it. Relatedly, cancelling the optional
+  setup wizard on a fresh install no longer swallows the "next steps" footer.
 - **Docs and `doctor`/`setup` hints no longer model `sudo` on commands that
   don't need it.** `status` never needed root — its `doctor` fix hint wrongly
   said otherwise. `block`, `unblock`, `switch`, `pause`, `resume` route over
