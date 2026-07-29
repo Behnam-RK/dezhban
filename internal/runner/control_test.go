@@ -34,16 +34,19 @@ func pollUntil(t *testing.T, timeout time.Duration, cond func() bool, msg string
 // countingHandler counts slog records whose message contains substr, so a
 // test can poll for a specific number of log-visible events instead of
 // sleeping over a fixed wall-clock window.
+// atomic.Int64, not a *int64 driven by atomic.AddInt64: the same as
+// countingMonitor and scriptedWatcher in this package, and the typed form is
+// the one that cannot be read non-atomically by accident.
 type countingHandler struct {
 	substr string
-	count  *int64
+	count  *atomic.Int64
 }
 
 func (h countingHandler) Enabled(context.Context, slog.Level) bool { return true }
 
 func (h countingHandler) Handle(_ context.Context, r slog.Record) error {
 	if strings.Contains(r.Message, h.substr) {
-		atomic.AddInt64(h.count, 1)
+		h.count.Add(1)
 	}
 	return nil
 }
@@ -168,7 +171,7 @@ func TestControlManualBlockHeldAcrossGeoTicks(t *testing.T) {
 	be := &fakeBackend{}
 	o := vpnOpts(be)
 	o.Interval = 5 * time.Millisecond // geo ticks fire continuously
-	var skipped int64
+	var skipped atomic.Int64
 	o.Log = slog.New(countingHandler{substr: "manual block held", count: &skipped})
 	path := startControlled(t, o)
 
@@ -180,7 +183,7 @@ func TestControlManualBlockHeldAcrossGeoTicks(t *testing.T) {
 	// Wait for many geo ticks to actually be suspended by the manual block — not
 	// merely idle. A running state machine would probe (apply-guard +
 	// apply-fullblock) and then lift the block on the steady "US" reading.
-	pollUntil(t, 3*time.Second, func() bool { return atomic.LoadInt64(&skipped) >= 10 },
+	pollUntil(t, 3*time.Second, func() bool { return skipped.Load() >= 10 },
 		"geo ticks were not suspended by the manual block in time")
 
 	resp := do(t, path, control.Request{Op: control.OpStatus})

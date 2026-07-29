@@ -47,6 +47,10 @@ root and no real firewall. `task test:cover` enforces the coverage floors in
 - **`t.Parallel()` by default.** Add it to every new test unless the test uses
   `t.Setenv` or otherwise mutates process-global state (`t.Setenv` itself
   already fails if paired with `t.Parallel()`, which is the tell).
+  **`cmd/dezhban` is the standing exception — no test there may be parallel**,
+  because `runCLI` swaps the process-global `os.Stdout`/`os.Stderr` and a
+  parallel test anywhere in the package races it. Unlike `t.Setenv` nothing
+  fails on its own here, so `TestNoTestInPackageMainIsParallel` enforces it.
 - **Table-driven once there are ≥3 similar cases; a plain `t.Run` below that.**
   A table with one or two rows is indirection with nothing to show for it.
 - **Assert observable behaviour, not call arguments.** Prefer "the firewall

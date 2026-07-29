@@ -2,6 +2,9 @@ package main
 
 import (
 	"encoding/json"
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"io"
 	"os"
 	"path/filepath"
@@ -66,6 +69,54 @@ func runCLI(t *testing.T, args ...string) (stdout, stderr string, code int) {
 	_ = outW.Close()
 	_ = errW.Close()
 	return <-outCh, <-errCh, code
+}
+
+// The invariant runCLI's doc comment states, enforced instead of merely
+// documented. It is the one rule in this package a compiler cannot keep: adding
+// `t.Parallel()` to a test here is legal Go, passes review as "following the
+// unit test policy" (docs/contribute/testing.md now asks for it BY DEFAULT), and
+// breaks nothing visibly — it just races two goroutines on os.Stdout/os.Stderr
+// and silently sends one test's output into the other's pipe. That failure is
+// nondeterministic and lands on whoever runs the suite next, not on the author.
+//
+// Parsed rather than grepped so the rule reads actual calls: the sentence above,
+// the string in the failure message, and runCLI's own comment all contain the
+// spelling, and a text scan would flag this file for describing the rule. That
+// is also why this test needs no self-exemption and can cover its own file.
+func TestNoTestInPackageMainIsParallel(t *testing.T) {
+	// ParseFile over a glob, not parser.ParseDir: that one is deprecated in
+	// favour of golang.org/x/tools/go/packages, and this repo does not take a
+	// dependency to satisfy a test (see CLAUDE.md's Conventions).
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatalf("glob package main's test files: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no test files found — this guard would pass vacuously")
+	}
+
+	fset := token.NewFileSet()
+	for _, name := range files {
+		file, err := parser.ParseFile(fset, name, nil, 0)
+		if err != nil {
+			t.Fatalf("parse %s: %v", name, err)
+		}
+		ast.Inspect(file, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			sel, ok := call.Fun.(*ast.SelectorExpr)
+			if !ok || sel.Sel.Name != "Parallel" {
+				return true
+			}
+			t.Errorf("%s calls t.Parallel(); no test in package main may.\n"+
+				"runCLI swaps the process-global os.Stdout/os.Stderr, so a parallel test anywhere in\n"+
+				"this package races it and has its own output swallowed. See runCLI's doc comment.",
+				fset.Position(call.Pos()))
+			return true
+		})
+	}
 }
 
 // testConfigPath writes a valid, self-contained config to a temp file and
