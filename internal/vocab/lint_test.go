@@ -103,6 +103,7 @@ var docExempt = []string{"docs/concepts/glossary.md"}
 // fails as "the glossary changed shape", not as "zero violations found". A lint
 // that silently checks an empty list is worse than no lint: it reports success.
 func TestTheGlossaryStillParses(t *testing.T) {
+	t.Parallel()
 	terms, err := Load(glossary())
 	if err != nil {
 		t.Fatal(err)
@@ -138,6 +139,7 @@ func TestTheGlossaryStillParses(t *testing.T) {
 // the lint reported success over a rule it was not applying. A term that cannot
 // find itself in its own text can never find itself in anyone else's.
 func TestEveryTermMatchesItself(t *testing.T) {
+	t.Parallel()
 	terms, err := Load(glossary())
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +163,7 @@ func TestEveryTermMatchesItself(t *testing.T) {
 // authority depends on: "when user-facing copy and this page disagree, the copy
 // is wrong" was true only as an intention until something verified it.
 func TestUserFacingCopyUsesTheGlossary(t *testing.T) {
+	t.Parallel()
 	terms, err := Load(glossary())
 	if err != nil {
 		t.Fatal(err)

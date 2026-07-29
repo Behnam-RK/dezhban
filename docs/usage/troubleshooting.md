@@ -293,6 +293,25 @@ sudo chmod 755 /var/db/dezhban
 The open directory leaks nothing: the sensitive files inside it (`command.json`,
 `pf.state`) are `0600`.
 
+## The installer upgraded the binary but the service is still running the old version
+
+Expected when the daemon's posture wasn't safe to restart through at the
+moment `scripts/install.sh` ran: FULL BLOCK, a guard holding a downed tunnel,
+or an open switch/redial/pause window. The new binary is on disk and installed
+either way — only the *restart* was skipped, so the old build keeps enforcing
+uninterrupted rather than the install racing a restart through an unsafe
+posture (see [upgrade.md](upgrade.md) for why that specific gap matters).
+
+```sh
+dezhban upgrade can-activate     # names the current refusal reason, if any
+dezhban status                   # confirm the posture that's blocking it
+sudo dezhban restart             # once the posture clears
+```
+
+There is no override — this is the same rule `dezhban upgrade apply` enforces
+for its own restart, and `sudo dezhban restart` is already the deliberate,
+by-name escape hatch for an operator who wants to force it anyway.
+
 ## Preview rules before applying them
 
 Never find out what a block does by getting locked out — render the exact

@@ -39,6 +39,7 @@ var docDefaultIsProse = map[string]string{
 // config reference that disagrees with the shipped default is worse than no
 // documentation: a reader acts on it.
 func TestDocumentedDefaultsMatchTheCode(t *testing.T) {
+	t.Parallel()
 	documented := parseDocDefaults(t, docConfigRef)
 
 	for _, tun := range Tunables() {
@@ -88,6 +89,7 @@ func TestDocumentedDefaultsMatchTheCode(t *testing.T) {
 // assertion. What must never happen is an example naming a key that no longer
 // takes effect.
 func TestExampleConfigsUseOnlyKnownKeys(t *testing.T) {
+	t.Parallel()
 	paths, err := filepath.Glob(filepath.Join(exampleDir, "*.json"))
 	if err != nil {
 		t.Fatalf("glob %s: %v", exampleDir, err)

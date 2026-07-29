@@ -39,6 +39,7 @@ func assertSeq(t *testing.T, got, want []Verdict) {
 
 // hysteresis=1 → behaves like the pure Phase-3 mapping (immediate toggle).
 func TestNoHysteresisImmediateToggle(t *testing.T) {
+	t.Parallel()
 	d := New([]string{"IR", "ru"}, 1) // mixed case → normalized
 	got := feed(d, []monitor.Result{
 		ok("US"), // allow
@@ -52,6 +53,7 @@ func TestNoHysteresisImmediateToggle(t *testing.T) {
 }
 
 func TestHysteresisRequiresConsecutiveAgreement(t *testing.T) {
+	t.Parallel()
 	d := New([]string{"IR"}, 3)
 	got := feed(d, []monitor.Result{
 		ok("IR"), // streak 1 → still Allow
@@ -68,6 +70,7 @@ func TestHysteresisRequiresConsecutiveAgreement(t *testing.T) {
 // A reading that agrees with the committed state resets a pending flip, so an
 // alternating sequence never flaps the firewall.
 func TestFlapResetsStreak(t *testing.T) {
+	t.Parallel()
 	d := New([]string{"IR"}, 3)
 	got := feed(d, []monitor.Result{
 		ok("IR"), // streak 1 toward Block
@@ -87,6 +90,7 @@ func TestFlapResetsStreak(t *testing.T) {
 // would cut the tunnel's own egress and livelock the redial that could fix
 // the lookup in the first place.
 func TestErrorsNeverCommitABlock(t *testing.T) {
+	t.Parallel()
 	d := New([]string{"IR"}, 3)
 	got := feed(d, []monitor.Result{
 		fail(),   // neutral
@@ -105,6 +109,7 @@ func TestErrorsNeverCommitABlock(t *testing.T) {
 // retired fail-open path did the latter, which let an exit that fails lookups
 // every other tick postpone its block indefinitely.
 func TestErrorMidStreakDoesNotCancelPendingFlip(t *testing.T) {
+	t.Parallel()
 	d := New([]string{"IR"}, 3)
 	got := feed(d, []monitor.Result{
 		ok("IR"), // streak 1
@@ -117,18 +122,21 @@ func TestErrorMidStreakDoesNotCancelPendingFlip(t *testing.T) {
 
 // The mirror case: once blocked, errors must not lift the block either.
 func TestErrorsDoNotLiftACommittedBlock(t *testing.T) {
+	t.Parallel()
 	d := New([]string{"IR"}, 1)
 	got := feed(d, []monitor.Result{ok("IR"), fail(), fail()})
 	assertSeq(t, got, []Verdict{Block, Block, Block})
 }
 
 func TestEmptyBlocklistAllowsEverything(t *testing.T) {
+	t.Parallel()
 	d := New(nil, 1)
 	got := feed(d, []monitor.Result{ok("IR"), ok("KP"), fail()})
 	assertSeq(t, got, []Verdict{Allow, Allow, Allow})
 }
 
 func TestHysteresisFloorIsOne(t *testing.T) {
+	t.Parallel()
 	d := New([]string{"IR"}, 0) // clamped to 1
 	got := feed(d, []monitor.Result{ok("IR")})
 	assertSeq(t, got, []Verdict{Block})

@@ -29,9 +29,10 @@ import (
 
 const upgradeUsage = `usage: dezhban upgrade <subcommand>
 
-  check      Ask GitHub for the latest release and report if one is newer (no root)
-  download   Fetch and verify the latest .pkg, staged for apply (root — see below)
-  apply      Install the staged .pkg and, unless --no-activate, restart into it (root)
+  check         Ask GitHub for the latest release and report if one is newer (no root)
+  download      Fetch and verify the latest .pkg, staged for apply (root — see below)
+  apply         Install the staged .pkg and, unless --no-activate, restart into it (root)
+  can-activate  Report whether a restart could activate right now (no root)
 
 download needs root too, not just apply: its staging directory is root-owned
 on purpose. A writable-by-anyone staging area would let a local user swap the
@@ -65,6 +66,8 @@ func cmdUpgrade(args []string) int {
 		return cmdUpgradeDownload(rest)
 	case "apply":
 		return cmdUpgradeApply(rest)
+	case "can-activate":
+		return cmdUpgradeCanActivate(rest)
 	case "help", "-h", "--help":
 		fmt.Println(upgradeUsage)
 		return 0
@@ -113,6 +116,33 @@ func cmdUpgradeCheck(args []string) int {
 		fmt.Println("  sudo dezhban upgrade download && sudo dezhban upgrade apply")
 	} else {
 		fmt.Println("  self-upgrade isn't available on this OS — see docs/usage/upgrade.md for the update path")
+	}
+	return 0
+}
+
+// cmdUpgradeCanActivate wraps update.CanActivate for callers outside the Go
+// process — namely scripts/install.sh, whose upgrade path used to restart a
+// running daemon unconditionally, including from FULL BLOCK, which ADR-0007
+// says a restart must never do. It reads the daemon's own state snapshot, so
+// it needs no root — same posture cmdUpgradeApply's activation step already
+// gates on, just exposed as its own read-only check.
+func cmdUpgradeCanActivate(args []string) int {
+	fs := flag.NewFlagSet("upgrade can-activate", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON")
+	_ = fs.Parse(args)
+
+	res := update.CanActivate(defaultStatePath())
+
+	if *jsonOut {
+		data, _ := json.MarshalIndent(res, "", "  ")
+		fmt.Println(string(data))
+	} else if res.OK {
+		fmt.Printf("ok — a restart could activate now (posture: %s)\n", res.Posture)
+	} else {
+		fmt.Printf("refused: %s\n", res.Reason)
+	}
+	if !res.OK {
+		return 1
 	}
 	return 0
 }

@@ -63,6 +63,10 @@ var Pages = []Page{
 		Summary: "Every command and flag, and which of them need root.",
 	},
 	{
+		Source: "usage/passwordless.md", Title: "Using the CLI without sudo",
+		Summary: "Turn on control.group so routine ops need no password.",
+	},
+	{
 		Source: "concepts/glossary.md", Title: "Glossary",
 		Summary: "One word per concept — the words this app, the CLI, and the docs all use.",
 	},

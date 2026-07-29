@@ -9,6 +9,7 @@ import (
 )
 
 func TestLoadMissingFileIsNeverArmed(t *testing.T) {
+	t.Parallel()
 	r, err := Load(filepath.Join(t.TempDir(), "nope.json"))
 	if err != nil {
 		t.Fatalf("Load missing: %v", err)
@@ -19,6 +20,7 @@ func TestLoadMissingFileIsNeverArmed(t *testing.T) {
 }
 
 func TestLoadCorruptIsNeverArmedNotFatal(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "armed.json")
 	if err := os.WriteFile(p, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
@@ -33,6 +35,7 @@ func TestLoadCorruptIsNeverArmedNotFatal(t *testing.T) {
 }
 
 func TestMarkUpRoundTrip(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "sub", "armed.json")
 	t1 := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	if err := MarkUp(p, t1); err != nil {
@@ -82,6 +85,7 @@ func TestMarkUpRoundTrip(t *testing.T) {
 }
 
 func TestMarkUpOverCorruptFileRecovers(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "armed.json")
 	if err := os.WriteFile(p, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)

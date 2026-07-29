@@ -43,11 +43,31 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go test ./...
+      # The profile is written on every OS but GATED on one (below): running the
+      # suite a third time just to produce it would triple ubuntu's test cost
+      # for a file only ubuntu reads.
+      - run: go test ./... -coverprofile=cover.out
       # Race detector once (ubuntu): the runner toggles posture from a ticker
-      # loop with a recovery probe — catch data races there.
+      # loop with a recovery probe — catch data races there. Also the one
+      # uninstrumented run of the whole suite.
       - if: matrix.os == 'ubuntu-latest'
         run: go test -race ./...
+      # Coverage gate once (ubuntu): enforces .testcoverage.yml's per-package
+      # floors so coverage cannot regress. See docs/contribute/testing.md's
+      # Unit test policy for what counts. The tool version is PINNED, never
+      # @latest — this gate decides whether CI goes red, so an upstream release
+      # must not be able to change that verdict with no commit here. Keep in
+      # sync with Taskfile.yml's test:cover.
+      #
+      # Gated to ubuntu on purpose, and that is also why the floors in
+      # .testcoverage.yml are LINUX numbers: the backends are build-tagged, so
+      # macOS compiles pf_darwin.go/discover_darwin.go where Linux compiles
+      # nft_linux.go/discover_other.go. Same package name, different files,
+      # legitimately different coverage.
+      - if: matrix.os == 'ubuntu-latest'
+        run: |
+          go install github.com/vladopajic/go-test-coverage/v2@v2.19.0
+          "$(go env GOPATH)/bin/go-test-coverage" --config=.testcoverage.yml
       # Keep the windows backend compiling even though we don't test it yet (see
       # the matrix comment). Vet, not just build: it type-checks the _windows.go
       # files that no runner in the matrix ever touches.

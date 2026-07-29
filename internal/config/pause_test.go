@@ -10,6 +10,7 @@ import (
 // to `dezhban pause`, so a Value that does not parse back to its own Duration
 // would silently grant a different pause than the label promised.
 func TestPauseOptionValuesRoundTrip(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	Normalize(&c)
 	for _, o := range PauseOptions(&c) {
@@ -30,6 +31,7 @@ func TestPauseOptionValuesRoundTrip(t *testing.T) {
 // Over-cap options are LISTED and explained, never hidden and never shortened.
 // Hiding them teaches the user their cap is something other than it is.
 func TestPauseOptionsMarkOverCapWithoutHiding(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	Normalize(&c)
 	c.VPN.PauseMax = 20 * time.Minute
@@ -56,6 +58,7 @@ func TestPauseOptionsMarkOverCapWithoutHiding(t *testing.T) {
 // With pausing off, every option is unavailable and says why — the reason is
 // the disabled setting, not the length.
 func TestPauseOptionsWhenPausingIsDisabled(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	Normalize(&c)
 	c.VPN.PauseMax = Disabled
@@ -73,6 +76,7 @@ func TestPauseOptionsWhenPausingIsDisabled(t *testing.T) {
 // PauseRefusal is where "clamp nothing silently" lives: an over-cap request is
 // refused and explained rather than quietly shortened.
 func TestPauseRefusal(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	Normalize(&c)
 	c.VPN.PauseMax = 30 * time.Minute

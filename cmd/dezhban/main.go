@@ -9,6 +9,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -779,6 +780,49 @@ func runDryRun(cfg *config.Config, log *slog.Logger, ov runOverrides) int {
 	return 0
 }
 
+// blockDecision is the outcome of blockPlan: the policy to apply, plus the
+// tunnels/endpoints it was built from — cmdBlock logs those alongside the
+// apply, and recomputing them a second time would repeat the DNS/discovery
+// work resolveEndpointsOnce already did.
+type blockDecision struct {
+	Policy    firewall.Policy
+	Tunnels   []string
+	Endpoints []netip.Addr
+}
+
+// blockPlan builds the VPN-mode firewall policy `block`/`block --guard` would
+// apply — the pure decision pulled out of cmdBlock's default branch (`--force`
+// stays a manual override built directly in cmdBlock; it has no VPN state to
+// resolve) so it can be tested without root or a firewall backend. Built
+// through the same firewall.PolicyInput constructor the daemon and
+// print-rules use, so this manual override can never drift from what the run
+// loop would actually install — in particular, it must NOT carry a physical
+// dst-IP allowlist: a VPN posture opens the tunnel endpoint, never a
+// destination allowlist.
+func blockPlan(cfg *config.Config, log *slog.Logger, guard bool) (blockDecision, error) {
+	tunnels := resolveTunnels(cfg, log)
+	if len(tunnels) == 0 {
+		return blockDecision{}, fmt.Errorf("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autoDetect)")
+	}
+	endpoints := resolveEndpointsOnce(cfg, log, tunnels)
+	if len(endpoints) == 0 {
+		return blockDecision{}, fmt.Errorf("vpn mode needs at least one reachable endpoint (vpn.endpoints as IP/hostname, or vpn.autoDiscoverEndpoints with the VPN connected)")
+	}
+	in := firewall.PolicyInput{
+		Tunnels:           tunnels,
+		Endpoints:         endpoints,
+		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
+		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
+		WindowProtos:      cfg.VPN.Advanced.WindowProtocols,
+		WindowPorts:       cfg.VPN.Advanced.WindowPorts,
+	}
+	pol := in.FullBlock()
+	if guard {
+		pol = in.Guard()
+	}
+	return blockDecision{Policy: pol, Tunnels: tunnels, Endpoints: endpoints}, nil
+}
+
 func cmdBlock(args []string) int {
 	fs := flag.NewFlagSet("block", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
@@ -831,41 +875,20 @@ func cmdBlock(args []string) int {
 	default:
 		// `--guard` installs the always-on interface guard (tunnel stays open,
 		// physical egress locked to the endpoint); a plain `block` is a full block
-		// that cuts the tunnel too. Built through the same firewall.PolicyInput
-		// constructor the daemon and print-rules use, so this manual override can
-		// never drift from what the run loop would actually install — in
-		// particular, it must NOT carry a physical dst-IP allowlist: a VPN posture
-		// opens the tunnel endpoint, never a destination allowlist.
-		tunnels := resolveTunnels(cfg, log)
-		if len(tunnels) == 0 {
-			log.Error("vpn mode needs tunnel interfaces (vpn.tunnelInterfaces or vpn.autoDetect)")
+		// that cuts the tunnel too. See blockPlan for how the policy is built.
+		d, err := blockPlan(cfg, log, *guard)
+		if err != nil {
+			log.Error(err.Error())
 			return 1
 		}
-		endpoints := resolveEndpointsOnce(cfg, log, tunnels)
-		if len(endpoints) == 0 {
-			log.Error("vpn mode needs at least one reachable endpoint (vpn.endpoints as IP/hostname, or vpn.autoDiscoverEndpoints with the VPN connected)")
-			return 1
-		}
-		in := firewall.PolicyInput{
-			Tunnels:           tunnels,
-			Endpoints:         endpoints,
-			AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
-			AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
-			WindowProtos:      cfg.VPN.Advanced.WindowProtocols,
-			WindowPorts:       cfg.VPN.Advanced.WindowPorts,
-		}
-		pol := in.FullBlock()
-		if *guard {
-			pol = in.Guard()
-		}
-		if err := fw.Apply(pol); err != nil {
+		if err := fw.Apply(d.Policy); err != nil {
 			log.Error("block failed", "err", err)
 			return 1
 		}
 		if *guard {
-			log.Info("vpn guard active", "tunnels", tunnels, "endpoints", len(endpoints))
+			log.Info("vpn guard active", "tunnels", d.Tunnels, "endpoints", len(d.Endpoints))
 		} else {
-			log.Info("network full-blocked (vpn)", "tunnels", tunnels)
+			log.Info("network full-blocked (vpn)", "tunnels", d.Tunnels)
 		}
 	}
 	return 0
@@ -1647,8 +1670,8 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 		// may exist but could not be read. Guessing between them is how a
 		// correctly-installed user gets told to reinstall.
 		c.Summary = "cannot tell without asking the service manager."
-		c.Details = []string{"Nothing readable here says what happens at boot. Ask it directly (needs root):"}
-		c.Fixes = []string{"sudo dezhban status"}
+		c.Details = []string{"Nothing readable here says what happens at boot. Ask it directly:"}
+		c.Fixes = []string{"dezhban status"}
 		return c
 	}
 
@@ -1695,6 +1718,89 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 			"If the menubar app is missing after a login, that is a login-item",
 			"question — the guard is already up without it.",
 		}
+	}
+	return c
+}
+
+// setGroupFix is the runnable `config set` line that points control.group at
+// this host's existing administrators group — the one fix for every "no group
+// is configured" branch below. It keeps `sudo`: config writes are in the
+// privileged set (they need an enrolled control token, not just group
+// membership), and a check that exists to explain a password prompt must not
+// model a command that would fail without one.
+func setGroupFix() string {
+	if runtime.GOOS == "darwin" {
+		return "sudo dezhban config set control.group admin"
+	}
+	return "sudo dezhban config set control.group sudo   # or wheel, whichever your distro uses"
+}
+
+// buildControlCheck reports whether routine ops (block/unblock/switch/pause/
+// resume/hold) will ask for a password over the control socket — the
+// passwordless path's own diagnostic. Pure: resp/probeErr are the result of
+// probeControl(cfg), already run by the caller, so the branches are directly
+// testable without a real socket. Mirrors controlStatus's own four-way
+// distinction (disabled / forbidden / unreachable / reachable) rather than
+// reusing its prose, so this stays a structured doctorCheck instead of a
+// second renderer reparsing a sentence to guess a status — splitting
+// "reachable" once more, since a reachable socket with no group configured is
+// still a password prompt and has its own fix.
+//
+// The doc pointer is a Detail, never a Fix: Fixes are runnable commands the GUI
+// badges as such, so "see docs/usage/passwordless.md" dressed as one reads as a
+// command to type. Where a real command exists it is the Fix; where it doesn't
+// — adding yourself to a unix group is usermod on Linux and dseditgroup on
+// macOS, neither safe to hand someone unprompted — the branch carries prose and
+// no Fix at all.
+func buildControlCheck(cfg *config.Config, resp control.Response, probeErr error) doctorCheck {
+	c := doctorCheck{Name: "control", Status: checkOK}
+	path := controlSocketPath(cfg)
+	const seeDoc = "To turn the passwordless path on, see docs/usage/passwordless.md."
+
+	switch {
+	case !cfg.Control.Enabled:
+		c.Status = checkWarn
+		c.Summary = "disabled (control.enabled=false) — routine ops need sudo."
+		c.Fixes = []string{"sudo dezhban config set control.enabled true"}
+	case errors.Is(probeErr, control.ErrForbidden):
+		c.Status = checkWarn
+		c.Summary = fmt.Sprintf("reachable (%s), but you are not in the %q group — routine ops need sudo.", path, cfg.Control.Group)
+		c.Details = []string{
+			fmt.Sprintf("Add your account to %q the normal way for this OS, then log out and back in — group membership is read at login, not live.", cfg.Control.Group),
+			seeDoc,
+		}
+	case probeErr != nil || !resp.OK:
+		c.Status = checkWarn
+		c.Summary = fmt.Sprintf("unreachable (%s) — dezhban is not running; routine ops need sudo.", path)
+		if cfg.Control.Group == "" {
+			c.Details = []string{"no group is configured either — once running, an unprivileged caller would still need sudo.", seeDoc}
+			c.Fixes = []string{setGroupFix()}
+		}
+	case cfg.Control.Group == "":
+		c.Status = checkWarn
+		c.Summary = fmt.Sprintf("reachable (%s), but no group is configured — routine ops need sudo.", path)
+		c.Details = []string{seeDoc}
+		c.Fixes = []string{setGroupFix()}
+	default:
+		c.Summary = fmt.Sprintf("reachable (%s, group %q) — routine ops need no password.", path, cfg.Control.Group)
+	}
+
+	var gated []string
+	if !cfg.Control.AllowSwitchOps {
+		gated = append(gated, "switch (control.allowSwitchOps=false)")
+	}
+	if !cfg.Control.AllowPauseOps {
+		gated = append(gated, "pause/resume (control.allowPauseOps=false)")
+	}
+	if !cfg.Control.AllowConfigOps {
+		gated = append(gated, "config set (control.allowConfigOps=false)")
+	}
+	if len(gated) > 0 {
+		if len(c.Details) > 0 {
+			c.Details = append(c.Details, "")
+		}
+		c.Details = append(c.Details, "Forced back to sudo regardless of group membership:")
+		c.Details = append(c.Details, gated...)
 	}
 	return c
 }
@@ -1928,6 +2034,17 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 		cfg.VPN.Advanced.LearnedEndpointTTL, cfg.VPN.Advanced.LearnedMaxPerProfile,
 		len(cfg.VPN.Endpoints), now))
 
+	// Probe only when the socket is supposed to exist. buildControlCheck's
+	// disabled branch discards resp/probeErr anyway, and controlReachable and
+	// controlStatus short-circuit the same way rather than dialing a path the
+	// config says nothing should be listening on.
+	var controlResp control.Response
+	var controlErr error
+	if cfg.Control.Enabled {
+		controlResp, controlErr = probeControl(cfg)
+	}
+	checks = append(checks, buildControlCheck(cfg, controlResp, controlErr))
+
 	// Touch ID discoverability (macOS): privileged ops (start/stop/panic, GUI
 	// actions) authenticate through sudo, and sudo only offers Touch ID when
 	// pam_tid is opted in via /etc/pam.d/sudo_local. Informational only — never
@@ -2003,7 +2120,7 @@ var unattendedSections = []struct{ name, heading string }{
 var sectionedChecks = []string{
 	"config", "tunnels", "endpoints", "lockout",
 	"service", "armAtBoot", "endpointRetention",
-	"touchID", "discover",
+	"control", "touchID", "discover",
 }
 
 // printDoctor renders a doctorReport in the text layout `doctor` has always
@@ -2086,6 +2203,18 @@ func printDoctor(r doctorReport) {
 		if len(c.Fixes) > 0 {
 			fmt.Println()
 			for _, f := range c.Fixes {
+				fmt.Printf("    %s\n", f)
+			}
+		}
+		fmt.Println()
+	}
+
+	if ctl, ok := get("control"); ok {
+		fmt.Printf("control: %s\n", ctl.Summary)
+		printDetails(ctl.Details)
+		if len(ctl.Fixes) > 0 {
+			fmt.Println()
+			for _, f := range ctl.Fixes {
 				fmt.Printf("    %s\n", f)
 			}
 		}

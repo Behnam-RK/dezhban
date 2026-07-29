@@ -153,6 +153,15 @@ func Run(build Builder, baseLog *slog.Logger, level, configPath string, persist 
 	return s.Run()
 }
 
+// StatusInstalledRunning is what Status returns for a live service, and it is
+// not only a display string: scripts/install.sh greps `dezhban status --json`
+// for it to decide whether an upgrade has a running daemon to restart. That
+// makes it a cross-language contract with no compiler behind it — rename the
+// literal and the installer silently stops restarting daemons, then tells the
+// user "The service was not running, so it was left stopped", which is false.
+// TestInstallerGrepsTheLiveServiceString pins the two sides together.
+const StatusInstalledRunning = "installed, running"
+
 // Status reports whether the service is installed and running, as a short string
 // for `dezhban status`. Querying status may require privilege on some platforms;
 // any error is surfaced rather than hidden.
@@ -168,7 +177,7 @@ func Status() string {
 	case err != nil:
 		return "unknown: " + err.Error()
 	case st == service.StatusRunning:
-		return "installed, running"
+		return StatusInstalledRunning
 	case st == service.StatusStopped:
 		return "installed, stopped"
 	default:

@@ -20,6 +20,7 @@ func addr(t *testing.T, s string) netip.Addr {
 }
 
 func TestLoadMissingFileIsEmpty(t *testing.T) {
+	t.Parallel()
 	s, err := Load(filepath.Join(t.TempDir(), "nope.json"))
 	if err != nil {
 		t.Fatalf("Load missing: %v", err)
@@ -30,6 +31,7 @@ func TestLoadMissingFileIsEmpty(t *testing.T) {
 }
 
 func TestLoadCorruptIsEmptyNotFatal(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "learned.json")
 	if err := os.WriteFile(p, []byte("{not json"), 0o644); err != nil {
 		t.Fatal(err)
@@ -44,6 +46,7 @@ func TestLoadCorruptIsEmptyNotFatal(t *testing.T) {
 }
 
 func TestRecordAndSaveRoundTrip(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "sub", "learned.json")
 	now := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	s := &Store{}
@@ -74,6 +77,7 @@ func TestRecordAndSaveRoundTrip(t *testing.T) {
 }
 
 func TestRecordRefreshesLastSeenAndDedupes(t *testing.T) {
+	t.Parallel()
 	t0 := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	t1 := t0.Add(time.Hour)
 	s := &Store{}
@@ -92,6 +96,7 @@ func TestRecordRefreshesLastSeenAndDedupes(t *testing.T) {
 // handling), so "Proton" and "proton" merge into one entry rather than bloating
 // the store with case-variant duplicates.
 func TestRecordMergesCaseInsensitively(t *testing.T) {
+	t.Parallel()
 	t0 := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	s := &Store{}
 	s.Record("Proton", "", "discovery", []netip.Addr{addr(t, "1.2.3.4")}, 16, t0)
@@ -112,6 +117,7 @@ func TestRecordMergesCaseInsensitively(t *testing.T) {
 }
 
 func TestRecordEnforcesPerEntryCap(t *testing.T) {
+	t.Parallel()
 	base := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	s := &Store{}
 	// 5 addresses, cap 3 → the 3 most-recently-seen survive.
@@ -131,6 +137,7 @@ func TestRecordEnforcesPerEntryCap(t *testing.T) {
 }
 
 func TestPruneDropsExpiredAndEmptyEntries(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	s := &Store{}
 	s.Record("old", "", "discovery", []netip.Addr{addr(t, "1.1.1.1")}, 16, now.Add(-48*time.Hour))
@@ -145,6 +152,7 @@ func TestPruneDropsExpiredAndEmptyEntries(t *testing.T) {
 }
 
 func TestForgetAndAddrs(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 7, 7, 10, 0, 0, 0, time.UTC)
 	s := &Store{}
 	s.Record("a", "", "", []netip.Addr{addr(t, "3.3.3.3"), addr(t, "1.1.1.1")}, 16, now)
@@ -169,6 +177,7 @@ func TestForgetAndAddrs(t *testing.T) {
 }
 
 func TestSaveWritesSchemaVersion(t *testing.T) {
+	t.Parallel()
 	p := filepath.Join(t.TempDir(), "learned.json")
 	if err := (&Store{}).Save(p); err != nil {
 		t.Fatal(err)

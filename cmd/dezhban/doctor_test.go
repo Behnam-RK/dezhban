@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
@@ -8,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
 )
 
@@ -60,6 +62,146 @@ func TestBuildTunnelsCheck(t *testing.T) {
 		want := "utun4 — 10.0.0.0/24, fe80::/64"
 		if len(c.Details) != 1 || c.Details[0] != want {
 			t.Errorf("details = %v, want [%q]", c.Details, want)
+		}
+	})
+}
+
+func TestBuildControlCheck(t *testing.T) {
+	base := func() config.Config {
+		cfg := config.Default()
+		cfg.Control.Enabled = true
+		cfg.Control.Group = "admin"
+		return cfg
+	}
+
+	t.Run("disabled", func(t *testing.T) {
+		cfg := base()
+		cfg.Control.Enabled = false
+		c := buildControlCheck(&cfg, control.Response{}, nil)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if !strings.Contains(c.Summary, "disabled") {
+			t.Errorf("summary = %q, want it to say disabled", c.Summary)
+		}
+		// `config set` is in the privileged set — it needs an enrolled control
+		// token, not just group membership. A fix modelled without sudo tells
+		// the user to run something that fails, on the one check whose whole
+		// subject is which commands need a password.
+		if len(c.Fixes) != 1 || !strings.HasPrefix(c.Fixes[0], "sudo dezhban config set control.enabled") {
+			t.Errorf("fixes = %v, want a single `sudo dezhban config set control.enabled true`", c.Fixes)
+		}
+	})
+
+	t.Run("forbidden — reachable but not in the group", func(t *testing.T) {
+		cfg := base()
+		c := buildControlCheck(&cfg, control.Response{}, control.ErrForbidden)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if !strings.Contains(c.Summary, "not in the") || !strings.Contains(c.Summary, "admin") {
+			t.Errorf("summary = %q, want it to name the group", c.Summary)
+		}
+		// Adding an account to a unix group is usermod on Linux and dseditgroup
+		// on macOS — no portable command to offer, so this branch must explain
+		// rather than invent one.
+		if len(c.Fixes) != 0 {
+			t.Errorf("fixes = %v, want none — there is no portable add-to-group command to badge", c.Fixes)
+		}
+		if !strings.Contains(strings.Join(c.Details, "\n"), "passwordless.md") {
+			t.Errorf("details = %v, want the doc pointer", c.Details)
+		}
+	})
+
+	// doctorCheck.Fixes is documented as "commands or actions ... never prose
+	// about them — the GUI badges each one". A sentence in that slot renders as
+	// a command the user should type, so every branch is checked, not just the
+	// ones a case above happens to exercise.
+	t.Run("no branch puts prose in Fixes", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			mutate   func(*config.Config)
+			resp     control.Response
+			probeErr error
+		}{
+			{"disabled", func(c *config.Config) { c.Control.Enabled = false }, control.Response{}, nil},
+			{"forbidden", nil, control.Response{}, control.ErrForbidden},
+			{"unreachable", nil, control.Response{}, errors.New("dial: no such file")},
+			{"unreachable, no group", func(c *config.Config) { c.Control.Group = "" }, control.Response{}, errors.New("dial: no such file")},
+			{"reachable, no group", func(c *config.Config) { c.Control.Group = "" }, control.Response{OK: true}, nil},
+			{"reachable and a member", nil, control.Response{OK: true}, nil},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				cfg := base()
+				if tc.mutate != nil {
+					tc.mutate(&cfg)
+				}
+				for _, f := range buildControlCheck(&cfg, tc.resp, tc.probeErr).Fixes {
+					if !strings.HasPrefix(f, "dezhban ") && !strings.HasPrefix(f, "sudo dezhban ") {
+						t.Errorf("fix %q is not a runnable command — prose belongs in Details", f)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("unreachable — no daemon running", func(t *testing.T) {
+		cfg := base()
+		c := buildControlCheck(&cfg, control.Response{}, errors.New("dial: no such file"))
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if !strings.Contains(c.Summary, "unreachable") {
+			t.Errorf("summary = %q, want it to say unreachable", c.Summary)
+		}
+	})
+
+	t.Run("unreachable and no group configured names both problems", func(t *testing.T) {
+		cfg := base()
+		cfg.Control.Group = ""
+		c := buildControlCheck(&cfg, control.Response{}, errors.New("dial: no such file"))
+		if len(c.Details) == 0 || !strings.Contains(c.Details[0], "no group") {
+			t.Errorf("details = %v, want a note about the missing group", c.Details)
+		}
+	})
+
+	t.Run("reachable, no group configured", func(t *testing.T) {
+		cfg := base()
+		cfg.Control.Group = ""
+		c := buildControlCheck(&cfg, control.Response{OK: true}, nil)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if !strings.Contains(c.Summary, "no group") {
+			t.Errorf("summary = %q, want it to say no group is configured", c.Summary)
+		}
+	})
+
+	t.Run("reachable and a member — the happy path", func(t *testing.T) {
+		cfg := base()
+		c := buildControlCheck(&cfg, control.Response{OK: true}, nil)
+		if c.Status != checkOK {
+			t.Errorf("status = %q, want %q", c.Status, checkOK)
+		}
+		if !strings.Contains(c.Summary, "need no password") {
+			t.Errorf("summary = %q, want it to confirm no password is needed", c.Summary)
+		}
+	})
+
+	t.Run("gated ops are named regardless of reachability", func(t *testing.T) {
+		cfg := base()
+		cfg.Control.AllowSwitchOps = false
+		cfg.Control.AllowConfigOps = false
+		c := buildControlCheck(&cfg, control.Response{OK: true}, nil)
+		joined := strings.Join(c.Details, "\n")
+		if !strings.Contains(joined, "allowSwitchOps=false") {
+			t.Errorf("details = %v, want the switch gate named", c.Details)
+		}
+		if !strings.Contains(joined, "allowConfigOps=false") {
+			t.Errorf("details = %v, want the config-write gate named", c.Details)
+		}
+		if strings.Contains(joined, "allowPauseOps=false") {
+			t.Errorf("details = %v, want the pause gate NOT named (it wasn't disabled)", c.Details)
 		}
 	})
 }

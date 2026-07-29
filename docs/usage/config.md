@@ -286,7 +286,7 @@ freely — is served by two mechanisms:
   snaps shut:
 
   ```sh
-  sudo dezhban switch          # opens a window (5s default), watches for the new tunnel + server
+  dezhban switch               # opens a window (5s default), watches for the new tunnel + server
   # …connect your VPN in its app…
   sudo dezhban vpn promote <name>   # make the learned endpoint permanent (see: dezhban vpn list)
   ```

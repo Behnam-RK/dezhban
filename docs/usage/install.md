@@ -22,6 +22,15 @@ sudo dezhban setup     # choose your settings
 sudo dezhban start     # arm it
 ```
 
+Piped like that, `scripts/install.sh` never prompts — stdin is the script
+text itself, so there's nowhere to read a question from, and it takes exactly
+the defaults above. Save it to a file and run it directly at a real terminal
+(`sudo bash install.sh`, not piped) and it asks a few questions instead: which
+components to install on a fresh machine, and — on a machine that already has
+dezhban — upgrade, reinstall, or **uninstall**, with a typed confirmation
+before anything is removed. `DEZHBAN_ASSUME_YES=1` forces the non-interactive
+defaults even at a real terminal.
+
 Everything below is why this is the recommended path, what else exists, and
 how to verify what you downloaded.
 
@@ -70,8 +79,8 @@ checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
 
 1. Detects OS/arch, resolves the requested version (`VERSION=X.Y.Z` env var
    pins one; otherwise the latest release — which is never a `-rc` build).
-2. Downloads the platform binary (+ the app bundle on macOS) and
-   `SHA256SUMS`.
+2. Downloads the platform binary (+ the app bundle on macOS, unless you opted
+   out at the component prompt) and `SHA256SUMS`.
 3. **Verifies the checksum. A mismatch aborts the install outright** — this
    is not a warning, it's a hard stop. This is what actually protects you on
    this path: HTTPS gets the bytes to you unmodified in transit, and the
@@ -86,10 +95,23 @@ checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
    `packaging/linux/uninstall.sh`, from the **same tag** just installed) to
    `/usr/local/share/dezhban/uninstall.sh`.
 
-Re-running either script is safe: it stops the service first only if it was
-already running, replaces the binary, and restarts only if it was running —
-never touching `/etc/dezhban/` (your config) or `/var/db/dezhban/` (learned
-endpoints, state) either way.
+Re-running either script upgrades or reinstalls: it replaces the binary, and
+if a service was already running, stops it first and restarts it after — but
+only when a restart is actually safe right now (`dezhban upgrade
+can-activate`, the same rule `dezhban upgrade apply` honors — never through
+FULL BLOCK or an open switch window, see [upgrade.md](upgrade.md)). Refused:
+the new binary is installed and the old daemon keeps enforcing on it until you
+run `sudo dezhban restart` yourself, once the posture clears. Either way,
+`/etc/dezhban/` (your config) and `/var/db/dezhban/` (learned endpoints,
+state) are never touched.
+
+**Uninstalling.** At a real terminal, an existing install offers "Uninstall"
+in its menu — shows exactly what will be removed, asks whether to keep your
+config (default: yes), and requires typing `uninstall` to confirm. Or run it
+directly any time: `sudo sh /usr/local/share/dezhban/uninstall.sh` (add
+`KEEP_CONFIG=1` to keep `/etc/dezhban`). It always runs `panic` first — removes
+the firewall rules even with no daemon running — before touching anything
+else, so you're never left locked out mid-removal.
 
 ## Other ways to install
 

@@ -12,6 +12,71 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A checked-in test-quality gate.** `task test:cover` (and CI, once per run)
+  now enforces `.testcoverage.yml`'s per-package coverage floors via
+  `go-test-coverage`, pinned to today's real measured coverage rather than an
+  aspirational number — the point is to stop regressions, not to pretend every
+  package is already where it should be. See docs/contribute/testing.md's new
+  "Unit test policy" section for the rules a new test is expected to follow.
+- `cmd/dezhban/harness_test.go` exercises the CLI's read-only command surface
+  in-process (`run()` itself was previously untested), and `blockPlan`/
+  `parseOverrides` pull pure decision logic out of `cmdBlock`/`cmdRun` so it is
+  testable without root or a firewall backend.
+- **`scripts/install.sh` is now interactive at a real terminal.** Piped
+  (`curl | sudo bash`) it is unchanged — no prompt, today's exact defaults.
+  Run directly instead, it asks: which components to install on a fresh
+  machine (menubar app, service registration), and on a machine that already
+  has dezhban, upgrade / reinstall / **uninstall** (typed confirmation,
+  keep-config prompt, defaults to keeping `/etc/dezhban`). Progress now shows
+  `[n/N]` step counters, with curl's own progress bar on a real terminal.
+- **`dezhban upgrade can-activate [--json]`** — a read-only, no-root
+  subcommand reporting whether a restart could activate right now (the same
+  gate `upgrade apply` uses). See "Fixed" below for why `install.sh` needed it.
+- **[docs/usage/passwordless.md](docs/usage/passwordless.md)** — a task-oriented
+  tutorial for pointing `control.group` at your distro's existing admin group
+  (`sudo`/`wheel`/`admin`) so day-to-day ops (`block`, `unblock`, `switch`,
+  `pause`, `resume`, `hold`) no longer prompt for a password. Grants no new
+  authority — if you can already `sudo`, you're already a member. Bundled into
+  the macOS app's Help pane.
+- `dezhban doctor` gained a **`control:`** check: socket reachability, the
+  configured group, whether the caller is in it, and which ops
+  `allowSwitchOps`/`allowPauseOps`/`allowConfigOps` force back to `sudo`.
+
+### Fixed
+
+- Replaced six blind `time.Sleep`-and-hope waits in `internal/runner` and
+  `internal/control`'s tests with bounded polling (or, in one case, an
+  explicitly documented exception where the sleep IS the scenario under test).
+- **`scripts/install.sh`'s upgrade path could restart a running daemon through
+  an unsafe posture.** It stopped and restarted the service unconditionally,
+  with no regard for ADR-0007's activation gate — including through FULL
+  BLOCK, which would have briefly lifted a block on a forbidden-country exit,
+  the one thing this tool exists to prevent. It now checks `dezhban upgrade
+  can-activate` before stopping anything: the new binary always installs (safe
+  — a running process keeps its old inode), but the stop/restart is skipped on
+  refusal, leaving the old build enforcing until `sudo dezhban restart`
+  succeeds on its own. No override, matching `upgrade apply`'s own rule.
+- **`scripts/install.sh` could finish with the kill switch disarmed and say
+  nothing.** When an upgrade restarted a running daemon, the `start` was
+  unguarded: under `set -e` a failure aborted the script with no message at
+  all — after the `stop` had already run, so every firewall rule was gone.
+  The install looked like it had merely "failed" while the host was in fact
+  left unprotected. It now stops with an explicit warning that names the
+  exposure and the command that ends it. Relatedly, cancelling the optional
+  setup wizard on a fresh install no longer swallows the "next steps" footer.
+- **Docs and `doctor`/`setup` hints no longer model `sudo` on commands that
+  don't need it.** `status` never needed root — its `doctor` fix hint wrongly
+  said otherwise. `block`, `unblock`, `switch`, `pause`, `resume` route over
+  the control socket before ever needing root; `sudo` in front of them was
+  actively counterproductive; it re-execs as root, which then pays the very
+  password prompt the socket exists to avoid. Trimmed from the user-facing
+  `docs/usage/` pages; ADRs, contributor docs, and every `curl | sudo bash`
+  install line are untouched by design, and the `sudo` still shown on `panic`,
+  `setup`, `run`, and the service lifecycle is correct — those genuinely need
+  root.
+
 ## [0.8.0] - 2026-07-28
 
 ### Changed

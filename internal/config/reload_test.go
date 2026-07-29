@@ -20,6 +20,7 @@ func changeFor(t *testing.T, changes []Change, key string) Change {
 // reload would report a pile of phantom edits and the user could never tell a
 // real one from noise.
 func TestChangesEmptyForIdenticalConfigs(t *testing.T) {
+	t.Parallel()
 	a, b := Default(), Default()
 	if got := Changes(&a, &b); len(got) != 0 {
 		t.Fatalf("Changes on identical configs = %v, want none", got)
@@ -29,6 +30,7 @@ func TestChangesEmptyForIdenticalConfigs(t *testing.T) {
 // The two halves of the answer: what changed, and whether the running daemon can
 // actually adopt it.
 func TestChangesClassifiesLiveAndRestartRequired(t *testing.T) {
+	t.Parallel()
 	old := Default()
 	cur := Default()
 	cur.PollInterval = 42 * time.Second // live: the run loop owns the geo ticker
@@ -69,6 +71,7 @@ func TestChangesClassifiesLiveAndRestartRequired(t *testing.T) {
 // as a raw duration it renders "-1ns", which tells a user nothing and looks like
 // corruption in a reload report.
 func TestKeyValuesRendersDisabledWindowsAsOff(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	c.VPN.SwitchWindow = Disabled
 	c.VPN.RedialWindow = Disabled
@@ -85,6 +88,7 @@ func TestKeyValuesRendersDisabledWindowsAsOff(t *testing.T) {
 // Turning a window off is a security-relevant edit, so it must show up as a
 // change like any other rather than being swallowed.
 func TestChangesReportsDisablingAWindow(t *testing.T) {
+	t.Parallel()
 	old := Default()
 	cur := Default()
 	cur.VPN.RedialWindow = Disabled
@@ -102,6 +106,7 @@ func TestChangesReportsDisablingAWindow(t *testing.T) {
 // defaults to restart-required, which is safe but wrong to leave in place — this
 // is the test that makes someone decide.
 func TestEveryKeyIsClassifiedExactlyOnce(t *testing.T) {
+	t.Parallel()
 	c := Default()
 	for key := range KeyValues(&c) {
 		_, restart := restartReasons[key]
@@ -128,6 +133,7 @@ func TestEveryKeyIsClassifiedExactlyOnce(t *testing.T) {
 // Every restart reason is shown to a user, so an empty one would render as a
 // blank explanation next to a setting that silently did not take effect.
 func TestEveryRestartReasonExplainsItself(t *testing.T) {
+	t.Parallel()
 	for key, reason := range restartReasons {
 		if reason == "" {
 			t.Errorf("key %q is restart-required with no reason given", key)
@@ -140,6 +146,7 @@ func TestEveryRestartReasonExplainsItself(t *testing.T) {
 // from what it is actually enforcing, and the key would stop being reported as
 // pending — the user would never learn a restart was still owed.
 func TestMergeLiveMovesOnlyLiveKeys(t *testing.T) {
+	t.Parallel()
 	base := Default()
 
 	cur := Default()
@@ -172,6 +179,7 @@ func TestMergeLiveMovesOnlyLiveKeys(t *testing.T) {
 // every live key must actually be moved. This is what keeps the field-by-field
 // copy above honest against the liveKeys table beside it.
 func TestMergeLiveCoversExactlyTheLiveKeys(t *testing.T) {
+	t.Parallel()
 	base := Default()
 
 	// A config that differs from base in every single key.

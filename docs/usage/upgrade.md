@@ -82,6 +82,15 @@ the previous version is still running normally. retry activation later with: sud
 
 Retry with `sudo dezhban restart` once the posture clears, whenever that is.
 
+`dezhban upgrade can-activate [--json]` reports this same verdict on demand,
+with no root and without applying anything — the CLI-exposed form of the
+gate above, for a caller that isn't `dezhban upgrade apply` itself.
+`scripts/install.sh` calls it before restarting a service that was already
+running: install the new binary either way (the running daemon keeps
+enforcing on its old inode), but only restart into it when the gate says
+it's safe. There is deliberately no override — an operator who wants to
+force it already has `sudo dezhban restart`, typed by name.
+
 ## The restart window is disclosed, not hidden or blocked
 
 A deliberate choice: rather than adding a *second* firewall mechanism (a

@@ -3,9 +3,12 @@ package runner
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/netip"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -14,6 +17,42 @@ import (
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 )
+
+// pollUntil polls cond every 5ms until it returns true or timeout elapses, at
+// which point it fails the test with msg.
+func pollUntil(t *testing.T, timeout time.Duration, cond func() bool, msg string) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for !cond() {
+		if time.Now().After(deadline) {
+			t.Fatal(msg)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// countingHandler counts slog records whose message contains substr, so a
+// test can poll for a specific number of log-visible events instead of
+// sleeping over a fixed wall-clock window.
+// atomic.Int64, not a *int64 driven by atomic.AddInt64: the same as
+// countingMonitor and scriptedWatcher in this package, and the typed form is
+// the one that cannot be read non-atomically by accident.
+type countingHandler struct {
+	substr string
+	count  *atomic.Int64
+}
+
+func (h countingHandler) Enabled(context.Context, slog.Level) bool { return true }
+
+func (h countingHandler) Handle(_ context.Context, r slog.Record) error {
+	if strings.Contains(r.Message, h.substr) {
+		h.count.Add(1)
+	}
+	return nil
+}
+
+func (h countingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h countingHandler) WithGroup(string) slog.Handler      { return h }
 
 // controlSocket returns a short socket path (see internal/control: t.TempDir()
 // overruns the platform sun_path limit).
@@ -46,7 +85,9 @@ func startControlledWith(t *testing.T, o Options, tune func(*control.Server)) st
 		tune(srv)
 	}
 	o.Control = srv
-	o.Log = discardLog()
+	if o.Log == nil {
+		o.Log = discardLog()
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
@@ -64,13 +105,7 @@ func startControlledWith(t *testing.T, o Options, tune func(*control.Server)) st
 	})
 
 	// Wait for the loop to install its startup posture and start serving.
-	deadline := time.Now().Add(3 * time.Second)
-	for !control.Ping(path) {
-		if time.Now().After(deadline) {
-			t.Fatal("control socket never became reachable")
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
+	pollUntil(t, 3*time.Second, func() bool { return control.Ping(path) }, "control socket never became reachable")
 	return path
 }
 
@@ -136,6 +171,8 @@ func TestControlManualBlockHeldAcrossGeoTicks(t *testing.T) {
 	be := &fakeBackend{}
 	o := vpnOpts(be)
 	o.Interval = 5 * time.Millisecond // geo ticks fire continuously
+	var skipped atomic.Int64
+	o.Log = slog.New(countingHandler{substr: "manual block held", count: &skipped})
 	path := startControlled(t, o)
 
 	if resp := do(t, path, control.Request{Op: control.OpBlock}); !resp.OK {
@@ -143,9 +180,11 @@ func TestControlManualBlockHeldAcrossGeoTicks(t *testing.T) {
 	}
 	callsAfterBlock := len(be.calls)
 
-	// Let many geo ticks pass. A running state machine would probe (apply-guard +
+	// Wait for many geo ticks to actually be suspended by the manual block — not
+	// merely idle. A running state machine would probe (apply-guard +
 	// apply-fullblock) and then lift the block on the steady "US" reading.
-	time.Sleep(150 * time.Millisecond)
+	pollUntil(t, 3*time.Second, func() bool { return skipped.Load() >= 10 },
+		"geo ticks were not suspended by the manual block in time")
 
 	resp := do(t, path, control.Request{Op: control.OpStatus})
 	if !resp.Blocked || resp.Posture != "full-block" {
@@ -324,9 +363,7 @@ func TestControlSocketRemovedOnShutdown(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, o) }()
-	for !control.Ping(path) {
-		time.Sleep(5 * time.Millisecond)
-	}
+	pollUntil(t, 3*time.Second, func() bool { return control.Ping(path) }, "control socket never became reachable")
 	cancel()
 	if err := <-done; err != nil {
 		t.Fatalf("Run: %v", err)

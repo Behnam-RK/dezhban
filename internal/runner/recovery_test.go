@@ -2,8 +2,10 @@ package runner
 
 import (
 	"context"
+	"fmt"
 	"net/netip"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -84,10 +86,12 @@ func TestNoPendingFlipWhenSettled(t *testing.T) {
 }
 
 // countingMonitor reports a fixed country and counts how many lookups it served,
-// which is how the tests below observe the probe cadence.
+// which is how the tests below observe the probe cadence. n is accessed from
+// both the runner's goroutine (Once) and the test goroutine (polling for it),
+// hence atomic.
 type countingMonitor struct {
 	cc string
-	n  int
+	n  atomic.Int64
 }
 
 func (m *countingMonitor) Poll(ctx context.Context) <-chan monitor.Result {
@@ -97,7 +101,7 @@ func (m *countingMonitor) Poll(ctx context.Context) <-chan monitor.Result {
 }
 
 func (m *countingMonitor) Once(ctx context.Context) (monitor.Reading, error) {
-	m.n++
+	m.n.Add(1)
 	return monitor.Reading{CountryCode: m.cc, IP: netip.MustParseAddr("203.0.113.9")}, nil
 }
 
@@ -143,15 +147,15 @@ func TestTunnelUpWhileBlockedProbesUntilTheGuardIsRestored(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, o) }()
 
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
 	if !waitFor(t, snaps, func(s state.Snapshot) bool { return s.Posture == "full-block" }) {
 		t.Fatal("never reached FULL BLOCK on a blocked exit")
 	}
 
 	// The VPN redials onto an allowed exit: drop, then up.
 	mon.cc = "US"
-	tun.send(netdetect.TunnelState{Up: false, Detail: "dropped"})
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
+	tun.send(t, netdetect.TunnelState{Up: false, Detail: "dropped"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
 
 	if !waitFor(t, snaps, func(s state.Snapshot) bool { return s.Posture == "guard" }) {
 		t.Fatal("the guard was never restored; a tunnel-up edge in FULL BLOCK must probe for recovery " +
@@ -184,20 +188,29 @@ func TestNoAccelerationWhenProbingWouldHaveToLiftTheGuard(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- Run(ctx, o) }()
 
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
 	if !waitFor(t, snaps, func(s state.Snapshot) bool { return s.Posture == "full-block" }) {
 		t.Fatal("never reached FULL BLOCK")
 	}
 
-	before := mon.n
+	before := mon.n.Load()
 	mon.cc = "US"
-	tun.send(netdetect.TunnelState{Up: false, Detail: "dropped"})
-	tun.send(netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
-	time.Sleep(300 * time.Millisecond) // many fastProbeIntervals, were it accelerating
+	tun.send(t, netdetect.TunnelState{Up: false, Detail: "dropped"})
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "redialed"})
 
-	if extra := mon.n - before; extra > 0 {
-		t.Fatalf("%d lookup(s) ran after the tunnel-up edge with no tunnel-scoped provider pass; "+
-			"each would have lifted the guard, so this must fall back to the configured cadence", extra)
+	// Absence assertion: no provider pass means acceleration must not start.
+	// Poll the window an accelerated cadence would have used, failing as soon
+	// as an extra lookup appears rather than only after the full wait.
+	deadline := time.Now().Add(300 * time.Millisecond) // many fastProbeIntervals, were it accelerating
+	for {
+		if extra := mon.n.Load() - before; extra > 0 {
+			t.Fatalf("%d lookup(s) ran after the tunnel-up edge with no tunnel-scoped provider pass; "+
+				"each would have lifted the guard, so this must fall back to the configured cadence", extra)
+		}
+		if time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 	cancel()
 	<-done
@@ -206,14 +219,18 @@ func TestNoAccelerationWhenProbingWouldHaveToLiftTheGuard(t *testing.T) {
 // scriptedWatcher drives tunnel edges from a test by holding a state the
 // sampler keeps returning.
 //
-// `send` deliberately BLOCKS for several sample intervals. netdetect.Watcher
-// debounces a down edge over DownDebounce consecutive samples, so a state
-// visible for only one tick is swallowed — which is correct for a real
-// interface (it stops a flapping redial churning rule reloads) and would make a
-// fake that flipped states instantaneously silently emit no edges at all.
+// `send` deliberately BLOCKS until the watcher has actually sampled the new
+// state enough times to register. netdetect.Watcher debounces a down edge
+// over DownDebounce (default 2) consecutive samples, so a state visible for
+// only one tick is swallowed — which is correct for a real interface (it
+// stops a flapping redial churning rule reloads) and would make a fake that
+// flipped states instantaneously silently emit no edges at all. Polling the
+// watcher's own sample count — rather than sleeping a fixed multiple of the
+// interval — ties the wait to what the fake actually observed.
 type scriptedWatcher struct {
-	mu   sync.Mutex
-	last netdetect.TunnelState
+	mu      sync.Mutex
+	last    netdetect.TunnelState
+	samples atomic.Int64
 }
 
 const scriptedInterval = 5 * time.Millisecond
@@ -223,6 +240,7 @@ func (s *scriptedWatcher) watcher() *netdetect.Watcher {
 		Tunnels:  []string{"utun4"},
 		Interval: scriptedInterval,
 		Sample: func([]string) netdetect.TunnelState {
+			s.samples.Add(1)
 			s.mu.Lock()
 			defer s.mu.Unlock()
 			return s.last
@@ -230,12 +248,25 @@ func (s *scriptedWatcher) watcher() *netdetect.Watcher {
 	}
 }
 
-func (s *scriptedWatcher) send(st netdetect.TunnelState) {
+func (s *scriptedWatcher) send(t *testing.T, st netdetect.TunnelState) {
+	t.Helper()
 	s.mu.Lock()
 	s.last = st
 	s.mu.Unlock()
-	// Long enough to clear the down debounce and be observed as a real edge.
-	time.Sleep(10 * scriptedInterval)
+
+	// netdetect's default DownDebounce is 2; wait for a few more samples of
+	// the new state to clear it and register as a real edge, bounded by a
+	// generous deadline for a slow CI runner.
+	//
+	// The counter is read AFTER the unlock on purpose: Sample increments before
+	// it takes the mutex, so every sample counted from here on acquires the
+	// lock after this write and therefore observes the new state. Timing out is
+	// a hard failure, not a silent pass — a send that never registered leaves
+	// the test asserting on an edge that was never delivered, and the resulting
+	// failure names the wrong thing.
+	target := s.samples.Load() + 3
+	pollUntil(t, 2*time.Second, func() bool { return s.samples.Load() >= target },
+		fmt.Sprintf("watcher never sampled the new tunnel state (up=%v) enough times to clear the down debounce", st.Up))
 }
 
 // waitFor drains snapshots until one satisfies pred, or the deadline passes.
