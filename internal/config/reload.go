@@ -77,6 +77,8 @@ func KeyValues(c *Config) map[string]string {
 		"vpn.advanced.learnedMaxPerProfile":    strconv.Itoa(adv.LearnedMaxPerProfile),
 		"vpn.advanced.promoteAfterRefreshes":   strconv.Itoa(adv.PromoteAfterRefreshes),
 		"vpn.advanced.endpointWarnThreshold":   strconv.Itoa(adv.EndpointWarnThreshold),
+		"vpn.advanced.verifyInterval":          dur(adv.VerifyInterval),
+		"vpn.advanced.livenessRedial":          strconv.FormatBool(adv.LivenessRedial),
 		"vpn.advanced.windowProtocols":         strings.Join(adv.WindowProtocols, ","),
 		"vpn.advanced.windowPorts":             joinInts(adv.WindowPorts),
 	}
@@ -163,6 +165,8 @@ var liveKeys = map[string]bool{
 	"vpn.advanced.redialBudget":            true,
 	"vpn.advanced.redialBudgetWindow":      true,
 	"vpn.advanced.windowDiscoveryInterval": true,
+	"vpn.advanced.verifyInterval":          true,
+	"vpn.advanced.livenessRedial":          true,
 }
 
 // restartReasonFor returns why a key cannot be applied live, or "" when it can.
@@ -248,6 +252,8 @@ func MergeLive(base, cur *Config) *Config {
 	out.VPN.Advanced.RedialBudget = cur.VPN.Advanced.RedialBudget
 	out.VPN.Advanced.RedialBudgetWindow = cur.VPN.Advanced.RedialBudgetWindow
 	out.VPN.Advanced.WindowDiscoveryInterval = cur.VPN.Advanced.WindowDiscoveryInterval
+	out.VPN.Advanced.VerifyInterval = cur.VPN.Advanced.VerifyInterval
+	out.VPN.Advanced.LivenessRedial = cur.VPN.Advanced.LivenessRedial
 
 	return &out
 }

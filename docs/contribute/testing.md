@@ -90,6 +90,18 @@ root and no real firewall. `task test:cover` enforces the coverage floors in
       error.
 - [ ] **`--force` bypasses detection.** `block --force` / `unblock --force` act
       without consulting the geo state.
+- [ ] **Enforcement verification notices a ruleset removed from outside it, and
+      repairs it.** With the daemon running and enforcing (guard or a manual
+      block), flush the ruleset by hand — `sudo pfctl -a dezhban -F all` (macOS),
+      `sudo nft flush ruleset` (Linux; a full flush, not just the `dezhban`
+      table, since this is testing that dezhban notices ANY removal), or delete
+      the WFP rule group (Windows). Within one `vpn.advanced.verifyInterval`
+      (default `1m`; set it lower, e.g. `5s`, to speed up the check) the daemon
+      logs `dezhban's firewall rules are MISSING — ... re-applying now`,
+      `dezhban status --json` shows `state.verify.missing: true` with
+      `repairs` incremented, and the rule dump shows the ruleset back. Set
+      `vpn.advanced.verifyInterval: "0"` and repeat — the daemon must NOT
+      notice or repair (the check should stay off, not merely run slower).
 
 Per-OS rule inspection:
 
@@ -206,6 +218,12 @@ Only a live host can prove these — CI cannot reach a printer.
       **stays** `guard` however many error-ticks pass, and the log says the exit
       country is unknown. It must never reach `full-block` on errors alone:
       that would cut the tunnel's own egress and livelock the redial.
+- [ ] **An exit-IP change is observed and reported, without touching posture.**
+      Switch the VPN to a different server that still exits through an allowed
+      country (so `countryCode`/`blocked` are unaffected) → the daemon logs
+      `exit IP changed` and `dezhban status --json` shows a fresh
+      `exitIpChangedAt`. Confirm it does NOT reset on an unchanged reading, and
+      that `pending`/hysteresis progress is untouched by the comparison itself.
 - [ ] **An unknown country does not lift a block either.** Repeat while in
       `full-block` → it stays blocked.
 - [ ] **An error mid-streak does not cancel a pending flip.** With `hysteresis: 3`,
@@ -235,6 +253,22 @@ The guard is where a misconfiguration locks the host out. Run
       escalating — escalating on an unknown would cut the tunnel's own egress and
       livelock the redial.
 - [ ] **Unblock restores everything.**
+- [ ] **A hung tunnel (interface up, no traffic) is diagnosed, not silently
+      left cut with no signal.** With the VPN connected and the guard armed,
+      block the tunnel's traffic at the OS level without bringing the
+      interface down — e.g. a host-level firewall rule dropping packets on the
+      tunnel interface, or disconnect the VPN server side while the client's
+      interface stays configured. After `hysteresis` consecutive failed exit
+      checks, the daemon logs `tunnel interface reports up, but exit lookups
+      through it keep failing`, `dezhban status --json` shows
+      `state.zombie.checks`, and `dezhban doctor`'s "enforcement liveness"
+      section reports it. Confirm the guard itself is untouched throughout —
+      still cutting egress exactly as it would for any other tunnel-up state —
+      and that with `vpn.advanced.livenessRedial` at its default (`false`) NO
+      switch-window rule ever appears in the rule dump. Set it to `true` and
+      repeat: a switch-window pass should appear once the streak is confirmed,
+      through the same `redialBudget`/`redialMinUptime` machinery an ordinary
+      drop uses.
 
 ### macOS worked example (pf)
 
@@ -429,6 +463,13 @@ Per OS, privileged:
       restart-on-failure brings it back and it re-enforces.
 - [ ] **`restart` applies the restart-required keys** (most keys apply live — see
       the section below), and `start` and `stop` are idempotent.
+- [ ] **A second `run` refuses.** With the service running, `sudo dezhban run`
+      (with or without `--no-daemon`) in a second terminal refuses immediately
+      with "another dezhban is already running", and the first daemon's
+      enforcement is undisturbed — no duplicate rules, no double-Apply. `kill -9`
+      the first daemon, then start a second `run`: it succeeds (the OS released
+      the lock with the process), confirming a killed daemon never wedges the
+      next start.
 
 ## Unattended recovery (`doctor`'s boot and retention checks)
 

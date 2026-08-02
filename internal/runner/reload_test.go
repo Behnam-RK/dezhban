@@ -161,6 +161,8 @@ func TestLiveCapturesEveryLiveSetting(t *testing.T) {
 		WindowDiscoveryInterval: time.Second,
 		EndpointRefresh:         time.Minute,
 		EndpointGrace:           15 * time.Minute,
+		VerifyInterval:          time.Minute,
+		LivenessRedial:          true,
 		AllowSwitchOps:          true,
 		AllowPauseOps:           true,
 		AllowConfigOps:          true,

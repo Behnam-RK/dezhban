@@ -12,6 +12,47 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Enforcement verification** (`vpn.advanced.verifyInterval`, default `1m`).
+  The run loop now periodically confirms the firewall rules it believes are
+  installed are actually still there, re-applying the standing posture the
+  instant they are not. Every other rule change was already triggered by
+  something dezhban itself did — a tunnel change, an endpoint refresh, a
+  posture flip; this is the only one that notices a ruleset removed from
+  OUTSIDE the daemon (another firewall tool, `pfctl -F all`,
+  `nft flush ruleset`, an OS ruleset reload). Reported in `state.verify`
+  (`status --json`) only while something is wrong; disablable (`"0"`), and an
+  unreadable backend is never treated as evidence the rules are gone. See
+  [docs/usage/config.md](docs/usage/config.md#advanced-tunables-vpnadvanced).
+- **Zombie-tunnel detection.** A tunnel interface that reports up while a run
+  of exit-country lookups through it has failed is now diagnosed as such —
+  reported in `state.zombie`, `dezhban doctor`'s new "enforcement liveness"
+  check, and the rendered posture sentence — instead of sitting correctly cut
+  with no signal to anyone. Detection is always on; letting a confirmed streak
+  open an automatic redial window is a separate, off-by-default key
+  (`vpn.advanced.livenessRedial`), because an exit that censors the geo
+  providers produces the identical symptom on a tunnel that was never
+  actually down. See
+  [ADR-0010](docs/adr/0010-tunnel-liveness.md).
+- **A single-instance guard on `run`.** A second `dezhban run` — with or
+  without `--no-daemon` — started alongside an already-running daemon now
+  refuses immediately instead of racing it to apply firewall rules. The lock
+  is released by the OS the moment the holding process ends, by any means, so
+  a killed daemon never wedges the next start. `panic`, `unblock`, and the
+  service-lifecycle commands deliberately take no such lock — they remain the
+  escape hatch, usable with no daemon running at all.
+- **Exit-IP change observation.** The daemon now logs and publishes
+  (`state.exitIpChangedAt`) when the observed exit IP differs from the
+  previous successful reading — purely informational, like the exit-country
+  check it sits beside: it never affects `blocked`, `countryCode`, or the
+  hysteresis streak. A failover between two servers in the same allowed
+  country changes nothing those fields report, but changes this.
+- **A startup self-test log line.** `dezhban run` now logs one summary at
+  startup — firewall backend reachable, state directory writable, tunnels
+  configured/detected, endpoints known, whether this host has ever observed a
+  tunnel up — diagnostic only, never blocking startup.
+
 ## [0.9.0] - 2026-07-29
 
 ### Added

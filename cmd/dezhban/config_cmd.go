@@ -369,6 +369,30 @@ var configFields = map[string]configField{
 			return nil
 		},
 	},
+	"vpn.advanced.verifyInterval": {
+		get: func(c *config.Config) string {
+			if c.VPN.Advanced.VerifyInterval < 0 {
+				return "0s" // explicitly disabled
+			}
+			return c.VPN.Advanced.VerifyInterval.String()
+		},
+		set: func(c *config.Config, v string) error {
+			if err := setDuration(&c.VPN.Advanced.VerifyInterval, v); err != nil {
+				return err
+			}
+			if c.VPN.Advanced.VerifyInterval == 0 {
+				// "0" means enforcement verification is off, not "reset to
+				// default" — same explicit-opt-out sentinel as the three windows
+				// and RedialMinUptime.
+				c.VPN.Advanced.VerifyInterval = config.Disabled
+			}
+			return nil
+		},
+	},
+	"vpn.advanced.livenessRedial": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.Advanced.LivenessRedial) },
+		set: func(c *config.Config, v string) error { return setBool(&c.VPN.Advanced.LivenessRedial, v) },
+	},
 	"vpn.advanced.redialBudget": {
 		get: func(c *config.Config) string { return c.VPN.Advanced.RedialBudget.String() },
 		set: func(c *config.Config, v string) error {

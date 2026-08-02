@@ -56,6 +56,8 @@ type LiveSettings struct {
 
 	EndpointRefresh time.Duration
 	EndpointGrace   time.Duration
+	VerifyInterval  time.Duration
+	LivenessRedial  bool
 
 	AllowSwitchOps bool
 	AllowPauseOps  bool
@@ -97,6 +99,8 @@ func (o Options) Live() LiveSettings {
 		WindowDiscoveryInterval: o.WindowDiscoveryInterval,
 		EndpointRefresh:         o.EndpointRefresh,
 		EndpointGrace:           o.EndpointGrace,
+		VerifyInterval:          o.VerifyInterval,
+		LivenessRedial:          o.LivenessRedial,
 		AllowSwitchOps:          o.AllowSwitchOps,
 		AllowPauseOps:           o.AllowPauseOps,
 		AllowConfigOps:          o.AllowConfigOps,

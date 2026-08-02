@@ -89,6 +89,7 @@ func Text(s state.Snapshot) Display {
 	}
 	d := postureDisplay(s)
 	d.Detail = joinSentences(d.Detail, lookupNote(s))
+	d.Detail = joinSentences(d.Detail, zombieNote(s))
 	d.Detail = joinSentences(d.Detail, pendingNote(s.Pending))
 	return d
 }
@@ -433,6 +434,18 @@ func lookupNote(s state.Snapshot) string {
 		return ""
 	}
 	return fmt.Sprintf("Last exit-country check failed: %s.", s.LookupErr)
+}
+
+// zombieNote reports a tunnel that reports up but has stopped passing traffic
+// — diagnosis, not a leak: the guard is holding exactly as designed, same as
+// any other tunnel-down state. Appended alongside lookupNote rather than
+// replacing the posture headline, so "Guarding" stays accurate (it is) while
+// the detail explains why the checks keep failing.
+func zombieNote(s state.Snapshot) string {
+	if s.Zombie == nil {
+		return ""
+	}
+	return "Your VPN's interface looks up, but exit checks through it keep failing — it may need reconnecting."
 }
 
 // pendingNote reports a hysteresis streak in progress, in the one spelling

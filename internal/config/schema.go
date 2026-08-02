@@ -327,6 +327,23 @@ var tunables = []Tunable{
 		Help:       "A tunnel that was up for less than this still gets a window, but a shorter one for each consecutive fast drop, with a growing wait between them. Off gives every drop a full window until the budget runs out.",
 		DocAnchor:  anchorAdvanced,
 	},
+	{
+		Key:        "vpn.advanced.verifyInterval",
+		Label:      "Enforcement verification interval",
+		Kind:       KindDuration,
+		Advanced:   true,
+		Disablable: true,
+		Help:       "How often dezhban confirms its firewall rules are still installed, re-applying them if something removed them from outside. Off trusts the rules to stay put once applied.",
+		DocAnchor:  anchorAdvanced,
+	},
+	{
+		Key:       "vpn.advanced.livenessRedial",
+		Label:     "Redial on a hung tunnel",
+		Kind:      KindBool,
+		Advanced:  true,
+		Help:      "Lets a tunnel that reports up but has stopped passing traffic open an automatic redial window, the same as an ordinary drop. Off by default: an exit that censors the geo lookup looks identical to a hung tunnel, and this would let it trigger a window on a tunnel that was never actually down.",
+		DocAnchor: anchorAdvanced,
+	},
 	// Not Disablable, unlike almost every other duration here. These two are
 	// limits, so an Off switch would have to mean "no limit" — the opposite of
 	// what Off means on every other row, and the wrong direction to offer on a

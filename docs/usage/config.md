@@ -305,13 +305,14 @@ entirely to keep the defaults; set only the knobs you need. Every field below is
 reachable with `dezhban config set vpn.advanced.<field>=<value>` — the same
 validated write-and-reload path as any other key — not just by hand-editing the
 file. `switchWindowMax`, `redialWindowMax`, `redialMinUptime`, `redialBudget`,
-`redialBudgetWindow`, and
+`redialBudgetWindow`, `verifyInterval`, `livenessRedial`, and
 `windowDiscoveryInterval` apply live; the rest (built into something the run
 loop constructs once at startup, or — for `windowProtocols`/`windowPorts` —
 only re-read when a switch window opens) need `dezhban restart` to take
 effect, which `config set` says so at the time.
 
-**`0` is not "off" here.** Only the three windows and `redialMinUptime` treat a
+**`0` is not "off" here.** Only the three windows, `redialMinUptime`, and
+`verifyInterval` treat a
 `0` as an explicit opt-out; every other field in this table has no disabled
 state, so a non-positive value is replaced with the default shown below. That
 replacement is not silent — `config set` echoes the value actually stored and
@@ -348,6 +349,8 @@ were on. Turning it off is fine; turning it off by accident is not.
 | `redialBudget` | `2m` | Total time automatic redial windows may leave the guard relaxed within `redialBudgetWindow`. Debited when a window opens and **credited back when it closes early**, so a redial that succeeded in three seconds costs three seconds — the budget measures the exposure actually taken, not the exposure offered. When it can no longer afford a window the guard simply holds and traffic stays cut. Not disablable (see below). |
 | `redialBudgetWindow` | `15m` | The rolling period `redialBudget` is measured over. Each window's cost is returned as it falls out of the period, so a busy link recovers its allowance progressively rather than needing a full quiet stretch. Not disablable. |
 | `endpointWarnThreshold` | `256` | Union size at which `doctor` warns about rule-list bloat. |
+| `verifyInterval` | `1m` | How often the daemon re-reads the firewall to confirm the rules it believes are installed are still there, re-applying the standing posture the instant they are not. Every other rule change dezhban makes is triggered by something the daemon itself did — this is the only one that notices a ruleset removed from OUTSIDE it (another firewall tool, `pfctl -F all`, `nft flush ruleset`, an OS ruleset reload). `"0"` disables the check, trusting the rules to stay put once applied. On Windows each check is a PowerShell invocation, so a very short interval has a real cost — the default is deliberately conservative. |
+| `livenessRedial` | `false` | Lets a tunnel that reports up but has stopped passing traffic open an automatic redial window — see [ADR-0010](../adr/0010-tunnel-liveness.md). Off by default: an exit that censors the geo lookup produces the identical failure pattern as a genuinely hung tunnel, and turning this on lets that exit trigger a window on a tunnel that was never actually down. The diagnosis itself (`dezhban doctor`, the state file) is always on regardless of this key — only ACTING on it is gated. |
 | `windowProtocols` | `[]` | Restrict a switch window to these protocols (e.g. `["udp"]`) instead of allowing all outbound. Empty allows all — only worth setting when every VPN you switch to uses a fixed protocol. |
 | `windowPorts` | `[]` | Restrict a switch window to these ports (e.g. `[51820]`) instead of allowing all outbound. Empty allows all — only worth setting when every VPN you switch to uses a fixed port set (e.g. WireGuard on 51820). |
 

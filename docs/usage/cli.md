@@ -97,6 +97,13 @@ Pass `--no-sudo` (or `DEZHBAN_NO_SUDO=1`) to opt out and get the plain "must run
 root" error; on Windows, and when there's no terminal (CI/pipes), it never
 auto-elevates. Pass `--no-daemon` (or `DEZHBAN_NO_DAEMON=1`) to skip the control
 socket and act on the firewall directly — the escape hatch for a wedged daemon.
+That escape hatch is exactly the case `run` guards against contending with a
+still-running service: it takes an exclusive lock over the state directory for
+its whole lifetime, so a second `run` — with or without `--no-daemon` — refuses
+immediately ("another dezhban is already running") instead of racing the first
+to apply firewall rules. `panic`, `unblock`, and the service-lifecycle commands
+take no such lock; they are the recovery path and must stay usable with no
+daemon running at all.
 
 A manual `block` **holds**: the daemon suspends its geo state machine until you
 `unblock`, so an allowed country won't quietly undo what you asked for.
@@ -151,6 +158,38 @@ cut lasts, so it grows back on its own and a script can watch it recover. What i
 does not do is *cause* anything — the budget is still only consulted on a
 tunnel-down edge, so watching it reach a full window tells you a window would be
 granted, not that one is coming.
+
+`state.verify` is present only when enforcement verification (`vpn.advanced.verifyInterval`)
+last found something wrong — the firewall rules dezhban believes it installed
+were missing, or the backend could not be read at all. `missing: true` means
+they were found gone and have already been re-applied (`repairs` is the
+cumulative count since startup — a number that keeps climbing means something on
+this host is repeatedly removing dezhban's rules). An `err` string instead means
+the backend itself could not be read; that is **not** treated as evidence the
+rules are gone, so `missing` stays false and nothing is re-applied — the same
+discipline as an undeterminable exit country holding the current posture. Absent
+means the last check was clean, or verification is disabled (`"0"`) — the two
+look the same here; `pollIntervalSeconds`-scale staleness rules apply the same
+way they do to the rest of the snapshot.
+
+`state.zombie` is present only while a run of exit-country lookups has failed
+through a tunnel that still reports up — `checks` is the streak length, `since`
+when it started. This is **diagnosis, not a leak**: the guard is holding exactly
+as it would for any other unknown reading. Absent means either nothing is wrong
+or the tunnel is plainly down instead (a different, already-explained state —
+see `state.drop`). Whether this can also open an automatic redial window is
+controlled by `vpn.advanced.livenessRedial` (default off); see
+[ADR-0010](../adr/0010-tunnel-liveness.md) for why that default matters — an exit
+that censors the geo lookup produces the identical symptom on a tunnel that was
+never actually down.
+
+`state.exitIpChangedAt` is set the first time the observed exit IP differs from
+the previous successful reading, and stays set (it is not cleared by a later
+unchanged reading). Purely observational: it never affects `blocked`,
+`countryCode`, or `pending` — a failover between two servers in the same allowed
+country changes nothing those fields report, but changes this. Absent means no
+change has been observed since the daemon started, not that the exit has never
+had an IP.
 
 ```sh
 dezhban status                                    # config + service + block state

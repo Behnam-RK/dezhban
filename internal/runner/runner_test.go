@@ -68,6 +68,10 @@ type fakeBackend struct {
 	policies []firewall.Policy
 	blockErr error
 	applyErr error
+	// isBlockedFn drives enforcement verification. nil answers "the rules are
+	// present" — the healthy reply — so every test that does not care about
+	// verification is unaffected by its existence.
+	isBlockedFn func() (bool, error)
 }
 
 func (b *fakeBackend) Apply(p firewall.Policy) error {
@@ -93,6 +97,13 @@ func (b *fakeBackend) Unblock() error {
 func (b *fakeBackend) Cleanup() error {
 	b.calls = append(b.calls, "cleanup")
 	return nil
+}
+func (b *fakeBackend) IsBlocked() (bool, error) {
+	b.calls = append(b.calls, "is-blocked")
+	if b.isBlockedFn == nil {
+		return true, nil
+	}
+	return b.isBlockedFn()
 }
 
 func reading(cc string) monitor.Result {
@@ -368,6 +379,7 @@ type failingGuardBackend struct {
 func (b *failingGuardBackend) Apply(p firewall.Policy) error    { return errors.New("guard apply failed") }
 func (b *failingGuardBackend) Block(a firewall.Allowlist) error { return nil }
 func (b *failingGuardBackend) Unblock() error                   { return nil }
+func (b *failingGuardBackend) IsBlocked() (bool, error)         { return true, nil }
 func (b *failingGuardBackend) Cleanup() error                   { b.cleanups++; return nil }
 
 // --- tunnel watcher ---
@@ -1595,7 +1607,7 @@ func TestLookupFailureClassification(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			var got state.Snapshot
 			o := Options{Publish: func(s state.Snapshot) { got = s }}
-			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil, nil, nil)
+			o.publish(false, false, monitor.Reading{}, errors.New("all providers failed"), nil, c.tunnels, nil, nil, "", nil, nil, nil, diag{})
 
 			if hasErr := got.LookupErr != ""; hasErr != c.wantLookupErr {
 				t.Errorf("LookupErr set = %v, want %v (got %q)", hasErr, c.wantLookupErr, got.LookupErr)
@@ -1617,7 +1629,7 @@ func TestSuccessfulLookupSetsNoErrorFields(t *testing.T) {
 	var got state.Snapshot
 	o := Options{Publish: func(s state.Snapshot) { got = s }}
 	o.publish(false, false, monitor.Reading{CountryCode: "NL"}, nil, nil,
-		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil, nil, nil)
+		[]state.Tunnel{{Name: "utun4", Up: true}}, nil, nil, "", nil, nil, nil, diag{})
 	if got.LookupErr != "" || got.ExitUnknown != "" {
 		t.Errorf("a successful lookup set LookupErr=%q ExitUnknown=%q, want both empty", got.LookupErr, got.ExitUnknown)
 	}
@@ -1698,6 +1710,7 @@ func (b *firstWindowFailsBackend) Apply(p firewall.Policy) error {
 }
 func (b *firstWindowFailsBackend) Block(a firewall.Allowlist) error { return nil }
 func (b *firstWindowFailsBackend) Unblock() error                   { return nil }
+func (b *firstWindowFailsBackend) IsBlocked() (bool, error)         { return true, nil }
 func (b *firstWindowFailsBackend) Cleanup() error                   { return nil }
 func (b *firstWindowFailsBackend) seen() []string {
 	b.mu.Lock()

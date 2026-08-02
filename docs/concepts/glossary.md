@@ -196,6 +196,27 @@ streak resolves or a bounded budget runs out. It changes **cadence only** — hy
 still gates the change, and it is skipped entirely when checking would require lifting
 the guard.
 
+**Enforcement verification** — a periodic check (`vpn.advanced.verifyInterval`,
+default `1m`) that the firewall rules dezhban believes it installed are still
+installed, re-applying them the instant they are not. Every other rule change is
+triggered by something dezhban itself did; this is the only one that notices a
+ruleset removed from OUTSIDE it — another firewall tool, `pfctl -F all`,
+`nft flush ruleset`, an OS ruleset reload — the one failure mode that used to be
+completely silent. Reported in `state.verify` (`status --json`) only while
+something is wrong. Disablable (`"0"`); an unreadable backend is never treated
+as evidence the rules are gone, the same discipline **fail closed** already
+applies to an undeterminable country.
+
+**Zombie tunnel** — a tunnel interface that reports up while a run of
+exit-country lookups through it has failed. Diagnosis, not a leak: the guard is
+already holding exactly as it would for any other unknown reading (see **Fail
+closed**). Detection reuses **Hysteresis**'s streak length and is always on,
+reported in `state.zombie`. Acting on it — letting a confirmed streak open an
+automatic redial window — is a separate, off-by-default key
+(`vpn.advanced.livenessRedial`): an exit that censors the geo providers produces
+the identical symptom on a tunnel that was never actually down, so relaxing the
+guard on this signal is opt-in. See [ADR-0010](../adr/0010-tunnel-liveness.md).
+
 **Preset** — a named bundle of values for the keys that answer "how strict am I"
 (the three relaxation windows, poll cadence and hysteresis, the two firewall-pass
 toggles, arm-at-boot): **Strict**, **Balanced** (the shipped defaults), **Relaxed**.
@@ -226,6 +247,14 @@ available, root-only, and independent of the socket.
 **Panic** — the lockout escape hatch: remove every dezhban firewall rule immediately, as
 root, **with no daemon running**. Deliberately not a socket operation, because the escape
 hatch must never depend on the thing it is escaping from.
+
+**Single-instance lock** — an exclusive lock `run` holds over the state directory
+for its entire lifetime, so a second `run` — with or without `--no-daemon` —
+refuses outright instead of racing the first to call `Backend.Apply`. Released
+by the OS the moment the process ends, by any means, so a killed daemon never
+wedges the next start. `panic`, `unblock`, and the service-lifecycle commands
+take no such lock — they are the escape hatch and must stay usable with no
+daemon running at all.
 
 ## Words we do not use
 

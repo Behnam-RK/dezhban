@@ -107,6 +107,12 @@ type Backend interface {
 	Apply(p firewall.Policy) error
 	Unblock() error
 	Cleanup() error
+	// IsBlocked reports whether dezhban's rules are currently installed. The
+	// run loop uses it for enforcement verification, and it is part of this
+	// narrow interface rather than an optional capability discovered by type
+	// assertion on purpose: a backend that silently could not be verified would
+	// reintroduce the very silent-failure mode verification exists to close.
+	IsBlocked() (bool, error)
 }
 
 // Options bundles everything the run loop needs. main assembles it from config
@@ -213,6 +219,22 @@ type Options struct {
 	// last sighting once a refresh no longer reports it (VPN mode) — the window
 	// in which a dropped VPN can redial the same server. <=0 → 15m.
 	EndpointGrace time.Duration
+	// VerifyInterval is how often Backend.IsBlocked is consulted to confirm the
+	// rules dezhban believes it installed are still there, re-applying the
+	// posture in force when they are not. <=0 → disabled (the negative
+	// config.Disabled sentinel arrives here as an explicit opt-out).
+	//
+	// Every other Apply in this loop is triggered by something dezhban itself
+	// did. This is the only one that notices a ruleset removed from OUTSIDE the
+	// daemon, which until it existed left the guard able to fail silently — the
+	// daemon reporting GUARD, `status` reporting blocked, and the host open.
+	VerifyInterval time.Duration
+	// LivenessRedial (vpn.advanced.livenessRedial): let a hung tunnel — up
+	// interface, failing exit lookups — open an automatic redial window via the
+	// existing trigger 2 machinery. Default false; see the config doc comment
+	// for the censoring-exit hazard this guards against, and
+	// docs/adr/0010-tunnel-liveness.md for the full rationale.
+	LivenessRedial bool
 	// AutoArm (vpn.autoArm): start PASSIVE (standby, no enforcement) when no
 	// tunnel interface is present, and arm the guard automatically the moment
 	// one appears. Arming is one-way on tunnel loss — a drop is
@@ -369,7 +391,35 @@ func anyTunnelUp(tunnels []state.Tunnel) bool {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord, hold *state.HoldState, redialRefused *state.RedialState) {
+// diag carries the diagnostic conditions the run loop tracks between ticks and
+// republishes on every snapshot. It exists so the three of them travel as one
+// value: publish already took twelve parameters, and a positional list that long
+// is a place bugs hide — swap two same-typed arguments and nothing complains.
+//
+// Every field is a CONDITION, not a measurement: each is set while something is
+// wrong and cleared when it is not, so the zero value is the healthy state and
+// the whole struct is safe to pass by value.
+// diag carries diagnostic and observational run-loop state that isn't
+// central enough to the posture decision to earn its own publish parameter —
+// most fields are CONDITIONS (set while something is wrong, cleared when it
+// is not); exitIPChangedAt is the one sticky exception, a fact that is never
+// cleared once observed. Grouping keeps publish's parameter list from growing
+// by one every time the run loop learns something new worth surfacing.
+type diag struct {
+	// verify is the last unhappy enforcement-verification result, nil when the
+	// rules were confirmed present (or verification is disabled).
+	verify *state.VerifyState
+	// zombie is set while the tunnel interface reports up but a run of geo
+	// lookups through it has failed — nil once a lookup succeeds, the tunnel
+	// goes down, or anything else ends the streak's eligibility.
+	zombie *state.ZombieState
+	// exitIPChangedAt is when the observed exit IP last differed from the
+	// previous successful reading. Zero means no change has been observed
+	// yet. Sticky — never reset by a later clean tick, unlike verify/zombie.
+	exitIPChangedAt time.Time
+}
+
+func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord, hold *state.HoldState, redialRefused *state.RedialState, d diag) {
 	if o.Publish == nil {
 		return
 	}
@@ -389,6 +439,9 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		Drop:                drop,
 		Hold:                hold,
 		Redial:              redialRefused,
+		Verify:              d.verify,
+		Zombie:              d.zombie,
+		ExitIPChangedAt:     d.exitIPChangedAt,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -902,8 +955,38 @@ func (o Options) runGuard(ctx context.Context) error {
 		redialRetryTimer = time.NewTimer(d)
 		redialRetryC = redialRetryTimer.C
 	}
+	// dg is the run loop's diagnostic conditions. Owned by this goroutine like
+	// everything else here, and republished on every snapshot so a condition
+	// raised by one tick stays visible until the tick that clears it.
+	var dg diag
+	// verifyRepairs counts re-applies since startup. Deliberately cumulative and
+	// never reset by a clean check: a host where this keeps climbing has
+	// something repeatedly removing dezhban's rules, and that pattern is the
+	// finding — a counter that reset on every good tick would hide it.
+	var verifyRepairs int
+	// zombieChecks / zombieSince track a run of failed exit lookups through a
+	// tunnel that reports up. Reset to zero whenever the streak stops meaning
+	// what it meant — a successful lookup, the tunnel going down, or anything
+	// that suspends the geo state machine entirely (standby, a window, a
+	// manual block). See resetZombie below.
+	var zombieChecks int
+	var zombieSince time.Time
+	// lastGoodIP is the exit IP from the last SUCCESSFUL reading, kept
+	// separately from lastRes.Reading (which a failed lookup overwrites with a
+	// zero Reading) so a failure streak can never be misread as a change.
+	// Purely observational: comparing against it never touches blocked,
+	// CountryCode, or the hysteresis streak.
+	var lastGoodIP netip.Addr
+	resetZombie := func() {
+		if zombieChecks == 0 && dg.zombie == nil {
+			return
+		}
+		zombieChecks = 0
+		zombieSince = time.Time{}
+		dg.zombie = nil
+	}
 	snapshot := func() {
-		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState(), redialState())
+		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState(), redialState(), dg)
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
 
@@ -933,16 +1016,63 @@ func (o Options) runGuard(ctx context.Context) error {
 	// needs no rule update. A restricted window filters by proto/port and must
 	// learn the new tunnel/endpoint, or that traffic stays blocked and the
 	// verified early-close can never succeed.
-	reapplyWindow := func(reason string) {
-		if !windowActive || !o.windowRestricted() {
-			return
-		}
+	// applyWindowPolicy installs the open window's policy unconditionally. Split
+	// out of reapplyWindow because the two callers disagree about the
+	// unrestricted case: a tunnel/endpoint change genuinely does not affect a
+	// window that already passes everything, but enforcement verification finding
+	// the rules GONE does — an unrestricted window's pass vanished with them, and
+	// skipping it there would leave the host open while the daemon logged a
+	// repair.
+	applyWindowPolicy := func(reason string) {
 		if err := o.Backend.Apply(o.windowPolicy(tunnels, endpoints)); err != nil {
 			enfErr = err
 			o.Log.Error("re-apply switch window failed", "reason", reason, "err", err)
 		} else {
 			enfErr = nil
 			o.Log.Info("switch window updated", "reason", reason, "tunnels", tunnels, "endpoints", len(endpoints))
+		}
+	}
+
+	reapplyWindow := func(reason string) {
+		if !windowActive || !o.windowRestricted() {
+			return
+		}
+		applyWindowPolicy(reason)
+	}
+
+	// reapplyCurrent re-installs whatever posture is currently in force, whatever
+	// that is. It is the one place that knows how to answer "put back what should
+	// be there", and has two callers with quite different reasons for asking:
+	// a live reload of the two policy flags (below), and enforcement verification
+	// finding the rules gone from under the daemon.
+	//
+	// It deliberately does NOT rebuild the policies — the caller decides whether
+	// its reason changed what the rules should say. Verification's reason did
+	// not: the rules are correct, they are simply absent.
+	reapplyCurrent := func(reason string, force bool) {
+		switch {
+		case standby:
+			// Nothing is installed in standby; the rebuilt sets arm with the guard.
+		case windowActive:
+			// An unrestricted window already passes everything, so a policy-flag
+			// change only reaches a restricted one — the check reapplyWindow
+			// makes. `force` is verification's path: the rules are absent, so
+			// even an unrestricted window has to be re-installed.
+			if force {
+				applyWindowPolicy(reason)
+			} else {
+				reapplyWindow(reason)
+			}
+		case blocked:
+			if err := o.Backend.Apply(fullBlock); err != nil {
+				enfErr = err
+				o.Log.Error("re-apply full block failed", "reason", reason, "err", err)
+			} else {
+				enfErr = nil
+				o.Log.Info("full block updated", "reason", reason)
+			}
+		default:
+			reapplyStanding(reason)
 		}
 	}
 
@@ -957,25 +1087,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	// reported as applied has to actually be in force.
 	reapplyPolicyFlags := func(reason string) {
 		rebuild()
-		switch {
-		case standby:
-			// Nothing is installed in standby; the rebuilt sets arm with the guard.
-		case windowActive:
-			// An unrestricted window already passes everything, so only the
-			// restricted form carries AllowLocalNetwork — which is exactly what
-			// reapplyWindow re-applies.
-			reapplyWindow(reason)
-		case blocked:
-			if err := o.Backend.Apply(fullBlock); err != nil {
-				enfErr = err
-				o.Log.Error("re-apply full block failed", "reason", reason, "err", err)
-			} else {
-				enfErr = nil
-				o.Log.Info("full block updated", "reason", reason)
-			}
-		default:
-			reapplyStanding(reason)
-		}
+		reapplyCurrent(reason, false)
 	}
 
 	stopWindowTimers := func() {
@@ -1802,6 +1914,23 @@ func (o Options) runGuard(ctx context.Context) error {
 	geoTick := time.NewTicker(o.Interval)
 	defer geoTick.Stop()
 
+	// Enforcement verification runs on its own slow ticker, nil when disabled —
+	// a nil channel in a select blocks forever, which is exactly "this case does
+	// not exist". Created lazily so a reload can switch it on, and stopped via a
+	// closure rather than a plain `defer verifyTick.Stop()` because the ticker
+	// the deferred call must stop may be one applyLive created later.
+	var verifyTick *time.Ticker
+	var verifyC <-chan time.Time
+	if o.VerifyInterval > 0 {
+		verifyTick = time.NewTicker(o.VerifyInterval)
+		verifyC = verifyTick.C
+	}
+	defer func() {
+		if verifyTick != nil {
+			verifyTick.Stop()
+		}
+	}()
+
 	// applyLive adopts replacement settings on the run-loop goroutine. It updates
 	// `o` (a per-call copy, so nothing is shared with another run) plus the
 	// locals derived from it at startup, and reinstalls the standing rules when
@@ -1896,6 +2025,26 @@ func (o Options) runGuard(ctx context.Context) error {
 			}
 			o.EndpointRefresh = ls.EndpointRefresh
 		}
+
+		// Unlike epTick, the verify ticker may not exist at all — it honors the
+		// Disabled sentinel, so a reload can turn it on, off, or just retime it.
+		if ls.VerifyInterval != o.VerifyInterval {
+			switch {
+			case ls.VerifyInterval <= 0:
+				if verifyTick != nil {
+					verifyTick.Stop()
+					verifyTick = nil
+					verifyC = nil
+				}
+			case verifyTick == nil:
+				verifyTick = time.NewTicker(ls.VerifyInterval)
+				verifyC = verifyTick.C
+			default:
+				verifyTick.Reset(ls.VerifyInterval)
+			}
+			o.VerifyInterval = ls.VerifyInterval
+		}
+		o.LivenessRedial = ls.LivenessRedial
 
 		o.Log.Info("configuration reloaded",
 			"interval", o.Interval,
@@ -2021,6 +2170,14 @@ func (o Options) runGuard(ctx context.Context) error {
 			default:
 				o.Log.Warn("vpn tunnel down — guard holds the line (physical egress stays blocked, "+
 					"endpoints open for redial)", "detail", st.Detail)
+			}
+			if !st.Up {
+				// A plainly-down tunnel is a different, already-explained state —
+				// don't leave a stale "hung" diagnosis attached to it. The next
+				// geoTick would clear this anyway (its own down-tunnel skip does
+				// the same reset); doing it here means the down edge itself is
+				// never shown carrying a leftover zombie streak.
+				resetZombie()
 			}
 			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
 				tunnels = next
@@ -2201,6 +2358,41 @@ func (o Options) runGuard(ctx context.Context) error {
 				reapplyWindow("in-window endpoint discovery")
 			}
 			maybeStartCloseProbe()
+		case <-verifyC:
+			// Enforcement verification: confirm the rules dezhban believes it
+			// installed are still installed, and put them back when they are not.
+			//
+			// Skipped in standby, where nothing is installed BY DESIGN — a false
+			// answer is the correct one there, and "repairing" it would arm a host
+			// that has never seen a tunnel, which is exactly the lockout ADR-0002
+			// exists to prevent.
+			if standby {
+				break
+			}
+			installed, err := o.Backend.IsBlocked()
+			switch {
+			case err != nil:
+				// An unreadable backend is NOT evidence the rules are gone, so
+				// this reports and changes nothing — the same discipline as an
+				// undeterminable exit country holding the current posture.
+				// Re-applying on a failed read would let a transient backend
+				// hiccup churn the ruleset on every tick.
+				o.Log.Warn("enforcement verification could not read the firewall — posture held",
+					"err", err)
+				dg.verify = &state.VerifyState{At: time.Now(), Err: err.Error(), Repairs: verifyRepairs}
+			case !installed:
+				verifyRepairs++
+				o.Log.Error("dezhban's firewall rules are MISSING — something removed them; re-applying now",
+					"posture", postureName(blocked, windowActive, standby), "repairs", verifyRepairs)
+				dg.verify = &state.VerifyState{At: time.Now(), Missing: true, Repairs: verifyRepairs}
+				// force: the rules are absent, so even an unrestricted window —
+				// which no tunnel/endpoint change would ever need to re-apply —
+				// has lost its pass and must be reinstalled.
+				reapplyCurrent("enforcement verification: rules missing", true)
+			default:
+				dg.verify = nil
+			}
+			snapshot()
 		case <-epTick.C:
 			// Refresh the provider IPs on the same cadence. CDN-fronted providers
 			// rotate addresses, and a stale set means the tunnel-scoped pass no
@@ -2256,29 +2448,81 @@ func (o Options) runGuard(ctx context.Context) error {
 				stopFastProbe("geo state machine suspended")
 			}
 			if standby {
-				continue // not enforcing — nothing to decide, nothing to protect a probe with
+				resetZombie() // nothing enforcing, nothing to diagnose
+				continue      // not enforcing — nothing to decide, nothing to protect a probe with
 			}
 			if windowActive {
-				continue // window suppresses the geo state machine
+				resetZombie() // a window is already the response to a suspected problem
+				continue      // window suppresses the geo state machine
 			}
 			if manualBlock {
 				// An operator asked for this block. Recovery must not lift it behind
 				// their back — including the probe, which would briefly open egress to
 				// observe a country nobody is going to act on. Held until `unblock`.
 				o.Log.Debug("manual block held — skipping geo lookup (run `dezhban unblock` to resume)")
+				resetZombie()
 				continue
 			}
 			if len(tunnels) == 0 {
+				resetZombie()
 				continue // standing posture: nothing to observe until a tunnel exists
 			}
 			if o.Watcher != nil && !tunnelUp && !blocked {
 				o.Log.Debug("vpn tunnel down — skipping geo lookup (guard holds, endpoints open for redial)")
+				resetZombie() // plainly down is a different, already-explained state
 				continue
 			}
 			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
 			if lastRes.Err == nil && !blocked {
 				goodExitThisUp, sawTunnelUp = true, true // confirmed exit through the tunnel
 				markTunnelEverUp(time.Now())
+				// Exit-IP change observation: purely informational, like CVG's
+				// equivalent check — it never flips posture and never touches the
+				// hysteresis streak (CountryCode/Pending already own that). A
+				// failover between two servers in the same allowed country changes
+				// nothing CountryCode reports, but changes this — it is the signal
+				// that best explains "my exit flapped".
+				ip := lastRes.Reading.IP
+				if ip.IsValid() {
+					if lastGoodIP.IsValid() && ip != lastGoodIP {
+						o.Log.Info("exit IP changed", "from", lastGoodIP, "to", ip)
+						dg.exitIPChangedAt = time.Now()
+					}
+					lastGoodIP = ip
+				}
+			}
+			// Zombie-tunnel detection: the interface reports up, but a run of exit
+			// lookups through it have failed. dezhban's posture never escalates on
+			// a lookup error alone (an unknown country HOLDS — see decision logic),
+			// so without this a hung tunnel stayed correctly cut but explained
+			// itself to no one and recovered only if a person noticed. Reusing the
+			// Decider's own hysteresis count as the streak length keeps this
+			// aligned with the same "how many agreeing readings before we act"
+			// tuning the rest of the state machine already uses.
+			//
+			// The hazard this is built around: an exit that CENSORS the geo
+			// providers produces this exact same failure streak on a perfectly
+			// live tunnel (see state.Snapshot's LookupErr doc). That is why
+			// reporting is unconditional but ACTING on it (LivenessRedial) is not.
+			if tunnelUp && !blocked && lastRes.Err != nil {
+				zombieChecks++
+				if zombieChecks == 1 {
+					zombieSince = time.Now()
+				}
+				_, _, need := o.Decider.Pending()
+				if zombieChecks >= need {
+					if dg.zombie == nil {
+						o.Log.Warn("tunnel interface reports up, but exit lookups through it keep failing — "+
+							"it may need reconnecting; guard holds either way",
+							"checks", zombieChecks, "since", zombieSince)
+					}
+					dg.zombie = &state.ZombieState{Since: zombieSince, Checks: zombieChecks}
+					if o.LivenessRedial {
+						maybeAutoWindow(time.Now(), "tunnel reports up but appears to be hung (liveness redial)")
+					}
+				}
+			} else {
+				resetZombie()
 			}
 			// End the accelerated episode once it has done its job, or once its
 			// budget is spent. Recovery is the success case; the budget is what
