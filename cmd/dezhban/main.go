@@ -1939,11 +1939,16 @@ func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
 	c.Status = checkWarn
 	var lines []string
 	if snap.Verify != nil {
-		if snap.Verify.Missing {
+		// Missing and Err are mutually exclusive by construction (state.VerifyState's
+		// own doc comment) — the run loop sets exactly one per failed check — so
+		// checking Missing first and falling through to Err is exhaustive, not a
+		// default-case guess.
+		switch {
+		case snap.Verify.Missing:
 			lines = append(lines, fmt.Sprintf(
 				"Firewall rules were found missing and re-applied %d time(s) since startup — "+
 					"something on this host keeps removing them.", snap.Verify.Repairs))
-		} else {
+		case snap.Verify.Err != "":
 			lines = append(lines, fmt.Sprintf("Could not read the firewall to verify enforcement: %s", snap.Verify.Err))
 		}
 	}
