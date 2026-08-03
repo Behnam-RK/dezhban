@@ -391,20 +391,18 @@ func anyTunnelUp(tunnels []state.Tunnel) bool {
 // only a nil check when observability is off. Each call emits a complete snapshot
 // (the file is replaced atomically), so callers pass the last-known reading even
 // on tunnel/endpoint events to avoid blanking IP/country between polls.
-// diag carries the diagnostic conditions the run loop tracks between ticks and
-// republishes on every snapshot. It exists so the three of them travel as one
-// value: publish already took twelve parameters, and a positional list that long
-// is a place bugs hide — swap two same-typed arguments and nothing complains.
+
+// diag carries diagnostic and observational run-loop state that isn't central
+// enough to the posture decision to earn its own publish parameter. Grouping it
+// keeps publish's parameter list from growing by one every time the run loop
+// learns something new worth surfacing — it was already at twelve positional
+// parameters, a length where a swap of two same-typed arguments compiles clean
+// and says nothing.
 //
-// Every field is a CONDITION, not a measurement: each is set while something is
+// Most fields are CONDITIONS, not measurements: each is set while something is
 // wrong and cleared when it is not, so the zero value is the healthy state and
-// the whole struct is safe to pass by value.
-// diag carries diagnostic and observational run-loop state that isn't
-// central enough to the posture decision to earn its own publish parameter —
-// most fields are CONDITIONS (set while something is wrong, cleared when it
-// is not); exitIPChangedAt is the one sticky exception, a fact that is never
-// cleared once observed. Grouping keeps publish's parameter list from growing
-// by one every time the run loop learns something new worth surfacing.
+// the whole struct is safe to pass by value. exitIPChangedAt is the one sticky
+// exception — a fact that is never cleared once observed.
 type diag struct {
 	// verify is the last unhappy enforcement-verification result, nil when the
 	// rules were confirmed present (or verification is disabled).
@@ -984,6 +982,17 @@ func (o Options) runGuard(ctx context.Context) error {
 		zombieChecks = 0
 		zombieSince = time.Time{}
 		dg.zombie = nil
+	}
+	// resetVerify clears a stale enforcement-verification finding. dg.verify is
+	// otherwise only ever set or cleared by the verifyC tick handler itself, so
+	// anything that stops that tick from running — standby (skipped there by
+	// design; see the verifyC case) or a live reload that disables
+	// verifyInterval — must clear it explicitly, or a "rules missing, N
+	// repairs" finding from before the transition would keep being republished
+	// forever, misreporting an enforcement problem while the daemon is
+	// correctly idle.
+	resetVerify := func() {
+		dg.verify = nil
 	}
 	snapshot := func() {
 		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState(), redialState(), dg)
@@ -1753,6 +1762,11 @@ func (o Options) runGuard(ctx context.Context) error {
 				standby = true
 				blocked = false
 				enfErr = nil
+				// Nothing is installed in standby by design, so any diagnostic
+				// findings from the armed state that just ended no longer apply —
+				// see resetVerify's doc comment.
+				resetZombie()
+				resetVerify()
 				o.Log.Info("STANDBY (manual unblock, vpn.autoArm) — guard released; re-arms when a VPN connects")
 				snapshot()
 				return reply(true, "")
@@ -2036,6 +2050,10 @@ func (o Options) runGuard(ctx context.Context) error {
 					verifyTick = nil
 					verifyC = nil
 				}
+				// The tick that would otherwise clear a stale finding no longer
+				// runs, so clear it here — turning verification off must not leave
+				// its last answer stuck.
+				resetVerify()
 			case verifyTick == nil:
 				verifyTick = time.NewTicker(ls.VerifyInterval)
 				verifyC = verifyTick.C

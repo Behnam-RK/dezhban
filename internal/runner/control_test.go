@@ -16,6 +16,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 // pollUntil polls cond every 5ms until it returns true or timeout elapses, at
@@ -370,6 +371,46 @@ func TestControlSocketRemovedOnShutdown(t *testing.T) {
 	}
 	if _, err := os.Stat(path); !os.IsNotExist(err) {
 		t.Fatalf("control socket survived daemon shutdown: %v", err)
+	}
+}
+
+// A control-driven unblock into standby (vpn.autoArm, tunnel down) must clear
+// any stale enforcement-verification finding left over from the armed state
+// that just ended. dg.verify is otherwise only ever touched by the verifyC
+// tick, which is (correctly) skipped in standby — so without an explicit
+// reset at the transition, a "rules missing" finding from before the drop
+// would keep being republished forever, even though nothing is installed in
+// standby by design.
+func TestVerifyFindingClearedOnStandbyEntry(t *testing.T) {
+	be := &fakeBackend{isBlockedFn: func() (bool, error) { return false, nil }} // rules always "missing"
+	o := vpnOpts(be)
+	o.AutoArm = true
+	o.Watcher = downWatcher()
+	o.VerifyInterval = 5 * time.Millisecond
+	var downEdges atomic.Int64
+	o.Log = slog.New(countingHandler{substr: "vpn tunnel down — guard holds the line", count: &downEdges})
+	var last atomic.Pointer[state.Snapshot]
+	o.Publish = func(s state.Snapshot) { last.Store(&s) }
+	path := startControlled(t, o)
+
+	// Wait for the watcher's down edge to actually reach the run loop (tunnelUp
+	// = false), not just for the watcher to start — the log fires on the same
+	// goroutine right after the assignment, so seeing it guarantees the
+	// unblock below observes tunnelUp already false.
+	pollUntil(t, 2*time.Second, func() bool { return downEdges.Load() >= 1 },
+		"tunnel-down edge was never observed by the run loop")
+	pollUntil(t, 2*time.Second, func() bool {
+		s := last.Load()
+		return s != nil && s.Verify != nil && s.Verify.Missing
+	}, "enforcement verification never reported the rules missing")
+
+	resp := do(t, path, control.Request{Op: control.OpUnblock})
+	if !resp.OK || resp.Posture != "standby" {
+		t.Fatalf("unblock response = %+v, want an OK standby", resp)
+	}
+
+	if s := last.Load(); s.Verify != nil {
+		t.Fatalf("a stale verify finding survived the standby transition: %+v", s.Verify)
 	}
 }
 
