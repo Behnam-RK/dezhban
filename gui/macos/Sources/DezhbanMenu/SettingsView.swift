@@ -419,6 +419,10 @@ struct SettingsView: View {
                         text: $fields.advWindowProtocols)
             schemaField("vpn.advanced.windowPorts", "Window ports (comma-sep)",
                         text: $fields.advWindowPorts)
+            durationField("vpn.advanced.verifyInterval", "Enforcement verification interval",
+                          text: $fields.advVerifyInterval)
+            schemaToggle("vpn.advanced.livenessRedial", "Redial on a hung tunnel",
+                         isOn: $fields.advLivenessRedial)
         }
     }
 

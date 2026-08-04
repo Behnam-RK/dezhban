@@ -22,18 +22,21 @@ current as you land changes.
   posture flip; this is the only one that notices a ruleset removed from
   OUTSIDE the daemon (another firewall tool, `pfctl -F all`,
   `nft flush ruleset`, an OS ruleset reload). Reported in `state.verify`
-  (`status --json`) only while something is wrong; disablable (`"0"`), and an
+  (`status --json`), the plain-text `dezhban status`/menubar posture sentence,
+  and turns the menubar icon amber, only while something is wrong;
+  disablable (`"0"`) from the CLI or the macOS app's Settings pane, and an
   unreadable backend is never treated as evidence the rules are gone. See
   [docs/usage/config.md](docs/usage/config.md#advanced-tunables-vpnadvanced).
 - **Zombie-tunnel detection.** A tunnel interface that reports up while a run
   of exit-country lookups through it has failed is now diagnosed as such —
   reported in `state.zombie`, `dezhban doctor`'s new "enforcement liveness"
-  check, and the rendered posture sentence — instead of sitting correctly cut
-  with no signal to anyone. Detection is always on; letting a confirmed streak
-  open an automatic redial window is a separate, off-by-default key
-  (`vpn.advanced.livenessRedial`), because an exit that censors the geo
-  providers produces the identical symptom on a tunnel that was never
-  actually down. See
+  check, and the rendered posture sentence (which now also turns the menubar
+  icon amber for the duration of the streak) — instead of sitting correctly
+  cut with no signal to anyone. Detection is always on; letting a confirmed
+  streak open an automatic redial window is a separate, off-by-default key
+  (`vpn.advanced.livenessRedial`, settable from the CLI or the macOS app's
+  Settings pane), because an exit that censors the geo providers produces the
+  identical symptom on a tunnel that was never actually down. See
   [ADR-0010](docs/adr/0010-tunnel-liveness.md).
 - **A single-instance guard on `run`.** A second `dezhban run` — with or
   without `--no-daemon` — started alongside an already-running daemon now

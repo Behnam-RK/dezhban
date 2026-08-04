@@ -208,4 +208,70 @@ struct SnapshotTests {
         #expect(s.redial == nil)
         #expect(s.drop?.at != nil)
     }
+
+    /// Enforcement verification's "rules missing, already repaired" answer must
+    /// decode, `repairs` included — this is the count an operator uses to tell a
+    /// one-off from something recurring.
+    @Test func decodesAMissingRulesVerifyFinding() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "verify": { "at": "2026-07-25T09:59:50Z", "missing": true, "repairs": 3 } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.verify?.missing == true)
+        #expect(s.verify?.err == nil)
+        #expect(s.verify?.repairs == 3)
+    }
+
+    /// The unreadable-backend case: `err` set, `missing` and `repairs` both
+    /// absent (Go's `omitempty` never writes a literal `false`/`0`) — must not
+    /// be misread as "rules confirmed missing" or fail to decode.
+    @Test func decodesAVerifyReadError() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "verify": { "at": "2026-07-25T09:59:50Z", "err": "pfctl: no such process" } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.verify?.err == "pfctl: no such process")
+        #expect(s.verify?.missing == nil)
+        #expect(s.verify?.repairs == nil)
+    }
+
+    /// A zombie streak's `checks` count is never omitted by Go (no `omitempty`
+    /// on that field) — must decode even at its lowest meaningful value.
+    @Test func decodesAZombieStreak() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "zombie": { "since": "2026-07-25T09:59:00Z", "checks": 2 } }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.zombie?.checks == 2)
+        #expect(s.zombie?.since != nil)
+    }
+
+    /// A failover between two servers in the same allowed country changes
+    /// `exitIpChangedAt` and nothing else this decodes — must survive on its
+    /// own with no other diagnostic field present.
+    @Test func decodesExitIPChangedAt() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false,
+          "exitIpChangedAt": "2026-07-25T09:58:30Z" }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.exitIpChangedAt != nil)
+    }
+
+    /// Same additive rule as `redial`/`drop`/`hold`: every snapshot an older
+    /// daemon ever wrote lacks all three PR #39 diagnostic fields, and absent
+    /// must read as "nothing to report", never a decode failure that blanks
+    /// the menubar.
+    @Test func absentVerifyZombieAndExitIPAreNotAFailure() {
+        let json = """
+        { "time": "2026-07-25T10:00:00Z", "posture": "guard", "blocked": false }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.verify == nil)
+        #expect(s.zombie == nil)
+        #expect(s.exitIpChangedAt == nil)
+    }
 }

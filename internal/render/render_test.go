@@ -307,6 +307,73 @@ func TestText(t *testing.T) {
 			wantDetail:   "Traffic leaves only through your VPN tunnel. Last exit-country check failed: malformed response.",
 		},
 		{
+			name: "zombie note appended to guard detail, Key upgraded to warning",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Zombie:  &state.ZombieState{Checks: 2},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Your VPN's interface looks up, " +
+				"but exit checks through it keep failing — it may need reconnecting.",
+		},
+		{
+			name: "verify-missing note appended to guard detail, Key upgraded to warning",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{Missing: true, Repairs: 2},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Your firewall rules were found " +
+				"missing and have been re-applied (2 time(s) since startup).",
+		},
+		{
+			name: "verify-read-error note appended to guard detail, Key upgraded to warning",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{Err: "pfctl: no such process"},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Could not verify your firewall " +
+				"rules are still installed: pfctl: no such process.",
+		},
+		{
+			// A clean verification check (Verify present but neither Missing nor
+			// Err set) must never happen in practice — the run loop always clears
+			// Verify to nil on success — but render must not crash or append an
+			// empty sentence if it somehow did.
+			name: "verify present but clean is not surfaced and does not upgrade Key",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{},
+			},
+			wantKey:      KeyOn,
+			wantHeadline: "Guarding",
+			wantDetail:   "Traffic leaves only through your VPN tunnel.",
+		},
+		{
+			// Zombie/Verify only ever UPGRADE Key — a posture that is already
+			// KeyBlocked (a real exposure risk: FULL BLOCK) must stay KeyBlocked,
+			// never get quietly downgraded to the less alarming amber warning.
+			name: "verify-missing during full block never downgrades Key from blocked",
+			snap: state.Snapshot{
+				Posture:     PostureFullBlock,
+				CountryCode: "IR",
+				Verify:      &state.VerifyState{Missing: true, Repairs: 1},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "Full block (IR)",
+			wantDetail: "Your VPN is exiting through a country you've blocked (IR). Everything is cut " +
+				"until it moves. Your firewall rules were found missing and have been re-applied " +
+				"(1 time(s) since startup).",
+		},
+		{
 			name: "exit-unknown never surfaced",
 			snap: state.Snapshot{
 				Posture:     PostureGuard,
