@@ -969,6 +969,14 @@ func (o Options) runGuard(ctx context.Context) error {
 	// manual block). See resetZombie below.
 	var zombieChecks int
 	var zombieSince time.Time
+	// zombieRedialTried gates the ONE liveness-redial attempt a given zombie
+	// streak gets, mirroring how an ordinary drop calls maybeAutoWindow exactly
+	// once, at its own edge. Without this, the zombie tunnel never producing a
+	// down edge means the per-tick zombie check would otherwise re-invoke
+	// maybeAutoWindow on every geoTick for as long as the streak stands —
+	// spamming the ledger and, on a refusal, re-arming a retry timer every tick
+	// instead of once. Reset alongside the rest of the streak in resetZombie.
+	var zombieRedialTried bool
 	// lastGoodIP is the exit IP from the last SUCCESSFUL reading, kept
 	// separately from lastRes.Reading (which a failed lookup overwrites with a
 	// zero Reading) so a failure streak can never be misread as a change.
@@ -981,6 +989,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 		zombieChecks = 0
 		zombieSince = time.Time{}
+		zombieRedialTried = false
 		dg.zombie = nil
 	}
 	// resetVerify clears a stale enforcement-verification finding. dg.verify is
@@ -1055,9 +1064,12 @@ func (o Options) runGuard(ctx context.Context) error {
 	// a live reload of the two policy flags (below), and enforcement verification
 	// finding the rules gone from under the daemon.
 	//
-	// It deliberately does NOT rebuild the policies — the caller decides whether
-	// its reason changed what the rules should say. Verification's reason did
-	// not: the rules are correct, they are simply absent.
+	// It deliberately does not rebuild the policies ITSELF — the caller decides
+	// whether its reason changed what the rules should say; verification's did
+	// not: the rules are correct, they are simply absent. The guard-posture
+	// case below still ends up rebuilding, but via reapplyStanding, which
+	// always does — a no-op recompute here, since verification changes none of
+	// reapplyStanding's own inputs (tunnels, endpoints, providers).
 	reapplyCurrent := func(reason string, force bool) {
 		switch {
 		case standby:
@@ -1292,7 +1304,12 @@ func (o Options) runGuard(ctx context.Context) error {
 			// declines to help is the failure this project treats as worst, so the
 			// refusal carries the numbers behind it and `status`/the app turn the
 			// same facts into a sentence (see the redial object in the snapshot).
-			o.Log.Warn("vpn tunnel down — no redial window ("+redialRefusal(g.Reason)+
+			//
+			// Deliberately does not say "vpn tunnel down": this closure is also
+			// trigger 2's zombie-tunnel widening (LivenessRedial), where the
+			// interface reports up the whole time — detail carries the specific
+			// reason either way.
+			o.Log.Warn("no automatic redial window ("+redialRefusal(g.Reason)+
 				"); guard holds, traffic stays cut",
 				"reason", string(g.Reason),
 				"uptime", uptime.Round(time.Second),
@@ -1363,7 +1380,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		// that edge disarms it — see the st.Up branch in the watcher.
 		if holdArmed {
 			holdArmed = false
-			o.Log.Warn("vpn tunnel down — redial window suppressed (hold the line was armed); "+
+			o.Log.Warn("redial window suppressed (hold the line was armed); "+
 				"guard holds, traffic stays cut", "detail", detail)
 			return
 		}
@@ -1402,9 +1419,15 @@ func (o Options) runGuard(ctx context.Context) error {
 	// refusal stands, and a grant clears the refusal and disarms the timer.
 	// Nothing re-arms it, so an expired window never re-opens.
 	retryAutoWindow := func(now time.Time) {
-		// A refusal must still stand and the tunnel must still be down. Either
-		// being false means the drop this retry belongs to is over.
-		if redialRefused == nil || tunnelUp {
+		// A refusal must still stand, and the condition it was refused for must
+		// still be open. An ordinary drop needs the tunnel still down
+		// (tunnelUp == false); a zombie-tunnel drop (LivenessRedial widening
+		// trigger 2) needs its streak still standing instead, since its tunnel
+		// reports up for the whole episode — tunnelUp alone would never let
+		// this retry fire for that trigger, leaving a refused liveness-redial
+		// attempt stuck forever once the every-tick reattempt below was
+		// tightened to fire only once per streak (see zombieRedialTried).
+		if redialRefused == nil || (tunnelUp && dg.zombie == nil) {
 			return
 		}
 		// Hold the line, armed AFTER the drop by an operator watching a cut they
@@ -2535,11 +2558,33 @@ func (o Options) runGuard(ctx context.Context) error {
 							"checks", zombieChecks, "since", zombieSince)
 					}
 					dg.zombie = &state.ZombieState{Since: zombieSince, Checks: zombieChecks}
-					if o.LivenessRedial {
+					// One attempt per streak, matching the ordinary drop trigger's
+					// own edge-only call to maybeAutoWindow: a refusal is left to
+					// retryAutoWindow's bound-lifted re-decision (its guard now
+					// recognises a standing zombie streak, not just tunnelUp), not
+					// to this tick trying again immediately. Without
+					// zombieRedialTried, a persisting streak would re-invoke
+					// maybeAutoWindow on every geoTick — hammering the ledger and,
+					// on a refusal, re-arming (and instantly re-expiring) a retry
+					// timer every tick instead of once.
+					if o.LivenessRedial && !zombieRedialTried {
+						zombieRedialTried = true
 						maybeAutoWindow(time.Now(), "tunnel reports up but appears to be hung (liveness redial)")
 					}
 				}
 			} else {
+				// A stale refusal earned by a zombie streak that just resolved
+				// (a lookup succeeded, or posture moved to FULL BLOCK) must not
+				// survive it — tunnelUp is guaranteed true here (a plainly-down
+				// tunnel already `continue`d above before this code), so any
+				// standing redialRefused at this point was necessarily the
+				// liveness-redial trigger's, never an ordinary drop's. Mirrors
+				// the cleanup the real tunnel-up edge already does for that case.
+				if dg.zombie != nil && redialRefused != nil {
+					redialRefused = nil
+					disarmRedialRetry()
+					o.Log.Info("standing redial refusal dropped — the zombie streak it was refused for is over")
+				}
 				resetZombie()
 			}
 			// End the accelerated episode once it has done its job, or once its
