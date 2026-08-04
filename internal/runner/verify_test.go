@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/state"
 )
@@ -73,6 +74,56 @@ func TestVerifyTickRepairsMissingRules(t *testing.T) {
 	}
 	if !sawClearedAfter {
 		t.Error("Verify was never cleared by a later clean check")
+	}
+}
+
+// Enforcement verification finding the rules gone must re-apply even an
+// UNRESTRICTED switch window's policy — the one case reapplyWindow's own
+// ordinary reason (a tunnel/endpoint change) would skip, since an unrestricted
+// window already passes everything and no such change ever needs to touch it.
+// Verification's reason is different: the pass itself vanished along with the
+// rest of the ruleset, so reapplyCurrent's force path has to reach it anyway,
+// or the host would sit open behind a window while the daemon logged a repair.
+func TestVerifyTickRepairsAnOpenUnrestrictedWindow(t *testing.T) {
+	var calls int
+	be := &fakeBackend{isBlockedFn: func() (bool, error) {
+		calls++
+		return calls > 1, nil // first check: missing; every check after: present
+	}}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:         steadyMonitor{cc: "US"},
+		Decider:         decision.New([]string{"IR"}, 1),
+		Backend:         be,
+		Log:             discardLog(),
+		Interval:        time.Hour, // no geo ticks needed; the window stays open throughout
+		Tunnels:         []string{"utun4"},
+		Endpoints:       []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		SwitchWindow:    5 * time.Second, // outlives the test; no WindowProtocols/Ports set → unrestricted
+		SwitchWindowMax: time.Minute,
+		CommandPoll:     5 * time.Millisecond,
+		PollCommand:     scriptedCommands(command.Command{Op: command.OpOpenSwitchWindow}),
+		VerifyInterval:  10 * time.Millisecond,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls < 2 {
+		t.Fatalf("IsBlocked called %d times, want at least 2 (one missing, one clean)", calls)
+	}
+
+	var switches int
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			switches++
+		}
+	}
+	if switches < 2 {
+		t.Fatalf("apply-switch count = %d, want at least 2 (the initial open, plus verification's repair "+
+			"of the unrestricted window's vanished pass); calls = %v", switches, be.calls)
 	}
 }
 

@@ -320,8 +320,14 @@ func cmdRun(args []string) int {
 	// enforces nothing across a second process. `panic`, `unblock`, and the
 	// service-lifecycle commands deliberately do NOT take this lock — they are
 	// the escape hatch and must stay usable with no daemon running.
-	if err := state.EnsureDir(stateDir()); err != nil {
-		log.Warn("state directory not reachable; the single-instance lock will still be attempted", "err", err)
+	//
+	// This EnsureDir is the one call for the whole `run` invocation — the
+	// Builder below is documented (internal/svc.Builder) to run exactly once,
+	// so assembleOptions takes the result rather than re-establishing the
+	// directory itself.
+	stateDirErr := state.EnsureDir(stateDir())
+	if stateDirErr != nil {
+		log.Warn("state directory not reachable; the single-instance lock will still be attempted", "err", stateDirErr)
 	}
 	if err := acquireRunLock(stateDir()); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -350,7 +356,7 @@ func cmdRun(args []string) int {
 	// platform logger. The build closure assembles the run loop lazily so it can
 	// use whichever logger the service selects.
 	build := func(l *slog.Logger) (runner.Options, error) {
-		return assembleOptions(cfg, resolveConfigPath(*cfgPath), l, ov)
+		return assembleOptions(cfg, resolveConfigPath(*cfgPath), l, ov, stateDirErr)
 	}
 	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath, persist); err != nil {
 		log.Error("run loop failed", "err", err)
@@ -389,14 +395,17 @@ func parseOverrides(simCountry, simTunDown string) (runOverrides, error) {
 // live reload re-reads exactly the same file, rather than re-running resolution
 // and possibly landing on a different one mid-run. Empty means built-in
 // defaults, which is a config that cannot change, so reloading is not offered.
-func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov runOverrides) (runner.Options, error) {
-	// Everything the daemon publishes to the outside world lives under this one
-	// directory — state.json for the menubar app, control.sock for passwordless
-	// routine ops. It must be traversable by the unprivileged user or both silently
-	// stop working, so establish (and repair) its mode once, here, before anything
-	// writes into it. Non-fatal: a stale mode degrades observability, it must never
-	// stop the kill switch from enforcing.
-	stateDirErr := state.EnsureDir(stateDir())
+// stateDirErr is the result of establishing (and repairing) the state
+// directory's mode, already done once by the caller before this runs —
+// internal/svc.Builder documents that the Builder this feeds is called exactly
+// once per process, so a second state.EnsureDir here would just repeat the same
+// mkdir/chmod for no new information. Everything the daemon publishes to the
+// outside world lives under that one directory — state.json for the menubar
+// app, control.sock for passwordless routine ops — and it must be traversable
+// by the unprivileged user or both silently stop working; a stale mode is
+// non-fatal and must never stop the kill switch from enforcing, hence a
+// warning here rather than an aborted startup.
+func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov runOverrides, stateDirErr error) (runner.Options, error) {
 	if stateDirErr != nil {
 		log.Warn("state directory not reachable by unprivileged readers; the menubar app and control socket may not work", "err", stateDirErr)
 	}
