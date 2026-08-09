@@ -962,6 +962,15 @@ func cmdBlock(args []string) int {
 			log.Info("network full-blocked (vpn)", "tunnels", d.Tunnels)
 		}
 	}
+	// This path runs as root with no daemon involved (or bypassing one via
+	// --force/--guard), so it clears the panic-disarm marker itself, mirroring
+	// cmdUnblock — a direct block is just as much an explicit operator engaging
+	// with enforcement as an explicit unblock is, and leaving a stale marker
+	// here would keep any co-running daemon's enforcement verification
+	// suspended even after real rules were just installed by hand.
+	if err := clearPanicMarker(stateDir()); err != nil {
+		fmt.Fprintln(os.Stderr, "block: warning — could not clear the panic-disarm marker:", err)
+	}
 	return 0
 }
 

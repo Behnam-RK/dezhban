@@ -72,6 +72,21 @@ current as you land changes.
   suppressed"`. Anyone grepping or alerting on the old strings should update
   the pattern.
 
+### Fixed
+
+- **`dezhban panic`'s teardown now stays effective across every automatic
+  enforcement path, not just periodic verification.** Previously the
+  panic-disarm marker (which tells enforcement verification to stand down
+  after a deliberate `panic` teardown) was consulted only by the
+  `verifyInterval` tick — the automatic redial window, the geo-provider
+  GUARD/FULL BLOCK state machine, tunnel/endpoint-change re-applies, and
+  auto-arm from standby could all still silently reinstall rules within
+  moments, turning the documented lockout escape hatch into a brief flicker.
+  Every automatic path now stands down while the marker is set; every
+  explicit operator command (`block`, `unblock`, `switch`, `pause`/`resume`)
+  clears it unconditionally instead, exactly as `unblock` already did — an
+  explicit command is never blocked by the marker.
+
 ## [0.9.0] - 2026-07-29
 
 ### Added
