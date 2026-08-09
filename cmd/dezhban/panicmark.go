@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"time"
@@ -29,14 +30,38 @@ func panicMarkerPath(dir string) string {
 // which is exactly the silent-failure mode verification exists to close.
 // Best-effort — a failure here must never fail `panic` itself, since the
 // teardown it protects is the half of the command that actually matters.
+//
+// Atomic (temp + fsync + rename), same convention as internal/armed's Save
+// and learned.json for this class of daemon-owned state-dir file: a crash
+// mid-write must never leave the marker at a looser mode than 0600, or
+// missing content a future caller starts relying on.
 func setPanicMarker(dir string) error {
 	body := []byte("panic ran at " + time.Now().UTC().Format(time.RFC3339) + "\n")
-	if err := os.WriteFile(panicMarkerPath(dir), body, 0o600); err != nil {
-		return err
+	path := panicMarkerPath(dir)
+	tmp, err := os.CreateTemp(dir, ".panic.marker-*.tmp")
+	if err != nil {
+		return fmt.Errorf("panic marker: create temp: %w", err)
 	}
-	// WriteFile's mode only applies to a NEWLY-created file; enforce 0600
-	// unconditionally in case the marker somehow already existed looser.
-	return os.Chmod(panicMarkerPath(dir), 0o600)
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }()
+	if _, err := tmp.Write(body); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("panic marker: write temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return fmt.Errorf("panic marker: sync temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		return fmt.Errorf("panic marker: close temp: %w", err)
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return fmt.Errorf("panic marker: chmod temp: %w", err)
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return fmt.Errorf("panic marker: rename into place: %w", err)
+	}
+	return nil
 }
 
 // clearPanicMarker removes the marker — called when an operator explicitly
@@ -51,6 +76,17 @@ func clearPanicMarker(dir string) error {
 		return err
 	}
 	return nil
+}
+
+// clearPanicMarkerBestEffort clears the marker and reports a failure through
+// warn, never through a returned error — every caller treats this clear as
+// best-effort (see clearPanicMarker's doc comment) but each logs the failure
+// through its own surface (structured daemon log vs. CLI stderr), so the
+// logging call is left to warn rather than fixed here.
+func clearPanicMarkerBestEffort(dir string, warn func(err error)) {
+	if err := clearPanicMarker(dir); err != nil {
+		warn(err)
+	}
 }
 
 // panicMarkerPresent reports whether panic's marker is currently set.

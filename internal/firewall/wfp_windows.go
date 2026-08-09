@@ -199,13 +199,11 @@ func (b *wfpBackend) Unblock() error {
 // instead of reporting a false "MISSING" (and triggering an unwanted repair)
 // every time a window opens.
 func (b *wfpBackend) IsBlocked() (bool, error) {
-	out, err := powershell(
-		"if (Get-NetFirewallRule -Group " + groupName +
-			" -ErrorAction SilentlyContinue) { 'blocked' } else { 'clear' }")
+	blocked, got, err := queryBlockedAndDefaults()
 	if err != nil {
 		return false, err
 	}
-	if !strings.Contains(out, "blocked") {
+	if !blocked {
 		return false, nil
 	}
 
@@ -218,16 +216,43 @@ func (b *wfpBackend) IsBlocked() (bool, error) {
 	}
 	want := strings.TrimSpace(string(wantRaw))
 
-	got, err := queryOutboundDefaults()
-	if err != nil {
-		return false, err
-	}
 	for _, prof := range fwProfiles {
 		if got[prof] != want {
 			return false, nil
 		}
 	}
 	return true, nil
+}
+
+// queryBlockedAndDefaults combines the group-existence check and the
+// per-profile DefaultOutboundAction query into a single PowerShell
+// invocation. IsBlocked is called synchronously from the run loop's verifyC
+// tick, which CLAUDE.md requires stay bounded — two sequential psTimeout-
+// bounded subprocess calls would nearly double that tick's worst case.
+func queryBlockedAndDefaults() (bool, map[string]string, error) {
+	out, err := powershell(
+		"$g = Get-NetFirewallRule -Group " + groupName + " -ErrorAction SilentlyContinue\n" +
+			"if ($g) {\n" +
+			"  'blocked'\n" +
+			"  Get-NetFirewallProfile -All | ForEach-Object { \"$($_.Name)=$($_.DefaultOutboundAction)\" }\n" +
+			"} else {\n" +
+			"  'clear'\n" +
+			"}")
+	if err != nil {
+		return false, nil, err
+	}
+	lines := strings.Split(out, "\n")
+	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "blocked" {
+		return false, nil, nil
+	}
+	res := make(map[string]string)
+	for _, line := range lines[1:] {
+		line = strings.TrimSpace(line)
+		if name, action, ok := strings.Cut(line, "="); ok {
+			res[strings.TrimSpace(name)] = strings.TrimSpace(action)
+		}
+	}
+	return true, res, nil
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any

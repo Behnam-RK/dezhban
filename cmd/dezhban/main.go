@@ -350,9 +350,9 @@ func cmdRun(args []string) int {
 	// marker left over from a PRIOR run has done its job — clear it now, or
 	// it would silently suppress this run's own enforcement verification
 	// forever, until someone thought to run `dezhban unblock`.
-	if err := clearPanicMarker(stateDir()); err != nil {
+	clearPanicMarkerBestEffort(stateDir(), func(err error) {
 		log.Debug("clear panic-disarm marker failed", "err", err)
-	}
+	})
 
 	// Persistent log capture, always on: every daemon run appends to
 	// <state dir>/logs/dezhban.log (size-rotated), whether launched from a shell
@@ -968,9 +968,9 @@ func cmdBlock(args []string) int {
 	// with enforcement as an explicit unblock is, and leaving a stale marker
 	// here would keep any co-running daemon's enforcement verification
 	// suspended even after real rules were just installed by hand.
-	if err := clearPanicMarker(stateDir()); err != nil {
+	clearPanicMarkerBestEffort(stateDir(), func(err error) {
 		fmt.Fprintln(os.Stderr, "block: warning — could not clear the panic-disarm marker:", err)
-	}
+	})
 	return 0
 }
 
@@ -1135,9 +1135,9 @@ func cmdUnblock(args []string) int {
 	// --force), so it clears the panic-disarm marker itself — the
 	// control-socket path instead asks the running daemon to clear it (see
 	// runner.Options.ClearPanicDisarm), since that path may run unprivileged.
-	if err := clearPanicMarker(stateDir()); err != nil {
+	clearPanicMarkerBestEffort(stateDir(), func(err error) {
 		fmt.Fprintln(os.Stderr, "unblock: warning — could not clear the panic-disarm marker:", err)
-	}
+	})
 	fmt.Println("dezhban: network unblocked")
 	return 0
 }

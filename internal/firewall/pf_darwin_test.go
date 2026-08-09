@@ -389,3 +389,32 @@ func TestRenderTunnelScopedProviders(t *testing.T) {
 		t.Errorf("GUARD should not emit a provider pass — it already passes all tunnel egress:\n%s", g)
 	}
 }
+
+// TestMainRulesetReferencesAnchor exercises IsBlocked's drift-detection
+// substring match against the shape `pfctl -s rules` actually renders: an
+// anchor declared without filter criteria in pf.conf comes back with pfctl's
+// own "all" appended, sitting among Apple's own scrub-anchor/anchor lines and
+// dezhban's loopback-always rule. Captured by hand from a `pfctl -s rules`
+// run rather than the live daemon — pfctl requires root and this package has
+// no test seam to fake it, so this fixture is the best available substitute
+// for the on-host check the PR's own test plan still flags as unverified.
+func TestMainRulesetReferencesAnchor(t *testing.T) {
+	const rendered = `scrub-anchor "com.apple/*" all fragment reassemble
+anchor "com.apple/*" all
+pass on lo0 all flags S/SA no state
+anchor "dezhban" all
+block drop out all`
+
+	if !mainRulesetReferencesAnchor(rendered) {
+		t.Errorf("expected anchor reference to be found in:\n%s", rendered)
+	}
+
+	const missing = `scrub-anchor "com.apple/*" all fragment reassemble
+anchor "com.apple/*" all
+pass on lo0 all flags S/SA no state
+block drop out all`
+
+	if mainRulesetReferencesAnchor(missing) {
+		t.Errorf("expected no anchor reference to be found in:\n%s", missing)
+	}
+}

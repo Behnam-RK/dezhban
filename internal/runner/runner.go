@@ -1013,6 +1013,20 @@ func (o Options) runGuard(ctx context.Context) error {
 	// Purely observational: comparing against it never touches blocked,
 	// CountryCode, or the hysteresis streak.
 	var lastGoodIP netip.Addr
+	// observeExitIP records a confirmed exit IP and logs a change against the
+	// last one seen. Shared by the startup probe and the geoTick branch so a
+	// failover landing between the two can't be missed by only wiring this
+	// into one of them.
+	observeExitIP := func(ip netip.Addr) {
+		if !ip.IsValid() {
+			return
+		}
+		if lastGoodIP.IsValid() && ip != lastGoodIP {
+			o.Log.Info("exit IP changed", "from", lastGoodIP, "to", ip)
+			dg.exitIPChangedAt = time.Now()
+		}
+		lastGoodIP = ip
+	}
 	// resetZombie clears the zombie streak's observation (zombieChecks,
 	// zombieSince, the published dg.zombie). full additionally clears
 	// zombieRedialTried, i.e. declares the underlying hang itself resolved
@@ -1529,7 +1543,18 @@ func (o Options) runGuard(ctx context.Context) error {
 			o.Log.Info("redial retry skipped — hold the line is armed; guard holds, traffic stays cut")
 			return
 		}
-		grantAutoWindow(now, dropUptime, dropGoodExit, dropDetail)
+		// dropUptime is frozen by design for an ordinary drop (see its doc
+		// comment above) because the tunnel is down and re-deriving it would
+		// grow for no real reason. A zombie streak is the opposite: the
+		// interface never went down, so tunnelUpSince is a live connection
+		// start time and now.Sub(tunnelUpSince) growing is exactly correct —
+		// reusing the frozen value would let redialMinUptime's backoff refuse
+		// a tunnel forever even once it has genuinely been up long enough.
+		uptime := dropUptime
+		if tunnelUp && dg.zombie != nil && !tunnelUpSince.IsZero() {
+			uptime = now.Sub(tunnelUpSince)
+		}
+		grantAutoWindow(now, uptime, dropGoodExit, dropDetail)
 	}
 
 	// resumeRedialRetry restores the pending re-decision that an armed hold
@@ -1906,6 +1931,12 @@ func (o Options) runGuard(ctx context.Context) error {
 			manualBlock = true
 			standby = false // a manual block arms enforcement out of standby
 			enfErr = nil
+			// A manual block is one of the states enumerated above resetZombie's
+			// own doc comment as ending what a standing zombie streak meant —
+			// without this, a stale "tunnel reports up but exit checks failing"
+			// warning from before the block would survive in this same publish,
+			// self-healing only at the next geoTick's own manualBlock branch.
+			resetZombie(true)
 			o.Log.Warn("FULL BLOCK (manual, via control socket) — held until unblock")
 			snapshot()
 			return reply(true, "")
@@ -2336,6 +2367,10 @@ func (o Options) runGuard(ctx context.Context) error {
 				sawTunnelUp = true
 				markTunnelEverUp(time.Now())
 			}
+			// Seed lastGoodIP here too — otherwise a failover between this
+			// startup reading and the first geoTick reading is silently missed,
+			// since only the geoTick branch used to ever assign it.
+			observeExitIP(lastRes.Reading.IP)
 		}
 	}
 	snapshot()
@@ -2738,14 +2773,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				// failover between two servers in the same allowed country changes
 				// nothing CountryCode reports, but changes this — it is the signal
 				// that best explains "my exit flapped".
-				ip := lastRes.Reading.IP
-				if ip.IsValid() {
-					if lastGoodIP.IsValid() && ip != lastGoodIP {
-						o.Log.Info("exit IP changed", "from", lastGoodIP, "to", ip)
-						dg.exitIPChangedAt = time.Now()
-					}
-					lastGoodIP = ip
-				}
+				observeExitIP(lastRes.Reading.IP)
 			}
 			// Zombie-tunnel detection: the interface reports up, but a run of exit
 			// lookups through it have failed. dezhban's posture never escalates on

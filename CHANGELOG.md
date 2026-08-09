@@ -86,6 +86,29 @@ current as you land changes.
   explicit operator command (`block`, `unblock`, `switch`, `pause`/`resume`)
   clears it unconditionally instead, exactly as `unblock` already did — an
   explicit command is never blocked by the marker.
+- **A hung tunnel `vpn.advanced.livenessRedial` refused to redial could stay
+  refused forever**, even once it had genuinely been up long enough to pass
+  `redialMinUptime`'s anti-flap check. The re-decision that fires once that
+  bound lifts was reusing the uptime captured at the very first widening
+  attempt — correct for an ordinary drop (the tunnel is down, so uptime is a
+  frozen historical fact) but wrong for a zombie streak, where the tunnel
+  never goes down and its uptime keeps growing for real. It now re-derives
+  the uptime for a standing zombie streak instead of reusing the stale value.
+- **A manual `block` no longer leaves a stale "tunnel reports up but exit
+  checks failing" warning on screen.** If a zombie-tunnel streak was showing
+  when the operator ran `dezhban block` (or the control-socket equivalent),
+  the warning previously lingered until the next periodic geo check cleared
+  it; it is now cleared in the same publish as the block itself.
+- **Exit-IP change observation now also covers the window between daemon
+  startup and the first periodic geo check.** A VPN failover landing in that
+  window was previously invisible to `state.exitIpChangedAt` because only the
+  periodic check recorded the last-seen exit IP; the startup reading now
+  records it too.
+- **Windows enforcement verification (`vpn.advanced.verifyInterval`) no
+  longer needs two sequential PowerShell calls per tick.** The group-existence
+  check and the per-profile default-action query are now one invocation, so a
+  slow PowerShell/WMI response can no longer nearly double the time a verify
+  tick can hold up the run loop.
 
 ## [0.9.0] - 2026-07-29
 

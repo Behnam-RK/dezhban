@@ -413,8 +413,9 @@ func (b *signalBackend) Block(a firewall.Allowlist) error {
 	}
 	return nil
 }
-func (b *signalBackend) Unblock() error { b.record("unblock"); return nil }
-func (b *signalBackend) Cleanup() error { b.record("cleanup"); return nil }
+func (b *signalBackend) Unblock() error           { b.record("unblock"); return nil }
+func (b *signalBackend) Cleanup() error           { b.record("cleanup"); return nil }
+func (b *signalBackend) IsBlocked() (bool, error) { return true, nil }
 func (b *signalBackend) has(call string) bool {
 	b.mu.Lock()
 	defer b.mu.Unlock()

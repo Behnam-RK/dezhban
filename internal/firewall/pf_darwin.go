@@ -195,7 +195,15 @@ func (b *pfBackend) IsBlocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(main, anchorRef), nil
+	return mainRulesetReferencesAnchor(main), nil
+}
+
+// mainRulesetReferencesAnchor reports whether pfctl's rendered main ruleset
+// still contains our anchor reference. Split out from IsBlocked so it can be
+// exercised in tests against captured `pfctl -s rules` output without
+// shelling out — pfctl requires root and this repo has no test seam for it.
+func mainRulesetReferencesAnchor(main string) bool {
+	return strings.Contains(main, anchorRef)
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any
