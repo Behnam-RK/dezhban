@@ -198,9 +198,15 @@ the guard.
 
 **Enforcement verification** — a periodic check (`vpn.advanced.verifyInterval`,
 default `1m`) that the firewall rules dezhban believes it installed are still
-installed, re-applying them the instant they are not. Every other rule change is
-triggered by something dezhban itself did; this is the only one that notices a
-ruleset removed from OUTSIDE it — another firewall tool, `pfctl -F all`,
+installed AND still actually enforcing — not just present but disconnected
+from what makes them bite (the pf main ruleset no longer referencing our
+anchor, an nft chain's policy rewritten off `drop` in place, a Windows profile's
+outbound default flipped back to Allow while our rules sit untouched) —
+re-applying whatever posture is currently in force — the standing guard, a
+full block, or an open switch/redial window or pause — the instant it is not.
+Every other rule change is triggered by something dezhban itself did; this is
+the only one that notices a ruleset (or the switch that makes it matter)
+disturbed from OUTSIDE it — another firewall tool, `pfctl -F all`,
 `nft flush ruleset`, an OS ruleset reload — the one failure mode that used to be
 completely silent. Reported in `state.verify` (`status --json`) only while
 something is wrong. Disablable (`"0"`); an unreadable backend is never treated

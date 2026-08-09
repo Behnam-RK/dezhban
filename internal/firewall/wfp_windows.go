@@ -43,6 +43,44 @@ func stateDir() string {
 
 func statePath() string { return filepath.Join(stateDir(), "fw.state") }
 
+// appliedActionPath records the DefaultOutboundAction the last successful Apply
+// set every profile to — IsBlocked's cross-check that the boundary Apply
+// actually installed hasn't drifted out from under the still-present allow
+// rules (see IsBlocked's doc comment).
+func appliedActionPath() string { return filepath.Join(stateDir(), "fw.applied") }
+
+// writeAppliedAction records action as the DefaultOutboundAction Apply just
+// applied, via temp-file-then-rename rather than a plain WriteFile — the
+// rename is atomic, so a crash between the two never leaves this file
+// half-written. IsBlocked's drift check reads this file's exact bytes back
+// and compares them against the live profiles, so a truncated/empty file
+// from a non-atomic write would read as "every profile drifted" and force a
+// repair loop that only a later, fully-written Apply would clear.
+func writeAppliedAction(action string) error {
+	dir := stateDir()
+	tmp, err := os.CreateTemp(dir, ".fw.applied-*.tmp")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer os.Remove(tmpName) // no-op once the rename below succeeds
+	if _, err := tmp.WriteString(action); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Chmod(tmpName, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmpName, appliedActionPath())
+}
+
 // wfpBackend is the Windows FirewallBackend. It holds no in-memory state: the
 // authoritative state is the dezhban rule group plus the saved DefaultOutbound
 // snapshot on disk, so it survives across separate invocations.
@@ -94,6 +132,15 @@ func (b *wfpBackend) Apply(p Policy) error {
 	if _, err := powershell(renderBlockScript(p)); err != nil {
 		return fmt.Errorf("apply dezhban firewall rules: %w", err)
 	}
+	// Best-effort: IsBlocked degrades to its old, weaker check if this is
+	// missing (e.g. leftover state from before this file existed), so a
+	// failure here must not fail the Apply that just succeeded. Written
+	// atomically (temp + rename): a plain WriteFile truncates in place, so a
+	// crash/power-loss mid-write would leave this file present-but-empty, and
+	// IsBlocked's drift check (comparing against "") would then read every
+	// correctly-applied profile as drifted, forever re-triggering repairs
+	// until the next successful Apply happens to overwrite it.
+	_ = writeAppliedAction(expectedOutboundAction(p))
 	return nil
 }
 
@@ -129,10 +176,28 @@ func (b *wfpBackend) Unblock() error {
 	if ok {
 		_ = os.Remove(statePath())
 	}
+	_ = os.Remove(appliedActionPath())
 	return nil
 }
 
-// IsBlocked reports whether the dezhban rule group is currently installed.
+// IsBlocked reports whether the dezhban rule group is currently installed AND
+// the profile outbound default Apply set still matches what it applied.
+//
+// The rule group existing is not sufficient on its own: our rules are all
+// Allow exceptions layered on the profile DefaultOutboundAction doing the
+// actual blocking (see the Model note above renderBlockScript). Something
+// else — Group Policy refresh, another security tool, an admin running
+// `Set-NetFirewallProfile` by hand — can flip that default back to Allow
+// without touching a single dezhban rule, leaving the group intact while
+// every packet the Allow rules didn't already cover sails through unfiltered.
+// A bare group-existence check would report "blocked" through that entire
+// gap. Cross-checking against the action Apply actually persisted
+// (appliedActionPath) catches it, while still tolerating the ONE posture
+// where Allow is the deliberately-correct default: an unrestricted switch
+// window (see expectedOutboundAction) — comparing against what THIS Apply
+// call set, not a hardcoded "Block", is what makes that distinction safe
+// instead of reporting a false "MISSING" (and triggering an unwanted repair)
+// every time a window opens.
 func (b *wfpBackend) IsBlocked() (bool, error) {
 	out, err := powershell(
 		"if (Get-NetFirewallRule -Group " + groupName +
@@ -140,7 +205,29 @@ func (b *wfpBackend) IsBlocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(out, "blocked"), nil
+	if !strings.Contains(out, "blocked") {
+		return false, nil
+	}
+
+	wantRaw, err := os.ReadFile(appliedActionPath())
+	if err != nil {
+		// No record of what we last applied (state predates this file, or was
+		// cleared) — degrade to the group-existence check above rather than
+		// treat an unrelated read failure as evidence of tampering.
+		return true, nil
+	}
+	want := strings.TrimSpace(string(wantRaw))
+
+	got, err := queryOutboundDefaults()
+	if err != nil {
+		return false, err
+	}
+	for _, prof := range fwProfiles {
+		if got[prof] != want {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any
@@ -179,19 +266,15 @@ func renderBlockScript(p Policy) string {
 	// Loopback always passes.
 	rule("loopback", "-RemoteAddress 127.0.0.1,::1")
 
-	// defaultAction is the profile's outbound default installed at the end. It is
-	// Block for every posture EXCEPT an unrestricted switch window, which must
-	// allow all outbound so a brand-new VPN's handshake can complete. (Windows
-	// ignores TunnelGroups — it matches interfaces by exact alias only.)
-	defaultAction := "Block"
+	defaultAction := expectedOutboundAction(p)
 
 	switch p.Mode {
 	case ModeSwitchWindow:
 		if len(p.WindowProtos) == 0 && len(p.WindowPorts) == 0 {
 			// Unrestricted: keep only the marker (loopback) rule so the group stays
-			// non-empty for surgical teardown, and flip the default to Allow. The
-			// daemon reverts to guard (default Block) when the window closes.
-			defaultAction = "Allow"
+			// non-empty for surgical teardown. defaultAction is already Allow (see
+			// expectedOutboundAction). The daemon reverts to guard (default Block)
+			// when the window closes.
 		} else {
 			if len(p.TunnelIfaces) > 0 {
 				rule("tunnel", "-InterfaceAlias "+psStringList(p.TunnelIfaces))
@@ -244,6 +327,19 @@ func renderBlockScript(p Policy) string {
 	fmt.Fprintf(&b, "Set-NetFirewallProfile -Name %s -DefaultOutboundAction %s\n",
 		strings.Join(fwProfiles, ","), defaultAction)
 	return b.String()
+}
+
+// expectedOutboundAction is the profile DefaultOutboundAction renderBlockScript
+// installs for p, and what IsBlocked cross-checks the live profiles against
+// (see IsBlocked's doc comment). Block for every posture EXCEPT an unrestricted
+// switch window, which must allow all outbound so a brand-new VPN's handshake
+// can complete. Factored out of renderBlockScript so Apply can persist the
+// value it actually applied without the two ever drifting apart.
+func expectedOutboundAction(p Policy) string {
+	if p.Mode == ModeSwitchWindow && len(p.WindowProtos) == 0 && len(p.WindowPorts) == 0 {
+		return "Allow"
+	}
+	return "Block"
 }
 
 // emitWindowPortRules renders the proto/port allows for a restricted switch

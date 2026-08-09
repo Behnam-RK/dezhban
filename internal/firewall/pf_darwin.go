@@ -178,7 +178,24 @@ func (b *pfBackend) IsBlocked() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return strings.Contains(info, "Status: Enabled"), nil
+	if !strings.Contains(info, "Status: Enabled") {
+		return false, nil
+	}
+	// The anchor's own rules can be loaded and non-empty while pf never actually
+	// evaluates them: pf only descends into a sub-anchor if the MAIN ruleset
+	// references it, and that reference lives in /etc/pf.conf — a file something
+	// else (a config-management tool, a manual `pfctl -f`) can overwrite without
+	// touching our anchor at all. Loaded-but-unreferenced would report blocked
+	// while every packet sails past the anchor unevaluated, exactly the silent
+	// gap enforcement verification exists to catch. `pfctl -s rules` lists the
+	// main ruleset as loaded right now, independent of what /etc/pf.conf says on
+	// disk, so this catches both a missing anchor line AND a main ruleset that
+	// was reloaded from some other file entirely.
+	main, err := pfctl("", "-s", "rules")
+	if err != nil {
+		return false, err
+	}
+	return strings.Contains(main, anchorRef), nil
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any

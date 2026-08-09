@@ -3,6 +3,8 @@
 package main
 
 import (
+	"errors"
+	"os"
 	"path/filepath"
 	"syscall"
 	"testing"
@@ -56,5 +58,66 @@ func TestAcquireRunLockRefusesASecondHolder(t *testing.T) {
 	}
 	if err := acquireRunLock(dir); err == nil {
 		t.Fatal("second acquire on the same directory succeeded; want refusal")
+	}
+}
+
+// A second holder's error must be identifiable as genuine contention via
+// errors.Is(err, ErrRunLockHeld) — cmdRun uses exactly that check to decide
+// between refusing to start and logging a warning and continuing anyway.
+func TestAcquireRunLockSecondHolderIsErrRunLockHeld(t *testing.T) {
+	dir := t.TempDir()
+
+	if err := acquireRunLock(dir); err != nil {
+		t.Fatalf("first acquire: %v", err)
+	}
+	err := acquireRunLock(dir)
+	if err == nil {
+		t.Fatal("second acquire on the same directory succeeded; want refusal")
+	}
+	if !errors.Is(err, ErrRunLockHeld) {
+		t.Fatalf("second acquire error = %v, want errors.Is(err, ErrRunLockHeld)", err)
+	}
+}
+
+// Any local user must not be able to flock the lock file open and starve the
+// guard from starting: 0644 (readable by everyone) allowed exactly that.
+func TestRunLockFileIsOwnerOnly(t *testing.T) {
+	path := filepath.Join(t.TempDir(), runLockName)
+
+	fd, err := tryRunLock(path)
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	defer syscall.Close(fd)
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0600 {
+		t.Fatalf("lock file mode = %o, want 0600", got)
+	}
+}
+
+// An upgrade from a build that created this file 0644 must not leave it that
+// way forever — O_CREAT's mode argument only applies to a brand-new file.
+func TestRunLockFileModeFixedOnPreExistingFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), runLockName)
+	if err := os.WriteFile(path, nil, 0644); err != nil {
+		t.Fatalf("seed pre-existing 0644 file: %v", err)
+	}
+
+	fd, err := tryRunLock(path)
+	if err != nil {
+		t.Fatalf("lock: %v", err)
+	}
+	defer syscall.Close(fd)
+
+	fi, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if got := fi.Mode().Perm(); got != 0600 {
+		t.Fatalf("lock file mode = %o, want 0600 (fixed from pre-existing 0644)", got)
 	}
 }

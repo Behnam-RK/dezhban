@@ -127,6 +127,82 @@ func TestVerifyTickRepairsAnOpenUnrestrictedWindow(t *testing.T) {
 	}
 }
 
+// Enforcement verification finding the rules gone while FULL BLOCK is the
+// standing posture must re-apply the full block, not fall through to guard —
+// reapplyCurrent's `case blocked:` branch, the one shape TestVerifyTickRepairsMissingRules
+// (guard) and TestVerifyTickRepairsAnOpenUnrestrictedWindow (an open window)
+// don't exercise. Missing this branch would mean a rules-removed-from-outside
+// gap silently downgrades a forbidden-country block to an ordinary guard on
+// its very next repair — the one posture where that matters most.
+func TestVerifyTickRepairsFullBlock(t *testing.T) {
+	var calls int
+	be := &fakeBackend{isBlockedFn: func() (bool, error) {
+		calls++
+		return calls > 1, nil // first check: missing; every check after: present
+	}}
+
+	var snaps []state.Snapshot
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:        steadyMonitor{cc: "IR"}, // forbidden exit → FULL BLOCK at startup
+		Decider:        decision.New([]string{"IR"}, 1),
+		Backend:        be,
+		Log:            discardLog(),
+		Interval:       time.Hour, // no further geo ticks needed; FULL BLOCK holds on its own
+		Tunnels:        []string{"utun4"},
+		Endpoints:      []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		VerifyInterval: 10 * time.Millisecond,
+		Publish:        func(s state.Snapshot) { snaps = append(snaps, s) },
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls < 2 {
+		t.Fatalf("IsBlocked called %d times, want at least 2 (one missing, one clean)", calls)
+	}
+
+	// The very first call is the startup posture arming with guard before the
+	// first geo reading lands — expected, and not a repair. Only a *later*
+	// apply-guard, once verification (is-blocked) has started ticking, would
+	// mean a repair mistakenly downgraded FULL BLOCK to guard.
+	var verifying bool
+	fullBlocks := 0
+	for _, c := range be.calls {
+		switch c {
+		case "is-blocked":
+			verifying = true
+		case "apply-fullblock":
+			fullBlocks++
+		case "apply-guard":
+			if verifying {
+				t.Fatalf("verification repaired FULL BLOCK by installing guard instead; calls = %v", be.calls)
+			}
+		}
+	}
+	if fullBlocks < 2 {
+		t.Errorf("apply-fullblock count = %d, want at least 2 (startup + repair); calls = %v", fullBlocks, be.calls)
+	}
+
+	var sawMissing, sawClearedAfter bool
+	for _, s := range snaps {
+		if s.Verify != nil && s.Verify.Missing {
+			sawMissing = true
+			continue
+		}
+		if sawMissing && s.Verify == nil {
+			sawClearedAfter = true
+		}
+	}
+	if !sawMissing {
+		t.Error("no published snapshot reported the missing ruleset")
+	}
+	if !sawClearedAfter {
+		t.Error("Verify was never cleared by a later clean check")
+	}
+}
+
 // An unreadable backend is not evidence the rules are gone — the daemon must
 // report it and change nothing, the same discipline as an undeterminable exit
 // country holding the current posture.

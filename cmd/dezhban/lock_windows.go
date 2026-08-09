@@ -45,7 +45,7 @@ func acquireRunLock(dir string) error {
 	// ERROR_ALREADY_EXISTS specifically means another process already owns
 	// this name, which for a still-live process means it is still running.
 	if errno, ok := callErr.(syscall.Errno); ok && errno == syscall.ERROR_ALREADY_EXISTS {
-		return fmt.Errorf("another dezhban is already running against this state directory — see `dezhban status`")
+		return fmt.Errorf("%w against this state directory — see `dezhban status`", ErrRunLockHeld)
 	}
 	return nil
 }

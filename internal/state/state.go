@@ -212,18 +212,6 @@ type DropRecord struct {
 	At time.Time `json:"at,omitzero"`
 }
 
-// HoldState reports that "hold the line" is armed: the next tunnel drop will
-// NOT open an automatic redial window, so a deliberate disconnect stays cut.
-//
-// dezhban cannot tell an intentional disconnect from an accidental drop, and
-// that ambiguity is the whole reason this exists — disconnecting by hand
-// otherwise opens a redial window the user never wanted. Arming says which kind
-// of drop the next one will be.
-//
-// It only ever SUPPRESSES. It removes an automatic relaxation for one drop and
-// grants nothing, so the three sanctioned relaxation triggers are unchanged and
-// there is no fourth. Being strictly more restrictive is also why it needs no
-// config gate of its own: there is no setting to protect.
 // VerifyState is what enforcement verification found the last time it did not
 // like the answer. It exists because every other Apply the daemon makes is
 // triggered by something the daemon itself did, so a ruleset removed from
@@ -272,6 +260,18 @@ type ZombieState struct {
 	Checks int `json:"checks"`
 }
 
+// HoldState reports that "hold the line" is armed: the next tunnel drop will
+// NOT open an automatic redial window, so a deliberate disconnect stays cut.
+//
+// dezhban cannot tell an intentional disconnect from an accidental drop, and
+// that ambiguity is the whole reason this exists — disconnecting by hand
+// otherwise opens a redial window the user never wanted. Arming says which kind
+// of drop the next one will be.
+//
+// It only ever SUPPRESSES. It removes an automatic relaxation for one drop and
+// grants nothing, so the three sanctioned relaxation triggers are unchanged and
+// there is no fourth. Being strictly more restrictive is also why it needs no
+// config gate of its own: there is no setting to protect.
 type HoldState struct {
 	// Armed is true from the moment it is armed until the drop it covers, an
 	// explicit cancel, or a tunnel coming back up.

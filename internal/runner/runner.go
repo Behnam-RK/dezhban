@@ -229,6 +229,22 @@ type Options struct {
 	// daemon, which until it existed left the guard able to fail silently — the
 	// daemon reporting GUARD, `status` reporting blocked, and the host open.
 	VerifyInterval time.Duration
+	// PanicDisarmed reports whether `dezhban panic` has torn down the rules
+	// deliberately while this daemon keeps running. Consulted on every
+	// verifyC tick: without it, verification cannot tell "something else
+	// removed my rules" from "the operator removed them on purpose", and
+	// would re-apply the standing posture within one VerifyInterval of a
+	// panic teardown — turning the documented lockout escape hatch into a
+	// brief flicker. nil → verification never stands down (tests / legacy
+	// callers, or panic never wired up a marker).
+	PanicDisarmed func() bool
+	// ClearPanicDisarm removes the marker PanicDisarmed reads, so an operator
+	// explicitly asking THIS running daemon to resume enforcement (the
+	// control socket's unblock op) clears it — the CLI process handling a
+	// direct/--force unblock has root and clears the marker itself instead.
+	// nil → nothing to clear (tests / legacy callers, or panic never wired up
+	// a marker).
+	ClearPanicDisarm func() error
 	// LivenessRedial (vpn.advanced.livenessRedial): let a hung tunnel — up
 	// interface, failing exit lookups — open an automatic redial window via the
 	// existing trigger 2 machinery. Default false; see the config doc comment
@@ -962,6 +978,11 @@ func (o Options) runGuard(ctx context.Context) error {
 	// something repeatedly removing dezhban's rules, and that pattern is the
 	// finding — a counter that reset on every good tick would hide it.
 	var verifyRepairs int
+	// verifySuspended tracks whether the last verifyC tick found
+	// PanicDisarmed true, purely so the log line below fires at the edge
+	// (suspend / resume) rather than once per tick for as long as the marker
+	// stands — same reasoning as the zombie/verify log-at-edge pattern.
+	var verifySuspended bool
 	// zombieChecks / zombieSince track a run of failed exit lookups through a
 	// tunnel that reports up. Reset to zero whenever the streak stops meaning
 	// what it meant — a successful lookup, the tunnel going down, or anything
@@ -975,7 +996,16 @@ func (o Options) runGuard(ctx context.Context) error {
 	// down edge means the per-tick zombie check would otherwise re-invoke
 	// maybeAutoWindow on every geoTick for as long as the streak stands —
 	// spamming the ledger and, on a refusal, re-arming a retry timer every tick
-	// instead of once. Reset alongside the rest of the streak in resetZombie.
+	// instead of once.
+	//
+	// It survives a window opening and closing: an auto-granted window
+	// suspends the geo state machine (see the windowActive branch of geoTick),
+	// but suspending observation does not mean the hang resolved, so a window
+	// that expires with the tunnel still hung must not look like a fresh
+	// streak. It is cleared only by resetZombie(full: true) — a genuine
+	// resolution (a lookup succeeds, the tunnel actually goes down, or the
+	// posture otherwise changes out from under it) — never by
+	// resetZombie(full: false), which the windowActive branch uses.
 	var zombieRedialTried bool
 	// lastGoodIP is the exit IP from the last SUCCESSFUL reading, kept
 	// separately from lastRes.Reading (which a failed lookup overwrites with a
@@ -983,14 +1013,21 @@ func (o Options) runGuard(ctx context.Context) error {
 	// Purely observational: comparing against it never touches blocked,
 	// CountryCode, or the hysteresis streak.
 	var lastGoodIP netip.Addr
-	resetZombie := func() {
-		if zombieChecks == 0 && dg.zombie == nil {
+	// resetZombie clears the zombie streak's observation (zombieChecks,
+	// zombieSince, the published dg.zombie). full additionally clears
+	// zombieRedialTried, i.e. declares the underlying hang itself resolved
+	// rather than merely un-observed for a while — see zombieRedialTried's doc
+	// comment for why those are different questions.
+	resetZombie := func(full bool) {
+		if zombieChecks == 0 && dg.zombie == nil && (!full || !zombieRedialTried) {
 			return
 		}
 		zombieChecks = 0
 		zombieSince = time.Time{}
-		zombieRedialTried = false
 		dg.zombie = nil
+		if full {
+			zombieRedialTried = false
+		}
 	}
 	// resetVerify clears a stale enforcement-verification finding. dg.verify is
 	// otherwise only ever set or cleared by the verifyC tick handler itself, so
@@ -1364,7 +1401,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		}
 	}
 
-	maybeAutoWindow := func(now time.Time, detail string) {
+	maybeAutoWindow := func(now time.Time, detail string, consumeHold bool) {
 		if !autoWindowPossible() {
 			return
 		}
@@ -1378,8 +1415,18 @@ func (o Options) runGuard(ctx context.Context) error {
 		// never seen up), so the flag survives those. That is safe because a
 		// drop cannot follow a drop without an intervening tunnel-up edge, and
 		// that edge disarms it — see the st.Up branch in the watcher.
+		//
+		// consumeHold distinguishes the ordinary tunnel-down trigger (true) from
+		// the liveness-redial trigger (false): hold's promise is "my NEXT
+		// DISCONNECT is deliberate", and a zombie streak — the interface never
+		// goes down — is not the event it was armed for. The flag still
+		// suppresses a liveness attempt (hold only ever subtracts a relaxation,
+		// and this is one), it just isn't spent by an event it didn't name, so a
+		// later real disconnect still gets the hold the operator asked for.
 		if holdArmed {
-			holdArmed = false
+			if consumeHold {
+				holdArmed = false
+			}
 			o.Log.Warn("redial window suppressed (hold the line was armed); "+
 				"guard holds, traffic stays cut", "detail", detail)
 			return
@@ -1769,6 +1816,18 @@ func (o Options) runGuard(ctx context.Context) error {
 			if windowActive {
 				return reply(false, "switch window is open — cancel it first")
 			}
+			// An explicit unblock is an operator asking THIS running daemon to
+			// resume enforcement, so it clears a standing panic-disarm marker
+			// unconditionally — even along the branches below that find
+			// nothing to actually re-apply (e.g. the daemon's own `blocked`
+			// is already false, unaware that `panic` removed the rules out
+			// from under it). Best-effort: a failure here must not fail the
+			// unblock itself.
+			if o.ClearPanicDisarm != nil {
+				if err := o.ClearPanicDisarm(); err != nil {
+					o.Log.Debug("clear panic-disarm marker failed", "err", err)
+				}
+			}
 			manualBlock = false
 			// vpn.autoArm: with the tunnel DOWN, an explicit unblock is the
 			// operator saying "the VPN is off on purpose — release the line".
@@ -1788,7 +1847,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				// Nothing is installed in standby by design, so any diagnostic
 				// findings from the armed state that just ended no longer apply —
 				// see resetVerify's doc comment.
-				resetZombie()
+				resetZombie(true)
 				resetVerify()
 				o.Log.Info("STANDBY (manual unblock, vpn.autoArm) — guard released; re-arms when a VPN connects")
 				snapshot()
@@ -2218,7 +2277,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				// geoTick would clear this anyway (its own down-tunnel skip does
 				// the same reset); doing it here means the down edge itself is
 				// never shown carrying a leftover zombie streak.
-				resetZombie()
+				resetZombie(true)
 			}
 			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
 				tunnels = next
@@ -2236,7 +2295,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				// state unreachable on the common path.
 				lastDrop = &state.DropRecord{At: time.Now()}
 				snapshot()
-				maybeAutoWindow(time.Now(), st.Detail)
+				maybeAutoWindow(time.Now(), st.Detail, true)
 			}
 			if st.Up {
 				// The drop is over the moment a tunnel is back, whether or not
@@ -2410,6 +2469,24 @@ func (o Options) runGuard(ctx context.Context) error {
 			if standby {
 				break
 			}
+			if o.PanicDisarmed != nil && o.PanicDisarmed() {
+				// `dezhban panic` tore this down deliberately, and this daemon
+				// is still running. Verification must not silently undo a
+				// deliberate teardown — that would turn the documented
+				// lockout escape hatch into a ~1-VerifyInterval flicker.
+				// Stand down until `dezhban unblock` or a fresh daemon start
+				// clears the marker (see docs/usage/troubleshooting.md).
+				if !verifySuspended {
+					verifySuspended = true
+					o.Log.Warn("enforcement verification suspended — `dezhban panic` tore down the rules " +
+						"deliberately; run `dezhban unblock` (or restart the daemon) to resume")
+				}
+				break
+			}
+			if verifySuspended {
+				verifySuspended = false
+				o.Log.Info("enforcement verification resumed")
+			}
 			installed, err := o.Backend.IsBlocked()
 			switch {
 			case err != nil:
@@ -2418,19 +2495,38 @@ func (o Options) runGuard(ctx context.Context) error {
 				// undeterminable exit country holding the current posture.
 				// Re-applying on a failed read would let a transient backend
 				// hiccup churn the ruleset on every tick.
-				o.Log.Warn("enforcement verification could not read the firewall — posture held",
-					"err", err)
+				//
+				// Logged at the edge only, mirroring the zombie streak below: a
+				// persistently unreadable backend would otherwise emit one Warn
+				// per tick forever into the size-rotated log, rotating away the
+				// evidence of the original problem before anyone reads it.
+				if dg.verify == nil || dg.verify.Err == "" {
+					o.Log.Warn("enforcement verification could not read the firewall — posture held",
+						"err", err)
+				}
 				dg.verify = &state.VerifyState{At: time.Now(), Err: err.Error(), Repairs: verifyRepairs}
 			case !installed:
 				verifyRepairs++
-				o.Log.Error("dezhban's firewall rules are MISSING — something removed them; re-applying now",
-					"posture", postureName(blocked, windowActive, standby), "repairs", verifyRepairs)
+				// Edge-triggered Error; a persisting problem (something keeps
+				// removing the rules) still repairs every tick — that part must
+				// not be edge-triggered — but logs at Info after the first tick,
+				// for the same log-rotation reason as the Err case above.
+				if dg.verify == nil || !dg.verify.Missing {
+					o.Log.Error("dezhban's firewall rules are MISSING — something removed them; re-applying now",
+						"posture", postureName(blocked, windowActive, standby), "repairs", verifyRepairs)
+				} else {
+					o.Log.Info("dezhban's firewall rules are still missing — re-applying again",
+						"posture", postureName(blocked, windowActive, standby), "repairs", verifyRepairs)
+				}
 				dg.verify = &state.VerifyState{At: time.Now(), Missing: true, Repairs: verifyRepairs}
 				// force: the rules are absent, so even an unrestricted window —
 				// which no tunnel/endpoint change would ever need to re-apply —
 				// has lost its pass and must be reinstalled.
 				reapplyCurrent("enforcement verification: rules missing", true)
 			default:
+				if dg.verify != nil {
+					o.Log.Info("enforcement verification: rules confirmed present again", "repairs", verifyRepairs)
+				}
 				dg.verify = nil
 			}
 			snapshot()
@@ -2489,28 +2585,32 @@ func (o Options) runGuard(ctx context.Context) error {
 				stopFastProbe("geo state machine suspended")
 			}
 			if standby {
-				resetZombie() // nothing enforcing, nothing to diagnose
-				continue      // not enforcing — nothing to decide, nothing to protect a probe with
+				resetZombie(true) // nothing enforcing, nothing to diagnose
+				continue          // not enforcing — nothing to decide, nothing to protect a probe with
 			}
 			if windowActive {
-				resetZombie() // a window is already the response to a suspected problem
-				continue      // window suppresses the geo state machine
+				// Partial: a window is already the response to a suspected
+				// problem, so suspend observation — but a window (including one
+				// LivenessRedial itself opened) is not evidence the hang
+				// resolved, so zombieRedialTried survives. See its doc comment.
+				resetZombie(false)
+				continue // window suppresses the geo state machine
 			}
 			if manualBlock {
 				// An operator asked for this block. Recovery must not lift it behind
 				// their back — including the probe, which would briefly open egress to
 				// observe a country nobody is going to act on. Held until `unblock`.
 				o.Log.Debug("manual block held — skipping geo lookup (run `dezhban unblock` to resume)")
-				resetZombie()
+				resetZombie(true)
 				continue
 			}
 			if len(tunnels) == 0 {
-				resetZombie()
+				resetZombie(true)
 				continue // standing posture: nothing to observe until a tunnel exists
 			}
 			if o.Watcher != nil && !tunnelUp && !blocked {
 				o.Log.Debug("vpn tunnel down — skipping geo lookup (guard holds, endpoints open for redial)")
-				resetZombie() // plainly down is a different, already-explained state
+				resetZombie(true) // plainly down is a different, already-explained state
 				continue
 			}
 			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
@@ -2569,23 +2669,31 @@ func (o Options) runGuard(ctx context.Context) error {
 					// timer every tick instead of once.
 					if o.LivenessRedial && !zombieRedialTried {
 						zombieRedialTried = true
-						maybeAutoWindow(time.Now(), "tunnel reports up but appears to be hung (liveness redial)")
+						// consumeHold=false: this streak is not the disconnect hold
+						// was armed for (the interface never went down), so a
+						// standing hold suppresses this attempt without being spent
+						// by it — see maybeAutoWindow's doc comment.
+						maybeAutoWindow(time.Now(), "tunnel reports up but appears to be hung (liveness redial)", false)
 					}
 				}
 			} else {
 				// A stale refusal earned by a zombie streak that just resolved
 				// (a lookup succeeded, or posture moved to FULL BLOCK) must not
-				// survive it — tunnelUp is guaranteed true here (a plainly-down
-				// tunnel already `continue`d above before this code), so any
-				// standing redialRefused at this point was necessarily the
-				// liveness-redial trigger's, never an ordinary drop's. Mirrors
-				// the cleanup the real tunnel-up edge already does for that case.
+				// survive it. Gated on dg.zombie != nil directly, not on tunnelUp:
+				// tunnelUp is NOT guaranteed true here (this branch is also
+				// reached with the tunnel genuinely down, when blocked == true
+				// skipped the down-tunnel `continue` above, or when o.Watcher is
+				// nil and tunnelUp never updates) — but dg.zombie is only ever
+				// set inside the zombie-streak branch above, so checking it
+				// directly still limits this to a liveness-redial refusal,
+				// never an ordinary drop's. Mirrors the cleanup the real
+				// tunnel-up edge already does for that case.
 				if dg.zombie != nil && redialRefused != nil {
 					redialRefused = nil
 					disarmRedialRetry()
 					o.Log.Info("standing redial refusal dropped — the zombie streak it was refused for is over")
 				}
-				resetZombie()
+				resetZombie(true)
 			}
 			// End the accelerated episode once it has done its job, or once its
 			// budget is spent. Recovery is the success case; the budget is what

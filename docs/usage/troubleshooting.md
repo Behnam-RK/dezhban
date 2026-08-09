@@ -346,6 +346,16 @@ route around. Setting `vpn.advanced.verifyInterval: "0"` disables the check
 entirely; do this only if you understand you are giving up the one signal that
 would otherwise catch a rules-removed-from-outside gap.
 
+**`sudo dezhban panic` is the one deliberate exception.** Tearing down the
+rules on purpose is still "the rules going missing" from a running daemon's
+point of view, so `panic` leaves behind a marker telling that daemon's
+enforcement verification to stand down instead of re-applying the posture you
+just asked it to remove — otherwise the two features would fight, and
+verification would win within a minute of every `panic`. The marker clears
+automatically the next time you `dezhban unblock` (or restart the daemon,
+which re-applies the initial posture on its own anyway), so verification
+never stays suspended longer than it takes to explicitly resume enforcement.
+
 ## dezhban says my VPN might be hung (zombie tunnel)
 
 Symptom (from the daemon log, or in `dezhban doctor`):
@@ -398,11 +408,20 @@ sudo dezhban restart         # restart the ONE daemon, rather than starting a se
 
 The lock is released by the OS the moment the holding process ends, by any
 means — a crash, `SIGKILL`, a clean stop — so it never survives past the
-process it belonged to; there is no stale-lock case to clean up by hand. If
-this refuses and `dezhban status`/your process manager show nothing running,
-look for the daemon in a genuinely stuck (not dead) state rather than assuming
-a leftover lock file — `sudo dezhban panic` removes firewall rules without
-needing this lock at all, regardless of what is holding it.
+process it belonged to; there is no stale-lock case to clean up by hand. The
+lock file itself is root-owned and `0600`, so an unprivileged local user
+cannot hold it open to keep `run` from starting. If this refuses and
+`dezhban status`/your process manager show nothing running, look for the
+daemon in a genuinely stuck (not dead) state rather than assuming a leftover
+lock file — `sudo dezhban panic` removes firewall rules without needing this
+lock at all, regardless of what is holding it.
+
+This lock is a safety net around a race, not part of the kill switch itself:
+if acquiring it fails for any reason OTHER than the contention above — an
+unwritable or missing state directory, for example — `run` logs a warning and
+starts anyway, without the single-instance guard for that run, rather than
+refusing to enforce. A lock that cannot be established must never become a
+reason the guard does not arm.
 
 ## Preview rules before applying them
 

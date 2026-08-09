@@ -45,14 +45,27 @@ func acquireRunLock(dir string) error {
 // comment). Not used by acquireRunLock's own error message, which reports the
 // path rather than the fd.
 func tryRunLock(path string) (int, error) {
-	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR, 0644)
+	// 0600, not 0644: flock only requires a readable descriptor, so a
+	// world/group-readable lock file would let any local user hold it open
+	// (e.g. `flock -x <path> -c 'sleep inf'`) and starve the guard from ever
+	// starting, including at boot. O_CLOEXEC keeps the descriptor from leaking
+	// into a backend child (pfctl/nft) that outlives the daemon, which would
+	// otherwise hold the flock past this process's own exit.
+	fd, err := syscall.Open(path, syscall.O_CREAT|syscall.O_RDWR|syscall.O_CLOEXEC, 0600)
 	if err != nil {
 		return -1, fmt.Errorf("open lock file %s: %w", path, err)
+	}
+	// O_CREAT's mode only applies to a newly-created file, so an upgrade from
+	// a build that created this file 0644 would otherwise keep the looser
+	// mode forever. Enforce 0600 unconditionally.
+	if err := syscall.Fchmod(fd, 0600); err != nil {
+		_ = syscall.Close(fd)
+		return -1, fmt.Errorf("chmod lock file %s: %w", path, err)
 	}
 	if err := syscall.Flock(fd, syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = syscall.Close(fd)
 		if errors.Is(err, syscall.EWOULDBLOCK) {
-			return -1, fmt.Errorf("another dezhban is already running (holds %s) — see `dezhban status`", path)
+			return -1, fmt.Errorf("%w (holds %s) — see `dezhban status`", ErrRunLockHeld, path)
 		}
 		return -1, fmt.Errorf("lock %s: %w", path, err)
 	}

@@ -330,8 +330,28 @@ func cmdRun(args []string) int {
 		log.Warn("state directory not reachable; the single-instance lock will still be attempted", "err", stateDirErr)
 	}
 	if err := acquireRunLock(stateDir()); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		return 1
+		// Only genuine contention — another dezhban already holds the lock —
+		// is a reason to refuse to start: two daemons both calling
+		// Backend.Apply is the exact race this lock exists to prevent. Any
+		// other failure (the state directory above being unwritable, a full
+		// disk, a permission error) must degrade to "no single-instance
+		// protection this run", never to "the kill switch does not start" —
+		// the same principle EnsureDir's own tolerated failure follows for
+		// the directory underneath it.
+		if errors.Is(err, ErrRunLockHeld) {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		log.Warn("single-instance lock unavailable; continuing without it — enforcement is not gated on this lock", "err", err)
+	}
+
+	// A fresh daemon start already re-applies the initial posture
+	// unconditionally below (runGuard's startup Apply), so any panic-disarm
+	// marker left over from a PRIOR run has done its job — clear it now, or
+	// it would silently suppress this run's own enforcement verification
+	// forever, until someone thought to run `dezhban unblock`.
+	if err := clearPanicMarker(stateDir()); err != nil {
+		log.Debug("clear panic-disarm marker failed", "err", err)
 	}
 
 	// Persistent log capture, always on: every daemon run appends to
@@ -670,6 +690,8 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
 		EndpointGrace:           cfg.VPN.EndpointGrace,
 		VerifyInterval:          adv.VerifyInterval,
+		PanicDisarmed:           func() bool { return panicMarkerPresent(stateDir()) },
+		ClearPanicDisarm:        func() error { return clearPanicMarker(stateDir()) },
 		LivenessRedial:          adv.LivenessRedial,
 		AutoArm:                 cfg.VPN.AutoArm,
 		ArmAtBoot:               armAtBoot,
@@ -1100,6 +1122,13 @@ func cmdUnblock(args []string) int {
 		fmt.Fprintln(os.Stderr, "unblock failed:", err)
 		return 1
 	}
+	// This path runs as root with no daemon involved (or bypassing one via
+	// --force), so it clears the panic-disarm marker itself — the
+	// control-socket path instead asks the running daemon to clear it (see
+	// runner.Options.ClearPanicDisarm), since that path may run unprivileged.
+	if err := clearPanicMarker(stateDir()); err != nil {
+		fmt.Fprintln(os.Stderr, "unblock: warning — could not clear the panic-disarm marker:", err)
+	}
 	fmt.Println("dezhban: network unblocked")
 	return 0
 }
@@ -1126,6 +1155,17 @@ func cmdPanic(args []string) int {
 	if err := fw.Cleanup(); err != nil {
 		fmt.Fprintln(os.Stderr, "panic: teardown reported an error (rules may persist):", err)
 		return 1
+	}
+	// Tell a daemon that might still be running (this command is deliberately
+	// daemon-independent, so there is no other way to reach it) to stand its
+	// enforcement verification down — otherwise it would notice the rules
+	// missing on its next VerifyInterval tick and silently put them back,
+	// turning this escape hatch into a brief flicker. Best-effort: a failure
+	// to write the marker must never fail `panic` itself, since the teardown
+	// above is the half of this command that actually matters.
+	if err := setPanicMarker(stateDir()); err != nil {
+		fmt.Fprintln(os.Stderr, "panic: warning — could not record the teardown; if dezhban is still "+
+			"running, its enforcement verification may re-apply the rules within a minute:", err)
 	}
 	fmt.Println("dezhban: panic teardown complete — all dezhban rules removed, connectivity restored")
 	return 0

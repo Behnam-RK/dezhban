@@ -5,6 +5,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 func hasCall(calls []string, want string) bool {
@@ -510,4 +512,196 @@ func TestReloadedRedialBudgetDecidesTheNextDrop(t *testing.T) {
 				"bound did not bind until restart. calls = %v", be.calls)
 		}
 	})
+}
+
+// vpn.advanced.verifyInterval is declared live-appliable, which is the same
+// promise as the redial-budget tests above: the run loop's verifyTick is
+// created/stopped/reset by applyLive, not merely a field getting copied.
+// Booting with verification OFF and never calling IsBlocked proves the
+// ticker did not already exist; a reload that turns it on has to actually
+// start calling IsBlocked, and a rules-missing finding it discovers has to
+// reach a repair — the same two-part promise TestReloadedRedialBudgetDecidesTheNextDrop
+// pins for the redial ledger.
+func TestReloadedVerifyIntervalStartsCheckingLive(t *testing.T) {
+	var calls atomic.Int32
+	be := &fakeBackend{isBlockedFn: func() (bool, error) {
+		calls.Add(1)
+		return false, nil // missing, every time — a repair should follow
+	}}
+	ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+	defer cancel()
+
+	reloadC := make(chan LiveSettings, 1)
+	reloadC <- LiveSettings{
+		Interval:       time.Hour,
+		VerifyInterval: 10 * time.Millisecond, // the change under test: off → on
+	}
+
+	o := Options{
+		Monitor:        steadyMonitor{cc: "US"},
+		Decider:        decision.New([]string{"IR"}, 1),
+		Backend:        be,
+		Log:            discardLog(),
+		Interval:       time.Hour, // the reload and the verify ticker are the only events
+		Tunnels:        []string{"utun4"},
+		Endpoints:      []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		VerifyInterval: -1, // the config.Disabled sentinel: no ticker exists at boot
+		ReloadC:        reloadC,
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls.Load() == 0 {
+		t.Fatal("IsBlocked was never called; reloading vpn.advanced.verifyInterval on did not start the ticker")
+	}
+
+	guards := 0
+	for _, c := range be.calls {
+		if c == "apply-guard" {
+			guards++
+		}
+	}
+	if guards < 2 {
+		t.Errorf("apply-guard count = %d, want at least 2 (startup + a repair from the newly-live "+
+			"verify tick); calls = %v", guards, be.calls)
+	}
+}
+
+// The other half of the same promise: disabling verification live must stop
+// the ticker AND clear whatever finding it last published — resetVerify()'s
+// whole reason to exist (see its doc comment in runner.go). Without that
+// call, a "rules missing" finding from before the reload would keep being
+// republished forever off a tick that no longer runs, misreporting an
+// enforcement problem while the daemon is correctly idle.
+func TestReloadedVerifyIntervalDisableClearsStaleFinding(t *testing.T) {
+	be := &fakeBackend{isBlockedFn: func() (bool, error) { return false, nil }} // missing, forever
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	reloadC := make(chan LiveSettings, 1)
+
+	var (
+		mu       sync.Mutex
+		snaps    []state.Snapshot
+		reloaded bool
+	)
+	o := Options{
+		Monitor:        steadyMonitor{cc: "US"},
+		Decider:        decision.New([]string{"IR"}, 1),
+		Backend:        be,
+		Log:            discardLog(),
+		Interval:       time.Hour,
+		Tunnels:        []string{"utun4"},
+		Endpoints:      []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		VerifyInterval: 10 * time.Millisecond, // on at boot, so a finding can accumulate first
+		ReloadC:        reloadC,
+	}
+	o.Publish = func(s state.Snapshot) {
+		mu.Lock()
+		defer mu.Unlock()
+		snaps = append(snaps, s)
+		// The moment a Missing finding is actually published, turn
+		// verification off — event-driven so the test needs no sleep and
+		// cannot race the first verify tick.
+		if s.Verify != nil && s.Verify.Missing && !reloaded {
+			reloaded = true
+			ls := o.Live()
+			ls.VerifyInterval = -1 // the config.Disabled sentinel
+			select {
+			case reloadC <- ls:
+			default:
+			}
+		}
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !reloaded {
+		t.Fatal("no Missing finding was ever published; this fixture tests nothing")
+	}
+
+	// The LAST live snapshot (shutdown publishes a terminal posture:"stopped"
+	// record that carries no Verify either way, which would pass regardless of
+	// whether resetVerify actually ran).
+	var last *state.Snapshot
+	for i := len(snaps) - 1; i >= 0; i-- {
+		if snaps[i].Posture != "stopped" {
+			last = &snaps[i]
+			break
+		}
+	}
+	if last == nil {
+		t.Fatal("no live snapshot found after the reload")
+	}
+	if last.Verify != nil {
+		t.Errorf("Verify = %+v after disabling verifyInterval; want nil — resetVerify() did not run", last.Verify)
+	}
+}
+
+// vpn.advanced.livenessRedial is declared live-appliable too, but unlike the
+// windows above it needs no ticker of its own — maybeAutoWindow's zombie-widen
+// branch just reads o.LivenessRedial directly on every geoTick (see runner.go).
+// So the live-reload promise here is narrower but just as real: a zombie streak
+// that has ALREADY crossed the hysteresis threshold while the key was off must
+// still earn its one automatic attempt the moment a reload turns it on, rather
+// than waiting for an entirely new streak to form.
+func TestReloadedLivenessRedialLetsAStandingStreakOpenAWindow(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	reloadC := make(chan LiveSettings, 1)
+
+	var (
+		mu       sync.Mutex
+		reloaded bool
+	)
+	o := Options{
+		Monitor:   steadyFailMonitor{}, // every exit check fails — a standing zombie streak
+		Decider:   decision.New([]string{"IR"}, 2),
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  10 * time.Millisecond,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:   edgeWatcher(100000), // interface reports up for the whole run
+		// LivenessRedial left false: off at boot, same as the key's real default.
+		RedialWindow:       30 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
+		ReloadC:            reloadC,
+	}
+	o.Publish = func(s state.Snapshot) {
+		mu.Lock()
+		defer mu.Unlock()
+		// The moment the streak is actually reported, turn the key on —
+		// event-driven, so the test cannot race the streak crossing
+		// hysteresis and needs no sleep to line the two up.
+		if s.Zombie != nil && s.Zombie.Checks >= 2 && !reloaded {
+			reloaded = true
+			ls := o.Live()
+			ls.LivenessRedial = true // the change under test: off → on, mid-streak
+			select {
+			case reloadC <- ls:
+			default:
+			}
+		}
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !reloaded {
+		t.Fatal("the zombie streak never reached hysteresis; this fixture tests nothing")
+	}
+	if !hasCall(be.calls, "apply-switch") {
+		t.Errorf("no automatic window opened after vpn.advanced.livenessRedial was reloaded on for an "+
+			"already-standing streak; calls = %v", be.calls)
+	}
 }

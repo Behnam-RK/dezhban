@@ -2,14 +2,44 @@ package runner
 
 import (
 	"context"
+	"errors"
 	"net/netip"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/decision"
+	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/state"
 )
+
+// scriptedZombieMonitor fails every lookup except the call at successAt
+// (0-indexed), which succeeds — just enough to genuinely resolve a zombie
+// streak (the same way a real recovered exit would) so a second, distinct
+// streak can start immediately after, all without the tunnel interface
+// itself ever reporting down.
+type scriptedZombieMonitor struct {
+	mu        sync.Mutex
+	calls     int
+	successAt int
+}
+
+func (m *scriptedZombieMonitor) Poll(ctx context.Context) <-chan monitor.Result {
+	ch := make(chan monitor.Result)
+	go func() { <-ctx.Done(); close(ch) }()
+	return ch
+}
+
+func (m *scriptedZombieMonitor) Once(context.Context) (monitor.Reading, error) {
+	m.mu.Lock()
+	n := m.calls
+	m.calls++
+	m.mu.Unlock()
+	if n == m.successAt {
+		return monitor.Reading{CountryCode: "US"}, nil
+	}
+	return monitor.Reading{}, errors.New("lookup failed")
+}
 
 // dezhban's posture never escalates on a lookup failure alone — an unknown
 // exit country HOLDS the current posture rather than flipping it (see
@@ -64,6 +94,13 @@ func TestZombieStreakReportedButRedialStaysOffByDefault(t *testing.T) {
 // redial window through the EXISTING trigger-2 machinery — this is that
 // trigger widening what counts as "down", not a fourth trigger, so it has to
 // land on the same apply-switch path an ordinary tunnel drop uses.
+//
+// Exactly ONE window, never more: the run's 400ms comfortably outlasts a
+// 30ms window plus the ~30ms (Hysteresis=2 × 15ms interval) it takes the
+// streak to re-cross the threshold once the window closes, so a version that
+// reopens on every expiry (the bug resetZombie's full/partial split fixed —
+// zombieRedialTried was being cleared just because a window was open, not
+// because the hang had actually resolved) would open several here, not one.
 func TestZombieStreakOpensRedialWindowWhenEnabled(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
@@ -92,8 +129,10 @@ func TestZombieStreakOpensRedialWindowWhenEnabled(t *testing.T) {
 			switches++
 		}
 	}
-	if switches == 0 {
-		t.Fatalf("no redial window opened with livenessRedial on; calls = %v", be.calls)
+	if switches != 1 {
+		t.Fatalf("apply-switch called %d time(s) for one continuous, never-resolving zombie streak; "+
+			"want exactly 1 — a streak's window expiring must never reopen a new one on its own. calls = %v",
+			switches, be.calls)
 	}
 }
 
@@ -103,6 +142,15 @@ func TestZombieStreakOpensRedialWindowWhenEnabled(t *testing.T) {
 // retryAutoWindow's guard must recognise a standing zombie streak as "the
 // drop is still open", not just tunnelUp == false, or a refused
 // liveness-redial attempt would never get a second chance.
+//
+// A single continuous streak, though, gets at most ONE automatic attempt —
+// its window expiring must never reopen a new one on its own (see
+// resetZombie's full/partial split in runner.go, which fixed exactly that:
+// an earlier version reset zombieRedialTried whenever a window was open,
+// letting a still-hung tunnel reopen a window every expiry). So the refusal
+// this test needs has to come from a SECOND, genuinely distinct streak
+// spending a budget the FIRST streak's own grant already mostly used up —
+// not from the same streak reattempting after its window closes.
 func TestAZombieRefusedRedialRetriesWithoutTheTunnelGoingDown(t *testing.T) {
 	be := &fakeBackend{}
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
@@ -113,11 +161,17 @@ func TestAZombieRefusedRedialRetriesWithoutTheTunnelGoingDown(t *testing.T) {
 		snaps []state.Snapshot
 	)
 	o := Options{
-		// The lookup always fails — that is what makes it a zombie, and it
-		// means no confirmed exit ever closes a window early: every window
-		// costs its full grant, which is what makes the budget reachable
-		// inside a test's lifetime.
-		Monitor:        steadyFailMonitor{},
+		// Fails every lookup except call index 3, which succeeds — just
+		// enough to genuinely resolve the FIRST zombie streak right after its
+		// window closes, so a SECOND streak starts immediately and is the one
+		// that gets refused. Index 3, not 2: index 0 is runGuard's own
+		// pre-loop startup observation (len(tunnels)>0 && len(endpoints)>0),
+		// which never touches zombieChecks; indices 1-2 are the two real
+		// geoTick failures that cross the Hysteresis(2) threshold and open
+		// the first window. No confirmed exit ever closes a window EARLY
+		// (both streaks' windows suppress lookups entirely while open), so
+		// each granted window costs its full duration.
+		Monitor:        &scriptedZombieMonitor{successAt: 3},
 		Decider:        decision.New([]string{"IR"}, 2),
 		Backend:        be,
 		Log:            discardLog(),
@@ -128,9 +182,9 @@ func TestAZombieRefusedRedialRetriesWithoutTheTunnelGoingDown(t *testing.T) {
 		LivenessRedial: true,
 		RedialWindow:   20 * time.Millisecond,
 		// Room for one full window and no more, refilling 120ms after the
-		// first window's cost is recorded — same shape as
-		// TestARefusedRedialRetriesWhenTheBudgetRefills, but with no down edge
-		// to drive the second attempt.
+		// first streak's window cost is recorded — same shape as
+		// TestARefusedRedialRetriesWhenTheBudgetRefills, but two zombie
+		// streaks stand in for the two ordinary drops that fixture uses.
 		RedialBudget:       25 * time.Millisecond,
 		RedialBudgetWindow: 120 * time.Millisecond,
 		Publish: func(s state.Snapshot) {
@@ -146,7 +200,8 @@ func TestAZombieRefusedRedialRetriesWithoutTheTunnelGoingDown(t *testing.T) {
 	defer mu.Unlock()
 
 	// A refusal must have been published, or the test proved nothing: the
-	// first crossing has to have been granted and spent the budget already.
+	// second streak's attempt has to have been refused because the first
+	// streak's window already spent the budget.
 	refusedAt := -1
 	for i, s := range snaps {
 		if s.Redial != nil {
@@ -186,6 +241,18 @@ func TestAZombieRefusedRedialRetriesWithoutTheTunnelGoingDown(t *testing.T) {
 		if s.Drop != nil {
 			t.Fatalf("a tunnel drop was recorded; this fixture's tunnel must never go down: %+v", *s.Drop)
 		}
+	}
+
+	// Exactly two automatic windows total — one grant per streak, never a
+	// third from either streak reopening on its own once its window expires.
+	var switches int
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			switches++
+		}
+	}
+	if switches != 2 {
+		t.Errorf("apply-switch called %d time(s), want exactly 2 (one grant per streak); calls = %v", switches, be.calls)
 	}
 }
 

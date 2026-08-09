@@ -179,6 +179,33 @@ func TestRenderBlockScriptSwitchWindowRestricted(t *testing.T) {
 	}
 }
 
+// expectedOutboundAction is what Apply persists for IsBlocked's drift check
+// (see wfp_windows.go), so it must agree with what renderBlockScript actually
+// installs — pinned directly rather than only indirectly via the script string.
+func TestExpectedOutboundAction(t *testing.T) {
+	cases := []struct {
+		name string
+		p    Policy
+		want string
+	}{
+		{"guard", Policy{Mode: ModeGuard, TunnelIfaces: []string{"utun4"}}, "Block"},
+		{"full block", Policy{Mode: ModeFullBlock}, "Block"},
+		{"unrestricted switch window", Policy{Mode: ModeSwitchWindow}, "Allow"},
+		{"restricted switch window", Policy{
+			Mode:         ModeSwitchWindow,
+			WindowProtos: []string{"udp"},
+			WindowPorts:  []int{51820},
+		}, "Block"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := expectedOutboundAction(c.p); got != c.want {
+				t.Errorf("expectedOutboundAction(%+v) = %q, want %q", c.p, got, c.want)
+			}
+		})
+	}
+}
+
 func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {
 	s := renderBlockScript(Policy{
 		Mode:         ModeFullBlock,

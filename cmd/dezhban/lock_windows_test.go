@@ -2,7 +2,10 @@
 
 package main
 
-import "testing"
+import (
+	"errors"
+	"testing"
+)
 
 // Unlike lock_unix_test.go, there is no exposed seam here comparable to
 // tryRunLock: acquireRunLock's doc comment explains why the handle returned by
@@ -18,8 +21,15 @@ func TestAcquireRunLockRefusesASecondHolder(t *testing.T) {
 	if err := acquireRunLock(dir); err != nil {
 		t.Fatalf("first acquire: %v", err)
 	}
-	if err := acquireRunLock(dir); err == nil {
+	err := acquireRunLock(dir)
+	if err == nil {
 		t.Fatal("second acquire on the same directory succeeded; want refusal")
+	}
+	// cmdRun uses errors.Is(err, ErrRunLockHeld) to distinguish genuine
+	// contention (refuse to start) from every other lock failure (warn and
+	// continue) — see lock.go's doc comment.
+	if !errors.Is(err, ErrRunLockHeld) {
+		t.Fatalf("second acquire error = %v, want errors.Is(err, ErrRunLockHeld)", err)
 	}
 }
 

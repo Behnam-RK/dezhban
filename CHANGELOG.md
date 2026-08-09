@@ -16,12 +16,18 @@ current as you land changes.
 
 - **Enforcement verification** (`vpn.advanced.verifyInterval`, default `1m`).
   The run loop now periodically confirms the firewall rules it believes are
-  installed are actually still there, re-applying the standing posture the
-  instant they are not. Every other rule change was already triggered by
-  something dezhban itself did — a tunnel change, an endpoint refresh, a
-  posture flip; this is the only one that notices a ruleset removed from
-  OUTSIDE the daemon (another firewall tool, `pfctl -F all`,
-  `nft flush ruleset`, an OS ruleset reload). Reported in `state.verify`
+  installed are actually still there AND still enforcing — not just present
+  but disconnected from what makes them bite (the pf main ruleset no longer
+  referencing our anchor, an nft chain's policy rewritten off `drop` in
+  place, a Windows profile's outbound default flipped back to Allow while
+  our rules sit untouched) — re-applying whatever posture is currently in
+  force (the standing guard, a full block, or an open switch/redial window
+  or pause) the instant either check fails. Every other rule change was
+  already triggered by something dezhban itself did — a tunnel change, an
+  endpoint refresh, a posture flip; this is the only one that notices a
+  ruleset (or the switch that makes it matter) disturbed from OUTSIDE the
+  daemon (another firewall tool, `pfctl -F all`, `nft flush ruleset`, an OS
+  ruleset reload). Reported in `state.verify`
   (`status --json`), the plain-text `dezhban status`/menubar posture sentence,
   and turns the menubar icon amber, only while something is wrong;
   disablable (`"0"`) from the CLI or the macOS app's Settings pane, and an
@@ -55,6 +61,16 @@ current as you land changes.
   startup — firewall backend reachable, state directory writable, tunnels
   configured/detected, endpoints known, whether this host has ever observed a
   tunnel up — diagnostic only, never blocking startup.
+
+### Changed
+
+- The automatic-redial-refusal log lines no longer hardcode "vpn tunnel
+  down", since a refusal can now also come from the zombie-tunnel liveness
+  trigger, whose interface never goes down: `"vpn tunnel down — no redial
+  window (...)"` is now `"no automatic redial window (...)"`, and
+  `"vpn tunnel down — redial window suppressed"` is now `"redial window
+  suppressed"`. Anyone grepping or alerting on the old strings should update
+  the pattern.
 
 ## [0.9.0] - 2026-07-29
 

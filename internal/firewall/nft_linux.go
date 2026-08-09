@@ -79,10 +79,22 @@ func (b *nftBackend) Unblock() error {
 	return nil
 }
 
-// IsBlocked reports whether the `inet dezhban` table exists. Unlike pf there is
-// no separate enabled/disabled state: a present table is always enforcing.
+// IsBlocked reports whether the `inet dezhban` table exists AND its output
+// chain's policy is still drop.
+//
+// The table existing is not sufficient on its own: nft lets a chain's hook
+// policy be rewritten in place (`nft add chain inet dezhban output { policy
+// accept; }`) without deleting or recreating the table, which leaves every
+// accept rule we installed intact while unmatched egress — the actual
+// default-deny this whole ruleset exists to provide — sails straight through.
+// A bare table-existence check would report "blocked" through that gap the
+// whole time. `policy drop` is the literal text nft echoes back for the
+// chain's hook policy in `list table`, so checking for it here catches that
+// drift the same way pf's anchor-reference check (pf_darwin.go) and
+// Windows' DefaultOutboundAction check (wfp_windows.go) catch theirs.
 func (b *nftBackend) IsBlocked() (bool, error) {
-	if _, err := nft("", "list", "table", "inet", tableName); err != nil {
+	out, err := nft("", "list", "table", "inet", tableName)
+	if err != nil {
 		// nft exits non-zero when the table does not exist. Distinguish that
 		// (not blocked) from a real failure by matching the kernel's message.
 		if strings.Contains(err.Error(), "No such file or directory") ||
@@ -91,7 +103,7 @@ func (b *nftBackend) IsBlocked() (bool, error) {
 		}
 		return false, err
 	}
-	return true, nil
+	return strings.Contains(out, "policy drop"), nil
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any
