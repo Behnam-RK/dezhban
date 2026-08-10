@@ -139,6 +139,61 @@ current as you land changes.
   zero value, which never matched the wanted action and triggered an
   unwarranted repair; it is now treated as an unreadable check, the same
   discipline already applied to a fully failed query.
+- **A local, unprivileged process could block the Windows kill switch from
+  ever starting.** The single-instance lock's mutex lived under a predictable
+  `Global\` name, so anyone could pre-create it first and either get treated
+  as the legitimate "already running" holder or deny the daemon's own
+  `CreateMutexW` with a hostile DACL. It now lives inside a boundary-restricted
+  private namespace that only `LocalSystem` or `BUILTIN\Administrators` can
+  create or open objects in, falling back to the old name only if that setup
+  fails.
+- **`dezhban panic`'s teardown could be silently undone by a transient read
+  error.** The running daemon checked whether its panic marker was still
+  present with a bare stat that treated ANY error — not just a missing file —
+  as "gone", so a momentary I/O or permission hiccup could make enforcement
+  verification re-apply the very posture the operator just tore down. Only a
+  definite "not found" now counts as absent.
+- **`dezhban doctor`'s liveness check now reports a suspended `dezhban panic`
+  teardown**, and no longer claims "enforcement is holding" when it genuinely
+  can't confirm that (an unreadable firewall, or a repair attempt that itself
+  failed) — both previously fell through to the same reassuring summary a
+  routine, already-repaired finding gets.
+- **Enforcement verification's repair counter and log line no longer claim
+  success before the re-apply actually lands.** A repair whose
+  `Backend.Apply` call itself failed was previously counted and reported as
+  completed; it is now counted only once the re-apply confirms, and a failed
+  attempt surfaces through the daemon's normal enforcement-error reporting
+  instead.
+- **Live-disabling `vpn.advanced.verifyInterval` while `dezhban panic` had
+  suspended verification could silently swallow the next "verification
+  suspended" warning** if the interval was later re-enabled. The suspended
+  flag is now reset when the interval is turned off, so the warning fires
+  again on the next suspend.
+- **Live-disabling `vpn.advanced.livenessRedial` no longer leaves a standing
+  zombie-tunnel redial refusal free to open a window anyway** once its
+  budget/cooldown lifts — the retry now re-checks the live setting, not just
+  whether the streak is still standing.
+- **Exit-IP change observation now also covers readings that land FULL
+  BLOCK**, not only allowed ones — a failover between two servers in the same
+  forbidden country previously went unrecorded, as did the very first
+  reading whenever startup itself observed a blocked country.
+- **`dezhban run`'s startup self-test no longer delays the boot-time firewall
+  apply.** Its firewall-reachability check (and, with auto-discovery on, its
+  endpoint resolve) now run off the startup path instead of ahead of the very
+  `Apply(guard)` call ADR-0008's arm-at-boot promise depends on landing
+  immediately. The self-test's "state directory writable" and "endpoints
+  known" fields also now probe a real write and a real resolve instead of
+  inferring success from configuration alone.
+- **Windows enforcement verification no longer misreports drift after its own
+  bookkeeping write fails.** The write that records what `Apply` last set is
+  atomic, so a failure left the PREVIOUS `Apply`'s value on disk; `IsBlocked`'s
+  drift check then compared a live, correctly re-applied profile against that
+  stale value and could report a false repair. The stale record is now
+  cleared on a failed write instead of left in place.
+- Config/state writes made through the shared `atomicfile` helper now also
+  fsync the containing directory after the rename, hardening durability
+  across a crash on filesystems that require it (covers the panic marker and
+  the arm-at-boot record, among others).
 
 ## [0.9.0] - 2026-07-29
 

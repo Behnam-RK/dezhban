@@ -129,6 +129,52 @@ func TestBuildLivenessCheck(t *testing.T) {
 			t.Errorf("details = %v, want 2 lines", c.Details)
 		}
 	})
+
+	// A verify read failure means doctor has no basis to claim enforcement is
+	// holding at all — it must say so distinctly, not fold into the generic
+	// "holding, but something needs attention" summary written for confirmed
+	// conditions like a completed repair or a zombie diagnosis.
+	t.Run("verify read error reports could-not-confirm, not holding", func(t *testing.T) {
+		snap := state.Snapshot{Verify: &state.VerifyState{Err: "permission denied"}}
+		c := buildLivenessCheck(snap, true)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if !strings.Contains(c.Summary, "could not confirm") {
+			t.Errorf("summary = %q, want it to say enforcement could not be confirmed", c.Summary)
+		}
+	})
+
+	// A failed enforcement action (a repair or apply that didn't land) must
+	// surface even with no Verify state at all — EnforcementErr is its own
+	// signal, set by the run loop's general apply path, not just verification.
+	t.Run("enforcement error reports could-not-confirm", func(t *testing.T) {
+		snap := state.Snapshot{EnforcementErr: "apply: exit status 1"}
+		c := buildLivenessCheck(snap, true)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if len(c.Details) != 1 || !strings.Contains(c.Details[0], "apply: exit status 1") {
+			t.Errorf("details = %v", c.Details)
+		}
+		if !strings.Contains(c.Summary, "could not confirm") {
+			t.Errorf("summary = %q, want it to say enforcement could not be confirmed", c.Summary)
+		}
+	})
+
+	// PanicDisarmed means verification is deliberately suspended — doctor
+	// must say so by name rather than silently reporting OK while every
+	// automatic repair path stands down (see runner.Options.PanicDisarmed).
+	t.Run("panic disarmed reports suspended verification", func(t *testing.T) {
+		snap := state.Snapshot{PanicDisarmed: true}
+		c := buildLivenessCheck(snap, true)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if !strings.Contains(c.Summary, "panic") {
+			t.Errorf("summary = %q, want it to mention panic", c.Summary)
+		}
+	})
 }
 
 func TestBuildControlCheck(t *testing.T) {

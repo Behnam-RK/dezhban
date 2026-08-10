@@ -46,5 +46,20 @@ func Write(path string, data []byte, mode os.FileMode) error {
 	if err := os.Chmod(tmpName, mode); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+
+	// The rename above is atomic, but without fsyncing the containing
+	// directory the rename itself is not guaranteed durable across a crash
+	// or power loss on filesystems that require it — the directory entry can
+	// still be sitting in write-back cache. Best-effort: some platforms and
+	// filesystems (Windows, some virtual/overlay FS) don't support syncing a
+	// directory handle at all, and this hardens durability rather than the
+	// atomicity the rename already guarantees on its own.
+	if dir, err := os.Open(filepath.Dir(path)); err == nil {
+		_ = dir.Sync()
+		dir.Close()
+	}
+	return nil
 }

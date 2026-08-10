@@ -77,6 +77,72 @@ func TestVerifyTickRepairsMissingRules(t *testing.T) {
 	}
 }
 
+// A repair attempt whose Backend.Apply itself fails must not be counted or
+// reported as a completed repair — Repairs must stay put and the failure
+// must surface through EnforcementErr instead, or an observer reading
+// "repairs=N" would believe the host is enforcing again when it is not.
+func TestVerifyTickDoesNotCountAFailedRepair(t *testing.T) {
+	var calls int
+	be := &fakeBackend{}
+	be.isBlockedFn = func() (bool, error) {
+		calls++
+		if calls == 1 {
+			return true, nil // first check: present, matching the successful startup apply
+		}
+		// From here on the rules are missing, and the repair Apply that
+		// verification is about to trigger fails too.
+		be.applyErr = errors.New("apply boom")
+		return false, nil
+	}
+
+	var snaps []state.Snapshot
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	o := Options{
+		Monitor:        steadyMonitor{cc: "US"},
+		Decider:        decision.New([]string{"IR"}, 1),
+		Backend:        be,
+		Log:            discardLog(),
+		Interval:       50 * time.Millisecond,
+		Tunnels:        []string{"utun4"},
+		Endpoints:      []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		VerifyInterval: 10 * time.Millisecond,
+		Publish:        func(s state.Snapshot) { snaps = append(snaps, s) },
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	if calls < 2 {
+		t.Fatalf("IsBlocked called %d times, want at least 2 (one present, one missing)", calls)
+	}
+
+	var sawFailedRepair, sawEnforcementErr bool
+	for _, s := range snaps {
+		if s.Verify == nil || !s.Verify.Missing {
+			continue
+		}
+		sawFailedRepair = true
+		if s.Verify.Repairs != 0 {
+			t.Errorf("Repairs = %d on a failed repair attempt, want 0", s.Verify.Repairs)
+		}
+		// enfErr is a single last-attempt variable shared with the regular
+		// poll tick's own vpnGeoStep call, which resets it to nil on a
+		// no-op steady reading — a pre-existing quirk unrelated to what
+		// this test pins, so only require it show up on SOME snapshot
+		// rather than every one.
+		if s.EnforcementErr != "" {
+			sawEnforcementErr = true
+		}
+	}
+	if !sawEnforcementErr {
+		t.Error("no snapshot with a failed repair ever surfaced EnforcementErr")
+	}
+	if !sawFailedRepair {
+		t.Fatal("no published snapshot reported the missing ruleset")
+	}
+}
+
 // Enforcement verification finding the rules gone must re-apply even an
 // UNRESTRICTED switch window's policy — the one case reapplyWindow's own
 // ordinary reason (a tunnel/endpoint change) would skip, since an unrestricted

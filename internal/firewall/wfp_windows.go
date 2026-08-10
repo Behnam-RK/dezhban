@@ -116,12 +116,18 @@ func (b *wfpBackend) Apply(p Policy) error {
 	// Best-effort: IsBlocked degrades to its old, weaker check if this is
 	// missing (e.g. leftover state from before this file existed), so a
 	// failure here must not fail the Apply that just succeeded. Written
-	// atomically (temp + rename): a plain WriteFile truncates in place, so a
-	// crash/power-loss mid-write would leave this file present-but-empty, and
-	// IsBlocked's drift check (comparing against "") would then read every
-	// correctly-applied profile as drifted, forever re-triggering repairs
-	// until the next successful Apply happens to overwrite it.
-	_ = writeAppliedAction(expectedOutboundAction(p))
+	// atomically (temp + rename), which means a failed write leaves the
+	// PREVIOUS Apply's value untouched on disk rather than truncating it —
+	// so on failure we remove it outright instead of leaving it in place.
+	// A stale-but-present file would make IsBlocked's drift check compare
+	// the live (correctly re-applied) profiles against what an EARLIER
+	// Apply set, not this one, misreporting real drift and triggering an
+	// unwanted repair. An absent file is already the designed fallback —
+	// "no record of what was last applied" degrades to the weaker
+	// group-existence-only check, not evidence of tampering.
+	if err := writeAppliedAction(expectedOutboundAction(p)); err != nil {
+		_ = os.Remove(appliedActionPath())
+	}
 	return nil
 }
 

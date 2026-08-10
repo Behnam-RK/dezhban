@@ -321,7 +321,7 @@ msg="dezhban's firewall rules are MISSING — something removed them; re-applyin
 ```
 
 **Cause.** Every other rule change dezhban makes is triggered by something it
-itself did — a tunnel change, an endpoint refresh, a posture flip. This message
+did — a tunnel change, an endpoint refresh, a posture flip. This message
 means something else removed the rules: another firewall tool, `pfctl -F all`
 / `nft flush ruleset` run by hand, an OS-level firewall reset, or a
 misbehaving script. Enforcement verification (`vpn.advanced.verifyInterval`,

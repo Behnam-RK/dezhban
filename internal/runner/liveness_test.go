@@ -256,6 +256,93 @@ func TestAZombieRefusedRedialRetriesWithoutTheTunnelGoingDown(t *testing.T) {
 	}
 }
 
+// Disabling vpn.advanced.livenessRedial live, after a zombie streak's
+// automatic attempt has already been refused by the budget, must cancel that
+// standing refusal's retry — not just future streaks. retryAutoWindow's
+// tunnelUp/dg.zombie guard alone would still let the retry fire once the
+// budget refills, silently bypassing the operator's just-disabled opt-in.
+// Same fixture as TestAZombieRefusedRedialRetriesWithoutTheTunnelGoingDown,
+// but the refusal triggers a reload turning livenessRedial off instead of
+// letting it stand.
+func TestDisablingLivenessRedialDropsAStandingZombieRefusal(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	reloadC := make(chan LiveSettings, 1)
+	var (
+		mu       sync.Mutex
+		snaps    []state.Snapshot
+		disabled bool
+	)
+	o := Options{
+		Monitor:            &scriptedZombieMonitor{successAt: 3},
+		Decider:            decision.New([]string{"IR"}, 2),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(100000), // interface reports up for the WHOLE run — no down edge, ever
+		LivenessRedial:     true,
+		RedialWindow:       20 * time.Millisecond,
+		RedialBudget:       25 * time.Millisecond,
+		RedialBudgetWindow: 120 * time.Millisecond,
+		ReloadC:            reloadC,
+	}
+	o.Publish = func(s state.Snapshot) {
+		mu.Lock()
+		defer mu.Unlock()
+		snaps = append(snaps, s)
+		// The moment the second streak's attempt is refused, turn
+		// livenessRedial off — event-driven so the test cannot race the
+		// refusal or the budget refilling.
+		if s.Redial != nil && !disabled {
+			disabled = true
+			ls := o.Live()
+			ls.LivenessRedial = false
+			select {
+			case reloadC <- ls:
+			default:
+			}
+		}
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+
+	if !disabled {
+		t.Fatal("no redial refusal was ever published; the budget never ran out and this fixture tests nothing")
+	}
+
+	refusedAt := -1
+	for i, s := range snaps {
+		if s.Redial != nil {
+			refusedAt = i
+			break
+		}
+	}
+	for _, s := range snaps[refusedAt+1:] {
+		if s.Switch != nil && s.Switch.Open && s.Switch.Trigger == state.TriggerAuto {
+			t.Fatalf("an automatic window opened after livenessRedial was disabled following the refusal: %+v", *s.Switch)
+		}
+	}
+
+	// Exactly ONE automatic window total — the first streak's grant — never
+	// a second from the disabled retry firing once the budget refilled.
+	var switches int
+	for _, c := range be.calls {
+		if c == "apply-switch" {
+			switches++
+		}
+	}
+	if switches != 1 {
+		t.Errorf("apply-switch called %d time(s), want exactly 1 (the first streak's grant only); calls = %v", switches, be.calls)
+	}
+}
+
 // A tunnel that plainly reports down must never be reported as a zombie — that
 // is a different, already-explained state (the guard holding a downed tunnel),
 // and conflating the two would blur two distinct diagnoses into one.

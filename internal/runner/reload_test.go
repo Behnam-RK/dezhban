@@ -2,6 +2,7 @@ package runner
 
 import (
 	"context"
+	"log/slog"
 	"net/netip"
 	"reflect"
 	"slices"
@@ -639,6 +640,91 @@ func TestReloadedVerifyIntervalDisableClearsStaleFinding(t *testing.T) {
 	}
 	if last.Verify != nil {
 		t.Errorf("Verify = %+v after disabling verifyInterval; want nil — resetVerify() did not run", last.Verify)
+	}
+}
+
+// recordingHandler is a minimal slog.Handler that keeps every record's
+// message, so a test can count how many times a specific log line fired
+// without depending on discardLog's silence.
+type recordingHandler struct {
+	mu   sync.Mutex
+	msgs []string
+}
+
+func (h *recordingHandler) Enabled(context.Context, slog.Level) bool { return true }
+func (h *recordingHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.msgs = append(h.msgs, r.Message)
+	return nil
+}
+func (h *recordingHandler) WithAttrs([]slog.Attr) slog.Handler { return h }
+func (h *recordingHandler) WithGroup(string) slog.Handler      { return h }
+
+func (h *recordingHandler) count(msg string) int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	n := 0
+	for _, m := range h.msgs {
+		if m == msg {
+			n++
+		}
+	}
+	return n
+}
+
+// verifySuspended (the edge-trigger flag guarding the "verification
+// suspended" log line) is only ever cleared by the verifyC tick's own
+// resume branch — so a reload that disables verifyInterval WHILE
+// panic-disarmed, stopping that tick forever, must clear it too. Otherwise a
+// later reload that re-enables verification finds verifySuspended already
+// true and the edge never re-fires, silently dropping the operator-visible
+// warning the second time around.
+func TestReloadedVerifyIntervalDisableResetsSuspendedFlag(t *testing.T) {
+	const suspendMsg = "enforcement verification suspended — `dezhban panic` tore down the rules " +
+		"deliberately; run `dezhban unblock` (or restart the daemon) to resume"
+
+	m := &fakePanicMarker{}
+	m.disarmed.Store(true) // panic-disarmed for the whole test
+	be := &fakeBackend{}
+	h := &recordingHandler{}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	reloadC := make(chan LiveSettings, 2)
+	o := Options{
+		Monitor:        steadyMonitor{cc: "US"},
+		Decider:        decision.New([]string{"IR"}, 1),
+		Backend:        be,
+		Log:            slog.New(h),
+		Interval:       time.Hour,
+		Tunnels:        []string{"utun4"},
+		Endpoints:      []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		VerifyInterval: 10 * time.Millisecond, // on at boot, so the first suspend edge fires early
+		PanicDisarmed:  m.Disarmed,
+		ReloadC:        reloadC,
+	}
+
+	go func() {
+		time.Sleep(60 * time.Millisecond) // let the first verify tick log the suspend edge
+		ls := o.Live()
+		ls.VerifyInterval = -1 // config.Disabled sentinel
+		reloadC <- ls
+
+		time.Sleep(60 * time.Millisecond) // stay disabled a while, still disarmed
+		ls2 := o.Live()
+		ls2.VerifyInterval = 10 * time.Millisecond // re-enable, panic still armed
+		reloadC <- ls2
+	}()
+
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	if got := h.count(suspendMsg); got < 2 {
+		t.Errorf("suspend-edge warning logged %d time(s), want at least 2 "+
+			"(once before the disable, once after re-enabling while still panic-disarmed)", got)
 	}
 }
 

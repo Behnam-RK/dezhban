@@ -70,8 +70,16 @@ func clearPanicMarkerBestEffort(dir string, warn func(err error)) {
 	}
 }
 
-// panicMarkerPresent reports whether panic's marker is currently set.
+// panicMarkerPresent reports whether panic's marker is currently set. Only a
+// definite os.IsNotExist counts as absent — any other stat error (a
+// transient I/O or permission blip) is indistinguishable from "still there"
+// and must not be read as absent, or a running daemon's enforcement
+// verification would silently re-apply the very posture panic just tore
+// down.
 func panicMarkerPresent(dir string) bool {
 	_, err := os.Stat(panicMarkerPath(dir))
-	return err == nil
+	if err == nil {
+		return true
+	}
+	return !os.IsNotExist(err)
 }

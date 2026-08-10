@@ -645,23 +645,59 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 
 	// Startup self-test: one Info line summarizing whether the pieces this
 	// daemon depends on are actually reachable. Diagnostic only, like CVG's
-	// equivalent — it never blocks or delays startup, and every enforcement
-	// decision downstream is fail-closed regardless of what this reports.
-	// Deliberately checks nothing an eager resolve would cost real work for
-	// (endpoint hostnames are left to the run loop's own first resolve moments
-	// later): "endpoints known" here means configured or auto-discoverable,
-	// not resolved, so this line adds one cheap backend read and nothing else.
-	backendReachable := true
-	if _, err := fw.IsBlocked(); err != nil {
-		backendReachable = false
-	}
-	log.Info("startup self-test",
-		"firewallBackendReachable", backendReachable,
-		"stateDirWritable", stateDirErr == nil,
-		"tunnelsConfiguredOrDetected", len(tunnels) > 0,
-		"endpointsKnown", len(cfg.VPN.Endpoints) > 0 || cfg.VPN.AutoDiscoverEndpoints,
-		"tunnelEverUpOnThisHost", armedRec.TunnelEverUp,
-	)
+	// equivalent — every enforcement decision downstream is fail-closed
+	// regardless of what this reports.
+	//
+	// Backgrounded, not inline: fw.IsBlocked() shells out (pfctl/nft/WFP —
+	// up to psTimeout on Windows) and an endpoint resolve can hit the network,
+	// and assembleOptions runs before runner.Run's first Apply(guard), so
+	// doing either synchronously here would directly delay that boot-time
+	// apply — undermining ADR-0008's promise to close the post-reboot leak
+	// window immediately. Logged from its own goroutine instead, arriving a
+	// beat after "run loop started" rather than gating it.
+	go func() {
+		backendReachable := true
+		if _, err := fw.IsBlocked(); err != nil {
+			backendReachable = false
+		}
+
+		// EnsureDir (called once by the caller before this) only creates,
+		// stats, and repairs the directory's mode — it never attempts a
+		// write. A directory that already existed with the right bits keeps
+		// reporting writable even after going read-only underneath it (a
+		// remount, a quota, an ACL change), so probe an actual write rather
+		// than trust stateDirErr alone.
+		stateDirWritable := stateDirErr == nil
+		if stateDirWritable {
+			probe := filepath.Join(stateDir(), ".selftest-write")
+			if f, err := os.Create(probe); err != nil {
+				stateDirWritable = false
+			} else {
+				f.Close()
+				os.Remove(probe)
+			}
+		}
+
+		// cfg.VPN.AutoDiscoverEndpoints==true only means discovery is
+		// configured to run — it says nothing about whether it actually
+		// found anything on this host. Resolve for real (safe here, off the
+		// critical path) so this reports the endpoint set that exists, not
+		// just the intent to look for one.
+		endpointCount := len(cfg.VPN.Endpoints)
+		if cfg.VPN.AutoDiscoverEndpoints {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			endpointCount = len(epSrc.Resolve(ctx).Addrs)
+			cancel()
+		}
+
+		log.Info("startup self-test",
+			"firewallBackendReachable", backendReachable,
+			"stateDirWritable", stateDirWritable,
+			"tunnelsConfiguredOrDetected", len(tunnels) > 0,
+			"endpointsKnown", endpointCount > 0,
+			"tunnelEverUpOnThisHost", armedRec.TunnelEverUp,
+		)
+	}()
 
 	return runner.Options{
 		Monitor:           mon,
@@ -1998,6 +2034,12 @@ func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
 		return c
 	}
 	var lines []string
+	// cannotConfirm distinguishes "enforcement is holding, but something
+	// needs attention" (a repair happened, or a diagnosis needs a look) from
+	// genuinely not knowing: an unreadable backend or a failed enforcement
+	// action means doctor has no basis to claim the firewall is holding at
+	// all, so it must not say so.
+	cannotConfirm := false
 	if snap.Verify != nil {
 		// Missing and Err are mutually exclusive by construction (state.VerifyState's
 		// own doc comment) — the run loop sets exactly one per failed check — so
@@ -2010,14 +2052,29 @@ func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
 					"something on this host keeps removing them.", snap.Verify.Repairs))
 		case snap.Verify.Err != "":
 			lines = append(lines, fmt.Sprintf("Could not read the firewall to verify enforcement: %s", snap.Verify.Err))
+			cannotConfirm = true
 		}
+	}
+	if snap.EnforcementErr != "" {
+		lines = append(lines, fmt.Sprintf(
+			"The last enforcement action failed: %s — dezhban could not confirm the firewall is enforcing.",
+			snap.EnforcementErr))
+		cannotConfirm = true
 	}
 	if snap.Zombie != nil {
 		lines = append(lines, fmt.Sprintf(
 			"Tunnel interface reports up, but %d consecutive exit checks through it have failed — "+
 				"it may need reconnecting. Guard holds either way; this is diagnosis, not a leak.", snap.Zombie.Checks))
 	}
-	if len(lines) > 0 {
+	switch {
+	case snap.PanicDisarmed:
+		c.Status = checkWarn
+		c.Summary = "`dezhban panic` tore the rules down and dezhban has not re-armed — enforcement verification is suspended."
+		lines = append(lines, "Run `dezhban unblock` (or restart dezhban) to resume automatic enforcement repair.")
+	case cannotConfirm:
+		c.Status = checkWarn
+		c.Summary = "could not confirm enforcement is holding — see details."
+	case len(lines) > 0:
 		c.Status = checkWarn
 		c.Summary = "enforcement is holding, but something needs attention."
 	}

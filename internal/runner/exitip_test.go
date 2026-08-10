@@ -61,6 +61,54 @@ func TestExitIPChangeIsObservedAndPublished(t *testing.T) {
 	}
 }
 
+// A failover between two servers in the same FORBIDDEN country still changes
+// the exit IP — and the readings that observe it are exactly the ones FULL
+// BLOCK is watching over, so excluding them here would leave "my exit
+// flapped" unexplained for the one posture where an operator most wants to
+// know. observeExitIP must run on every successful reading, not just an
+// ALLOWED one.
+func TestExitIPChangeIsObservedWhileBlocked(t *testing.T) {
+	be := &fakeBackend{}
+	ip1 := netip.MustParseAddr("203.0.113.10")
+	ip2 := netip.MustParseAddr("203.0.113.20")
+	ctx, cancel := context.WithCancel(context.Background())
+	mon := &fakeMonitor{cancel: cancel, results: []monitor.Result{
+		{Reading: monitor.Reading{IP: ip1, CountryCode: "IR"}}, // blocked country: nothing to compare against yet
+		{Reading: monitor.Reading{IP: ip1, CountryCode: "IR"}}, // same IP, still blocked: no change
+		{Reading: monitor.Reading{IP: ip2, CountryCode: "IR"}}, // different IP, still blocked: a change
+	}}
+	var snaps []state.Snapshot
+	o := Options{
+		Monitor:   mon,
+		Decider:   decision.New([]string{"IR"}, 1),
+		Backend:   be,
+		Log:       discardLog(),
+		Interval:  time.Millisecond,
+		Tunnels:   []string{"utun4"},
+		Endpoints: []netip.Addr{netip.MustParseAddr("198.51.100.7")},
+		Publish:   func(s state.Snapshot) { snaps = append(snaps, s) },
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+
+	var sawBlocked, sawChange bool
+	for _, s := range snaps {
+		if s.Blocked {
+			sawBlocked = true
+		}
+		if !s.ExitIPChangedAt.IsZero() {
+			sawChange = true
+		}
+	}
+	if !sawBlocked {
+		t.Fatal("posture never escalated to FULL BLOCK; this fixture tests nothing")
+	}
+	if !sawChange {
+		t.Error("ExitIPChangedAt was never set for an exit-IP change observed while blocked")
+	}
+}
+
 // A steady exit IP across every reading must never be reported as a change.
 func TestSteadyExitIPNeverReportsAChange(t *testing.T) {
 	be := &fakeBackend{}
