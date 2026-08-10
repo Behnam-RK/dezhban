@@ -21,7 +21,13 @@ const pfctlTimeout = 10 * time.Second
 func pfctl(stdin string, args ...string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), pfctlTimeout)
 	defer cancel()
+	return pfctlCtx(ctx, stdin, args...)
+}
 
+// pfctlCtx is pfctl with a caller-supplied context, so a run-loop caller that
+// issues several pfctl invocations back to back (e.g. IsBlocked) can share one
+// deadline instead of each call getting its own fresh pfctlTimeout budget.
+func pfctlCtx(ctx context.Context, stdin string, args ...string) (string, error) {
 	cmd := exec.CommandContext(ctx, "pfctl", args...)
 	if stdin != "" {
 		cmd.Stdin = strings.NewReader(stdin)

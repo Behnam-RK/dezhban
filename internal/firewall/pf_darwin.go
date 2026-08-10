@@ -3,6 +3,7 @@
 package firewall
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/netip"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 	"github.com/behnam-rk/dezhban/internal/state"
 )
 
@@ -139,7 +141,7 @@ func (b *pfBackend) Unblock() error {
 		if err != nil {
 			return fmt.Errorf("read pf.conf backup: %w", err)
 		}
-		if err := atomicWrite(pfConfPath, data, 0o644); err != nil {
+		if err := atomicfile.Write(pfConfPath, data, 0o644); err != nil {
 			return fmt.Errorf("restore pf.conf: %w", err)
 		}
 		_ = os.Remove(backupPath)
@@ -164,8 +166,17 @@ func (b *pfBackend) Unblock() error {
 	return nil
 }
 
+// IsBlocked issues three pfctl reads (anchor rules, pf status, main ruleset).
+// They share ONE pfctlTimeout deadline via pfctlCtx rather than each getting
+// its own fresh budget: the daemon's run loop calls IsBlocked from its single
+// goroutine on every verifyC tick, and window timers / geo ticks / control-
+// socket replies are select cases on that same loop — a bare 3x pfctl("", ...)
+// here could stall them for up to 3*pfctlTimeout under pf lock contention.
 func (b *pfBackend) IsBlocked() (bool, error) {
-	out, err := pfctl("", "-a", anchorName, "-s", "rules")
+	ctx, cancel := context.WithTimeout(context.Background(), pfctlTimeout)
+	defer cancel()
+
+	out, err := pfctlCtx(ctx, "", "-a", anchorName, "-s", "rules")
 	if err != nil {
 		return false, err
 	}
@@ -174,7 +185,7 @@ func (b *pfBackend) IsBlocked() (bool, error) {
 	}
 	// Anchor rules are loaded but only enforced while pf itself is enabled, so a
 	// stale anchor under a disabled pf must not report as blocked.
-	info, err := pfctl("", "-s", "info")
+	info, err := pfctlCtx(ctx, "", "-s", "info")
 	if err != nil {
 		return false, err
 	}
@@ -191,7 +202,7 @@ func (b *pfBackend) IsBlocked() (bool, error) {
 	// main ruleset as loaded right now, independent of what /etc/pf.conf says on
 	// disk, so this catches both a missing anchor line AND a main ruleset that
 	// was reloaded from some other file entirely.
-	main, err := pfctl("", "-s", "rules")
+	main, err := pfctlCtx(ctx, "", "-s", "rules")
 	if err != nil {
 		return false, err
 	}
@@ -422,7 +433,7 @@ func ensureAnchorRef() error {
 		body += "\n"
 	}
 	body += "# dezhban anchor (Phase 2) — removed on unblock by restoring the backup\n" + anchorRef + "\n"
-	if err := atomicWrite(pfConfPath, []byte(body), 0o644); err != nil {
+	if err := atomicfile.Write(pfConfPath, []byte(body), 0o644); err != nil {
 		return fmt.Errorf("append anchor to %s: %w", pfConfPath, err)
 	}
 	return nil
@@ -439,7 +450,7 @@ func backupPfConf() error {
 	if err != nil {
 		return fmt.Errorf("read %s for backup: %w", pfConfPath, err)
 	}
-	if err := atomicWrite(backupPath, data, 0o600); err != nil {
+	if err := atomicfile.Write(backupPath, data, 0o600); err != nil {
 		return fmt.Errorf("write pf.conf backup: %w", err)
 	}
 	return nil
@@ -458,37 +469,10 @@ func saveState(s savedState) error {
 	if err != nil {
 		return err
 	}
-	if err := atomicWrite(statePath, data, 0o600); err != nil {
+	if err := atomicfile.Write(statePath, data, 0o600); err != nil {
 		return fmt.Errorf("write state: %w", err)
 	}
 	return nil
-}
-
-// atomicWrite writes data to a temp file in the same directory, fsyncs it, then
-// renames it over path — so a crash mid-write can never leave a partially
-// written /etc/pf.conf or state file that a later restore would trust.
-func atomicWrite(path string, data []byte, mode os.FileMode) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".dezhban-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeds
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, mode); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
 }
 
 func loadState() (savedState, bool) {

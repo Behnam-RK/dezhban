@@ -56,11 +56,22 @@ current as you land changes.
   previous successful reading — purely informational, like the exit-country
   check it sits beside: it never affects `blocked`, `countryCode`, or the
   hysteresis streak. A failover between two servers in the same allowed
-  country changes nothing those fields report, but changes this.
+  country changes nothing those fields report, but changes this. Now also
+  reported in `dezhban doctor`'s "enforcement liveness" check (text and
+  `--json`) and the macOS app's Diagnostics pane — previously the field was
+  published but rendered nowhere.
 - **A startup self-test log line.** `dezhban run` now logs one summary at
   startup — firewall backend reachable, state directory writable, tunnels
   configured/detected, endpoints known, whether this host has ever observed a
   tunnel up — diagnostic only, never blocking startup.
+- **Panic-disarm status visibility.** `dezhban panic` tearing down the
+  firewall while a daemon keeps running (and every automatic Apply path
+  standing down because of it) is now reported to the operator instead of
+  being silent — `state.panicDisarmed` (`status --json`) and a "Panic
+  disarmed" headline that wins over the plain-text `dezhban status`/menubar
+  posture sentence, so `status`/the menubar can no longer say "Guarding" or
+  "Full block" while enforcement is actually torn down and waiting on
+  `dezhban unblock` (or a daemon restart).
 
 ### Changed
 
@@ -109,6 +120,25 @@ current as you land changes.
   check and the per-profile default-action query are now one invocation, so a
   slow PowerShell/WMI response can no longer nearly double the time a verify
   tick can hold up the run loop.
+- **macOS enforcement verification's three `pfctl` reads now share one
+  deadline instead of each getting its own.** Under `pf` lock contention a
+  verify tick could previously stall the run loop's single goroutine — window
+  timers, geo ticks, control-socket replies — for up to 3x `pfctl`'s 10s
+  timeout; it is now bounded to that timeout once, the same fix already
+  applied to the Windows backend above.
+- **A live daemon could briefly reinstate rules `dezhban panic` had just torn
+  down.** `panic` now records the panic-disarm marker BEFORE tearing down the
+  firewall rather than after — every automatic Apply path a running daemon
+  might take checks the marker first and only then reads the firewall, so the
+  old ordering left a window where such a check could land between the two
+  calls, see the rules already gone, find no marker yet, and silently
+  reinstate them.
+- **Windows enforcement verification no longer reports false rule drift when
+  a PowerShell/WMI hiccup drops one firewall profile's line from the query
+  output.** A profile missing from the parsed result used to read as the Go
+  zero value, which never matched the wanted action and triggered an
+  unwarranted repair; it is now treated as an unreadable check, the same
+  discipline already applied to a fully failed query.
 
 ## [0.9.0] - 2026-07-29
 

@@ -27,8 +27,9 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"path/filepath"
 	"strings"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // FileMode is the hash file's permission: readable and writable by root only.
@@ -68,35 +69,12 @@ func Save(path, tok string) error {
 	if strings.TrimSpace(tok) == "" {
 		return errors.New("refusing to enroll an empty control token")
 	}
-	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".control-token-*")
-	if err != nil {
-		return fmt.Errorf("stage control token: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
-
-	if err := tmp.Chmod(FileMode); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("secure control token: %w", err)
-	}
-	if _, err := tmp.WriteString(hashOf(tok) + "\n"); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write control token: %w", err)
-	}
 	// Flushed before the rename: an unsynced rename can publish a zero-length hash
 	// after a power loss, which Verify reads as "not enrolled" — locking out a
 	// token the user still holds. Same convention as internal/learned and
 	// internal/armed.
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("flush control token: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
+	if err := atomicfile.Write(path, []byte(hashOf(tok)+"\n"), FileMode); err != nil {
 		return fmt.Errorf("write control token: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("install control token: %w", err)
 	}
 	return nil
 }

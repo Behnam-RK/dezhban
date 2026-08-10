@@ -47,6 +47,39 @@ func assertDefaultDrop(t *testing.T, rs string) {
 	}
 }
 
+// TestOutputChainPolicyIsDrop exercises IsBlocked's drift-detection substring
+// match against the shape `nft list table inet dezhban` actually renders.
+// Captured by hand rather than run against a live kernel — nft requires
+// root/CAP_NET_ADMIN and this package has no test seam to fake it, same as
+// pf_darwin's TestMainRulesetReferencesAnchor and wfp_windows'
+// TestParseProfileQuery.
+func TestOutputChainPolicyIsDrop(t *testing.T) {
+	const dropPolicy = `table inet dezhban {
+	chain output {
+		type filter hook output priority 0; policy drop;
+		oifname "lo" accept
+		ip daddr 10.0.0.1 accept
+	}
+}`
+	if !outputChainPolicyIsDrop(dropPolicy) {
+		t.Errorf("expected policy drop to be found in:\n%s", dropPolicy)
+	}
+
+	// A chain's hook policy can be rewritten in place (`nft add chain inet
+	// dezhban output { policy accept; }`) without touching a single accept
+	// rule or deleting the table — the exact drift this check exists to catch.
+	const accept = `table inet dezhban {
+	chain output {
+		type filter hook output priority 0; policy accept;
+		oifname "lo" accept
+		ip daddr 10.0.0.1 accept
+	}
+}`
+	if outputChainPolicyIsDrop(accept) {
+		t.Errorf("expected no policy drop to be found in:\n%s", accept)
+	}
+}
+
 func TestRenderNftLegacyFullBlock(t *testing.T) {
 	p := Policy{
 		Mode: ModeFullBlock,

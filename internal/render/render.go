@@ -79,6 +79,20 @@ func Posture(s state.Snapshot) Display {
 // not recognise (an older or newer daemon), so a caller never needs its own
 // fallback.
 func Text(s state.Snapshot) Display {
+	if s.PanicDisarmed {
+		// `dezhban panic` tore the rules down deliberately and this daemon is
+		// standing down rather than silently reinstating them (see
+		// runner.Options.PanicDisarmed). Wins over posture AND EnforcementErr:
+		// every automatic Apply is being skipped, so nothing below this would
+		// describe what the firewall is actually doing — Blocked/Posture may
+		// still say "full-block" or "guard" while egress is wide open.
+		return Display{
+			Key:      KeyWarning,
+			Headline: "Panic disarmed",
+			Detail: "`dezhban panic` tore down the firewall rules and dezhban is not re-applying them. " +
+				"Run `dezhban unblock` (or restart the background service) to resume enforcement.",
+		}
+	}
 	if s.EnforcementErr != "" {
 		// Wins over posture: the daemon tried to enforce and the backend
 		// refused, so posture/blocked describe the data plane truthfully but

@@ -163,6 +163,10 @@ public struct Snapshot: Codable {
     public let lookupErr: String?          // a GENUINE failure: a tunnel was up and measuring it failed
     public let exitUnknown: String?        // EXPECTED: no tunnel up, so there is no exit to measure
     public let enforcementErr: String?     // last firewall-action failure, nil when clear
+    /// `dezhban panic` tore the rules down and the daemon is standing down
+    /// rather than reinstating them — already folded into `display` by the
+    /// Go renderer, carried here only for parity with the rest of Snapshot.
+    public let panicDisarmed: Bool?
     public let tunnels: [Tunnel]?
     public let endpoints: [String]?
     public let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness

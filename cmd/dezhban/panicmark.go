@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // panicMarkerName is the file whose presence tells a RUNNING daemon that
@@ -37,29 +39,8 @@ func panicMarkerPath(dir string) string {
 // missing content a future caller starts relying on.
 func setPanicMarker(dir string) error {
 	body := []byte("panic ran at " + time.Now().UTC().Format(time.RFC3339) + "\n")
-	path := panicMarkerPath(dir)
-	tmp, err := os.CreateTemp(dir, ".panic.marker-*.tmp")
-	if err != nil {
-		return fmt.Errorf("panic marker: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(body); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("panic marker: write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("panic marker: sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("panic marker: close temp: %w", err)
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return fmt.Errorf("panic marker: chmod temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("panic marker: rename into place: %w", err)
+	if err := atomicfile.Write(panicMarkerPath(dir), body, 0o600); err != nil {
+		return fmt.Errorf("panic marker: write: %w", err)
 	}
 	return nil
 }

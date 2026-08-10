@@ -1159,22 +1159,28 @@ func cmdPanic(args []string) int {
 		fmt.Fprintln(os.Stderr, "firewall backend unavailable:", err)
 		return 1
 	}
+	// Tell a daemon that might still be running (this command is deliberately
+	// daemon-independent, so there is no other way to reach it) to stand its
+	// enforcement verification down — otherwise it would notice the rules
+	// missing on its next VerifyInterval tick and silently put them back,
+	// turning this escape hatch into a brief flicker. Set BEFORE Cleanup, not
+	// after: every automatic path a live daemon might take (verifyC's tick,
+	// reapplyStanding, applyWindowPolicy, reapplyCurrent) checks the marker
+	// first and only THEN reads the firewall — marker-after-Cleanup left a
+	// window where such a tick could land between the two calls, see the
+	// rules already gone, find no marker yet, and silently reinstate them.
+	// Best-effort: a failure to write the marker must never abort the
+	// teardown below, which is the half of this command that actually
+	// matters.
+	if err := setPanicMarker(stateDir()); err != nil {
+		fmt.Fprintln(os.Stderr, "panic: warning — could not record the teardown; if dezhban is still "+
+			"running, its enforcement verification may re-apply the rules within a minute:", err)
+	}
 	// Cleanup is best-effort and idempotent: it restores any saved prior state
 	// (e.g. pf) and removes dezhban's rules whether or not a daemon owns them.
 	if err := fw.Cleanup(); err != nil {
 		fmt.Fprintln(os.Stderr, "panic: teardown reported an error (rules may persist):", err)
 		return 1
-	}
-	// Tell a daemon that might still be running (this command is deliberately
-	// daemon-independent, so there is no other way to reach it) to stand its
-	// enforcement verification down — otherwise it would notice the rules
-	// missing on its next VerifyInterval tick and silently put them back,
-	// turning this escape hatch into a brief flicker. Best-effort: a failure
-	// to write the marker must never fail `panic` itself, since the teardown
-	// above is the half of this command that actually matters.
-	if err := setPanicMarker(stateDir()); err != nil {
-		fmt.Fprintln(os.Stderr, "panic: warning — could not record the teardown; if dezhban is still "+
-			"running, its enforcement verification may re-apply the rules within a minute:", err)
 	}
 	fmt.Println("dezhban: panic teardown complete — all dezhban rules removed, connectivity restored")
 	return 0
@@ -1973,14 +1979,14 @@ func buildArmAtBootCheck(armAtBoot bool, haveTunnel bool, rec *armed.Record, loa
 	return c
 }
 
-// buildLivenessCheck reports the two enforcement-diagnostic conditions the run
+// buildLivenessCheck reports the enforcement-diagnostic conditions the run
 // loop tracks between polls but doctor cannot recompute on its own — a missing
-// ruleset (Verify) and a tunnel that reports up but is not passing traffic
-// (Zombie) — from the running daemon's own last-published snapshot. Pure: takes
-// the snapshot and liveness already resolved by the caller, same shape as
-// buildServiceCheck.
+// ruleset (Verify), a tunnel that reports up but is not passing traffic
+// (Zombie), and the exit IP's last observed change (ExitIPChangedAt) — from
+// the running daemon's own last-published snapshot. Pure: takes the snapshot
+// and liveness already resolved by the caller, same shape as buildServiceCheck.
 //
-// Both are read-only diagnoses, not lockout risks — neither moves the exit
+// All three are read-only diagnoses, not lockout risks — none moves the exit
 // code — so this stays informational like the service and arm-at-boot checks.
 // A stale or absent snapshot says nothing (the daemon isn't running or hasn't
 // published yet, which buildServiceCheck already reports); it does not read as
@@ -1991,10 +1997,6 @@ func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
 		c.Summary = "not checked — dezhban isn't running."
 		return c
 	}
-	if snap.Verify == nil && snap.Zombie == nil {
-		return c
-	}
-	c.Status = checkWarn
 	var lines []string
 	if snap.Verify != nil {
 		// Missing and Err are mutually exclusive by construction (state.VerifyState's
@@ -2015,7 +2017,21 @@ func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
 			"Tunnel interface reports up, but %d consecutive exit checks through it have failed — "+
 				"it may need reconnecting. Guard holds either way; this is diagnosis, not a leak.", snap.Zombie.Checks))
 	}
-	c.Summary = "enforcement is holding, but something needs attention."
+	if len(lines) > 0 {
+		c.Status = checkWarn
+		c.Summary = "enforcement is holding, but something needs attention."
+	}
+	// Purely observational — never flips Status — since a legitimate failover
+	// between two VPN servers in the same allowed country changes nothing
+	// CountryCode reports, but changes this. It is the one signal that
+	// explains "my exit flapped" when the blocked-country check alone would
+	// say nothing happened.
+	if !snap.ExitIPChangedAt.IsZero() {
+		lines = append(lines, fmt.Sprintf(
+			"Exit IP last changed at %s (a failover between VPN servers in the same "+
+				"country would show here even though the blocked-country check saw no change).",
+			snap.ExitIPChangedAt.Local().Format(time.RFC1123)))
+	}
 	c.Details = lines
 	return c
 }

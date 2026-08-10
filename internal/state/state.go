@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // Tunnel is one VPN tunnel interface's observed state (VPN mode only).
@@ -67,9 +69,17 @@ type Snapshot struct {
 	// failure (see runner.publishStopped and docs/contribute/architecture.md); a clean, operator-requested
 	// stop leaves it empty. Either way the contract holds: the intended posture (enforcing)
 	// was not achieved.
-	EnforcementErr string   `json:"enforcementErr,omitempty"`
-	Tunnels        []Tunnel `json:"tunnels,omitempty"`   // VPN mode
-	Endpoints      []string `json:"endpoints,omitempty"` // resolved VPN endpoints (VPN mode)
+	EnforcementErr string `json:"enforcementErr,omitempty"`
+	// PanicDisarmed reports that `dezhban panic` tore the firewall rules down
+	// and this daemon is standing down rather than silently reinstating them
+	// (see runner.Options.PanicDisarmed). Distinct from EnforcementErr: this is
+	// not a failed Apply, it is every automatic Apply being deliberately
+	// skipped, so Posture/Blocked can describe an intended posture (e.g.
+	// "full-block") the data plane is not actually enforcing at all. Cleared
+	// once the marker is gone (`dezhban unblock` or a fresh daemon start).
+	PanicDisarmed bool     `json:"panicDisarmed,omitempty"`
+	Tunnels       []Tunnel `json:"tunnels,omitempty"`   // VPN mode
+	Endpoints     []string `json:"endpoints,omitempty"` // resolved VPN endpoints (VPN mode)
 	// PollIntervalSeconds is the daemon's poll cadence, so a reader can size its own
 	// staleness threshold off the actual interval instead of hardcoding one. 0 when unknown.
 	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
@@ -396,36 +406,9 @@ func Write(path string, s Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("state: marshal: %w", err)
 	}
-
-	tmp, err := os.CreateTemp(dir, ".state-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("state: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	// Best-effort cleanup if we bail before the rename.
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("state: write temp: %w", err)
-	}
-	// fsync before rename so a crash/power-loss right after the rename can't leave a
-	// truncated snapshot behind (same guarantee internal/firewall/pf_darwin.go's
-	// atomicWrite provides for its state files; kept as a separate impl because that
-	// helper is darwin build-tagged).
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("state: sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("state: close temp: %w", err)
-	}
-	// CreateTemp makes the file 0600; the reader is the unprivileged user.
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return fmt.Errorf("state: chmod temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("state: rename into place: %w", err)
+	// 0644, not the temp file's default 0600: the reader is the unprivileged user.
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
+		return fmt.Errorf("state: write %q: %w", path, err)
 	}
 	return nil
 }

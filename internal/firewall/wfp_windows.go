@@ -9,6 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // Windows enforcement via the Windows Firewall (NetSecurity cmdlets).
@@ -57,28 +59,7 @@ func appliedActionPath() string { return filepath.Join(stateDir(), "fw.applied")
 // from a non-atomic write would read as "every profile drifted" and force a
 // repair loop that only a later, fully-written Apply would clear.
 func writeAppliedAction(action string) error {
-	dir := stateDir()
-	tmp, err := os.CreateTemp(dir, ".fw.applied-*.tmp")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename below succeeds
-	if _, err := tmp.WriteString(action); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Chmod(tmpName, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, appliedActionPath())
+	return atomicfile.Write(appliedActionPath(), []byte(action), 0o600)
 }
 
 // wfpBackend is the Windows FirewallBackend. It holds no in-memory state: the
@@ -241,6 +222,14 @@ func queryBlockedAndDefaults() (bool, map[string]string, error) {
 	if err != nil {
 		return false, nil, err
 	}
+	return parseProfileQuery(out)
+}
+
+// parseProfileQuery parses queryBlockedAndDefaults' captured PowerShell output.
+// Split out so it can be exercised in tests against captured tool output
+// without shelling out to PowerShell — same rationale as pf_darwin's
+// mainRulesetReferencesAnchor.
+func parseProfileQuery(out string) (bool, map[string]string, error) {
 	lines := strings.Split(out, "\n")
 	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "blocked" {
 		return false, nil, nil
@@ -251,6 +240,23 @@ func queryBlockedAndDefaults() (bool, map[string]string, error) {
 		if name, action, ok := strings.Cut(line, "="); ok {
 			res[strings.TrimSpace(name)] = strings.TrimSpace(action)
 		}
+	}
+	// Every profile in fwProfiles must have a line, or a caller comparing
+	// got[prof] against a wanted action would silently read a missing entry as
+	// "" — the Go zero value — which never matches, so a transient
+	// PowerShell/WMI hiccup that drops one profile's line (while the script
+	// still exits 0) would report real drift and trigger an unwanted repair.
+	// That is not evidence of tampering, same discipline as the unreadable
+	// appliedActionPath case in IsBlocked: an incomplete read is an error, not
+	// a "missing" verdict.
+	var missing []string
+	for _, prof := range fwProfiles {
+		if _, ok := res[prof]; !ok {
+			missing = append(missing, prof)
+		}
+	}
+	if len(missing) > 0 {
+		return false, nil, fmt.Errorf("firewall profile query missing output for: %s", strings.Join(missing, ", "))
 	}
 	return true, res, nil
 }

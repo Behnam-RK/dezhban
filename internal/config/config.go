@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // Allowlist names the destinations that must stay reachable even while blocking,
@@ -1026,37 +1028,14 @@ func Save(path string, c *Config) error {
 			return fmt.Errorf("create config dir %q: %w", dir, err)
 		}
 	}
-	tmp, err := os.CreateTemp(dir, ".dezhban-config-*")
-	if err != nil {
-		return fmt.Errorf("stage config %q: %w", path, err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
-
-	// CreateTemp makes 0600; the published file must stay readable by the
-	// unprivileged tools that inspect it.
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write config %q: %w", path, err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write config %q: %w", path, err)
-	}
 	// Flushed before the rename, or the rename could publish a name whose contents
 	// are not on disk yet: a power loss then leaves a zero-length config, which is
 	// the very "unparseable at boot, host unprotected" outcome staging exists to
 	// prevent. The same reason internal/learned, internal/armed and internal/state
-	// all sync here.
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("flush config %q: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
+	// all sync here. 0644, not the temp file's default 0600: the published config
+	// must stay readable by the unprivileged tools that inspect it.
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
 		return fmt.Errorf("write config %q: %w", path, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("install config %q: %w", path, err)
 	}
 	return nil
 }

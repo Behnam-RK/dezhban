@@ -206,6 +206,51 @@ func TestExpectedOutboundAction(t *testing.T) {
 	}
 }
 
+func TestParseProfileQuery(t *testing.T) {
+	t.Run("clear", func(t *testing.T) {
+		blocked, got, err := parseProfileQuery("clear\n")
+		if err != nil || blocked || got != nil {
+			t.Fatalf("parseProfileQuery(clear) = (%v, %v, %v), want (false, nil, nil)", blocked, got, err)
+		}
+	})
+
+	t.Run("blocked with all profiles present", func(t *testing.T) {
+		out := "blocked\nDomain=Block\nPrivate=Block\nPublic=Allow\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err != nil {
+			t.Fatalf("parseProfileQuery: unexpected error: %v", err)
+		}
+		if !blocked {
+			t.Fatalf("parseProfileQuery: got blocked=false, want true")
+		}
+		want := map[string]string{"Domain": "Block", "Private": "Block", "Public": "Allow"}
+		if len(got) != len(want) {
+			t.Fatalf("parseProfileQuery: got %v, want %v", got, want)
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("parseProfileQuery: got[%q] = %q, want %q", k, got[k], v)
+			}
+		}
+	})
+
+	// A transient PowerShell/WMI hiccup that drops one profile's line — while
+	// the script still exits 0 — must read as an unreadable query, not as
+	// evidence that the Public profile's default actually changed. A caller
+	// comparing the zero-value "" against a wanted action would otherwise
+	// report false drift and trigger an unwanted repair.
+	t.Run("blocked but missing a profile line", func(t *testing.T) {
+		out := "blocked\nDomain=Block\nPrivate=Block\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err == nil {
+			t.Fatalf("parseProfileQuery: got no error for a missing profile line, want an error")
+		}
+		if blocked || got != nil {
+			t.Fatalf("parseProfileQuery: got (%v, %v) alongside the error, want (false, nil)", blocked, got)
+		}
+	})
+}
+
 func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {
 	s := renderBlockScript(Policy{
 		Mode:         ModeFullBlock,

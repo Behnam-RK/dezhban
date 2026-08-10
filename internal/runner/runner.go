@@ -431,6 +431,26 @@ type diag struct {
 	// previous successful reading. Zero means no change has been observed
 	// yet. Sticky — never reset by a later clean tick, unlike verify/zombie.
 	exitIPChangedAt time.Time
+	// panicDisarmed mirrors o.PanicDisarmed() as of this snapshot — a live read
+	// of the marker file, not state accumulated over ticks like verify/zombie,
+	// but it belongs here for the same reason: it is the one piece of context
+	// that explains why blocked/posture may not describe what the firewall is
+	// actually doing. Set by the snapshot closure in runGuard, the one place
+	// that publishes for every code path that can skip an Apply while
+	// panic-disarmed (closeWindowRevert included), rather than by each such
+	// call site individually.
+	panicDisarmed bool
+}
+
+// panicDisarmed reports whether `dezhban panic` has torn the rules down and
+// this daemon should stand down its automatic Apply paths — o.PanicDisarmed
+// with the nil check folded in, since it is optional (tests / legacy callers,
+// or panic never wired up a marker) and every one of the run loop's dozen
+// call sites otherwise had to re-prove that nil safety itself, which is
+// exactly the kind of copy-paste a future edit (a new call site, a flipped
+// polarity) can get wrong silently.
+func (o Options) panicDisarmed() bool {
+	return o.PanicDisarmed != nil && o.PanicDisarmed()
 }
 
 func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupErr error, enfErr error, tunnels []state.Tunnel, endpoints []netip.Addr, win *state.SwitchState, profile string, drop *state.DropRecord, hold *state.HoldState, redialRefused *state.RedialState, d diag) {
@@ -456,6 +476,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		Verify:              d.verify,
 		Zombie:              d.zombie,
 		ExitIPChangedAt:     d.exitIPChangedAt,
+		PanicDisarmed:       d.panicDisarmed,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -1055,6 +1076,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		dg.verify = nil
 	}
 	snapshot := func() {
+		dg.panicDisarmed = o.panicDisarmed()
 		o.publish(blocked, standby, lastRes.Reading, lastRes.Err, enfErr, lastTun, endpoints, switchState(), activeProfile, lastDrop, holdState(), redialState(), dg)
 	}
 	rebuild := func() { guard, fullBlock = o.vpnPolicies(tunnels, endpoints, providers) }
@@ -1067,7 +1089,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		if windowActive || blocked || standby {
 			return
 		}
-		if o.PanicDisarmed != nil && o.PanicDisarmed() {
+		if o.panicDisarmed() {
 			// `dezhban panic` tore the rules down deliberately; an automatic
 			// re-apply here would silently undo that. See applyWindowPolicy's
 			// twin of this guard for the full rationale.
@@ -1100,7 +1122,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	// skipping it there would leave the host open while the daemon logged a
 	// repair.
 	applyWindowPolicy := func(reason string) {
-		if o.PanicDisarmed != nil && o.PanicDisarmed() {
+		if o.panicDisarmed() {
 			// `dezhban panic` tore the rules down deliberately, and this daemon
 			// is still running. An automatic re-apply here — reached from a
 			// tunnel/endpoint change or enforcement verification finding the
@@ -1154,7 +1176,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				reapplyWindow(reason)
 			}
 		case blocked:
-			if o.PanicDisarmed != nil && o.PanicDisarmed() {
+			if o.panicDisarmed() {
 				o.Log.Debug("panic-disarm marker set — not re-applying full block", "reason", reason)
 				return
 			}
@@ -1363,7 +1385,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		// disarming its retry timer via the existing "no longer available"
 		// handling in grantAutoWindow.
 		return o.RedialWindow > 0 && !windowActive && !standby && !blocked && sawTunnelUp &&
-			(o.PanicDisarmed == nil || !o.PanicDisarmed())
+			(!o.panicDisarmed())
 	}
 
 	// grantAutoWindow asks the ledger and acts on the answer. Shared by the drop
@@ -1616,7 +1638,7 @@ func (o Options) runGuard(ctx context.Context) error {
 					o.Log.Debug("clear panic-disarm marker failed", "err", err)
 				}
 			}
-		} else if o.PanicDisarmed != nil && o.PanicDisarmed() {
+		} else if o.panicDisarmed() {
 			stopWindowTimers()
 			windowActive = false
 			redialLedger.Close(now)
@@ -1697,7 +1719,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		if probeInFlight || !windowActive || len(tunnels) == 0 {
 			return
 		}
-		if o.PanicDisarmed != nil && o.PanicDisarmed() {
+		if o.panicDisarmed() {
 			// No point spending a network probe on a close that finishCloseProbe
 			// would refuse to Apply anyway while disarmed.
 			return
@@ -1725,7 +1747,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		if !windowActive || len(tunnels) == 0 {
 			return
 		}
-		if o.PanicDisarmed != nil && o.PanicDisarmed() {
+		if o.panicDisarmed() {
 			// The marker may have been set while this probe was already in
 			// flight (started before `dezhban panic` ran) — must not Apply(guard)
 			// on completion, or a deliberate teardown gets silently undone.
@@ -1786,7 +1808,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		if !standby {
 			return
 		}
-		if o.PanicDisarmed != nil && o.PanicDisarmed() {
+		if o.panicDisarmed() {
 			// A tunnel appearing is not an explicit operator command; arming
 			// out of standby here would silently undo a deliberate `dezhban
 			// panic` teardown, same as every other automatic Apply path.
@@ -2353,7 +2375,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	// escalate straight to FULL BLOCK, and Run's own contract — never silently
 	// undo a deliberate `dezhban panic` teardown — must not depend on every
 	// caller having cleared the marker first.
-	if len(tunnels) > 0 && len(endpoints) > 0 && (o.PanicDisarmed == nil || !o.PanicDisarmed()) {
+	if len(tunnels) > 0 && len(endpoints) > 0 && (!o.panicDisarmed()) {
 		lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
 		if lastRes.Err == nil && !blocked {
 			// A confirmed allowed exit proves the tunnel is carrying traffic.
@@ -2609,7 +2631,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			if standby {
 				break
 			}
-			if o.PanicDisarmed != nil && o.PanicDisarmed() {
+			if o.panicDisarmed() {
 				// `dezhban panic` tore this down deliberately, and this daemon
 				// is still running. Verification must not silently undo a
 				// deliberate teardown — that would turn the documented
@@ -2687,7 +2709,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				if fresh := o.ResolveProviders(ctx); len(fresh) > 0 && !sameAddrs(fresh, providers) {
 					providers = fresh
 					reapplyStanding("provider refresh")
-					if blocked && (o.PanicDisarmed == nil || !o.PanicDisarmed()) {
+					if blocked && (!o.panicDisarmed()) {
 						// FULL BLOCK is the posture that carries these rules, and
 						// reapplyStanding deliberately skips it. Re-apply directly so a
 						// rotated provider IP becomes reachable without waiting for the
@@ -2745,7 +2767,7 @@ func (o Options) runGuard(ctx context.Context) error {
 				resetZombie(true)
 				continue
 			}
-			if o.PanicDisarmed != nil && o.PanicDisarmed() {
+			if o.panicDisarmed() {
 				// `dezhban panic` tore the rules down deliberately. The geo state
 				// machine's Block/Allow transitions (vpnGeoStep) and its
 				// lift-and-probe recovery fallback (probe) both Apply — must not

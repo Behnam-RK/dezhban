@@ -103,7 +103,17 @@ func (b *nftBackend) IsBlocked() (bool, error) {
 		}
 		return false, err
 	}
-	return strings.Contains(out, "policy drop"), nil
+	return outputChainPolicyIsDrop(out), nil
+}
+
+// outputChainPolicyIsDrop reports whether nft's rendered `list table` output
+// still shows the output chain's hook policy as drop. Split out from
+// IsBlocked so it can be exercised in tests against captured `nft list table`
+// output without shelling out — nft requires root/CAP_NET_ADMIN and this
+// package has no test seam for it, the same rationale as pf_darwin's
+// mainRulesetReferencesAnchor and wfp_windows' parseProfileQuery.
+func outputChainPolicyIsDrop(out string) bool {
+	return strings.Contains(out, "policy drop")
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any

@@ -7,10 +7,12 @@ import (
 	"net/netip"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/control"
 	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 // The pure formatters (buildTunnelsCheck/buildEndpointsCheck/buildLockoutCheck)
@@ -62,6 +64,69 @@ func TestBuildTunnelsCheck(t *testing.T) {
 		want := "utun4 — 10.0.0.0/24, fe80::/64"
 		if len(c.Details) != 1 || c.Details[0] != want {
 			t.Errorf("details = %v, want [%q]", c.Details, want)
+		}
+	})
+}
+
+func TestBuildLivenessCheck(t *testing.T) {
+	t.Run("daemon not running", func(t *testing.T) {
+		c := buildLivenessCheck(state.Snapshot{}, false)
+		if c.Status != checkOK {
+			t.Errorf("status = %q, want %q", c.Status, checkOK)
+		}
+		if c.Summary != "not checked — dezhban isn't running." {
+			t.Errorf("summary = %q", c.Summary)
+		}
+	})
+
+	t.Run("clean snapshot reports OK with no details", func(t *testing.T) {
+		c := buildLivenessCheck(state.Snapshot{}, true)
+		if c.Status != checkOK {
+			t.Errorf("status = %q, want %q", c.Status, checkOK)
+		}
+		if len(c.Details) != 0 {
+			t.Errorf("details = %v, want none", c.Details)
+		}
+	})
+
+	t.Run("verify missing escalates to warn", func(t *testing.T) {
+		snap := state.Snapshot{Verify: &state.VerifyState{Missing: true, Repairs: 2}}
+		c := buildLivenessCheck(snap, true)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if len(c.Details) != 1 || !strings.Contains(c.Details[0], "re-applied 2 time(s)") {
+			t.Errorf("details = %v", c.Details)
+		}
+	})
+
+	// ExitIPChangedAt is purely observational (CLAUDE.md: "it never flips
+	// posture and never touches the hysteresis streak") and must not escalate
+	// Status on its own — a failover between VPN servers in the same allowed
+	// country is not a lockout risk, just a fact worth surfacing.
+	t.Run("exit IP change alone stays OK but is reported", func(t *testing.T) {
+		changedAt := time.Date(2026, 8, 9, 15, 4, 0, 0, time.UTC)
+		snap := state.Snapshot{ExitIPChangedAt: changedAt}
+		c := buildLivenessCheck(snap, true)
+		if c.Status != checkOK {
+			t.Errorf("status = %q, want %q", c.Status, checkOK)
+		}
+		if len(c.Details) != 1 || !strings.Contains(c.Details[0], "Exit IP last changed at") {
+			t.Errorf("details = %v", c.Details)
+		}
+	})
+
+	t.Run("verify and exit IP change combine under warn", func(t *testing.T) {
+		snap := state.Snapshot{
+			Verify:          &state.VerifyState{Err: "permission denied"},
+			ExitIPChangedAt: time.Date(2026, 8, 9, 15, 4, 0, 0, time.UTC),
+		}
+		c := buildLivenessCheck(snap, true)
+		if c.Status != checkWarn {
+			t.Errorf("status = %q, want %q", c.Status, checkWarn)
+		}
+		if len(c.Details) != 2 {
+			t.Errorf("details = %v, want 2 lines", c.Details)
 		}
 	})
 }
