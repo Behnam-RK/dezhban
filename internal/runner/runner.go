@@ -1989,6 +1989,11 @@ func (o Options) runGuard(ctx context.Context) error {
 			// warning from before the block would survive in this same publish,
 			// self-healing only at the next geoTick's own manualBlock branch.
 			resetZombie(true)
+			// The Apply above just froze fresh rules onto the backend, so a stale
+			// "rules missing, N repairs" finding from before this command no
+			// longer describes reality — see resetVerify's doc comment. Otherwise
+			// it would keep being republished until the next verifyC tick.
+			resetVerify()
 			o.Log.Warn("FULL BLOCK (manual, via control socket) — held until unblock")
 			snapshot()
 			return reply(true, "")
@@ -2042,6 +2047,10 @@ func (o Options) runGuard(ctx context.Context) error {
 			}
 			blocked = false
 			enfErr = nil
+			// Same reasoning as OpBlock's resetVerify above: the Apply just
+			// installed fresh rules, so a stale "rules missing, N repairs"
+			// finding from before this command no longer applies.
+			resetVerify()
 			o.Log.Info("GUARD (manual unblock, via control socket) — geo state machine resumed")
 			snapshot()
 			return reply(true, "")
@@ -2412,7 +2421,11 @@ func (o Options) runGuard(ctx context.Context) error {
 	// undo a deliberate `dezhban panic` teardown — must not depend on every
 	// caller having cleared the marker first.
 	if len(tunnels) > 0 && len(endpoints) > 0 && (!o.panicDisarmed()) {
-		lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
+		res, err, attempted := o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
+		lastRes = res
+		if attempted {
+			enfErr = err
+		}
 		if lastRes.Err == nil {
 			// Seed lastGoodIP here too, on EVERY successful reading including
 			// one that lands FULL BLOCK — otherwise a failover between this
@@ -2838,7 +2851,11 @@ func (o Options) runGuard(ctx context.Context) error {
 				resetZombie(true) // plainly down is a different, already-explained state
 				continue
 			}
-			lastRes, enfErr = o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
+			res, err, attempted := o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
+			lastRes = res
+			if attempted {
+				enfErr = err
+			}
 			if lastRes.Err == nil {
 				// Exit-IP change observation: purely informational, like CVG's
 				// equivalent check — it never flips posture and never touches the
@@ -3053,14 +3070,24 @@ func sameStrings(a, b []string) bool {
 // firewall-action failure (a failed FULL BLOCK / guard restore, or a probe re-cut
 // that left egress open), or nil when the intended posture was achieved.
 //
+// The third return, attempted, is true only when this call actually touched the
+// backend (a probe while blocked, or a Block/Allow transition's Apply) — i.e.
+// only when the second return is a meaningful, fresh answer to "did enforcement
+// just succeed". A steady no-op reading (already in the right posture, nothing
+// to Apply) leaves it false so the caller does not overwrite a still-relevant
+// enforcement error from an unrelated source (e.g. a failed verification
+// repair) with this tick's uninformative nil.
+//
 // tunnelUp only classifies how a FAILED lookup is reported — it never changes
 // enforcement. With no tunnel there is no exit to measure, so a failure is
 // expected rather than a fault.
-func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Policy, blocked *bool, tunnelUp bool) (monitor.Result, error) {
+func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Policy, blocked *bool, tunnelUp bool) (monitor.Result, error, bool) {
 	var res monitor.Result
 	var enfErr error
+	attempted := false
 	if *blocked {
 		res, enfErr = o.probe(ctx, guard, fullBlock)
+		attempted = true
 	} else {
 		r, err := o.Monitor.Once(ctx)
 		res = monitor.Result{Reading: r, Err: err}
@@ -3080,13 +3107,14 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 		// physical leaks, so an unknown must not escalate GUARD→FULL BLOCK (which
 		// cuts tunnel egress and livelocks the redial) nor lift an active FULL
 		// BLOCK on a blip. Only a *successful* reading moves the state machine.
-		return res, enfErr
+		return res, enfErr, attempted
 	}
 	cc := res.Reading.CountryCode
 
 	switch o.Decider.Evaluate(res) {
 	case decision.Block:
 		if !*blocked {
+			attempted = true
 			if err := o.Backend.Apply(fullBlock); err != nil {
 				o.Log.Error("full block failed", "err", err, "country", cc)
 				enfErr = err
@@ -3100,6 +3128,7 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 		// re-cut failure it reported.
 	case decision.Allow:
 		if *blocked {
+			attempted = true
 			if err := o.Backend.Apply(guard); err != nil {
 				o.Log.Error("guard restore failed", "err", err, "country", cc)
 				enfErr = err
@@ -3110,7 +3139,7 @@ func (o Options) vpnGeoStep(ctx context.Context, guard, fullBlock firewall.Polic
 			}
 		}
 	}
-	return res, enfErr
+	return res, enfErr, attempted
 }
 
 // probe is the VPN recovery probe: observe the exit country while in FULL BLOCK,
