@@ -249,6 +249,38 @@ func TestParseProfileQuery(t *testing.T) {
 			t.Fatalf("parseProfileQuery: got (%v, %v) alongside the error, want (false, nil)", blocked, got)
 		}
 	})
+
+	// -ErrorAction SilentlyContinue only suppresses the error stream, not a
+	// warning PowerShell writes to the success stream ahead of the script's
+	// own output — this must not be misread as "not blocked" just because it
+	// is not lines[0].
+	t.Run("blocked with an incidental leading line", func(t *testing.T) {
+		out := "WARNING: some incidental PowerShell notice\nblocked\nDomain=Block\nPrivate=Block\nPublic=Block\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err != nil {
+			t.Fatalf("parseProfileQuery: unexpected error: %v", err)
+		}
+		if !blocked {
+			t.Fatalf("parseProfileQuery: got blocked=false, want true — a leading noise line must not hide the marker")
+		}
+		want := map[string]string{"Domain": "Block", "Private": "Block", "Public": "Block"}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("parseProfileQuery: got[%q] = %q, want %q", k, got[k], v)
+			}
+		}
+	})
+
+	// The marker text must still only match on its own line — never as a
+	// substring inside unrelated output, which would be a worse regression
+	// than the strict lines[0] check this replaced.
+	t.Run("blocked text embedded in noise is not a marker", func(t *testing.T) {
+		out := "this line mentions blocked in passing\nclear\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err != nil || blocked || got != nil {
+			t.Fatalf("parseProfileQuery(embedded) = (%v, %v, %v), want (false, nil, nil)", blocked, got, err)
+		}
+	})
 }
 
 func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {

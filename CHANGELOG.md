@@ -194,6 +194,36 @@ current as you land changes.
   fsync the containing directory after the rename, hardening durability
   across a crash on filesystems that require it (covers the panic marker and
   the arm-at-boot record, among others).
+- **A failed enforcement-verification repair's error could be silently
+  overwritten by the very next ordinary geo-poll tick**, replacing it with a
+  falsely reassuring "rules re-applied" message even though the repair
+  actually failed and the firewall was still unenforced. The geo-poll step
+  now only overwrites the enforcement-error surface on a tick that actually
+  touched the backend, never on an uneventful no-op reading.
+- **A manual `block`/`unblock` over the control socket no longer leaves a
+  stale "rules missing, re-applied N times" message on screen** after
+  installing fresh rules — enforcement-verification state is now reset in
+  the same command, the same fix already applied to the zombie-tunnel
+  warning.
+- **`dezhban hold` armed during a hung-tunnel (zombie) streak no longer
+  permanently forfeits that streak's one-shot `vpn.advanced.livenessRedial`
+  attempt.** Because that attempt is suppressed without being "spent" by
+  hold (a later real disconnect still needs its own hold), cancelling hold
+  previously had nothing to act on and the attempt was lost for the rest of
+  the streak. Cancelling hold now restores it, the same way it already
+  restores a refused-and-waiting ordinary drop's retry.
+- **Windows enforcement verification could misreport rules as missing when
+  PowerShell wrote incidental output ahead of the group-existence check's
+  own marker line.** The check required that marker on the exact first line
+  of output; it now scans for it instead, still requiring an exact line
+  match (never a substring) so unrelated text can't be mistaken for it
+  either.
+- **Linux (`nft`) enforcement verification's drift check is now scoped to
+  the `output` chain specifically**, instead of searching the whole `nft
+  list table` output for the text "policy drop" anywhere. A table with more
+  than one chain could previously have its `output` chain's policy drift to
+  `accept` while another chain's unrelated "policy drop" text kept the check
+  reporting enforcement as healthy.
 
 ## [0.9.0] - 2026-07-29
 

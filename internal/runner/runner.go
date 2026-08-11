@@ -1028,6 +1028,18 @@ func (o Options) runGuard(ctx context.Context) error {
 	// posture otherwise changes out from under it) — never by
 	// resetZombie(full: false), which the windowActive branch uses.
 	var zombieRedialTried bool
+	// zombieHoldSuppressed records that THIS streak's one-shot liveness-redial
+	// attempt was suppressed by an armed hold (maybeAutoWindow's holdArmed
+	// branch, called with consumeHold:false) rather than actually run. That
+	// call returns before grantAutoWindow, so no redialRefused ever gets set —
+	// unlike the ordinary drop trigger, there is nothing standing for
+	// retryAutoWindow to act on later. Without this flag, cancelling hold
+	// afterward (resumeRedialRetry) would find redialRefused == nil and do
+	// nothing, permanently forfeiting the streak's attempt even though hold
+	// never consumed it. Cleared alongside zombieRedialTried, both on a
+	// genuine resolution (resetZombie(full: true)) and once resumeRedialRetry
+	// has acted on it — see both for how.
+	var zombieHoldSuppressed bool
 	// lastGoodIP is the exit IP from the last SUCCESSFUL reading, kept
 	// separately from lastRes.Reading (which a failed lookup overwrites with a
 	// zero Reading) so a failure streak can never be misread as a change.
@@ -1059,7 +1071,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	// rather than merely un-observed for a while — see zombieRedialTried's doc
 	// comment for why those are different questions.
 	resetZombie := func(full bool) {
-		if zombieChecks == 0 && dg.zombie == nil && (!full || !zombieRedialTried) {
+		if zombieChecks == 0 && dg.zombie == nil && (!full || (!zombieRedialTried && !zombieHoldSuppressed)) {
 			return
 		}
 		zombieChecks = 0
@@ -1067,6 +1079,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		dg.zombie = nil
 		if full {
 			zombieRedialTried = false
+			zombieHoldSuppressed = false
 		}
 	}
 	// resetVerify clears a stale enforcement-verification finding. dg.verify is
@@ -1084,6 +1097,14 @@ func (o Options) runGuard(ctx context.Context) error {
 	// never failing its caller over it — see each call site for why that
 	// particular one must clear it. Factored out because the same nil-check
 	// + best-effort debug log was copy-pasted at every site.
+	//
+	// Not merged with cmd/dezhban/panicmark.go's clearPanicMarkerBestEffort,
+	// its twin on the other side of the marker file: this package never
+	// touches the marker path directly (o.ClearPanicDisarm is main's
+	// injected func() error, kept that way so runner stays testable without
+	// a real state directory), and a "main" package cannot be imported by
+	// anything else in Go — there is no third package the two could share
+	// without a generic wrapper for a 3-line pattern, which is not worth it.
 	clearPanicDisarmBestEffort := func() {
 		if o.ClearPanicDisarm == nil {
 			return
@@ -1529,6 +1550,15 @@ func (o Options) runGuard(ctx context.Context) error {
 		if holdArmed {
 			if consumeHold {
 				holdArmed = false
+			} else {
+				// The zombie/liveness caller passes consumeHold:false and
+				// returns here without ever reaching grantAutoWindow below, so
+				// no redialRefused gets set for retryAutoWindow to act on
+				// later. Record the suppression directly so a subsequent
+				// hold-cancel (resumeRedialRetry) can still give the streak's
+				// one-shot attempt back — see zombieHoldSuppressed's doc
+				// comment.
+				zombieHoldSuppressed = true
 			}
 			o.Log.Warn("redial window suppressed (hold the line was armed); "+
 				"guard holds, traffic stays cut", "detail", detail)
@@ -1639,6 +1669,21 @@ func (o Options) runGuard(ctx context.Context) error {
 	// original timer running and correct; re-deciding then would ask against a
 	// bound that has not lifted yet.
 	resumeRedialRetry := func() {
+		// A zombie streak's suppressed attempt never went through
+		// grantAutoWindow, so it left no redialRefused for the retryAutoWindow
+		// call below to find — handled separately, and not gated on
+		// redialRetryC below since that suppression never armed a retry timer
+		// either. If the streak is still standing, clearing zombieRedialTried
+		// lets the very next geoTick's zombie check retry maybeAutoWindow
+		// exactly as it would have on a fresh streak; if it already resolved,
+		// there is nothing left to give back.
+		if zombieHoldSuppressed {
+			zombieHoldSuppressed = false
+			if dg.zombie != nil {
+				zombieRedialTried = false
+				o.Log.Info("liveness redial attempt restored for the standing zombie streak — hold the line was cancelled")
+			}
+		}
 		if redialRetryC != nil {
 			return
 		}

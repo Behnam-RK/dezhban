@@ -461,7 +461,10 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	if _, lerr := learned.Load(learnedPath); lerr != nil {
 		log.Warn("learned endpoints store unreadable; starting empty", "err", lerr)
 	}
-	epSrc.Learned = func() []netip.Addr {
+	// A plain func value, not a method — reused below to give the startup
+	// self-test's own endpoint source (never epSrc itself) the same
+	// fresh-from-disk behavior without a second copy of the parsing logic.
+	loadLearnedEndpoints := func() []netip.Addr {
 		store, lerr := learned.Load(learnedPath)
 		if lerr != nil {
 			log.Debug("learned endpoints reload failed; skipping this cycle", "err", lerr)
@@ -480,6 +483,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		}
 		return out
 	}
+	epSrc.Learned = loadLearnedEndpoints
 	learnHook := func(profile, iface string, addrs []netip.Addr) {
 		// Reload before mutating so a concurrent forget/edit is merged with, not
 		// overwritten by, the new entry (Load returns a usable empty store on error).
@@ -655,10 +659,24 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	// apply — undermining ADR-0008's promise to close the post-reboot leak
 	// window immediately. Logged from its own goroutine instead, arriving a
 	// beat after "run loop started" rather than gating it.
+	//
+	// Uses its OWN backend and endpoint-source instances — never the `fw`/
+	// `epSrc` handed to runner.Options below — so this goroutine cannot touch
+	// the objects the run loop's single goroutine owns, per that invariant
+	// (see epSrc.Learned's doc comment above). Both constructors are cheap:
+	// firewall.New() and buildEndpointSource() build stateless value types,
+	// so a second instance costs nothing and keeps the invariant true by
+	// construction rather than by the backends happening to have no fields
+	// today.
+	selftestFW, selftestFWErr := firewall.New()
+	selftestEpSrc := buildEndpointSource(cfg, log, tunnels, true)
+	selftestEpSrc.Learned = loadLearnedEndpoints
 	go func() {
-		backendReachable := true
-		if _, err := fw.IsBlocked(); err != nil {
-			backendReachable = false
+		backendReachable := selftestFWErr == nil
+		if backendReachable {
+			if _, err := selftestFW.IsBlocked(); err != nil {
+				backendReachable = false
+			}
 		}
 
 		// EnsureDir (called once by the caller before this) only creates,
@@ -667,15 +685,15 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		// reporting writable even after going read-only underneath it (a
 		// remount, a quota, an ACL change), so probe an actual write rather
 		// than trust stateDirErr alone.
+		// Reuses elevate.go's pathWritable rather than a second inline probe:
+		// a nonexistent name under stateDir() hits its IsNotExist branch,
+		// which walks up to the nearest existing ancestor and probes with
+		// os.CreateTemp's random suffix — unlike a fixed probe filename, that
+		// can't collide if something else probes the same directory
+		// concurrently.
 		stateDirWritable := stateDirErr == nil
 		if stateDirWritable {
-			probe := filepath.Join(stateDir(), ".selftest-write")
-			if f, err := os.Create(probe); err != nil {
-				stateDirWritable = false
-			} else {
-				f.Close()
-				os.Remove(probe)
-			}
+			stateDirWritable = pathWritable(filepath.Join(stateDir(), ".selftest-write"))
 		}
 
 		// cfg.VPN.AutoDiscoverEndpoints==true only means discovery is
@@ -686,7 +704,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		endpointCount := len(cfg.VPN.Endpoints)
 		if cfg.VPN.AutoDiscoverEndpoints {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-			endpointCount = len(epSrc.Resolve(ctx).Addrs)
+			endpointCount = len(selftestEpSrc.Resolve(ctx).Addrs)
 			cancel()
 		}
 

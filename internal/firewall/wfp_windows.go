@@ -237,11 +237,30 @@ func queryBlockedAndDefaults() (bool, map[string]string, error) {
 // mainRulesetReferencesAnchor.
 func parseProfileQuery(out string) (bool, map[string]string, error) {
 	lines := strings.Split(out, "\n")
-	if len(lines) == 0 || strings.TrimSpace(lines[0]) != "blocked" {
+	// Scan for the exact "blocked"/"clear" marker rather than requiring it on
+	// lines[0]: -ErrorAction SilentlyContinue on Get-NetFirewallRule only
+	// suppresses the error stream, not a warning written to the success
+	// stream, so incidental leading text ahead of the script's own output is
+	// possible even under -NonInteractive. Matching a whole trimmed line —
+	// never a substring — still refuses to treat the marker text as found
+	// merely because it appears inside unrelated output.
+	markerAt, blocked := -1, false
+	for i, line := range lines {
+		switch strings.TrimSpace(line) {
+		case "blocked":
+			markerAt, blocked = i, true
+		case "clear":
+			markerAt, blocked = i, false
+		default:
+			continue
+		}
+		break
+	}
+	if markerAt < 0 || !blocked {
 		return false, nil, nil
 	}
 	res := make(map[string]string)
-	for _, line := range lines[1:] {
+	for _, line := range lines[markerAt+1:] {
 		line = strings.TrimSpace(line)
 		if name, action, ok := strings.Cut(line, "="); ok {
 			res[strings.TrimSpace(name)] = strings.TrimSpace(action)

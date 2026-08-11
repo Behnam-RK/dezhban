@@ -78,6 +78,24 @@ func TestOutputChainPolicyIsDrop(t *testing.T) {
 	if outputChainPolicyIsDrop(accept) {
 		t.Errorf("expected no policy drop to be found in:\n%s", accept)
 	}
+
+	// The check must be scoped to the "output" chain specifically, not a
+	// table-wide substring search: some OTHER chain still saying "policy
+	// drop" must never paper over the output chain itself having drifted to
+	// accept — that is the exact drift this function exists to catch.
+	const otherChainStillDrops = `table inet dezhban {
+	chain output {
+		type filter hook output priority 0; policy accept;
+		oifname "lo" accept
+	}
+	chain unrelated {
+		type filter hook input priority 0; policy drop;
+	}
+}`
+	if outputChainPolicyIsDrop(otherChainStillDrops) {
+		t.Errorf("expected no policy drop — the output chain itself is accept, "+
+			"even though another chain still says drop:\n%s", otherChainStillDrops)
+	}
 }
 
 func TestRenderNftLegacyFullBlock(t *testing.T) {

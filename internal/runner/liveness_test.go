@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/monitor"
 	"github.com/behnam-rk/dezhban/internal/state"
@@ -370,4 +371,100 @@ func TestPlainlyDownTunnelIsNeverReportedAsZombie(t *testing.T) {
 			t.Fatalf("a plainly-down tunnel was reported as a zombie: %+v", *s.Zombie)
 		}
 	}
+}
+
+// If `dezhban hold` is armed before a zombie streak's one-shot
+// liveness-redial attempt fires, maybeAutoWindow's holdArmed branch
+// (consumeHold:false for this caller) suppresses it without ever reaching
+// grantAutoWindow — so unlike an ordinary drop's refusal, there is no
+// standing redialRefused for retryAutoWindow to act on once hold is
+// cancelled. Without zombieHoldSuppressed restoring the attempt directly,
+// the streak's one shot (already spent via zombieRedialTried) was forfeited
+// for good: nothing else would ever re-arm it while the same streak stands.
+// This pins that cancelling hold gives the streak's attempt back — a window
+// must open afterward, all without the tunnel ever reporting down.
+func TestHoldCancelRestoresASuppressedZombieRedialAttempt(t *testing.T) {
+	be := &fakeBackend{}
+	ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+	defer cancel()
+
+	var (
+		mu       sync.Mutex
+		snaps    []state.Snapshot
+		armed    bool
+		canceled bool
+		start    = time.Now()
+	)
+	o := Options{
+		Monitor:            steadyFailMonitor{}, // never resolves — one continuous streak
+		Decider:            decision.New([]string{"IR"}, 2),
+		Backend:            be,
+		Log:                discardLog(),
+		Interval:           15 * time.Millisecond,
+		Tunnels:            []string{"utun4"},
+		Endpoints:          []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		Watcher:            edgeWatcher(100000), // interface reports up for the whole run
+		LivenessRedial:     true,
+		RedialWindow:       30 * time.Millisecond,
+		RedialBudget:       testRedialBudget,
+		RedialBudgetWindow: testRedialBudgetWindow,
+		CommandPoll:        time.Millisecond,
+		Publish: func(s state.Snapshot) {
+			mu.Lock()
+			defer mu.Unlock()
+			snaps = append(snaps, s)
+		},
+	}
+	o.PollCommand = func() (command.Command, bool) {
+		mu.Lock()
+		defer mu.Unlock()
+		// Armed on the very first poll (~1ms in), well before the streak can
+		// cross the Hysteresis(2) threshold (~30ms in, at Interval=15ms), so
+		// the streak's one attempt is suppressed by hold rather than actually
+		// run.
+		if !armed {
+			armed = true
+			return command.Command{Op: command.OpHoldArm, IssuedAt: time.Now(), Nonce: "arm"}, true
+		}
+		if armed && !canceled && time.Since(start) > 150*time.Millisecond {
+			canceled = true
+			return command.Command{Op: command.OpHoldCancel, IssuedAt: time.Now(), Nonce: "cancel"}, true
+		}
+		return command.Command{}, false
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !armed || !canceled {
+		t.Fatalf("fixture never reached the state under test (armed=%v canceled=%v)", armed, canceled)
+	}
+
+	cancelIdx := -1
+	for i := 1; i < len(snaps); i++ {
+		prev, cur := snaps[i-1], snaps[i]
+		if prev.Hold != nil && prev.Hold.Armed && (cur.Hold == nil || !cur.Hold.Armed) {
+			cancelIdx = i
+		}
+	}
+	if cancelIdx < 0 {
+		t.Fatal("never observed hold going from armed to cancelled; fixture proved nothing")
+	}
+
+	for _, s := range snaps[cancelIdx:] {
+		if s.Switch == nil || !s.Switch.Open || s.Switch.Trigger != state.TriggerAuto {
+			continue
+		}
+		// Confirm no tunnel-down edge ever happened — the window must be
+		// attributable to the restored zombie attempt, not an ordinary drop.
+		for _, d := range snaps {
+			if d.Drop != nil {
+				t.Fatalf("a tunnel drop was recorded; this fixture's tunnel must never go down: %+v", *d.Drop)
+			}
+		}
+		return
+	}
+	t.Error("after hold the line was cancelled, the suppressed zombie liveness-redial attempt never got " +
+		"a window: it was silently forfeited instead of being restored")
 }

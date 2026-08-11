@@ -64,6 +64,13 @@ func clearPanicMarker(dir string) error {
 // best-effort (see clearPanicMarker's doc comment) but each logs the failure
 // through its own surface (structured daemon log vs. CLI stderr), so the
 // logging call is left to warn rather than fixed here.
+//
+// internal/runner/runner.go has its own clearPanicDisarmBestEffort with the
+// same shape — not merged with this one. That side never sees dir or
+// clearPanicMarker directly (it only holds the injected
+// runner.Options.ClearPanicDisarm), and this is a main package, which
+// nothing else can import — see that function's doc comment for the full
+// reasoning.
 func clearPanicMarkerBestEffort(dir string, warn func(err error)) {
 	if err := clearPanicMarker(dir); err != nil {
 		warn(err)

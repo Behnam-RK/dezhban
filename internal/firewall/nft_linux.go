@@ -113,7 +113,37 @@ func (b *nftBackend) IsBlocked() (bool, error) {
 // package has no test seam for it, the same rationale as pf_darwin's
 // mainRulesetReferencesAnchor and wfp_windows' parseProfileQuery.
 func outputChainPolicyIsDrop(out string) bool {
-	return strings.Contains(out, "policy drop")
+	// Scoped to the "output" chain block specifically (matching
+	// renderNftRuleset's `add chain inet %s output {...}`), not a table-wide
+	// substring search: a table-wide search would report "blocked" as long as
+	// the text "policy drop" appears ANYWHERE in `list table`'s output — which
+	// would go on being true even after the output chain's own policy drifted
+	// to accept, as long as some other chain in the table still says "policy
+	// drop". Only the "output" chain's own policy line may answer this.
+	inOutputChain := false
+	depth := 0
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inOutputChain {
+			if trimmed == "chain output {" || strings.HasPrefix(trimmed, "chain output ") {
+				inOutputChain = true
+				depth = strings.Count(line, "{") - strings.Count(line, "}")
+			}
+			continue
+		}
+		if strings.Contains(line, "policy drop") {
+			return true
+		}
+		depth += strings.Count(line, "{") - strings.Count(line, "}")
+		if depth <= 0 {
+			// The output chain's block closed without ever showing "policy
+			// drop" — its policy is something else (accept), or nft's output
+			// shape changed in a way this no longer recognises. Either way,
+			// this is not the confirmed-drop state IsBlocked promises.
+			return false
+		}
+	}
+	return false
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any
