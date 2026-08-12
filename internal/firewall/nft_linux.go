@@ -67,16 +67,44 @@ func (b *nftBackend) Apply(p Policy) error {
 // Unblock removes ONLY dezhban's table (surgical — touches nothing else). A
 // missing table is not an error: unblock must be safe to run when nothing is
 // blocked.
+//
+// Gated on the table EXISTING, deliberately not on IsBlocked: IsBlocked is the
+// stricter "is this actually enforcing" question and answers false for a table
+// whose output-chain policy drifted to accept. Teardown must not inherit that
+// strictness — a drifted table is still dezhban's table, and skipping the
+// delete would have `unblock`/`panic`/`Cleanup` report success while leaving
+// our ruleset installed, breaking the surgical-teardown invariant.
 func (b *nftBackend) Unblock() error {
-	if blocked, err := b.IsBlocked(); err != nil {
+	_, exists, err := b.listTable()
+	if err != nil {
 		return err
-	} else if !blocked {
+	}
+	if !exists {
 		return nil
 	}
 	if _, err := nft("", "delete", "table", "inet", tableName); err != nil {
 		return fmt.Errorf("delete dezhban table: %w", err)
 	}
 	return nil
+}
+
+// listTable renders `nft list table inet dezhban`, reporting whether the table
+// exists at all separately from a real failure to ask. Shared by Unblock (which
+// only cares about existence) and IsBlocked (which also inspects the rendered
+// policy), so the two can never drift on what "the table is not there" looks
+// like.
+func (b *nftBackend) listTable() (out string, exists bool, err error) {
+	out, err = nft("", "list", "table", "inet", tableName)
+	if err != nil {
+		// nft exits non-zero when the table does not exist. Distinguish that
+		// (not blocked) from a real failure by matching the kernel's message.
+		if strings.Contains(err.Error(), "No such file or directory") ||
+			strings.Contains(err.Error(), "does not exist") {
+			return "", false, nil
+		}
+		return "", false, err
+	}
+	return out, true, nil
 }
 
 // IsBlocked reports whether the `inet dezhban` table exists AND its output
@@ -93,14 +121,8 @@ func (b *nftBackend) Unblock() error {
 // drift the same way pf's anchor-reference check (pf_darwin.go) and
 // Windows' DefaultOutboundAction check (wfp_windows.go) catch theirs.
 func (b *nftBackend) IsBlocked() (bool, error) {
-	out, err := nft("", "list", "table", "inet", tableName)
-	if err != nil {
-		// nft exits non-zero when the table does not exist. Distinguish that
-		// (not blocked) from a real failure by matching the kernel's message.
-		if strings.Contains(err.Error(), "No such file or directory") ||
-			strings.Contains(err.Error(), "does not exist") {
-			return false, nil
-		}
+	out, exists, err := b.listTable()
+	if err != nil || !exists {
 		return false, err
 	}
 	return outputChainPolicyIsDrop(out), nil

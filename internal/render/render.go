@@ -99,6 +99,16 @@ func Text(s state.Snapshot) Display {
 		// the intended posture was not achieved. That is more urgent than
 		// whatever the intended posture was, so there is no point deriving
 		// its display just to discard it.
+		//
+		// A verification repair that failed sets BOTH EnforcementErr and
+		// Verify.Missing+Err (the run loop publishes the same error through
+		// both), so without this the more specific sentence below could never
+		// be reached from a real snapshot — the reader would see the raw
+		// backend error with no hint that the rules are GONE. Same headline,
+		// the detail that actually says what happened.
+		if note := verifyNote(s); note != "" && s.Verify.Missing && s.Verify.Err != "" {
+			return Display{Key: KeyWarning, Headline: "Enforcement failed", Detail: note}
+		}
 		return Display{Key: KeyWarning, Headline: "Enforcement failed", Detail: s.EnforcementErr}
 	}
 	d := postureDisplay(s)
@@ -491,6 +501,14 @@ func verifyNote(s state.Snapshot) string {
 		return ""
 	}
 	if s.Verify.Missing {
+		if s.Verify.Err != "" {
+			// Missing AND Err: the rules are gone and putting them back FAILED,
+			// so the host is unenforced right now. Saying "have been re-applied"
+			// here would be the single most dangerous sentence this renderer
+			// can produce — see state.VerifyState.Err.
+			return fmt.Sprintf("Your firewall rules were found missing and could NOT be re-applied: %s. "+
+				"Your traffic is not being guarded.", s.Verify.Err)
+		}
 		return fmt.Sprintf("Your firewall rules were found missing and have been re-applied (%d time(s) since startup).",
 			s.Verify.Repairs)
 	}

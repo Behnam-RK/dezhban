@@ -331,6 +331,56 @@ func TestText(t *testing.T) {
 				"missing and have been re-applied (2 time(s) since startup).",
 		},
 		{
+			// Missing WITH Err: the rules were gone and the re-apply FAILED, so
+			// the host is unenforced. The note must not claim a repair that did
+			// not happen — that sentence is the one this renderer must never
+			// produce for an unguarded host.
+			name: "verify-missing with a failed repair says so, never 'has been re-applied'",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{Missing: true, Err: "pfctl: /dev/pf: Device busy", Repairs: 0},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Your firewall rules were found " +
+				"missing and could NOT be re-applied: pfctl: /dev/pf: Device busy. " +
+				"Your traffic is not being guarded.",
+		},
+		{
+			// What the run loop ACTUALLY publishes for a failed repair: it sets
+			// enfErr and Verify.Missing+Err from the same error, so the generic
+			// EnforcementErr short-circuit would otherwise swallow the sentence
+			// above and leave the reader with a bare backend error that never
+			// says the rules are gone.
+			name: "failed repair keeps the specific sentence even with EnforcementErr set",
+			snap: state.Snapshot{
+				Posture:        PostureGuard,
+				Tunnels:        []state.Tunnel{{Name: "utun4", Up: true}},
+				EnforcementErr: "pfctl: /dev/pf: Device busy",
+				Verify:         &state.VerifyState{Missing: true, Err: "pfctl: /dev/pf: Device busy"},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Enforcement failed",
+			wantDetail: "Your firewall rules were found missing and could NOT be re-applied: " +
+				"pfctl: /dev/pf: Device busy. Your traffic is not being guarded.",
+		},
+		{
+			// An EnforcementErr with no verification finding behind it still
+			// reports the raw backend error — the specific sentence above must
+			// not swallow the general case.
+			name: "enforcement error with a read-only verify finding keeps the raw error",
+			snap: state.Snapshot{
+				Posture:        PostureGuard,
+				Tunnels:        []state.Tunnel{{Name: "utun4", Up: true}},
+				EnforcementErr: "nft: permission denied",
+				Verify:         &state.VerifyState{Err: "nft: permission denied"},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Enforcement failed",
+			wantDetail:   "nft: permission denied",
+		},
+		{
 			name: "verify-read-error note appended to guard detail, Key upgraded to warning",
 			snap: state.Snapshot{
 				Posture: PostureGuard,

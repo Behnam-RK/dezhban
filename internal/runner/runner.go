@@ -1070,6 +1070,16 @@ func (o Options) runGuard(ctx context.Context) error {
 	// zombieRedialTried, i.e. declares the underlying hang itself resolved
 	// rather than merely un-observed for a while — see zombieRedialTried's doc
 	// comment for why those are different questions.
+	// zombieEpisodeOpen reports whether a zombie EPISODE is still unresolved, as
+	// opposed to whether it is being observed right now. The two differ while a
+	// window is open: resetZombie(false) drops the observation (dg.zombie) but
+	// deliberately keeps zombieRedialTried, because suspending observation is
+	// not evidence the hang healed. Everything that has to outlive that
+	// suspension — identifying which trigger a standing refusal belongs to, and
+	// deciding whether that refusal is still live — must ask this, never
+	// dg.zombie, or it silently answers "no episode" for the whole window and
+	// strands the refusal with nothing left to reconsider it.
+	zombieEpisodeOpen := func() bool { return dg.zombie != nil || zombieRedialTried }
 	resetZombie := func(full bool) {
 		if zombieChecks == 0 && dg.zombie == nil && (!full || (!zombieRedialTried && !zombieHoldSuppressed)) {
 			return
@@ -1607,7 +1617,18 @@ func (o Options) runGuard(ctx context.Context) error {
 		// this retry fire for that trigger, leaving a refused liveness-redial
 		// attempt stuck forever once the every-tick reattempt below was
 		// tightened to fire only once per streak (see zombieRedialTried).
-		if redialRefused == nil || (tunnelUp && dg.zombie == nil) {
+		//
+		// The episode test is zombieEpisodeOpen(), NOT `dg.zombie != nil`:
+		// dg.zombie is the *observation*, and the windowActive branch of geoTick
+		// clears it (resetZombie(false)) for as long as any window is open. A
+		// refusal earned by a zombie streak would then hit this guard with
+		// tunnelUp true and dg.zombie nil, return without dropping it, and be
+		// stranded — the retry channel is disarmed by its own case before this
+		// runs, and nothing else re-arms it — leaving `status` and the app
+		// promising a nextEligible that has already passed for the rest of the
+		// cut. zombieRedialTried survives exactly that suspension, which is what
+		// makes it the episode's identity.
+		if redialRefused == nil || (tunnelUp && !zombieEpisodeOpen()) {
 			return
 		}
 		// A zombie-triggered refusal only re-asks while the opt-in that armed
@@ -1618,7 +1639,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		// Ordinary (tunnel-down) drops are untouched: that trigger has no such
 		// opt-in to disable. Clears the stale refusal rather than leaving it
 		// standing with nothing left to reconsider it.
-		if tunnelUp && dg.zombie != nil && !o.LivenessRedial {
+		if tunnelUp && zombieEpisodeOpen() && !o.LivenessRedial {
 			o.Log.Info("zombie-tunnel redial retry skipped — vpn.advanced.livenessRedial was disabled after the refusal")
 			redialRefused = nil
 			disarmRedialRetry()
@@ -1641,7 +1662,7 @@ func (o Options) runGuard(ctx context.Context) error {
 		// reusing the frozen value would let redialMinUptime's backoff refuse
 		// a tunnel forever even once it has genuinely been up long enough.
 		uptime := dropUptime
-		if tunnelUp && dg.zombie != nil && !tunnelUpSince.IsZero() {
+		if tunnelUp && zombieEpisodeOpen() && !tunnelUpSince.IsZero() {
 			uptime = now.Sub(tunnelUpSince)
 		}
 		grantAutoWindow(now, uptime, dropGoodExit, dropDetail)
@@ -1677,12 +1698,16 @@ func (o Options) runGuard(ctx context.Context) error {
 		// lets the very next geoTick's zombie check retry maybeAutoWindow
 		// exactly as it would have on a fresh streak; if it already resolved,
 		// there is nothing left to give back.
+		//
+		// Not gated on dg.zombie either: the two flags are set together and
+		// cleared together (resetZombie(full: true)), so zombieHoldSuppressed
+		// still being set IS the proof the episode never resolved — whereas
+		// dg.zombie is nil for the whole of any open window (resetZombie(false)),
+		// which would silently forfeit the attempt for a hold cancelled there.
 		if zombieHoldSuppressed {
 			zombieHoldSuppressed = false
-			if dg.zombie != nil {
-				zombieRedialTried = false
-				o.Log.Info("liveness redial attempt restored for the standing zombie streak — hold the line was cancelled")
-			}
+			zombieRedialTried = false
+			o.Log.Info("liveness redial attempt restored for the standing zombie streak — hold the line was cancelled")
 		}
 		if redialRetryC != nil {
 			return
@@ -2762,7 +2787,11 @@ func (o Options) runGuard(ctx context.Context) error {
 				// persistently unreadable backend would otherwise emit one Warn
 				// per tick forever into the size-rotated log, rotating away the
 				// evidence of the original problem before anyone reads it.
-				if dg.verify == nil || dg.verify.Err == "" {
+				// `dg.verify.Missing` counts as a different condition, not the
+				// same edge: a failed repair also carries an Err, and coming from
+				// there to "cannot read the firewall at all" is a transition an
+				// operator needs to see rather than have deduplicated away.
+				if dg.verify == nil || dg.verify.Missing || dg.verify.Err == "" {
 					o.Log.Warn("enforcement verification could not read the firewall — posture held",
 						"err", err)
 				}
@@ -2790,12 +2819,25 @@ func (o Options) runGuard(ctx context.Context) error {
 				// that through the normal EnforcementErr surface on snapshot()
 				// below, instead of Repairs climbing for a repair that never
 				// landed.
-				if repairErr := reapplyCurrent("enforcement verification: rules missing", true); repairErr != nil {
+				//
+				// A failed repair is carried in Err ALONGSIDE Missing, not just
+				// in EnforcementErr: every reader of Missing (`status`, the
+				// menubar app, `doctor`) otherwise words it as "found missing
+				// and re-applied", which is exactly backwards for a host that is
+				// missing its rules AND could not get them back. Missing+Err is
+				// therefore a real, distinct state — the rules are gone and the
+				// repair did not land — not a contradiction.
+				repairErr := reapplyCurrent("enforcement verification: rules missing", true)
+				if repairErr != nil {
 					o.Log.Error("enforcement verification: repair attempt failed — still unenforced", "err", repairErr)
 				} else {
 					verifyRepairs++
 				}
-				dg.verify = &state.VerifyState{At: time.Now(), Missing: true, Repairs: verifyRepairs}
+				v := &state.VerifyState{At: time.Now(), Missing: true, Repairs: verifyRepairs}
+				if repairErr != nil {
+					v.Err = repairErr.Error()
+				}
+				dg.verify = v
 			default:
 				if dg.verify != nil {
 					o.Log.Info("enforcement verification: rules confirmed present again", "repairs", verifyRepairs)
@@ -2973,7 +3015,15 @@ func (o Options) runGuard(ctx context.Context) error {
 				// directly still limits this to a liveness-redial refusal,
 				// never an ordinary drop's. Mirrors the cleanup the real
 				// tunnel-up edge already does for that case.
-				if dg.zombie != nil && redialRefused != nil {
+				// zombieEpisodeOpen(), not dg.zombie: a window that opened and
+				// closed mid-streak cleared the observation but not the episode,
+				// and the refusal has to be dropped by whichever tick actually
+				// ends the episode — this one. Still limited to a liveness
+				// refusal, never an ordinary drop's: the only way to reach this
+				// with an episode open is tunnelUp, and a tunnel going down
+				// clears both flags at the watcher's own down edge before any
+				// ordinary-drop refusal can be recorded.
+				if zombieEpisodeOpen() && redialRefused != nil {
 					redialRefused = nil
 					disarmRedialRetry()
 					o.Log.Info("standing redial refusal dropped — the zombie streak it was refused for is over")

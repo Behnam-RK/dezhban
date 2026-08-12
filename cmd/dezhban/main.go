@@ -669,7 +669,13 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	// construction rather than by the backends happening to have no fields
 	// today.
 	selftestFW, selftestFWErr := firewall.New()
-	selftestEpSrc := buildEndpointSource(cfg, log, tunnels, true)
+	// withDiscovery is gated on darwin rather than passed as a bare `true`:
+	// buildEndpointSource only wires a Discover on darwin, and on every other
+	// OS a `true` here does nothing except re-emit its "live discovery is only
+	// supported on macOS" warning — a second copy of a line the epSrc above
+	// already logged, at every daemon start, for a condition that has not
+	// changed between the two calls.
+	selftestEpSrc := buildEndpointSource(cfg, log, tunnels, runtime.GOOS == "darwin")
 	selftestEpSrc.Learned = loadLearnedEndpoints
 	go func() {
 		backendReachable := selftestFWErr == nil
@@ -701,7 +707,14 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		// found anything on this host. Resolve for real (safe here, off the
 		// critical path) so this reports the endpoint set that exists, not
 		// just the intent to look for one.
-		endpointCount := len(cfg.VPN.Endpoints)
+		//
+		// EffectiveEndpoints, not cfg.VPN.Endpoints: the union of the flat list
+		// and every profile's own endpoints is what buildEndpointSource (and so
+		// the guard itself) actually resolves. Reading the flat list alone
+		// reported endpointsKnown=false for a profile-only config — a host that
+		// is fully configured — which is exactly the wrong answer from a check
+		// whose whole job is telling an operator whether the pieces are there.
+		endpointCount := len(config.EffectiveEndpoints(cfg, nil))
 		if cfg.VPN.AutoDiscoverEndpoints {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			endpointCount = len(selftestEpSrc.Resolve(ctx).Addrs)
@@ -2059,11 +2072,16 @@ func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
 	// all, so it must not say so.
 	cannotConfirm := false
 	if snap.Verify != nil {
-		// Missing and Err are mutually exclusive by construction (state.VerifyState's
-		// own doc comment) — the run loop sets exactly one per failed check — so
-		// checking Missing first and falling through to Err is exhaustive, not a
-		// default-case guess.
+		// The three cases below are exhaustive over what the run loop publishes
+		// (state.VerifyState's own doc comment): rules missing and repaired,
+		// rules missing and the repair FAILED (Missing with Err — the host is
+		// unenforced), or the backend unreadable (Err alone, nothing changed).
 		switch {
+		case snap.Verify.Missing && snap.Verify.Err != "":
+			lines = append(lines, fmt.Sprintf(
+				"Firewall rules were found missing and could NOT be re-applied: %s — "+
+					"this host is not being guarded right now.", snap.Verify.Err))
+			cannotConfirm = true
 		case snap.Verify.Missing:
 			lines = append(lines, fmt.Sprintf(
 				"Firewall rules were found missing and re-applied %d time(s) since startup — "+

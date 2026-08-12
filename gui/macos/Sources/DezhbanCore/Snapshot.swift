@@ -118,11 +118,13 @@ public struct RedialState: Codable {
 
 /// Enforcement verification's last unhappy answer — mirrors Go's
 /// `state.VerifyState`. Present only while something is wrong; a clean check
-/// clears it. Distinguishes two different problems: `missing` means the
-/// backend answered and the rules were actually gone (already re-applied by
-/// the time this is read); `err` means the backend could not be read at all,
-/// which is NOT evidence the rules are gone and changes nothing — the same
-/// discipline as an undeterminable exit country holding the current posture.
+/// clears it. Distinguishes three different problems: `missing` alone means
+/// the backend answered, the rules were actually gone, and they were already
+/// re-applied by the time this is read; `missing` WITH `err` means the
+/// re-apply itself failed and the host is unenforced right now; `err` alone
+/// means the backend could not be read at all, which is NOT evidence the
+/// rules are gone and changes nothing — the same discipline as an
+/// undeterminable exit country holding the current posture.
 /// See ADR-0010 and docs/usage/config.md's `verifyInterval` row.
 public struct VerifyState: Codable {
     /// Optional to match Go's `omitzero` — see `SwitchState.until`.

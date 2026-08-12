@@ -239,10 +239,18 @@ type VerifyState struct {
 	// Missing is true when the backend answered and said the rules are gone.
 	// This is the actionable case: the daemon re-applies immediately.
 	Missing bool `json:"missing,omitempty"`
-	// Err is set when the backend could not be READ at all. Not the same as
-	// Missing: an unreadable backend is not evidence of absence, so the daemon
-	// changes nothing and only reports — the same discipline as an
-	// undeterminable exit country holding the current posture.
+	// Err carries the reason this check is unhappy, and its meaning depends on
+	// Missing:
+	//
+	//   - Err WITHOUT Missing: the backend could not be READ at all. Not the
+	//     same as absence — an unreadable backend is not evidence the rules are
+	//     gone — so the daemon changes nothing and only reports, the same
+	//     discipline as an undeterminable exit country holding the current
+	//     posture.
+	//   - Err WITH Missing: the rules were confirmed gone AND the re-apply that
+	//     was supposed to put them back failed. The host is unenforced right
+	//     now. Readers must not word this as "found missing and re-applied";
+	//     Repairs has deliberately NOT been incremented for it.
 	Err string `json:"err,omitempty"`
 	// Repairs counts how many times verification has re-applied the posture
 	// since the daemon started. A number that keeps climbing means something on
