@@ -224,6 +224,23 @@ current as you land changes.
   than one chain could previously have its `output` chain's policy drift to
   `accept` while another chain's unrelated "policy drop" text kept the check
   reporting enforcement as healthy.
+- **The menubar app no longer crashes when a settings field's "?" opens Help at
+  a heading.** Every contextual help link took the app down. `Bundle.main
+  .resourceURL` returns a URL *relative to* a base (`file:///Applications/
+  Dezhban.app/`), and the helper that appended the heading anchor rebuilt the
+  URL from `URLComponents(url:resolvingAgainstBaseURL: false)` — which sees only
+  the relative half, with no scheme. `WKWebView.loadFileURL` raises on a
+  non-file URL, and an ObjC exception thrown inside a SwiftUI layout pass cannot
+  be caught. Opening Help from the menu was unaffected, because only the
+  anchored path appended a fragment at all. The same base also made a URL built
+  from the bundle never compare equal to the same URL handed back by WebKit, so
+  a plain in-page heading link was misread as a jump to another page and routed
+  into that identical crash — clicking a table-of-contents entry inside Help was
+  enough, with no settings field involved. The base is now folded in once where
+  the bundle is opened, the fragment helpers moved to `DezhbanCore` so they are
+  covered by tests, and the loader refuses to hand WebKit anything that is not a
+  file URL — a bad anchor now lands the reader at the top of the right page,
+  matching what `HelpBundle.resolve` already did with a stale one.
 
 ## [0.9.0] - 2026-07-29
 
