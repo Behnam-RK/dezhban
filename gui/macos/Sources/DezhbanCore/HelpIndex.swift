@@ -131,8 +131,14 @@ public struct HelpBundle {
     /// nil when running from `swift run` outside a bundle, or against an app
     /// built before the docs were bundled — callers show a short explanation
     /// rather than an empty pane.
+    ///
+    /// `absoluteURL` is load-bearing, not tidiness: `Bundle.main.resourceURL`
+    /// is `Contents/Resources/` relative to a base, and that base propagates
+    /// into every URL derived from it — where it has already cost one crash.
+    /// Folding it in once, here, means nothing downstream has to know. See
+    /// `HelpURL`.
     public static func bundled() -> HelpBundle? {
-        guard let resources = Bundle.main.resourceURL else { return nil }
+        guard let resources = Bundle.main.resourceURL?.absoluteURL else { return nil }
         return load(directory: resources.appendingPathComponent("help", isDirectory: true))
     }
 
@@ -153,8 +159,10 @@ public struct HelpBundle {
 
     /// The on-disk file for a page. `WKWebView.loadFileURL` needs a real URL,
     /// and this is the only place one is constructed.
+    ///
+    /// Absolute, deliberately: see `HelpURL` for what a base URL costs here.
     public func url(for page: HelpPage) -> URL {
-        directory.appendingPathComponent(page.file)
+        directory.appendingPathComponent(page.file).absoluteURL
     }
 
     /// Resolves a deep link. Reports the anchor only when a heading actually
@@ -225,5 +233,44 @@ public struct HelpBundle {
             }
         }
         return nil
+    }
+}
+
+/// Fragment surgery on a bundled help URL — putting the reader on a heading,
+/// and taking the heading back off to compare two URLs as pages.
+///
+/// It lives here, in the testable target, because getting it wrong is not a
+/// wrong scroll position — it is a crash, and it shipped as one. `loadFileURL`
+/// raises `NSInvalidArgumentException` on a URL whose scheme is not `file:`,
+/// and an uncaught ObjC exception in a SwiftUI layout pass terminates the app.
+///
+/// The trap is that a bundle URL carries a base. `Bundle.main.resourceURL` is
+/// `Contents/Resources/` **relative to** `file:///Applications/Dezhban.app/`,
+/// and that base survives every `appendingPathComponent`. Feed such a URL to
+/// `URLComponents(url:resolvingAgainstBaseURL: false)` and the components
+/// describe only the relative half — path `Contents/Resources/help/x.html`,
+/// **no scheme** — so rebuilding from them yields a relative URL that is no
+/// longer a file URL. Only the anchored path went through here, which is why
+/// Help opened fine from the menu and took the app down from a "?" button.
+///
+/// Hence `absoluteURL` first, on the way in and on the fallback: it folds the
+/// base into the URL so the components are the whole thing.
+public enum HelpURL {
+    /// The same page, pointing at a heading within it. WebKit scrolls to it on
+    /// load, which is why the Help pane needs no script of its own.
+    public static func appendingFragment(_ url: URL, _ fragment: String) -> URL {
+        let absolute = url.absoluteURL
+        var c = URLComponents(url: absolute, resolvingAgainstBaseURL: false)
+        c?.fragment = fragment
+        return c?.url ?? absolute
+    }
+
+    /// The same URL without its fragment — what tells "scroll within this page"
+    /// apart from "go to another page".
+    public static func deletingFragment(_ url: URL) -> URL {
+        let absolute = url.absoluteURL
+        var c = URLComponents(url: absolute, resolvingAgainstBaseURL: false)
+        c?.fragment = nil
+        return c?.url ?? absolute
     }
 }

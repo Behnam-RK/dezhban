@@ -198,20 +198,13 @@ struct HelpView: View {
 }
 
 private extension URL {
-    /// The same URL without its fragment — what tells "scroll within this page"
-    /// apart from "go to another page".
-    var deletingFragment: URL {
-        var c = URLComponents(url: self, resolvingAgainstBaseURL: false)
-        c?.fragment = nil
-        return c?.url ?? self
-    }
+    /// See `HelpURL` in DezhbanCore, which is where these live so they can be
+    /// tested — an executable target cannot be `@testable import`ed, and this
+    /// pair is exactly the kind of thing that must not go untested twice.
+    var deletingFragment: URL { HelpURL.deletingFragment(self) }
 
-    /// The same URL pointing at a heading within the page. WebKit scrolls to it
-    /// on load, which is why the pane needs no script of its own.
     func appendingFragment(_ fragment: String) -> URL {
-        var c = URLComponents(url: self, resolvingAgainstBaseURL: false)
-        c?.fragment = fragment
-        return c?.url ?? self
+        HelpURL.appendingFragment(self, fragment)
     }
 }
 
@@ -269,9 +262,20 @@ struct HelpWebView: NSViewRepresentable {
         /// rather than the app injecting a `scrollIntoView` — which would not
         /// run anyway with content JavaScript off, and which would put script
         /// into a pane that has none.
+        ///
+        /// `loadFileURL` RAISES on anything that is not a file URL, and an ObjC
+        /// exception thrown inside a SwiftUI layout pass is not catchable — it
+        /// kills the app. So the anchored URL is checked before it is handed
+        /// over, and a bad one degrades to the page itself: the reader lands at
+        /// the top of the right page, which is the same thing `HelpBundle
+        /// .resolve` already does with a stale anchor. Never let this method
+        /// pass an unchecked URL to WebKit, whatever the fragment helper is
+        /// believed to guarantee this week.
         func load(_ web: WKWebView, url: URL, readAccess: URL, anchor: String?) {
-            let target = anchor.map { url.appendingFragment($0) } ?? url
+            let anchored = anchor.map { url.appendingFragment($0) } ?? url
+            let target = anchored.isFileURL ? anchored : url.absoluteURL
             defer { clearAnchor() }
+            guard target.isFileURL, readAccess.isFileURL else { return }
             guard target != loaded else { return }
             loaded = target
             web.loadFileURL(target, allowingReadAccessTo: readAccess)

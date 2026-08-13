@@ -154,4 +154,55 @@ struct HelpIndexTests {
         #expect(!snippet.contains("\n"))
         #expect(HelpBundle.snippet(in: "nothing here", around: "pause") == nil)
     }
+
+    /// The shape that crashed the app: a URL built the way `HelpBundle.bundled`
+    /// builds one, i.e. relative to a base, because that is what
+    /// `Bundle.main.resourceURL` hands back. Adding a fragment used to drop the
+    /// scheme, and `WKWebView.loadFileURL` raises on a non-file URL.
+    ///
+    /// `isFileURL` is the assertion that matters — the absolute string is
+    /// checked alongside it so a helper that "fixes" the scheme by pointing
+    /// somewhere else cannot pass.
+    @Test func fragmentSurvivesABasedBundleURL() {
+        let app = URL(fileURLWithPath: "/Applications/Dezhban.app/", isDirectory: true)
+        let page = URL(string: "Contents/Resources/help/usage-config.html", relativeTo: app)!
+        #expect(page.baseURL != nil, "the fixture must reproduce a based URL, or it tests nothing")
+
+        let anchored = HelpURL.appendingFragment(page, "vpn-redialwindow")
+        #expect(anchored.isFileURL)
+        #expect(anchored.absoluteString
+            == "file:///Applications/Dezhban.app/Contents/Resources/help/usage-config.html#vpn-redialwindow")
+
+        let bare = HelpURL.deletingFragment(anchored)
+        #expect(bare.isFileURL)
+        #expect(bare.absoluteString
+            == "file:///Applications/Dezhban.app/Contents/Resources/help/usage-config.html")
+        // Two anchors in one page are the same page — what the navigation
+        // delegate uses to tell a scroll from a page change.
+        #expect(HelpURL.deletingFragment(HelpURL.appendingFragment(page, "other")) == bare)
+
+        // The same page reached the two ways the navigation delegate sees it —
+        // built from the bundle (based) and handed back by WebKit (absolute) —
+        // must compare equal. When it did not, an in-page "#heading" link was
+        // mistaken for a jump to another page and re-entered the anchored load
+        // path, i.e. the crash above, from the Help pane alone.
+        let fromWebKit = URL(string:
+            "file:///Applications/Dezhban.app/Contents/Resources/help/usage-config.html#heading")!
+        #expect(HelpURL.deletingFragment(fromWebKit) == HelpURL.deletingFragment(page))
+    }
+
+    /// A page URL is absolute even before an anchor is added, so nothing
+    /// downstream has to remember to fold the base in.
+    @Test func pageURLIsAbsolute() {
+        let bundle = HelpBundle(
+            directory: URL(string: "Contents/Resources/help/",
+                           relativeTo: URL(fileURLWithPath: "/Applications/Dezhban.app/"))!,
+            pages: [HelpPage(file: "usage-config.html", source: "usage/config.md",
+                             title: "Configuration reference", summary: "")])
+        let url = bundle.url(for: bundle.pages[0])
+        #expect(url.isFileURL)
+        #expect(url.baseURL == nil)
+        #expect(url.absoluteString
+            == "file:///Applications/Dezhban.app/Contents/Resources/help/usage-config.html")
+    }
 }
