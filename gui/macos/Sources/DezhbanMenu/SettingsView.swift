@@ -56,9 +56,16 @@ struct SettingsView: View {
     /// Evaluated at init rather than in `body`, so a body getter stays cheap —
     /// but deliberately NOT cached for the process's lifetime. The keychain half
     /// of `capability` is memoized inside `ControlToken`; the biometry half is
-    /// re-asked here every time SwiftUI rebuilds the view, because it really does
+    /// re-asked whenever `MainView` re-creates this struct, because it really does
     /// change (clamshell mode, Touch ID lockout) and a menubar app that froze it
     /// at launch would leave the toggle greyed out until the user quit.
+    ///
+    /// "Re-creates the struct" is the precise boundary and is NOT the same as
+    /// "re-runs `body`": a stored property's initialiser does not run again when
+    /// SwiftUI merely re-evaluates the body for a `@State` change here. In
+    /// practice `MainView.body` rebuilds on every `AppState` publish, so the
+    /// answer refreshes with the rest of the window — but leaving and re-entering
+    /// the pane is the guaranteed way to re-ask.
     private let tokenCapability = ControlToken.capability
 
     var body: some View {

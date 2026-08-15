@@ -126,8 +126,11 @@ struct AboutView: View {
             return "Touch ID (control token enrolled)"
         }
         // Not "turn on Touch ID in Settings" unless that would actually work.
-        // On an ad-hoc build the keychain refuses the item, and the old copy sent
-        // people to a toggle that could only spend a password and fail.
+        // The old copy said it unconditionally, so a Mac whose keychain refuses
+        // the item was sent to a toggle that could only spend a password and fail.
+        //
+        // MUST NOT run on the main thread: reading `capability` can be the first
+        // touch of the keychain probe, which is a keychain write.
         return ControlToken.capability.settingsAuthSummary
     }
 
@@ -146,16 +149,25 @@ struct AboutView: View {
     }
 
     private func load() {
-        settingsAuth = Self.describeSettingsAuth()
         privilegedAuth = Self.describePrivilegedAuth()
         // Show the memoized path immediately; the authoritative resolution happens
         // below, off the main thread (DezhbanCLI.exec explains why that matters).
         configPath = DezhbanCLI.displayConfigPath
         binaryPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
         DispatchQueue.global(qos: .userInitiated).async {
+            // `describeSettingsAuth` reads `ControlToken.capability`, and that is a
+            // keychain probe — an ADD plus a DELETE — the first time anything asks
+            // for it. `AppDelegate` warms it at launch, but only when biometry was
+            // usable at that moment: a Mac woken from clamshell, or one in Touch ID
+            // lockout at launch, reaches this pane with the probe still unresolved.
+            // Doing it here rather than on `.onAppear`'s main thread means the
+            // worst case is a row that fills in late, not a frozen window behind a
+            // keychain-unlock dialog.
+            let auth = Self.describeSettingsAuth()
             let path = DezhbanCLI.resolvedConfigPath()
             let v = DezhbanCLI.run(["version"]).output.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {
+                settingsAuth = auth
                 configPath = path
                 version = v
             }

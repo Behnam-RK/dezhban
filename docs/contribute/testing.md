@@ -851,10 +851,14 @@ end up typing a password.
       password prompt that would perform it anyway.
 - [ ] **Turning it off removes both copies.** The toggle goes off, `dezhban token
       status` reports "not enrolled", and saves ask for a password again.
-- [ ] **Changing your fingerprints invalidates the stored token** (this is the
-      point of `.biometryCurrentSet`): add or remove a fingerprint, then save →
-      it falls back to the password path, and re-enrolling from the toggle
-      restores Touch ID.
+- [ ] **Changing your fingerprints does NOT invalidate the stored token.** Add or
+      remove a fingerprint, then save → it still costs a Touch ID tap and still
+      succeeds. `.biometryCurrentSet` is gone with
+      [ADR-0012](../adr/0012-app-checked-biometrics-on-unsigned-builds.md) — the
+      keychain item is ordinary and the check is the app's, so there is nothing
+      for a fingerprint change to invalidate. Adding a finger already needs the
+      login password, which already grants `sudo`. Recorded here so the loss is
+      re-confirmed on each pass rather than rediscovered as a surprise.
 - [ ] **On a Mac without Touch ID** the toggle is disabled and explains why;
       settings changes keep working through the password path.
 
