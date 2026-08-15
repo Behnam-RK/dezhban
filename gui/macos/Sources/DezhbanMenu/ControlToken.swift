@@ -133,8 +133,12 @@ enum ControlToken {
     /// a keychain write, and a locked login keychain answers one with a system
     /// dialog — on the main thread that is a frozen UI, not merely a slow one.
     /// Same reasoning as `DezhbanCLI.warmConfigPath`.
+    /// Goes through `capability`, NOT `probeStatus` directly: the biometry guard
+    /// there is what keeps a Mac with no sensor from writing to the keychain at
+    /// all, and warming the probe behind its back would break that promise on
+    /// exactly the desktops (mini, Studio, iMac) that can never use the feature.
     static func warmCapability() {
-        DispatchQueue.global(qos: .utility).async { _ = probeStatus }
+        DispatchQueue.global(qos: .utility).async { _ = capability }
     }
 
     /// Whether a token is stored, WITHOUT reading it — deliberately, so the UI can
@@ -189,7 +193,13 @@ enum ControlToken {
             authorised = ok
             done.signal()
         }
-        done.wait()
+        // `withExtendedLifetime` is load-bearing, not decoration: `ctx` is not
+        // touched again after the call above, so an optimised build is free to
+        // release it immediately — and deallocating an LAContext CANCELS the
+        // evaluation in flight. That would dismiss the prompt the user is looking
+        // at and, at worst, leave this thread parked on `done.wait()` forever with
+        // the Settings toggle stuck busy.
+        withExtendedLifetime(ctx) { done.wait() }
         guard authorised else { return nil }
 
         var q = query()
@@ -207,9 +217,13 @@ enum ControlToken {
     /// Stores `token`, replacing any previous one. Returns nil on success, or a
     /// sentence naming what went wrong.
     ///
-    /// `...ThisDeviceOnly` keeps it off iCloud Keychain. The daemon that checks
-    /// this token runs on THIS host; syncing it would hand other Macs a
-    /// credential they have no matching enrollment for.
+    /// The item lands in the legacy (file) login keychain, which does not sync to
+    /// iCloud Keychain at all — which is what this design needs, since the daemon
+    /// that checks the token runs on THIS host and syncing it would hand other
+    /// Macs a credential they have no matching enrollment for. `kSecAttrAccessible`
+    /// is set for the day this moves to the data protection keychain; that
+    /// attribute applies only there, so on the store we actually use it is inert
+    /// and is NOT what keeps the token off iCloud.
     @discardableResult
     static func store(_ token: String) -> String? {
         guard let data = token.data(using: .utf8) else { return "token is not valid UTF-8" }
