@@ -43,7 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // About and Settings panes ask for the verdict as a pane opens, so resolve
         // it here and they find it already settled. They fall back to
         // `capabilityIfKnown` + `resolveCapability` when this warm-up did not run
-        // (no usable sensor at launch), never to `capability` on the main thread.
+        // (no usable sensor at launch, or a token already enrolled — see
+        // `warmCapability`), never to `capability` on the main thread.
         ControlToken.warmCapability()
         AppActions.refresh = { [weak self] in self?.refresh() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)

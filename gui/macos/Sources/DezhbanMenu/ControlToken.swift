@@ -124,7 +124,16 @@ enum ControlToken {
         _ = remove(account: probeAccount)
         var add = query(account: probeAccount)
         add[kSecValueData as String] = Data("probe".utf8)
-        let status = SecItemAdd(add as CFDictionary, nil)
+        var status = SecItemAdd(add as CFDictionary, nil)
+        // A DUPLICATE IS NOT A REFUSAL. The question this probe asks is "will the
+        // keychain take an item from this build", and -25299 answers it with "there
+        // is already one there" — which is a yes, arrived at the long way round.
+        // The pre-clean above should have removed it, but it returns false whenever
+        // the lookup itself failed (a locked keychain, a cancelled unlock dialog),
+        // and reporting that as `.failed(-25299)` would grey the toggle out and
+        // blame the keychain for holding what this build put there. Worse, -25299
+        // is not a cacheable verdict, so the misreading would repeat on every probe.
+        if status == errSecDuplicateItem { status = errSecSuccess }
         if status == errSecSuccess {
             _ = remove(account: probeAccount)
         }
@@ -212,7 +221,16 @@ enum ControlToken {
     /// all, and warming the probe behind its back would break that promise on
     /// exactly the desktops (mini, Studio, iMac) that can never use the feature.
     static func warmCapability() {
-        DispatchQueue.global(qos: .utility).async { _ = capability }
+        DispatchQueue.global(qos: .utility).async {
+            // An enrolled host needs no verdict: `capability` answers whether
+            // ENROLLING could succeed, and both panes skip it once a token is
+            // stored (AboutView.describeSettingsAuthIfKnown, SettingsView's
+            // refreshTokenCapability). Warming it anyway would spend a keychain
+            // write — and, on a locked login keychain, a modal unlock dialog at
+            // every login — for an answer nothing goes on to read.
+            guard !isStored else { return }
+            _ = capability
+        }
     }
 
     /// Whether a token is stored, WITHOUT reading it — deliberately, so the UI can
@@ -336,6 +354,9 @@ enum ControlToken {
             }
             return "keychain refused to store the token (OSStatus \(status)) — \(verdict.toggleExplanation)"
         }
+        // The secret under this account is now one the daemon has just hashed, so
+        // whatever went before is no longer orphaned.
+        clearOrphaned()
         return nil
     }
 
@@ -358,6 +379,40 @@ enum ControlToken {
     /// identities without a prompt. Measured, not assumed — `SecItemUpdate` also
     /// succeeds cross-identity but does NOT re-own the ACL, so it writes a token
     /// the new build can never read back, which is worse than failing.
+    /// Set when the daemon's hash has been removed but the app's copy could not
+    /// be — the one state in which the stored secret is known to authorise
+    /// nothing.
+    ///
+    /// Without this, that state is a dead end rather than a degradation.
+    /// `writeConfig` offers the token whenever `isStored` is true, the daemon
+    /// answers an orphaned token with a refusal, and a refusal is deliberately
+    /// never retried through the privileged path — so EVERY settings save fails
+    /// until the user finds and runs `manualRemovalCommand`. Skipping the token
+    /// path restores the password fallback, which is where turning the toggle off
+    /// was heading anyway.
+    ///
+    /// It records something the app observed, not a policy: nothing here decides
+    /// whether a write is allowed, so the rule that a daemon refusal is never
+    /// routed around is untouched. Session-only and never persisted — a restart
+    /// re-reads the keychain and asks the daemon afresh, which is the right
+    /// answer if the user cleared the item in between.
+    private static let orphanFlag = DispatchQueue(label: "sh.dezhban.menu.orphan-flag")
+    private static var orphaned = false
+
+    /// Whether the stored secret is known to be orphaned. Checked before the
+    /// token path is offered.
+    static var isKnownOrphaned: Bool { orphanFlag.sync { orphaned } }
+
+    /// Called when a `token forget` succeeded but the keychain removal did not.
+    static func markOrphaned() { orphanFlag.sync { orphaned = true } }
+
+    /// Cleared by a successful `store`, and only there. Everywhere else the flag
+    /// is checked alongside `isStored`, so once the item is gone a stale `true`
+    /// changes nothing — but a re-enrollment puts a NEW secret under the same
+    /// account, and that one the daemon does know. Leaving the flag set would
+    /// suppress the token path for a token that works.
+    private static func clearOrphaned() { orphanFlag.sync { orphaned = false } }
+
     @discardableResult
     static func remove(account: String = ControlToken.account) -> Bool {
         // Look the item up with the modern API — `kSecReturnRef` hands back a
