@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var loginEnabled = false
     @State private var notifyEnabled = true
     @State private var checkUpdatesEnabled = true
+    @State private var launchVisibility: LaunchVisibility = .bootOnly
 
     /// Displayed in the Config file row and used by "Open Config File…". Seeded from
     /// the memoized value (warmed at launch) and refreshed off the main thread by
@@ -154,6 +155,14 @@ struct SettingsView: View {
                     Toggle("Open this app at login", isOn: loginBinding)
                         .help("Registers the app as a login item (System Settings → General → Login Items). "
                             + "This is only the status display — the guard itself is the system service above.")
+                    Picker("Open minimized", selection: launchVisibilityBinding) {
+                        ForEach(LaunchVisibility.allCases) { choice in
+                            Text(choice.label).tag(choice)
+                        }
+                    }
+                    .help("Whether the main window opens when Dezhban starts. The Dock icon and the "
+                        + "menubar's \"Open Dezhban…\" always open it, whichever you pick — this only "
+                        + "governs startup.")
                     Toggle("Notify on essential events", isOn: notifyBinding)
                         .help("macOS notifications for the transitions that matter: guard armed, traffic "
                             + "cut, warnings (enforcement error / window open), standby, stopped. "
@@ -257,7 +266,6 @@ struct SettingsView: View {
             Divider()
             footer
         }
-        .navigationTitle("Settings")
         .onAppear(perform: seed)
         // The config file is not owned by this pane: `dezhban config set` in a
         // terminal, another admin, or a hand edit can all change it while the
@@ -272,13 +280,20 @@ struct SettingsView: View {
     }
 
     private var footer: some View {
-        HStack {
+        // Same shape, and same defect, as the Overview's action row: an HStack
+        // whose natural width (~450pt) exceeds the pane at a narrow window
+        // compresses every button's label. The .lineLimit(1) below only ever
+        // masked it for the status text; the buttons truncated regardless.
+        ActionRow(trailingCount: 4) {
             Text(status)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
                 .truncationMode(.tail)
-            Spacer()
+                // ActionRow places every subview at its ideal size, and a status
+                // line's ideal width is however long the message is. Bound it,
+                // or one long message pushes all four buttons onto a second row.
+                .frame(maxWidth: PaneMetrics.statusColumn, alignment: .leading)
             Button("Restart dezhban…", action: restartNow)
                 .disabled(restartBusy || !state.cliFound)
             Button("Reset to Defaults…", action: resetToDefaults)
@@ -288,7 +303,7 @@ struct SettingsView: View {
                 .keyboardShortcut(.defaultAction)
                 .disabled(!canApply)
         }
-        .padding(12)
+        .padding(PaneMetrics.footerPadding)
     }
 
     // MARK: - explicit restart
@@ -703,6 +718,19 @@ struct SettingsView: View {
         }
     }
 
+    /// Like the notify/update toggles beside it: an app preference that takes
+    /// effect immediately and is deliberately untouched by Apply, because Apply
+    /// writes the daemon's config and this never goes there.
+    private var launchVisibilityBinding: Binding<LaunchVisibility> {
+        Binding(
+            get: { launchVisibility },
+            set: { choice in
+                LaunchPreference.current = choice
+                launchVisibility = LaunchPreference.current
+                status = choice.detail
+            })
+    }
+
     private var notifyBinding: Binding<Bool> {
         Binding(
             get: { notifyEnabled },
@@ -744,6 +772,7 @@ struct SettingsView: View {
         loginEnabled = LoginItem.isEnabled
         notifyEnabled = NotificationManager.isEnabled
         checkUpdatesEnabled = UpdateChecker.isEnabled
+        launchVisibility = LaunchPreference.current
         fields = SettingsFields()
         state.refreshServiceState()
         refreshPresets()

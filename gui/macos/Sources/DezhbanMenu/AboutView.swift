@@ -53,7 +53,6 @@ struct AboutView: View {
             updateSection
         }
         .formStyle(.grouped)
-        .navigationTitle("About Dezhban")
         .onAppear(perform: load)
     }
 

@@ -15,7 +15,6 @@ struct LogsView: View {
             Divider()
             ConsoleTextView(console: console)
         }
-        .navigationTitle("Logs")
     }
 
     private var toolbar: some View {

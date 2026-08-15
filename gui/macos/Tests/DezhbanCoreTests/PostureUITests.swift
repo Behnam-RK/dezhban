@@ -157,6 +157,21 @@ struct PostureUITests {
         }
     }
 
+    /// Under `swift test` there is no assembled .app, so every bundle lookup
+    /// must MISS — and that nil is precisely what keeps the SF Symbol fallback
+    /// in the Overview hero reachable for a bare `swift run`. A future change
+    /// that made these resolve some other way (SPM resources, an asset catalog)
+    /// would silently strand that branch.
+    ///
+    /// It cannot pin the opposite — that the tiles DO resolve in a real bundle —
+    /// because that is a build-script property, not a Swift one. build-app.sh
+    /// carries its own note for a missing state-tile-<key>.png.
+    @Test(arguments: ["on", "off", "blocked", "warning", "paused"])
+    func brandImagesMissOutsideTheAssembledBundle(_ state: String) {
+        #expect(PostureUI.stateTile(state) == nil)
+        #expect(PostureUI.dockIcon(state) == nil)
+    }
+
     @Test func mmssRoundsDown() {
         #expect(PostureUI.mmss(59.6) == "0:59")
         #expect(PostureUI.mmss(60) == "1:00")

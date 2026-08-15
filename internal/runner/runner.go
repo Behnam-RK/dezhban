@@ -17,6 +17,7 @@ import (
 
 	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/control"
+	"github.com/behnam-rk/dezhban/internal/country"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/monitor"
@@ -474,8 +475,10 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		Posture:             postureName(blocked, windowOpen, standby),
 		Blocked:             blocked,
 		CountryCode:         r.CountryCode,
+		CountryName:         country.Name(r.CountryCode),
 		Provider:            r.Provider,
 		BlockedCountries:    o.BlockedCountries,
+		BlockedCountryNames: country.Labels(o.BlockedCountries),
 		Tunnels:             tunnels,
 		PollIntervalSeconds: int(o.Interval.Seconds()),
 		PID:                 os.Getpid(),

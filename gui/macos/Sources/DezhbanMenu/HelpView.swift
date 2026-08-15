@@ -30,7 +30,6 @@ struct HelpView: View {
                 unavailable
             }
         }
-        .navigationTitle("Help")
         .onAppear { openPendingTarget() }
         .onChange(of: state.helpTarget) { _ in openPendingTarget() }
     }
@@ -89,7 +88,11 @@ struct HelpView: View {
                     }
                 }
             }
-            .listStyle(.sidebar)
+            // .inset, not .sidebar: this list sits INSIDE the detail column, so
+            // the sidebar treatment gave the window two nested vibrant sidebars
+            // competing with each other. The window's one real sidebar is
+            // SidebarListView.
+            .listStyle(.inset)
         }
     }
 

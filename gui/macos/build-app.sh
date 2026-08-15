@@ -88,6 +88,15 @@ if [[ -d "$ASSETS" ]]; then
 			sips -Z 44 "$ASSETS/icon-$state-512.png" \
 				--out "$APP/Contents/Resources/menubar-state-$state.png" >/dev/null
 		fi
+		# Window hero: the full five-state tile set, deliberately NOT subject to
+		# the Dock's coarsening below. The Overview's hero answers "what is the
+		# guard doing right now?" in the brand's own state artwork, so off /
+		# warning / paused each need their own file. Before this, three of the
+		# five resolved to no file at all and the hero silently fell back to a
+		# generic SF Symbol shield, which is not a dezhban artifact.
+		if [[ -f "$ASSETS/icon-$state-512.png" ]]; then
+			cp "$ASSETS/icon-$state-512.png" "$APP/Contents/Resources/state-tile-$state.png"
+		fi
 		# Dock tile: PostureUI.dockState coarsens every state down to "blocked" or
 		# "on", so only those two are ever requested. "blocked" is the state tile,
 		# because a cut is the one thing the Dock has to shout about. "on" is the
@@ -101,6 +110,13 @@ if [[ -d "$ASSETS" ]]; then
 			sips -Z 512 "$ASSETS/app-icon-1024.png" \
 				--out "$APP/Contents/Resources/dock-state-on.png" >/dev/null
 		fi
+	done
+	# A missing hero tile is otherwise invisible until someone actually reaches
+	# that state in a shipped build — which is exactly how the generic shield
+	# shipped. A note, not a failure: the block above is explicitly optional.
+	for state in on off blocked warning paused; do
+		[[ -f "$APP/Contents/Resources/state-tile-$state.png" ]] \
+			|| echo "build-app.sh: note: no state-tile-$state.png — the Overview hero will fall back to an SF Symbol for '$state'" >&2
 	done
 fi
 

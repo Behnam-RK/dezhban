@@ -20,7 +20,6 @@ struct DiagnosticsView: View {
             Divider()
             content
         }
-        .navigationTitle("Diagnostics")
         .onAppear {
             if report == nil { run() }
         }

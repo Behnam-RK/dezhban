@@ -219,8 +219,8 @@ func TestText(t *testing.T) {
 			name:         "full block with country",
 			snap:         state.Snapshot{Posture: PostureFullBlock, CountryCode: "IR"},
 			wantKey:      KeyBlocked,
-			wantHeadline: "Full block (IR)",
-			wantDetail:   "Your VPN is exiting through a country you've blocked (IR). Everything is cut until it moves.",
+			wantHeadline: "Full block — Iran (IR)",
+			wantDetail:   "Your VPN is exiting through Iran (IR), a country you've blocked. Everything is cut until it moves.",
 		},
 		{
 			name:         "full block without country",
@@ -418,8 +418,8 @@ func TestText(t *testing.T) {
 				Verify:      &state.VerifyState{Missing: true, Repairs: 1},
 			},
 			wantKey:      KeyBlocked,
-			wantHeadline: "Full block (IR)",
-			wantDetail: "Your VPN is exiting through a country you've blocked (IR). Everything is cut " +
+			wantHeadline: "Full block — Iran (IR)",
+			wantDetail: "Your VPN is exiting through Iran (IR), a country you've blocked. Everything is cut " +
 				"until it moves. Your firewall rules were found missing and have been re-applied " +
 				"(1 time(s) since startup).",
 		},

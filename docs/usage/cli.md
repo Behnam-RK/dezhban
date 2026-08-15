@@ -582,7 +582,8 @@ Two surfaces, split by urgency:
 
 The main window's sidebar sections:
 
-- **Overview** — live status hero (posture, IP/country, tunnel, endpoints,
+- **Overview** — live status hero (posture, IP/country — named in full, e.g.
+  `Kazakhstan (KZ)` — tunnel, endpoints,
   every configured VPN profile with the matched one marked, switch-window
   countdown, enforcement-error banner) plus the daily controls, Pause, and a
   visually-separated Panic. With profiles configured, "Switching VPN…"
@@ -592,7 +593,11 @@ The main window's sidebar sections:
   service… / Guard up).
 - **Settings** — startup ("Start the guard at boot" installs the launchd
   system service so enforcement survives reboots; "Open this app at login" via
-  `SMAppService`; essential-event notifications), a **strictness preset
+  `SMAppService`; **"Open minimized"** — Never / Always / Only at login, an
+  app-local preference that decides whether the main window opens when Dezhban
+  starts, defaulting to "Only at login", which is what the app always did; the
+  Dock icon and the menubar's "Open Dezhban…" open it regardless;
+  essential-event notifications), a **strictness preset
   picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
   the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
   countries, poll interval), windows (switch/redial/endpoint grace), timing,

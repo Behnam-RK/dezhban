@@ -66,7 +66,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // should not make. A missing flag reads as an ordinary launch, so the
         // window still opens if AppKit ever stops reporting this.
         let deliberateLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool) ?? true
-        if deliberateLaunch {
+        // The Settings "Open minimized" choice decides what to do with that.
+        // Its default, .bootOnly, is exactly the behaviour described above, so
+        // anyone who never touches the setting sees no change.
+        if LaunchPreference.current.opensWindow(deliberateLaunch: deliberateLaunch) {
             MainWindow.shared.open()
         }
         AppState.shared.refreshServiceState()
@@ -207,8 +210,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Menubar brand state images, loaded once from the app bundle's Resources
     /// (put there by build-app.sh from gui/artifacts/png) and cached per state. Empty
     /// when running outside the bundle, which triggers the SF Symbol fallback
-    /// in refresh(). (Dock-size counterparts live in PostureUI.dockIcon, shared
-    /// with the window's Overview hero.)
+    /// in refresh(). (The Dock tile's own two-file family is PostureUI.dockIcon;
+    /// the window's Overview hero uses PostureUI.stateTile, which — like this
+    /// one — ships all five states.)
     private static var menubarIcons: [String: NSImage] = [:]
 
     private static func menubarIcon(_ state: String) -> NSImage? {
@@ -356,7 +360,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         var line = PostureUI.humanPosture(s)
         if let e = s.enforcementErr, !e.isEmpty {
             line = "⚠︎ Enforcement failed — open Dezhban for details"
-        } else if let cc = s.countryCode, !cc.isEmpty {
+        } else if let cc = s.countryLabel, !cc.isEmpty {
             line += " — \(cc)"
             if let p = s.provider, !p.isEmpty { line += " via \(p)" }
         }

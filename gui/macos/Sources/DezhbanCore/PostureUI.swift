@@ -147,13 +147,42 @@ public enum PostureUI {
 
     /// Dock-size brand state images from the app bundle's Resources (put there by
     /// build-app.sh from gui/artifacts/png), cached per state. Empty outside the bundle,
-    /// where callers fall back to SF Symbols. Shared by the Dock tile and the
-    /// Overview hero.
+    /// where callers fall back to SF Symbols.
+    ///
+    /// The Dock tile ONLY — pass it a `dockState`, never a raw posture key.
+    /// build-app.sh ships exactly two of these files ("blocked" and "on"),
+    /// because `dockState` coarsens every posture into one of those two. Any
+    /// other key resolves to no file at all. Surfaces that show the full
+    /// five-state nuance want `stateTile` instead.
     private static let dockIcons = ImageCache()
 
     public static func dockIcon(_ state: String) -> NSImage? {
         dockIcons.image(state) {
             Bundle.main.url(forResource: "dock-state-\(state)", withExtension: "png")
+                .flatMap { NSImage(contentsOf: $0) }
+        }
+    }
+
+    /// Full-color brand STATE tiles (gui/artifacts/png's icon-<state>-512.png),
+    /// bundled by build-app.sh for all five states. Color IS the state, so
+    /// these are what a status hero shows.
+    ///
+    /// Deliberately a different resource family from `dockIcon`. The Dock's two
+    /// files are a coarsening (see `dockState`) and the window's hero is the
+    /// opposite of coarse — it is the surface with room to say "warning" or
+    /// "paused" rather than merely "not a cut". Sharing `dock-state-*` was the
+    /// bug: three of the five keys resolved to no file, so the hero silently
+    /// fell back to a generic SF Symbol shield, which is not a dezhban artifact
+    /// at all, and the three degraded pages hit it every single time.
+    ///
+    /// nil outside the assembled bundle (a bare `swift run`), where callers keep
+    /// their SF Symbol fallback. A miss is not cached, so a lookup that fails
+    /// once outside the bundle does not poison a later in-bundle run.
+    private static let stateTiles = ImageCache()
+
+    public static func stateTile(_ state: String) -> NSImage? {
+        stateTiles.image(state) {
+            Bundle.main.url(forResource: "state-tile-\(state)", withExtension: "png")
                 .flatMap { NSImage(contentsOf: $0) }
         }
     }
