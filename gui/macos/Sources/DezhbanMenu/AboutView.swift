@@ -121,17 +121,22 @@ struct AboutView: View {
     /// read "Authorization Services (Touch ID capable)" unconditionally, which was
     /// false in every case that mattered: that dialog is password-only in
     /// practice, which is the finding that produced the control token.
-    private static func describeSettingsAuth() -> String {
+    private static func describeSettingsAuth(_ capability: TokenCapability) -> String {
         if ControlToken.isStored {
             return "Touch ID (control token enrolled)"
         }
         // Not "turn on Touch ID in Settings" unless that would actually work.
         // The old copy said it unconditionally, so a Mac whose keychain refuses
         // the item was sent to a toggle that could only spend a password and fail.
-        //
-        // MUST NOT run on the main thread: reading `capability` can be the first
-        // touch of the keychain probe, which is a keychain write.
-        return ControlToken.capability.settingsAuthSummary
+        return capability.settingsAuthSummary
+    }
+
+    /// The row's value when it can be given without touching the keychain — which
+    /// `warmCapability()` makes the normal case — so the pane does not render a
+    /// blank "Settings changes" for as long as two subprocesses take to answer.
+    /// nil only when the probe has not run and biometry is now available.
+    private static func describeSettingsAuthIfKnown() -> String? {
+        ControlToken.capabilityIfKnown.map(describeSettingsAuth)
     }
 
     /// Lifecycle actions (install/start/stop/panic) cannot go through the daemon,
@@ -150,6 +155,10 @@ struct AboutView: View {
 
     private func load() {
         privilegedAuth = Self.describePrivilegedAuth()
+        // Same "show it now, confirm it below" shape as the paths: an empty
+        // LabeledContent value for the length of two subprocess calls reads as a
+        // missing row, not a pending one.
+        settingsAuth = Self.describeSettingsAuthIfKnown() ?? "Checking…"
         // Show the memoized path immediately; the authoritative resolution happens
         // below, off the main thread (DezhbanCLI.exec explains why that matters).
         configPath = DezhbanCLI.displayConfigPath
@@ -163,7 +172,7 @@ struct AboutView: View {
             // Doing it here rather than on `.onAppear`'s main thread means the
             // worst case is a row that fills in late, not a frozen window behind a
             // keychain-unlock dialog.
-            let auth = Self.describeSettingsAuth()
+            let auth = Self.describeSettingsAuth(ControlToken.capability)
             let path = DezhbanCLI.resolvedConfigPath()
             let v = DezhbanCLI.run(["version"]).output.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {

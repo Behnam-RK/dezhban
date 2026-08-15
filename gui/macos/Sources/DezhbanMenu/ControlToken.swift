@@ -86,10 +86,34 @@ enum ControlToken {
     /// current storage scheme continuing to be the forgiving one. It costs one
     /// silent add and delete.
     ///
-    /// `static let` gives lazy, once-only, thread-safe evaluation, and — unlike
-    /// `biometryAvailable` — this genuinely cannot change while the app runs: the
-    /// signature of the running binary is fixed for its lifetime.
-    private static let probeStatus: OSStatus = {
+    /// **Only a PERMANENT verdict is remembered.** A `static let` would have been
+    /// simpler, but it memoizes whatever the first attempt returned — and the add
+    /// status is not purely a function of the signature. A login-item launch races
+    /// the login keychain's unlock, and a user who dismisses the unlock dialog
+    /// that the probe raises gets `errSecAuthFailed` back; frozen for the life of
+    /// a menubar app that runs for weeks, that one cancelled dialog would disable
+    /// the feature until the next reboot, with the toggle greyed out and blaming
+    /// the keychain. So success and `errSecMissingEntitlement` — the two answers
+    /// that really are fixed for this binary — are cached, and anything else is
+    /// left uncached, which makes `capabilityIfKnown` nil again and lets the next
+    /// pane re-probe in the background.
+    private static var probeStatus: OSStatus {
+        if let cached = probeFlag.sync(execute: { cachedProbe }) { return cached }
+        // Serialised so two callers cannot run overlapping adds under the same
+        // probe account and hand each other a spurious -25299. The probe itself
+        // must NOT run inside `probeFlag`, which `probeHasRun` reads from the main
+        // thread — it can block on a keychain-unlock dialog.
+        return probeQueue.sync {
+            if let cached = probeFlag.sync(execute: { cachedProbe }) { return cached }
+            let status = runProbe()
+            if status == errSecSuccess || status == TokenCapability.missingEntitlement {
+                probeFlag.sync { cachedProbe = status }
+            }
+            return status
+        }
+    }
+
+    private static func runProbe() -> OSStatus {
         // Clear any leftover from a crash between the add and the delete below.
         // MUST go through `remove(account:)`, not `SecItemDelete`: a leftover from
         // a PREVIOUS build belongs to a different code identity, and that is
@@ -97,12 +121,6 @@ enum ControlToken {
         // stranded probe item would then make the `SecItemAdd` below collide with
         // -25299 forever, permanently disabling the feature on that host with no
         // in-app way back.
-        //
-        // The flag is set on the way out, so `probeHasRun` can only report true
-        // once the value is about to be published — never while a probe is still
-        // in flight, which would send a caller to the blocking path believing it
-        // was the cheap one.
-        defer { probeFlag.sync { probeRan = true } }
         _ = remove(account: probeAccount)
         var add = query(account: probeAccount)
         add[kSecValueData as String] = Data("probe".utf8)
@@ -111,17 +129,22 @@ enum ControlToken {
             _ = remove(account: probeAccount)
         }
         return status
-    }()
+    }
 
-    /// Guards `probeRan`. A serial queue rather than a lock keeps this to the
-    /// concurrency vocabulary the rest of the app already uses.
+    /// Guards `cachedProbe`. A serial queue rather than a lock keeps this to the
+    /// concurrency vocabulary the rest of the app already uses. Held only across
+    /// the read/write of one optional — never across the probe itself.
     private static let probeFlag = DispatchQueue(label: "sh.dezhban.menu.probe-flag")
-    private static var probeRan = false
+    private static var cachedProbe: OSStatus?
 
-    /// Whether `probeStatus` has already been established — asked WITHOUT
-    /// establishing it. Reading `probeStatus` itself would trigger the very
-    /// keychain write this exists to let a caller avoid.
-    private static var probeHasRun: Bool { probeFlag.sync { probeRan } }
+    /// Serialises the probe so overlapping callers cannot collide on the probe
+    /// account. Separate from `probeFlag` precisely because this one can block.
+    private static let probeQueue = DispatchQueue(label: "sh.dezhban.menu.capability-probe")
+
+    /// Whether `probeStatus` has already settled on a permanent answer — asked
+    /// WITHOUT establishing it. Reading `probeStatus` itself would trigger the
+    /// very keychain write this exists to let a caller avoid.
+    private static var probeHasRun: Bool { probeFlag.sync { cachedProbe != nil } }
 
     /// Whether this build can hold a token at all, and why not when it cannot.
     ///
@@ -304,7 +327,13 @@ enum ControlToken {
             // already had the daemon mint a token and write its hash. Printing
             // that promise here put a flat contradiction in the transcript,
             // directly above "Rolling the enrollment back also failed".
+            // The status is spelled once, not twice: `.failed`'s explanation
+            // already carries the number, and printing it on both halves read as
+            // two separate failures.
             let verdict = TokenCapability.classify(addStatus: status, biometryAvailable: true)
+            if case .failed = verdict {
+                return "keychain refused to store the token — \(verdict.toggleExplanation)"
+            }
             return "keychain refused to store the token (OSStatus \(status)) — \(verdict.toggleExplanation)"
         }
         return nil

@@ -270,24 +270,37 @@ jobs:
           # because the app has no headless mode: main.swift goes straight to
           # NSApplication.run(). What it does afterwards (window server, update
           # check) varies with the runner and is NOT what this guards, so only a
-          # SIGKILL fails the build. We SIGTERM it ourselves and read the status:
-          # 143 means we killed a running process (exec worked), 137 means the
-          # kernel killed it first.
+          # SIGKILL fails the build.
+          #
+          # Liveness is checked with `kill -0` BEFORE any signal is sent, and the
+          # exit status is only consulted when the process is already gone. Asking
+          # `wait` for the status of a process we have merely SIGTERMed is an
+          # unbounded wait: the app now runs a keychain probe at launch, and a
+          # runner whose login keychain is locked answers that with a modal dialog
+          # nobody can dismiss — the step would hang until the job timeout instead
+          # of failing. A process still alive three seconds in has, by definition,
+          # survived exec, which is the entire assertion; SIGKILL it and move on.
           /Applications/Dezhban.app/Contents/MacOS/DezhbanMenu >/dev/null 2>&1 &
           app_pid=$!
           sleep 3
-          kill "$app_pid" 2>/dev/null || true
-          set +e
-          wait "$app_pid"
-          app_rc=$?
-          set -e
+          if kill -0 "$app_pid" 2>/dev/null; then
+            kill -9 "$app_pid" 2>/dev/null || true
+            set +e; wait "$app_pid" >/dev/null 2>&1; set -e
+            echo "app exec check: ok (still running after 3s, so exec succeeded)"
+            app_rc=0
+          else
+            set +e
+            wait "$app_pid"
+            app_rc=$?
+            set -e
+          fi
           if [ "$app_rc" -eq 137 ]; then
             echo "error: the app was SIGKILLed at launch — the signature claims an entitlement it may not carry" >&2
             echo "       entitlements currently declared:" >&2
             codesign -d --entitlements - /Applications/Dezhban.app 2>&1 | sed 's/^/       /' >&2
             exit 1
           fi
-          echo "app exec check: ok (exit status $app_rc; 143 = terminated by this script)"
+          echo "app exec check: done (exit status $app_rc)"
 
           test -f /Library/LaunchDaemons/dezhban.plist || { echo "LaunchDaemon not registered" >&2; exit 1; }
           test -x /usr/local/share/dezhban/uninstall.sh || { echo "uninstaller not installed" >&2; exit 1; }

@@ -236,22 +236,28 @@ enum ConfigApply {
     /// token that authorises nothing or an enrollment no client can satisfy.
     static func forgetToken(completion: @escaping (Outcome) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            // Report a keychain removal that did not happen, rather than claiming
-            // both copies are gone. The daemon's hash is still cleared either way:
-            // an orphaned keychain item authorises nothing once the hash is gone,
-            // so the safe half must not be skipped because the other half failed.
-            let removed = ControlToken.remove()
+            // ORDER MATTERS: the daemon's hash goes first. It is the half that
+            // actually revokes — an orphaned keychain item authorises nothing once
+            // the hash is gone — and it is also the half that can be DECLINED,
+            // since it needs an admin prompt. Removing the app's copy first meant
+            // that dismissing that prompt destroyed a working enrollment while
+            // leaving the daemon's hash in place: the user is then worse off than
+            // before, having to re-enroll (another password) to get back what they
+            // had. Failing before either copy is touched leaves everything intact.
             let result = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
-            DispatchQueue.main.async {
-                guard result.ok else {
+            guard result.ok else {
+                DispatchQueue.main.async {
                     completion(Outcome(ok: false,
-                                       status: removed
-                                           ? "Removed the app's copy, but dezhban still has an enrollment — see output."
-                                           : "Neither copy could be removed — see output.",
+                                       status: "dezhban still has the enrollment, so nothing was removed — see output.",
                                        transcriptTitle: "Forget control token — failed",
                                        transcript: result.output))
-                    return
                 }
+                return
+            }
+            // Report a keychain removal that did not happen, rather than claiming
+            // both copies are gone.
+            let removed = ControlToken.remove()
+            DispatchQueue.main.async {
                 guard removed else {
                     completion(Outcome(ok: false,
                                        status: "Disabled — but the keychain kept a stale secret it won't let this app "
