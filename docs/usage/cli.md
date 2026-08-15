@@ -399,6 +399,17 @@ toggle restores it. Turning the toggle off removes **both** copies, the keychain
 item and the daemon's hash. Macs without Touch ID keep using the password path,
 which is exactly what they had before.
 
+**The toggle needs a signed build, and the released builds are not signed.**
+Storing a secret behind Touch ID requires a code-signing entitlement that an
+ad-hoc signature cannot carry — which is what every build this project currently
+ships has. On such a build the app reports *"this build can't use the keychain for
+Touch ID"*, disables the toggle, and settings changes keep asking for your
+password. Nothing is lost that you had before, and nothing is enrolled that you
+would then have to clean up. The CLI is unaffected: `sudo dezhban token enroll`
+still works, and `--token-stdin` still authorises writes for scripts that hold
+the token themselves. Rationale:
+[ADR 0010](../adr/0010-biometric-enrollment-requires-a-signed-build.md).
+
 ## Connect & switch VPNs
 
 After a one-time `setup`, run dezhban (or install the service) and connect any

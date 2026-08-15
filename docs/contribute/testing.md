@@ -446,6 +446,23 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       works. This is the revocation path for a leaked token.
 - [ ] **`token forget` recovers a stranded host.** After forgetting, config
       changes fall back to `sudo` rather than being impossible.
+- [ ] **The app refuses enrollment it cannot complete, for free.** On an
+      ad-hoc-signed build (i.e. any build from `build-app.sh`), the Settings
+      toggle "Use Touch ID for settings changes" is disabled and says why.
+      Flipping it must produce **no password prompt** and leave
+      `dezhban token status` reporting "not enrolled" — the failure this checks
+      for cost a password and then stranded an enrollment. See
+      [ADR-0010](../adr/0010-biometric-enrollment-requires-a-signed-build.md).
+- [ ] **A failed store rolls the daemon back.** If `SecItemAdd` fails after
+      `token enroll` has already run, `dezhban token status` must return to
+      "not enrolled" without the user intervening.
+- [ ] **The About pane never invites an impossible retry.** With no token
+      enrolled, "Settings changes" must not read "turn on Touch ID in Settings"
+      unless that toggle would actually succeed.
+- [ ] **An entitlement does not silently brick the app.** If anyone adds
+      `keychain-access-groups` to `build-app.sh`'s `codesign` call, the built app
+      is SIGKILLed at launch rather than gaining keychain access. Verify the app
+      still opens after any change to that line.
 
 ## Service lifecycle
 

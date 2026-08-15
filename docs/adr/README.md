@@ -22,6 +22,7 @@ New records use [template.md](template.md) and take the next free number.
 | [0008](0008-arm-at-boot.md) | Arm at boot from a persisted observation, plus a bounded pause | accepted, implemented |
 | [0009](0009-redial-budget.md) | The automatic redial window spends from a bounded budget | accepted, implemented |
 | [0010](0010-tunnel-liveness.md) | Zombie-tunnel detection is unconditional; acting on it is opt-in | accepted, implemented |
+| [0010](0010-biometric-enrollment-requires-a-signed-build.md) | Biometric token enrollment requires a signed build, so unsigned builds must refuse it | accepted, implemented |
 
 > **0006 is the one to read first if you are touching the geo lookup.** It records why
 > the obvious implementation silently defeats the exit-country check, and it exists
@@ -38,6 +39,12 @@ New records use [template.md](template.md) and take the next free number.
 > or pause. It records why the obvious shape — one window per drop, suppressed
 > outright on a flap — is simultaneously unbounded across drops and useless on
 > the poor connection it was meant to serve.
+>
+> **0010 is the one to read before adding an entitlement to the macOS app**, or
+> before "fixing" the Touch ID toggle that the released builds disable. It
+> records that the obvious fix — declaring `keychain-access-groups` on the
+> ad-hoc signature — makes the app unlaunchable rather than working, and that
+> this was tested rather than assumed.
 >
 > **0008 is the one to read before adding a fourth relaxation trigger** (or
 > before treating "the switch window is the only sanctioned relaxation" as
