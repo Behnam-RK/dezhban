@@ -257,8 +257,8 @@ current as you land changes.
   the toggle's help text and
   [the CLI reference](docs/usage/cli.md#changing-settings-without-a-password) now
   say so — a gate that reads stronger than it is would be worse than none. See
-  [ADR-0011](docs/adr/0011-app-checked-biometrics-on-unsigned-builds.md), and
-  [ADR-0010](docs/adr/0010-biometric-enrollment-requires-a-signed-build.md) for
+  [ADR-0012](docs/adr/0012-app-checked-biometrics-on-unsigned-builds.md), and
+  [ADR-0011](docs/adr/0011-biometric-enrollment-requires-a-signed-build.md) for
   the signing constraint (adding the entitlement was tested: an ad-hoc signature
   declaring `keychain-access-groups` is SIGKILLed at launch).
 - **Enrollment can no longer half-succeed.** The app probes the keychain before
@@ -289,8 +289,6 @@ current as you land changes.
   weeks; the toggle would have stayed greyed out with "this Mac has no Touch ID"
   until you quit and relaunched. Only the keychain half of the check, which
   genuinely cannot change while the app runs, is now remembered.
-
-## [0.9.0] - 2026-07-29
 
 ## [0.9.0] - 2026-07-29
 

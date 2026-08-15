@@ -406,8 +406,8 @@ keychain item keeps its ordinary access control, tied to the app's code identity
 so another program reading it gets a keychain password prompt rather than silent
 access; and modifying the app needs admin rights, which already allow
 `sudo dezhban config set` and bypass the token outright. Rationale:
-[ADR 0011](../adr/0011-app-checked-biometrics-on-unsigned-builds.md), and
-[ADR 0010](../adr/0010-biometric-enrollment-requires-a-signed-build.md) for the
+[ADR 0012](../adr/0012-app-checked-biometrics-on-unsigned-builds.md), and
+[ADR 0011](../adr/0011-biometric-enrollment-requires-a-signed-build.md) for the
 signing constraint behind it.
 
 ## Connect & switch VPNs

@@ -4,7 +4,7 @@ import Testing
 
 struct TokenCapabilityTests {
     /// No longer the expected outcome — the token is a plain keychain item since
-    /// ADR-0011 — but -34018 must keep its own words if it ever returns, rather
+    /// ADR-0012 — but -34018 must keep its own words if it ever returns, rather
     /// than degrading into a bare number the user might retry past.
     @Test func missingEntitlementIsItsOwnVerdict() {
         let v = TokenCapability.classify(addStatus: -34018, biometryAvailable: true)

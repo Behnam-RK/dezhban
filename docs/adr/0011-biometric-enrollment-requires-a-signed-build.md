@@ -1,4 +1,4 @@
-# ADR-0010: Biometric token enrollment requires a signed build, so unsigned builds must refuse it
+# ADR-0011: Biometric token enrollment requires a signed build, so unsigned builds must refuse it
 
 **Date**: 2026-08-15
 **Status**: accepted, implemented
