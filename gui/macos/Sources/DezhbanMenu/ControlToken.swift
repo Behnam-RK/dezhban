@@ -97,6 +97,12 @@ enum ControlToken {
         // stranded probe item would then make the `SecItemAdd` below collide with
         // -25299 forever, permanently disabling the feature on that host with no
         // in-app way back.
+        //
+        // The flag is set on the way out, so `probeHasRun` can only report true
+        // once the value is about to be published — never while a probe is still
+        // in flight, which would send a caller to the blocking path believing it
+        // was the cheap one.
+        defer { probeFlag.sync { probeRan = true } }
         _ = remove(account: probeAccount)
         var add = query(account: probeAccount)
         add[kSecValueData as String] = Data("probe".utf8)
@@ -106,6 +112,16 @@ enum ControlToken {
         }
         return status
     }()
+
+    /// Guards `probeRan`. A serial queue rather than a lock keeps this to the
+    /// concurrency vocabulary the rest of the app already uses.
+    private static let probeFlag = DispatchQueue(label: "sh.dezhban.menu.probe-flag")
+    private static var probeRan = false
+
+    /// Whether `probeStatus` has already been established — asked WITHOUT
+    /// establishing it. Reading `probeStatus` itself would trigger the very
+    /// keychain write this exists to let a caller avoid.
+    private static var probeHasRun: Bool { probeFlag.sync { probeRan } }
 
     /// Whether this build can hold a token at all, and why not when it cannot.
     ///
@@ -119,12 +135,48 @@ enum ControlToken {
     ///
     /// Ordering matters: the `guard` short-circuits before `probeStatus`, so a Mac
     /// with no sensor never writes to the keychain at all.
+    /// MAY BLOCK on its first evaluation, so never call it on the main thread —
+    /// use `capabilityIfKnown` there and fall back to a background resolve.
     static var capability: TokenCapability {
         guard biometryAvailable else {
             // Status is irrelevant on a Mac with no sensor; classify() ignores it.
             return TokenCapability.classify(addStatus: errSecSuccess, biometryAvailable: false)
         }
         return TokenCapability.classify(addStatus: probeStatus, biometryAvailable: true)
+    }
+
+    /// The verdict when it can be given without touching the keychain, and nil
+    /// when answering would mean running the probe.
+    ///
+    /// Exactly one of the two halves can block, and only once: `biometryAvailable`
+    /// is a cheap local call, so a Mac with no usable sensor is answered
+    /// immediately — the probe is not consulted at all, and must not be, since
+    /// that is the promise `capability`'s guard makes. What is left is the single
+    /// case where a caller would have to wait: biometry present, probe not yet
+    /// run.
+    ///
+    /// This exists because `warmCapability()` cannot cover that case. The warm
+    /// runs at launch and is gated on biometry too, so a Mac booted in clamshell
+    /// mode — or one in a Touch ID lockout — warms nothing. Open the lid and the
+    /// sensor comes back, and the *next* reader is the one that pays for the
+    /// probe. If that reader is a SwiftUI view initialiser, it pays on the main
+    /// thread, behind a keychain-unlock dialog if the login keychain is locked.
+    /// A pane asks this first and only resolves in the background when it is nil.
+    static var capabilityIfKnown: TokenCapability? {
+        guard biometryAvailable else {
+            return TokenCapability.classify(addStatus: errSecSuccess, biometryAvailable: false)
+        }
+        guard probeHasRun else { return nil }
+        return TokenCapability.classify(addStatus: probeStatus, biometryAvailable: true)
+    }
+
+    /// Resolves `capability` off the main thread and hands it back on the main
+    /// queue. For the one case `capabilityIfKnown` returns nil for.
+    static func resolveCapability(_ completion: @escaping (TokenCapability) -> Void) {
+        DispatchQueue.global(qos: .userInitiated).async {
+            let verdict = capability
+            DispatchQueue.main.async { completion(verdict) }
+        }
     }
 
     /// Runs the keychain probe off the main thread, so the first pane to ask for

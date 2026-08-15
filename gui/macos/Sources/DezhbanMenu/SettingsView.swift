@@ -53,9 +53,11 @@ struct SettingsView: View {
     @State private var presetBusy = false
     @State private var tokenBusy = false
     @State private var tokenEnrolled = ControlToken.isStored
-    /// Evaluated at init rather than in `body`, so a body getter stays cheap —
-    /// but deliberately NOT cached for the process's lifetime. The keychain half
-    /// of `capability` is memoized inside `ControlToken`; the biometry half is
+    /// Seeded at init with the answer only when giving it costs nothing, and
+    /// resolved in the background otherwise — nil means "not known yet".
+    ///
+    /// Deliberately NOT cached for the process's lifetime. The keychain half of
+    /// `capability` is memoized inside `ControlToken`; the biometry half is
     /// re-asked whenever `MainView` re-creates this struct, because it really does
     /// change (clamshell mode, Touch ID lockout) and a menubar app that froze it
     /// at launch would leave the toggle greyed out until the user quit.
@@ -66,7 +68,14 @@ struct SettingsView: View {
     /// practice `MainView.body` rebuilds on every `AppState` publish, so the
     /// answer refreshes with the rest of the window — but leaving and re-entering
     /// the pane is the guaranteed way to re-ask.
-    private let tokenCapability = ControlToken.capability
+    ///
+    /// `capabilityIfKnown`, never `capability`: the latter may run the keychain
+    /// probe, and a stored-property initialiser runs on the main thread. That is
+    /// not merely slow — a locked login keychain answers a write with a system
+    /// dialog, so it is a frozen window. `warmCapability()` covers this at launch
+    /// but cannot cover a sensor that was unavailable *then* and is available
+    /// now, which is exactly the clamshell case the paragraph above describes.
+    @State private var tokenCapability: TokenCapability? = ControlToken.capabilityIfKnown
 
     var body: some View {
         VStack(spacing: 0) {
@@ -157,7 +166,11 @@ struct SettingsView: View {
 
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
-                        .disabled(tokenBusy || !tokenCapability.isAvailable)
+                        // Unknown is treated as unavailable, never as available:
+                        // enabling the toggle before the answer is in would let
+                        // someone start an enrollment the probe is about to refuse,
+                        // which is the whole failure this design exists to prevent.
+                        .disabled(tokenBusy || !(tokenCapability?.isAvailable ?? false))
                         .help("Applying a change asks dezhban to make it, authorised by a "
                             + "secret kept in your login keychain — so saving costs a fingerprint "
                             + "instead of your password. Dezhban checks your fingerprint and then "
@@ -170,8 +183,21 @@ struct SettingsView: View {
                     // explanation reads as a bug; "no Touch ID on this Mac" and
                     // "this build can't reach the keychain" send you to different
                     // places, and only the second is fixable by us.
-                    if !tokenCapability.isAvailable {
-                        Text(tokenCapability.toggleExplanation)
+                    //
+                    // The nil case says so rather than borrowing one of the real
+                    // reasons: "not known yet" is a fourth state, and showing a
+                    // verdict we do not have would be a guess the user cannot tell
+                    // from an answer. It is normally invisible — `warmCapability()`
+                    // resolves this during launch, so nil survives only when the
+                    // sensor was unavailable then and is available now.
+                    if let tokenCapability {
+                        if !tokenCapability.isAvailable {
+                            Text(tokenCapability.toggleExplanation)
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                        }
+                    } else {
+                        Text("Checking whether this Mac can hold the secret…")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }
@@ -655,6 +681,14 @@ struct SettingsView: View {
     /// written back as a value), service state via AppState, login-item state
     /// from SMAppService.
     private func seed() {
+        // Only when init could not answer for free — the nil case is biometry
+        // present with the keychain probe not yet run, and resolving it here keeps
+        // that one keychain write off the main thread. Re-asked on every appear
+        // rather than once, because the biometry half genuinely changes.
+        tokenCapability = ControlToken.capabilityIfKnown
+        if tokenCapability == nil {
+            ControlToken.resolveCapability { tokenCapability = $0 }
+        }
         status = "Loading…"
         canApply = false
         loginEnabled = LoginItem.isEnabled

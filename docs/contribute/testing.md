@@ -451,6 +451,15 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       one password prompt, and a subsequent settings change costs a **fingerprint
       and no password**. See
       [ADR-0012](../adr/0012-app-checked-biometrics-on-unsigned-builds.md).
+- [ ] **Settings never freezes waiting on the keychain.** Launch the app with the
+      lid shut on an external display (no usable sensor, so the launch warm-up is
+      skipped by design), then open the lid and go straight to Settings. The
+      Authorization section may read "Checking…" for a moment; the window must
+      stay responsive throughout. A freeze here means something reads
+      `ControlToken.capability` on the main thread — use `capabilityIfKnown` plus
+      `resolveCapability` instead. Worth repeating with a locked login keychain
+      (`security lock-keychain`), which is what turns the block into a modal
+      dialog rather than a pause.
 - [ ] **Enrollment survives an app upgrade.** Enrol, then rebuild and reinstall
       the app (`task dev` is enough — an ad-hoc rebuild changes the cdhash, and
       the keychain ACL is bound to it). Toggling off and on again must succeed:
