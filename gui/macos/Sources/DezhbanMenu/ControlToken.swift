@@ -73,8 +73,12 @@ enum ControlToken {
         ]
     }
 
-    /// Whether this build can hold a token at all, established by trying — once,
-    /// at first use — rather than assumed.
+    /// The account the capability probe writes under. Distinct from `account`, so
+    /// a probe can never collide with — or worse, delete — a real token.
+    private static let probeAccount = ControlToken.account + ".capability-probe"
+
+    /// Whether the keychain will ACCEPT an item from this build, established by
+    /// trying — once, at first use — rather than assumed.
     ///
     /// Kept even though a plain keychain item is expected to succeed everywhere:
     /// the probe is what stops enrollment spending a root password on a store
@@ -82,26 +86,56 @@ enum ControlToken {
     /// current storage scheme continuing to be the forgiving one. It costs one
     /// silent add and delete.
     ///
-    /// `static let` gives lazy, once-only, thread-safe evaluation, and the answer
-    /// cannot change while the app runs.
-    static let capability: TokenCapability = {
-        guard biometryAvailable else {
-            // Status is irrelevant on a Mac with no sensor; classify() ignores it.
-            return TokenCapability.classify(addStatus: errSecSuccess, biometryAvailable: false)
-        }
-        // A distinct account, so a probe can never collide with — or worse,
-        // delete — a real token.
-        let probe = query(account: account + ".capability-probe")
-        SecItemDelete(probe as CFDictionary) // clear any leftover from a crash mid-probe
-        var add = probe
+    /// `static let` gives lazy, once-only, thread-safe evaluation, and — unlike
+    /// `biometryAvailable` — this genuinely cannot change while the app runs: the
+    /// signature of the running binary is fixed for its lifetime.
+    private static let probeStatus: OSStatus = {
+        // Clear any leftover from a crash between the add and the delete below.
+        // MUST go through `remove(account:)`, not `SecItemDelete`: a leftover from
+        // a PREVIOUS build belongs to a different code identity, and that is
+        // exactly the case `SecItemDelete` refuses with -25244 (see `remove`). A
+        // stranded probe item would then make the `SecItemAdd` below collide with
+        // -25299 forever, permanently disabling the feature on that host with no
+        // in-app way back.
+        _ = remove(account: probeAccount)
+        var add = query(account: probeAccount)
         add[kSecValueData as String] = Data("probe".utf8)
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecSuccess {
-            SecItemDelete(probe as CFDictionary)
+            _ = remove(account: probeAccount)
         }
-        return TokenCapability.classify(addStatus: status, biometryAvailable: true)
+        return status
     }()
+
+    /// Whether this build can hold a token at all, and why not when it cannot.
+    ///
+    /// Deliberately a computed property over a cached probe rather than a cached
+    /// verdict: only the *keychain* half is fixed for the process's lifetime.
+    /// Biometry availability is not — a MacBook in clamshell mode reports no
+    /// usable sensor, and so does a Touch ID lockout after repeated failures. A
+    /// menubar app runs for weeks, so freezing the whole verdict would leave the
+    /// toggle greyed out with "this Mac has no Touch ID" until the user quit and
+    /// relaunched.
+    ///
+    /// Ordering matters: the `guard` short-circuits before `probeStatus`, so a Mac
+    /// with no sensor never writes to the keychain at all.
+    static var capability: TokenCapability {
+        guard biometryAvailable else {
+            // Status is irrelevant on a Mac with no sensor; classify() ignores it.
+            return TokenCapability.classify(addStatus: errSecSuccess, biometryAvailable: false)
+        }
+        return TokenCapability.classify(addStatus: probeStatus, biometryAvailable: true)
+    }
+
+    /// Runs the keychain probe off the main thread, so the first pane to ask for
+    /// `capability` finds it already resolved. Worth doing at launch: the probe is
+    /// a keychain write, and a locked login keychain answers one with a system
+    /// dialog — on the main thread that is a frozen UI, not merely a slow one.
+    /// Same reasoning as `DezhbanCLI.warmConfigPath`.
+    static func warmCapability() {
+        DispatchQueue.global(qos: .utility).async { _ = probeStatus }
+    }
 
     /// Whether a token is stored, WITHOUT reading it — deliberately, so the UI can
     /// show enrollment state without triggering a biometric prompt every time a
@@ -185,8 +219,7 @@ enum ControlToken {
         // reporting "duplicate item" would tell the user nothing they can act on.
         guard remove() else {
             return "the keychain already holds a dezhban secret that this copy of the app "
-                + "cannot replace. Remove it once with: "
-                + "security delete-generic-password -s \(service) -a \(account)"
+                + "cannot replace. Remove it once with: \(manualRemovalCommand)"
         }
 
         var add = query()
@@ -194,8 +227,13 @@ enum ControlToken {
         add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(add as CFDictionary, nil)
         guard status == errSecSuccess else {
+            // `toggleExplanation`, NOT `enrollRefusal`: the latter promises
+            // "Nothing was changed", and by the time `store` runs the caller has
+            // already had the daemon mint a token and write its hash. Printing
+            // that promise here put a flat contradiction in the transcript,
+            // directly above "Rolling the enrollment back also failed".
             let verdict = TokenCapability.classify(addStatus: status, biometryAvailable: true)
-            return "keychain refused to store the token (OSStatus \(status)) — \(verdict.enrollRefusal)"
+            return "keychain refused to store the token (OSStatus \(status)) — \(verdict.toggleExplanation)"
         }
         return nil
     }
@@ -220,17 +258,44 @@ enum ControlToken {
     /// succeeds cross-identity but does NOT re-own the ACL, so it writes a token
     /// the new build can never read back, which is worse than failing.
     @discardableResult
-    static func remove() -> Bool {
+    static func remove(account: String = ControlToken.account) -> Bool {
         // Look the item up with the modern API — `kSecReturnRef` hands back a
         // reference without decrypting the secret, so this needs no ACL access —
         // and delete it with the old one, which is the only call that is not
         // subject to the owner check. One deprecated call, not two.
-        var q = query()
+        //
+        // Loop rather than delete once: `SecItemDelete` (which this replaces)
+        // removed EVERY match, and more than one keychain in the search list can
+        // hold a (service, account) pair. Deleting only the first would leave a
+        // second copy that `isStored` still finds and `store`'s `SecItemAdd`
+        // still collides with.
+        var q = query(account: account)
         q[kSecReturnRef as String] = true
-        var ref: CFTypeRef?
-        let found = SecItemCopyMatching(q as CFDictionary, &ref)
-        if found == errSecItemNotFound { return true } // nothing to do is success
-        guard found == errSecSuccess, let item = ref else { return false }
-        return SecKeychainItemDelete(item as! SecKeychainItem) == errSecSuccess
+        // A dezhban host should never accumulate copies; the bound just keeps a
+        // pathological keychain from spinning this forever.
+        for _ in 0..<16 {
+            var ref: CFTypeRef?
+            let found = SecItemCopyMatching(q as CFDictionary, &ref)
+            if found == errSecItemNotFound { return true } // nothing left is success
+            guard found == errSecSuccess, let ref else { return false }
+            // Check the CFTypeID before casting. A cast to a CoreFoundation type
+            // is UNCHECKED in Swift — `as!` here does not trap on a wrong type,
+            // it hands whatever came back straight to `SecKeychainItemDelete` as
+            // if it were a keychain item. Only the legacy (file) keychain returns
+            // a SecKeychainItem, and every query here addresses it, but that
+            // assumption should fail as a `false` the callers already have words
+            // for, not as undefined behaviour inside a C API.
+            guard CFGetTypeID(ref) == SecKeychainItemGetTypeID() else { return false }
+            // swiftlint:disable:next force_cast
+            guard SecKeychainItemDelete(ref as! SecKeychainItem) == errSecSuccess else { return false }
+        }
+        return false
+    }
+
+    /// What to tell the user to run when this app cannot clear the item itself.
+    /// Built from the same constants the queries use, so the instruction cannot
+    /// drift away from the item it is meant to remove.
+    static var manualRemovalCommand: String {
+        "security delete-generic-password -s \(service) -a \(account)"
     }
 }

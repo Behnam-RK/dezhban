@@ -38,6 +38,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // it — every later read is then a memoized lookup rather than a shell-out on
         // whatever thread the caller happened to be on. See DezhbanCLI.exec.
         DezhbanCLI.warmConfigPath()
+        // Same reason, different store: the token capability probe is a keychain
+        // WRITE, and a locked login keychain answers one with a system dialog. The
+        // About and Settings panes read `ControlToken.capability` from the main
+        // thread, so resolve it here instead of freezing the UI on first open.
+        ControlToken.warmCapability()
         AppActions.refresh = { [weak self] in self?.refresh() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         menu.delegate = self
