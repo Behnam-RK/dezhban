@@ -451,6 +451,13 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       one password prompt, and a subsequent settings change costs a **fingerprint
       and no password**. See
       [ADR-0011](../adr/0011-app-checked-biometrics-on-unsigned-builds.md).
+- [ ] **Enrollment survives an app upgrade.** Enrol, then rebuild and reinstall
+      the app (`task dev` is enough — an ad-hoc rebuild changes the cdhash, and
+      the keychain ACL is bound to it). Toggling off and on again must succeed:
+      before the fix this failed with `-25299` because the new build could
+      neither read nor delete the item the old one stored. The first *read* after
+      an upgrade may ask you to approve keychain access once; that is macOS, and
+      approving keeps the enrollment.
 - [ ] **A cancelled fingerprint falls back to sudo, never to a login password.**
       Dismiss the Touch ID prompt on a settings save: the change must fall to the
       ordinary privileged path, and the biometric prompt must never offer "Use

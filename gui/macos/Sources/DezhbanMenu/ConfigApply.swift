@@ -227,14 +227,28 @@ enum ConfigApply {
     /// token that authorises nothing or an enrollment no client can satisfy.
     static func forgetToken(completion: @escaping (Outcome) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            ControlToken.remove()
+            // Report a keychain removal that did not happen, rather than claiming
+            // both copies are gone. The daemon's hash is still cleared either way:
+            // an orphaned keychain item authorises nothing once the hash is gone,
+            // so the safe half must not be skipped because the other half failed.
+            let removed = ControlToken.remove()
             let result = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
             DispatchQueue.main.async {
                 guard result.ok else {
                     completion(Outcome(ok: false,
-                                       status: "Removed the app's copy, but dezhban still has an enrollment — see output.",
+                                       status: removed
+                                           ? "Removed the app's copy, but dezhban still has an enrollment — see output."
+                                           : "Neither copy could be removed — see output.",
                                        transcriptTitle: "Forget control token — failed",
                                        transcript: result.output))
+                    return
+                }
+                guard removed else {
+                    completion(Outcome(ok: false,
+                                       status: "Disabled — but the keychain kept a stale secret it won't let this app "
+                                           + "remove. It authorises nothing now; clear it with: "
+                                           + "security delete-generic-password -s sh.dezhban.menu -a control-token",
+                                       transcriptTitle: nil, transcript: nil))
                     return
                 }
                 completion(Outcome(ok: true, status: "Disabled — settings changes ask for your password again.",

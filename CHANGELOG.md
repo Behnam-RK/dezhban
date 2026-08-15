@@ -271,6 +271,16 @@ current as you land changes.
 - **A cancelled fingerprint falls back to `sudo`, never to your login password.**
   The check uses `.deviceOwnerAuthenticationWithBiometrics` deliberately: a login
   password that unlocks a settings change is the thing the token exists to avoid.
+- **Re-enrolling works after an app update.** A login-keychain item's access
+  control is bound to the exact binary that created it, and an ad-hoc signature's
+  identity is its cdhash — so every rebuild produced an app the keychain treated
+  as a stranger to its own stored secret. `SecItemDelete` was refused with
+  `-25244` and the following add collided with `-25299`, which broke both the
+  documented recovery and the revocation path for a leaked token. Removal now
+  goes through `SecKeychainItemDelete`, which is not subject to that check.
+  Reading a secret stored by a previous version may ask you to approve keychain
+  access once; approving keeps the enrollment, and turning the toggle off and on
+  is always a clean escape.
 
 ## [0.9.0] - 2026-07-29
 

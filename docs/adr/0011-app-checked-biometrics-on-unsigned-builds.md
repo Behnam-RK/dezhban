@@ -47,6 +47,44 @@ The check is deliberately `.deviceOwnerAuthenticationWithBiometrics` and not
 login password that unlocks a settings change is exactly what the token exists to
 avoid. A cancelled or failed prompt drops to the ordinary `sudo` path instead.
 
+### The ACL is bound to the cdhash, which every rebuild changes
+
+Storing in the login keychain brought a consequence that only shows up on the
+*second* build. A login-keychain item's ACL names the creating binary's code
+identity, and for an ad-hoc signature that identity is the **cdhash** — so an app
+upgrade, or any local rebuild, produces a binary the keychain treats as a
+stranger to the item it stored. Measured, non-interactively:
+
+| operation, from a different build | status |
+|---|---|
+| read attributes | `0` — the item is visible |
+| read the secret | `-25293` `errSecAuthFailed` |
+| `SecItemDelete` | `-25244` `errSecInvalidOwnerEdit` |
+| `SecItemAdd` | `-25299` `errSecDuplicateItem` |
+| `SecItemUpdate` | `0` — **but does not re-own the ACL** |
+| `SecKeychainItemDelete` | `0` |
+
+That made re-enrolling impossible after an upgrade: `remove()` was refused, the
+add then collided, and the user saw "the keychain won't hold the secret
+(OSStatus -25299)". Re-enrolling is the documented recovery *and* the revocation
+path for a leaked token, so this was not cosmetic.
+
+`SecItemUpdate` is the trap here. It reports success across identities, so it
+looks like the fix — but it leaves the old ACL in place, meaning the new build
+writes a token it can never read back. That fails silently and permanently,
+which is worse than the error it replaces. `remove()` therefore looks the item up
+with `SecItemCopyMatching` (`kSecReturnRef` needs no ACL access) and deletes it
+with the deprecated `SecKeychainItemDelete`, the one call not subject to the
+owner check and the one behind `security delete-generic-password`. The
+deprecation is accepted deliberately; there is no modern replacement for
+"clear an item this code identity does not own".
+
+Reading an item stored by a *previous* build still cannot be done silently. With
+user interaction allowed — the real app — macOS prompts to approve keychain
+access once, and approving preserves the enrollment across the upgrade. Declining
+falls back to `sudo`, and re-enrolling from the toggle now always works as the
+clean escape.
+
 ## Alternatives considered
 
 ### Alternative 1: Keep 0010's position — no biometrics until the build is signed
@@ -109,3 +147,7 @@ avoid. A cancelled or failed prompt drops to the ordinary `sudo` path instead.
   it strictly better. ADR-0010 records that the entitlement SIGKILLs the app;
   this record explains why the access-control flags were dropped rather than
   lost.
+- **Someone "modernises" `remove()` back to `SecItemDelete`**, or swaps the
+  delete-then-add for a tidier `SecItemUpdate`. Both look correct and both break
+  the upgrade path — the second silently. The table above is why the deprecated
+  call is there, and `testing.md` carries the on-host check that catches it.
