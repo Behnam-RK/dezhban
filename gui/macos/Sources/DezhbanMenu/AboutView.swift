@@ -125,10 +125,10 @@ struct AboutView: View {
         if ControlToken.isStored {
             return "Touch ID (control token enrolled)"
         }
-        if ControlToken.biometryAvailable {
-            return "Password — turn on Touch ID in Settings"
-        }
-        return "Password — this Mac has no Touch ID"
+        // Not "turn on Touch ID in Settings" unless that would actually work.
+        // On an ad-hoc build the keychain refuses the item, and the old copy sent
+        // people to a toggle that could only spend a password and fail.
+        return ControlToken.capability.settingsAuthSummary
     }
 
     /// Lifecycle actions (install/start/stop/panic) cannot go through the daemon,

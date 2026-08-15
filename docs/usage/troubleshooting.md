@@ -293,6 +293,41 @@ sudo chmod 755 /var/db/dezhban
 The open directory leaks nothing: the sensitive files inside it (`command.json`,
 `pf.state`) are `0600`.
 
+## "Use Touch ID for settings changes" is greyed out, or refuses to turn on
+
+Three different causes, and this pair of commands tells them apart — the first
+asks what the daemon thinks, the second what the app actually holds:
+
+```sh
+dezhban token status                                          # daemon's side
+security find-generic-password -s sh.dezhban.menu -a control-token   # app's side
+```
+
+**The toggle is disabled and says this build can't use the keychain.** Expected,
+and not a fault on your machine. A Touch ID–gated keychain item needs a
+code-signing entitlement that the released, ad-hoc-signed builds cannot carry, so
+the app declines rather than half-enrolling. Settings changes keep asking for
+your password, exactly as they did before the toggle existed. See
+[Changing settings without a password](cli.md#changing-settings-without-a-password).
+
+**Touch ID stopped working after you added or removed a fingerprint.** The item
+is deliberately bound to the fingerprint set enrolled at the time, so changing
+that set invalidates it — that is the security property working, not a bug. Turn
+the toggle off and on again to re-enrol.
+
+**`token status` says enrolled, but the keychain has nothing.** The daemon holds
+a hash for a token nobody can present. Config writes over the socket will be
+refused, and the app falls back to the password path. Clear the dead enrollment:
+
+```sh
+sudo dezhban token forget
+dezhban token status            # want: not enrolled
+```
+
+Current versions cannot get into this state — enrollment checks the keychain
+before it mints anything, and rolls the daemon's hash back if the store fails
+anyway — but a host enrolled by an older build can still be carrying one.
+
 ## The installer upgraded the binary but the service is still running the old version
 
 Expected when the daemon's posture wasn't safe to restart through at the

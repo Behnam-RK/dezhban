@@ -247,6 +247,12 @@ the firewall.
 **Control socket** — the unix socket carrying routine commands into the running daemon
 without a password prompt.
 
+**Control token** — the secret a client presents to prove a settings change over the
+[control socket](#control-socket) is authorised. The daemon keeps only its hash, root-owned;
+the holder keeps the token. It raises the socket's bar above filesystem permissions for the
+one operation that writes state outliving the daemon. Enrolling again replaces it, which is
+how a leaked token is revoked.
+
 **Command file** — the root-owned file carrying operator commands into the daemon. Always
 available, root-only, and independent of the socket.
 

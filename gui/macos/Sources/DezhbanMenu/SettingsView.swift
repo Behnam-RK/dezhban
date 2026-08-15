@@ -53,9 +53,11 @@ struct SettingsView: View {
     @State private var presetBusy = false
     @State private var tokenBusy = false
     @State private var tokenEnrolled = ControlToken.isStored
-    /// Evaluated once rather than in `body`: whether this Mac has biometry cannot
-    /// change while the pane is open, and a body getter should stay cheap.
-    private let biometryAvailable = ControlToken.biometryAvailable
+    /// Evaluated once rather than in `body`: neither whether this Mac has
+    /// biometry nor whether this build can reach the keychain can change while
+    /// the pane is open, and a body getter should stay cheap. `capability` is
+    /// itself cached behind a `static let`, so this is a load, not a probe.
+    private let tokenCapability = ControlToken.capability
 
     var body: some View {
         VStack(spacing: 0) {
@@ -146,14 +148,18 @@ struct SettingsView: View {
 
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
-                        .disabled(tokenBusy || !biometryAvailable)
+                        .disabled(tokenBusy || !tokenCapability.isAvailable)
                         .help("Applying a change asks dezhban to make it, authorised by a "
                             + "secret kept in your login keychain behind Touch ID — so saving costs a "
                             + "fingerprint instead of your password. Turning this on stores that secret "
                             + "(one password prompt, now); turning it off removes it from both the "
                             + "keychain and dezhban. Nothing else about what dezhban enforces changes.")
-                    if !biometryAvailable {
-                        Text("This Mac has no Touch ID, so settings changes ask for your password.")
+                    // Says WHICH of the reasons applies. A disabled toggle with no
+                    // explanation reads as a bug; "no Touch ID on this Mac" and
+                    // "this build can't reach the keychain" send you to different
+                    // places, and only the second is fixable by us.
+                    if !tokenCapability.isAvailable {
+                        Text(tokenCapability.toggleExplanation)
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     }

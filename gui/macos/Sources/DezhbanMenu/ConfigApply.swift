@@ -165,10 +165,15 @@ enum ConfigApply {
     /// leaked is revoked.
     static func enrollToken(completion: @escaping (Outcome) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            guard ControlToken.biometryAvailable else {
+            // Ask whether the keychain will ACCEPT the item before minting one.
+            // `token enroll` needs root and writes the daemon's hash, so a check
+            // made after it is a check made too late: that ordering is what left
+            // hosts with an enrollment no client could satisfy. The probe is
+            // silent and costs nothing.
+            let capability = ControlToken.capability
+            guard capability.isAvailable else {
                 DispatchQueue.main.async {
-                    completion(Outcome(ok: false,
-                                       status: "This Mac has no Touch ID, so settings changes keep using your password.",
+                    completion(Outcome(ok: false, status: capability.enrollRefusal,
                                        transcriptTitle: nil, transcript: nil))
                 }
                 return
@@ -189,12 +194,22 @@ enum ConfigApply {
                 return
             }
             if let err = ControlToken.store(token) {
-                // The daemon now holds a hash for a token nobody has. Say so plainly
-                // and name the recovery, rather than leaving a host that silently
-                // refuses every config write.
+                // The daemon now holds a hash for a token nobody has. The probe
+                // above should have caught this, so reaching here means the
+                // keychain refused for a reason the probe could not see — but the
+                // host must not be left stranded either way, so undo the half we
+                // did complete instead of asking the user to.
+                let rollback = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
                 DispatchQueue.main.async {
+                    guard rollback.ok else {
+                        completion(Outcome(ok: false,
+                                           status: "dezhban enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
+                                           transcriptTitle: "Enroll control token — keychain failed",
+                                           transcript: err + "\n\nRolling the enrollment back also failed:\n" + rollback.output))
+                        return
+                    }
                     completion(Outcome(ok: false,
-                                       status: "dezhban enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
+                                       status: "The keychain refused the secret, so nothing was changed — settings changes keep using your password.",
                                        transcriptTitle: "Enroll control token — keychain failed",
                                        transcript: err))
                 }
