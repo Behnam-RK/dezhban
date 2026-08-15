@@ -180,7 +180,14 @@ enum ControlToken {
     static func store(_ token: String) -> String? {
         guard let data = token.data(using: .utf8) else { return "token is not valid UTF-8" }
 
-        remove() // replace, never accumulate a second item under the same account
+        // Replace, never accumulate a second item under the same account. The
+        // result matters: a failed delete means the add below collides, and
+        // reporting "duplicate item" would tell the user nothing they can act on.
+        guard remove() else {
+            return "the keychain already holds a dezhban secret that this copy of the app "
+                + "cannot replace. Remove it once with: "
+                + "security delete-generic-password -s \(service) -a \(account)"
+        }
 
         var add = query()
         add[kSecValueData as String] = data
@@ -196,7 +203,34 @@ enum ControlToken {
     /// Forgets the app's copy. The daemon's hash is separate — removing only this
     /// leaves an enrollment no client can satisfy, so the UI pairs it with
     /// `dezhban token forget`.
-    static func remove() {
-        SecItemDelete(query() as CFDictionary)
+    ///
+    /// **Uses the deprecated SecKeychain API deliberately, and must keep doing
+    /// so.** A login-keychain item's ACL is bound to the creating binary's code
+    /// identity, and for an ad-hoc signature that identity is the cdhash — which
+    /// changes on every single build. So after any app upgrade, the new build
+    /// asking `SecItemDelete` to remove the token it "owns" is refused with
+    /// `-25244` (`errSecInvalidOwnerEdit`), and the `SecItemAdd` that follows
+    /// then collides with `-25299` (`errSecDuplicateItem`). That made
+    /// re-enrolling — the documented recovery, and the revocation path for a
+    /// leaked token — impossible after an upgrade.
+    ///
+    /// `SecKeychainItemDelete` is not subject to that check: it is the call
+    /// behind `security delete-generic-password`, and it succeeds across code
+    /// identities without a prompt. Measured, not assumed — `SecItemUpdate` also
+    /// succeeds cross-identity but does NOT re-own the ACL, so it writes a token
+    /// the new build can never read back, which is worse than failing.
+    @discardableResult
+    static func remove() -> Bool {
+        // Look the item up with the modern API — `kSecReturnRef` hands back a
+        // reference without decrypting the secret, so this needs no ACL access —
+        // and delete it with the old one, which is the only call that is not
+        // subject to the owner check. One deprecated call, not two.
+        var q = query()
+        q[kSecReturnRef as String] = true
+        var ref: CFTypeRef?
+        let found = SecItemCopyMatching(q as CFDictionary, &ref)
+        if found == errSecItemNotFound { return true } // nothing to do is success
+        guard found == errSecSuccess, let item = ref else { return false }
+        return SecKeychainItemDelete(item as! SecKeychainItem) == errSecSuccess
     }
 }

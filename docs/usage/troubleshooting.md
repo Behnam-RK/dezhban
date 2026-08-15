@@ -313,6 +313,12 @@ locked login keychain rather than at dezhban. The message carries the `OSStatus`
 check Keychain Access, then
 [open an issue](https://github.com/Behnam-RK/dezhban/issues) with that number.
 
+**After updating the app, macOS asks to approve keychain access.** Expected once
+per update. The stored secret is tied to the exact copy of the app that saved it,
+and an update is a new copy. Approving keeps your enrollment; declining falls
+back to your password, and turning the toggle off and on again re-enrolls
+cleanly.
+
 **Saving still asks for your password even though the toggle is on.** Reading the
 token requires a successful fingerprint, and dezhban never falls back to your
 login password for it — a password that unlocks a settings change is the thing
