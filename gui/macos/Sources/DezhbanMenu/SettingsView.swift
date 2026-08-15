@@ -58,16 +58,19 @@ struct SettingsView: View {
     ///
     /// Deliberately NOT cached for the process's lifetime. The keychain half of
     /// `capability` is memoized inside `ControlToken`; the biometry half is
-    /// re-asked whenever `MainView` re-creates this struct, because it really does
-    /// change (clamshell mode, Touch ID lockout) and a menubar app that froze it
-    /// at launch would leave the toggle greyed out until the user quit.
+    /// re-asked on every `.onAppear`, because it really does change (clamshell
+    /// mode, Touch ID lockout) and a menubar app that froze it at launch would
+    /// leave the toggle greyed out until the user quit.
     ///
-    /// "Re-creates the struct" is the precise boundary and is NOT the same as
-    /// "re-runs `body`": a stored property's initialiser does not run again when
-    /// SwiftUI merely re-evaluates the body for a `@State` change here. In
-    /// practice `MainView.body` rebuilds on every `AppState` publish, so the
-    /// answer refreshes with the rest of the window — but leaving and re-entering
-    /// the pane is the guaranteed way to re-ask.
+    /// **`seed()` is what re-asks it, and that is not an optimisation — it is the
+    /// only thing that does.** The initialiser below runs exactly once per view
+    /// identity: SwiftUI installs `@State` storage the first time and DISCARDS the
+    /// initial value on every later re-creation of the struct, so re-creating
+    /// `SettingsView` (which `MainView.body` does on every `AppState` publish)
+    /// does *not* re-run this. The predecessor of this property was a plain
+    /// `let`, which did refresh that way; converting it to `@State` moved the
+    /// responsibility to `seed()`. Deleting the assignment there would silently
+    /// freeze the verdict for the life of the window.
     ///
     /// `capabilityIfKnown`, never `capability`: the latter may run the keychain
     /// probe, and a stored-property initialiser runs on the main thread. That is

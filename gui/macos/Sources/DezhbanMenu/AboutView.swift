@@ -134,9 +134,20 @@ struct AboutView: View {
     /// The row's value when it can be given without touching the keychain — which
     /// `warmCapability()` makes the normal case — so the pane does not render a
     /// blank "Settings changes" for as long as two subprocesses take to answer.
-    /// nil only when the probe has not run and biometry is now available.
+    /// nil only when nothing is enrolled, the probe has not run, and biometry is
+    /// available.
+    ///
+    /// An enrolled host is answered FIRST and without consulting the capability at
+    /// all: the verdict is about whether *enrolling* could succeed, and a host that
+    /// already has a token does not need it. Asking anyway would have shown
+    /// "Checking…" — and, on a host whose probe status is not cacheable, run a
+    /// keychain add/delete (a modal unlock dialog on a locked login keychain) —
+    /// every time the pane opened, for a row whose value was already known.
     private static func describeSettingsAuthIfKnown() -> String? {
-        ControlToken.capabilityIfKnown.map(describeSettingsAuth)
+        if ControlToken.isStored {
+            return "Touch ID (control token enrolled)"
+        }
+        return ControlToken.capabilityIfKnown.map(describeSettingsAuth)
     }
 
     /// Lifecycle actions (install/start/stop/panic) cannot go through the daemon,
@@ -164,15 +175,19 @@ struct AboutView: View {
         configPath = DezhbanCLI.displayConfigPath
         binaryPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
         DispatchQueue.global(qos: .userInitiated).async {
-            // `describeSettingsAuth` reads `ControlToken.capability`, and that is a
-            // keychain probe — an ADD plus a DELETE — the first time anything asks
-            // for it. `AppDelegate` warms it at launch, but only when biometry was
-            // usable at that moment: a Mac woken from clamshell, or one in Touch ID
-            // lockout at launch, reaches this pane with the probe still unresolved.
-            // Doing it here rather than on `.onAppear`'s main thread means the
-            // worst case is a row that fills in late, not a frozen window behind a
-            // keychain-unlock dialog.
-            let auth = Self.describeSettingsAuth(ControlToken.capability)
+            // `ControlToken.capability` is a keychain probe — an ADD plus a DELETE
+            // — the first time anything asks for it. `AppDelegate` warms it at
+            // launch, but only when biometry was usable at that moment: a Mac woken
+            // from clamshell, or one in Touch ID lockout at launch, reaches this
+            // pane with the probe still unresolved. Doing it here rather than on
+            // `.onAppear`'s main thread means the worst case is a row that fills in
+            // late, not a frozen window behind a keychain-unlock dialog.
+            //
+            // Asked through `…IfKnown` first so the probe runs ONLY when it is the
+            // thing standing between us and an answer — an enrolled host, or one
+            // with no sensor, never writes to the keychain here at all.
+            let auth = Self.describeSettingsAuthIfKnown()
+                ?? Self.describeSettingsAuth(ControlToken.capability)
             let path = DezhbanCLI.resolvedConfigPath()
             let v = DezhbanCLI.run(["version"]).output.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {
