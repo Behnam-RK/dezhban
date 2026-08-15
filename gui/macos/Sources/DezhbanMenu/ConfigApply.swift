@@ -208,8 +208,16 @@ enum ConfigApply {
                                            transcript: err + "\n\nRolling the enrollment back also failed:\n" + rollback.output))
                         return
                     }
+                    // Report `err`, not a blanket "nothing was changed". The
+                    // daemon's half is genuinely undone, but `store` also fails
+                    // when it cannot REPLACE an item a previous build left behind
+                    // — and that item is still there, so `isStored` stays true and
+                    // the toggle snaps back on. Claiming nothing changed would
+                    // send the user to a settings save that then presents a token
+                    // the daemon no longer knows. `err` names the one-line
+                    // `security delete-generic-password` that clears it.
                     completion(Outcome(ok: false,
-                                       status: "The keychain refused the secret, so nothing was changed — settings changes keep using your password.",
+                                       status: "The keychain refused the secret and the enrollment was rolled back — \(err)",
                                        transcriptTitle: "Enroll control token — keychain failed",
                                        transcript: err))
                 }

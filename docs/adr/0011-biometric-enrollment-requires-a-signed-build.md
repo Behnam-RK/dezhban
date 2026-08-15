@@ -46,8 +46,12 @@ Treat "can this build hold a control token?" as a **capability to be probed, not
 assumed** — and probe it *before* spending anything privileged.
 
 `ControlToken.capability` attempts a real `SecItemAdd` of a throwaway item under
-the same access-control policy, deletes it, and classifies the status. Adding a
-biometry-gated item does not prompt, so the probe is silent. On an unsigned build
+a suffixed account that can never collide with a real token, deletes it, and
+classifies the status. The add prompts for nothing, so the probe is silent.
+(As shipped it uses the plain-item policy
+[ADR-0012](0012-app-checked-biometrics-on-unsigned-builds.md) settled on, not the
+`.biometryCurrentSet` one this record was written against — see that ADR's Risks
+for why the post-store rollback stays as the backstop.) On an unsigned build
 the app disables the toggle, says why, and never takes a password. Enrollment is
 refused **before** `token enroll` runs; if a store somehow fails anyway, the
 daemon's hash is rolled back automatically rather than left for the user.
@@ -113,7 +117,11 @@ remain the recorded future fix.
   protection keychain while `isStored`, `load` and `remove` addressed the legacy
   one. Invisible only because `store` never succeeded — and it would have
   surfaced as "saved, but `isStored` says no" on the first signed build. All four
-  now pin `kSecUseDataProtectionKeychain`.
+  now build their query from one shared helper, so they cannot drift onto
+  different stores again. **They all address the LEGACY keychain**, and after
+  [ADR-0012](0012-app-checked-biometrics-on-unsigned-builds.md) they must: the
+  `SecKeychainItemDelete` that makes `remove` work across code identities exists
+  only there. Do not "fix" this by pinning `kSecUseDataProtectionKeychain`.
 - The verdict mapping lives in `DezhbanCore` and is unit-tested, so the copy
   cannot regress into inviting an impossible retry.
 
@@ -129,10 +137,11 @@ remain the recorded future fix.
 
 ### Risks
 
-- **The probe could disagree with the real store.** Mitigated by probing with the
-  same `accessControl()` policy the real store uses, rather than a simplified
-  one, and by keeping the post-store rollback as a backstop for the case where it
-  still diverges.
+- **The probe could disagree with the real store.** It writes the same item shape
+  the real store writes, but under a different account — and it cannot exercise
+  the `remove()` of a *pre-existing* token that `store` does first, so an item
+  left by an earlier build is a divergence the probe cannot see. That is why the
+  post-store rollback is kept as a backstop rather than treated as unreachable.
 - **A stale probe item could be left behind** by a crash between add and delete.
   Mitigated by deleting the probe account before adding, so a leftover is cleared
   on the next run; the account is suffixed and can never collide with a real token.

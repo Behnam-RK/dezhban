@@ -4,7 +4,7 @@
 **Status**: accepted, implemented
 **Supersedes**: the rejection of "Alternative 3" in
 [ADR-0011](0011-biometric-enrollment-requires-a-signed-build.md). Everything else
-in 0010 — the signing constraint, the entitlement that SIGKILLs the app, the
+in 0011 — the signing constraint, the entitlement that SIGKILLs the app, the
 probe-before-spending ordering — still holds and is unchanged.
 
 ## Context
@@ -17,7 +17,7 @@ settings change still costs a password, which is precisely the complaint
 [ADR-0003](0003-biometric-token-over-existing-daemon.md) existed to fix. The
 feature was honest and absent.
 
-0010 considered and rejected "Alternative 3" — `LAContext.evaluatePolicy` plus a
+0011 considered and rejected "Alternative 3" — `LAContext.evaluatePolicy` plus a
 plain keychain item — on the grounds that it converts an enforced gate into an
 advisory one. That reasoning was sound in isolation and **weighed the wrong
 baseline**: it compared app-checked biometrics against keychain-enforced
@@ -87,7 +87,7 @@ clean escape.
 
 ## Alternatives considered
 
-### Alternative 1: Keep 0010's position — no biometrics until the build is signed
+### Alternative 1: Keep 0011's position — no biometrics until the build is signed
 
 - **Pros**: preserves the strongest property; nothing to explain; no new risk.
 - **Cons**: the feature stays absent indefinitely, since the signing work is not
