@@ -179,6 +179,110 @@ func TestRenderBlockScriptSwitchWindowRestricted(t *testing.T) {
 	}
 }
 
+// expectedOutboundAction is what Apply persists for IsBlocked's drift check
+// (see wfp_windows.go), so it must agree with what renderBlockScript actually
+// installs — pinned directly rather than only indirectly via the script string.
+func TestExpectedOutboundAction(t *testing.T) {
+	cases := []struct {
+		name string
+		p    Policy
+		want string
+	}{
+		{"guard", Policy{Mode: ModeGuard, TunnelIfaces: []string{"utun4"}}, "Block"},
+		{"full block", Policy{Mode: ModeFullBlock}, "Block"},
+		{"unrestricted switch window", Policy{Mode: ModeSwitchWindow}, "Allow"},
+		{"restricted switch window", Policy{
+			Mode:         ModeSwitchWindow,
+			WindowProtos: []string{"udp"},
+			WindowPorts:  []int{51820},
+		}, "Block"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := expectedOutboundAction(c.p); got != c.want {
+				t.Errorf("expectedOutboundAction(%+v) = %q, want %q", c.p, got, c.want)
+			}
+		})
+	}
+}
+
+func TestParseProfileQuery(t *testing.T) {
+	t.Run("clear", func(t *testing.T) {
+		blocked, got, err := parseProfileQuery("clear\n")
+		if err != nil || blocked || got != nil {
+			t.Fatalf("parseProfileQuery(clear) = (%v, %v, %v), want (false, nil, nil)", blocked, got, err)
+		}
+	})
+
+	t.Run("blocked with all profiles present", func(t *testing.T) {
+		out := "blocked\nDomain=Block\nPrivate=Block\nPublic=Allow\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err != nil {
+			t.Fatalf("parseProfileQuery: unexpected error: %v", err)
+		}
+		if !blocked {
+			t.Fatalf("parseProfileQuery: got blocked=false, want true")
+		}
+		want := map[string]string{"Domain": "Block", "Private": "Block", "Public": "Allow"}
+		if len(got) != len(want) {
+			t.Fatalf("parseProfileQuery: got %v, want %v", got, want)
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("parseProfileQuery: got[%q] = %q, want %q", k, got[k], v)
+			}
+		}
+	})
+
+	// A transient PowerShell/WMI hiccup that drops one profile's line — while
+	// the script still exits 0 — must read as an unreadable query, not as
+	// evidence that the Public profile's default actually changed. A caller
+	// comparing the zero-value "" against a wanted action would otherwise
+	// report false drift and trigger an unwanted repair.
+	t.Run("blocked but missing a profile line", func(t *testing.T) {
+		out := "blocked\nDomain=Block\nPrivate=Block\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err == nil {
+			t.Fatalf("parseProfileQuery: got no error for a missing profile line, want an error")
+		}
+		if blocked || got != nil {
+			t.Fatalf("parseProfileQuery: got (%v, %v) alongside the error, want (false, nil)", blocked, got)
+		}
+	})
+
+	// -ErrorAction SilentlyContinue only suppresses the error stream, not a
+	// warning PowerShell writes to the success stream ahead of the script's
+	// own output — this must not be misread as "not blocked" just because it
+	// is not lines[0].
+	t.Run("blocked with an incidental leading line", func(t *testing.T) {
+		out := "WARNING: some incidental PowerShell notice\nblocked\nDomain=Block\nPrivate=Block\nPublic=Block\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err != nil {
+			t.Fatalf("parseProfileQuery: unexpected error: %v", err)
+		}
+		if !blocked {
+			t.Fatalf("parseProfileQuery: got blocked=false, want true — a leading noise line must not hide the marker")
+		}
+		want := map[string]string{"Domain": "Block", "Private": "Block", "Public": "Block"}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("parseProfileQuery: got[%q] = %q, want %q", k, got[k], v)
+			}
+		}
+	})
+
+	// The marker text must still only match on its own line — never as a
+	// substring inside unrelated output, which would be a worse regression
+	// than the strict lines[0] check this replaced.
+	t.Run("blocked text embedded in noise is not a marker", func(t *testing.T) {
+		out := "this line mentions blocked in passing\nclear\n"
+		blocked, got, err := parseProfileQuery(out)
+		if err != nil || blocked || got != nil {
+			t.Fatalf("parseProfileQuery(embedded) = (%v, %v, %v), want (false, nil, nil)", blocked, got, err)
+		}
+	})
+}
+
 func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {
 	s := renderBlockScript(Policy{
 		Mode:         ModeFullBlock,

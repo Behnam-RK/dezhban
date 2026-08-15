@@ -112,6 +112,7 @@ func TestDisablableKeysSurviveNormalize(t *testing.T) {
 		"vpn.redialWindow":             func(c *Config) *time.Duration { return &c.VPN.RedialWindow },
 		"vpn.pauseMax":                 func(c *Config) *time.Duration { return &c.VPN.PauseMax },
 		"vpn.advanced.redialMinUptime": func(c *Config) *time.Duration { return &c.VPN.Advanced.RedialMinUptime },
+		"vpn.advanced.verifyInterval":  func(c *Config) *time.Duration { return &c.VPN.Advanced.VerifyInterval },
 	}
 
 	var disablable []string

@@ -54,6 +54,8 @@ var roundTripCases = map[string]roundTripCase{
 	"vpn.advanced.switchWindowMax":         {set: "4m", want: "4m0s"},
 	"vpn.advanced.redialWindowMax":         {set: "11m", want: "11m0s"},
 	"vpn.advanced.redialMinUptime":         {set: "20s", want: "20s"},
+	"vpn.advanced.verifyInterval":          {set: "90s", want: "1m30s"},
+	"vpn.advanced.livenessRedial":          {set: "true", want: "true"},
 	"vpn.advanced.redialBudget":            {set: "3m", want: "3m0s"},
 	"vpn.advanced.redialBudgetWindow":      {set: "20m", want: "20m0s"},
 	"vpn.advanced.commandFreshness":        {set: "45s", want: "45s"},

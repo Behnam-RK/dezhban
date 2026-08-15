@@ -312,6 +312,117 @@ There is no override — this is the same rule `dezhban upgrade apply` enforces
 for its own restart, and `sudo dezhban restart` is already the deliberate,
 by-name escape hatch for an operator who wants to force it anyway.
 
+## dezhban says its firewall rules went missing and were re-applied
+
+Symptom (from the daemon log):
+
+```
+msg="dezhban's firewall rules are MISSING — something removed them; re-applying now" posture=guard repairs=1
+```
+
+**Cause.** Every other rule change dezhban makes is triggered by something it
+did — a tunnel change, an endpoint refresh, a posture flip. This message
+means something else removed the rules: another firewall tool, `pfctl -F all`
+/ `nft flush ruleset` run by hand, an OS-level firewall reset, or a
+misbehaving script. Enforcement verification (`vpn.advanced.verifyInterval`,
+default `1m`) noticed the gap on its next check and closed it immediately.
+
+**This is not a leak that happened** — verification found the gap and repaired
+it before you saw this message, not after. What it tells you is that *something
+on this host keeps removing dezhban's rules*, which is worth tracking down
+regardless: a `repairs` count that keeps climbing across restarts means it is
+recurring, not a one-off.
+
+```sh
+dezhban status --json     # state.verify — At, Missing/Err, Repairs
+dezhban doctor            # the "enforcement liveness" section
+```
+
+**Fix.** Find and stop whatever else is touching the firewall — a competing
+security tool, a system firewall reset on network change, a cron job. If you
+need to intentionally flush rules for testing, expect dezhban to notice and
+repair within one `verifyInterval` — that is the feature working, not a bug to
+route around. Setting `vpn.advanced.verifyInterval: "0"` disables the check
+entirely; do this only if you understand you are giving up the one signal that
+would otherwise catch a rules-removed-from-outside gap.
+
+**`sudo dezhban panic` is the one deliberate exception.** Tearing down the
+rules on purpose is still "the rules going missing" from a running daemon's
+point of view, so `panic` leaves behind a marker telling that daemon's
+enforcement verification to stand down instead of re-applying the posture you
+just asked it to remove — otherwise the two features would fight, and
+verification would win within a minute of every `panic`. The marker clears
+automatically the next time you `dezhban unblock` (or restart the daemon,
+which re-applies the initial posture on its own anyway), so verification
+never stays suspended longer than it takes to explicitly resume enforcement.
+
+## dezhban says my VPN might be hung (zombie tunnel)
+
+Symptom (from the daemon log, or in `dezhban doctor`):
+
+```
+msg="tunnel interface reports up, but exit lookups through it keep failing — it may need reconnecting; guard holds either way" checks=2
+```
+
+**Cause.** The tunnel interface still looks up to the OS, but a run of
+exit-country lookups through it have failed — the same signal count as
+`hysteresis`. dezhban's posture never escalates on a lookup failure alone (an
+unknown country **holds**, it never flips — see
+[glossary § Fail closed](../concepts/glossary.md#mechanism)), so a hung tunnel
+stays correctly cut, but until this check existed it explained itself to no
+one and recovered only if a person noticed and ran `dezhban switch` by hand.
+
+This has one important false-positive case: an exit that **censors the geo
+providers** produces the identical symptom — interface up, lookups failing —
+on a tunnel that is working perfectly. That is why this diagnosis alone never
+opens a redial window; see below.
+
+```sh
+dezhban status --json     # state.zombie — Since, Checks
+dezhban doctor            # the "enforcement liveness" section
+```
+
+**Fix.** Reconnect your VPN client. If it happens repeatedly with the same VPN,
+consider `vpn.advanced.livenessRedial: true` to let a confirmed streak open an
+automatic redial window through the same budget/backoff machinery an ordinary
+drop uses (off by default — see
+[ADR-0010](../adr/0010-tunnel-liveness.md) for the censoring-exit trade-off
+before turning it on).
+
+## A second `dezhban run` refuses to start
+
+```
+another dezhban is already running (holds /var/db/dezhban/dezhban.lock) — see `dezhban status`
+```
+
+**Cause.** `run` takes an exclusive lock over the state directory for its
+entire lifetime, so a second daemon process — started by hand, via
+`--no-daemon`, or by accident alongside the service — cannot start and race the
+first to apply firewall rules. This is expected and correct: only one process
+may own `Backend.Apply` at a time.
+
+```sh
+dezhban status               # confirm the already-running daemon's posture
+sudo dezhban restart         # restart the ONE daemon, rather than starting a second
+```
+
+The lock is released by the OS the moment the holding process ends, by any
+means — a crash, `SIGKILL`, a clean stop — so it never survives past the
+process it belonged to; there is no stale-lock case to clean up by hand. The
+lock file itself is root-owned and `0600`, so an unprivileged local user
+cannot hold it open to keep `run` from starting. If this refuses and
+`dezhban status`/your process manager show nothing running, look for the
+daemon in a genuinely stuck (not dead) state rather than assuming a leftover
+lock file — `sudo dezhban panic` removes firewall rules without needing this
+lock at all, regardless of what is holding it.
+
+This lock is a safety net around a race, not part of the kill switch itself:
+if acquiring it fails for any reason OTHER than the contention above — an
+unwritable or missing state directory, for example — `run` logs a warning and
+starts anyway, without the single-instance guard for that run, rather than
+refusing to enforce. A lock that cannot be established must never become a
+reason the guard does not arm.
+
 ## Preview rules before applying them
 
 Never find out what a block does by getting locked out — render the exact

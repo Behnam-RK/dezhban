@@ -21,6 +21,7 @@ New records use [template.md](template.md) and take the next free number.
 | [0007](0007-upgrade-disclosed-window-not-holding-block.md) | `dezhban upgrade` discloses the activation window instead of holding a block through it | accepted, implemented |
 | [0008](0008-arm-at-boot.md) | Arm at boot from a persisted observation, plus a bounded pause | accepted, implemented |
 | [0009](0009-redial-budget.md) | The automatic redial window spends from a bounded budget | accepted, implemented |
+| [0010](0010-tunnel-liveness.md) | Zombie-tunnel detection is unconditional; acting on it is opt-in | accepted, implemented |
 
 > **0006 is the one to read first if you are touching the geo lookup.** It records why
 > the obvious implementation silently defeats the exit-country check, and it exists
@@ -43,3 +44,9 @@ New records use [template.md](template.md) and take the next free number.
 > still literally true) — it records why pause was added as a *third*, and
 > why arming at boot needed the `TunnelEverUp` persistence rather than a
 > plain unconditional fail-closed start.
+>
+> **0010 is the one to read before defaulting `vpn.advanced.livenessRedial`
+> to on**, or before treating a failed exit-country lookup as evidence a
+> tunnel is dead. It records why that exact symptom is indistinguishable from
+> a censoring exit, and why the diagnosis (always on) is kept separate from
+> the relaxation it may trigger (opt-in).

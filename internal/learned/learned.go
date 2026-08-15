@@ -28,6 +28,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // version is the on-disk schema version. Bump on an incompatible change.
@@ -94,28 +96,8 @@ func (s *Store) Save(path string) error {
 	if err != nil {
 		return fmt.Errorf("learned: marshal: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".learned-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("learned: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("learned: write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("learned: sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("learned: close temp: %w", err)
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return fmt.Errorf("learned: chmod temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("learned: rename into place: %w", err)
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
+		return fmt.Errorf("learned: write %q: %w", path, err)
 	}
 	return nil
 }

@@ -31,6 +31,7 @@ public struct SettingsFields {
         "vpn.advanced.commandFreshness", "vpn.advanced.windowDiscoveryInterval", "vpn.advanced.tunnelPruneAfter",
         "vpn.advanced.learnedEndpointTTL", "vpn.advanced.learnedMaxPerProfile", "vpn.advanced.promoteAfterRefreshes",
         "vpn.advanced.endpointWarnThreshold", "vpn.advanced.windowProtocols", "vpn.advanced.windowPorts",
+        "vpn.advanced.verifyInterval", "vpn.advanced.livenessRedial",
     ]
 
     /// Raw staged values, exactly as `config get` returned them and exactly as
@@ -60,6 +61,7 @@ public struct SettingsFields {
     /// representation.
     static let boolKeys: Set<String> = [
         "vpn.autoDetect", "vpn.autoDiscoverEndpoints", "vpn.autoArm", "vpn.allowLocalNetwork",
+        "vpn.advanced.livenessRedial",
     ]
 
     /// Reads one staged value by key. Returns "" for a key this pane does not
@@ -202,5 +204,11 @@ public struct SettingsFields {
     }
     public var advWindowPorts: String {
         get { string("vpn.advanced.windowPorts") } set { setString("vpn.advanced.windowPorts", newValue) }
+    }
+    public var advVerifyInterval: String {
+        get { string("vpn.advanced.verifyInterval") } set { setString("vpn.advanced.verifyInterval", newValue) }
+    }
+    public var advLivenessRedial: Bool {
+        get { bool("vpn.advanced.livenessRedial") } set { setBool("vpn.advanced.livenessRedial", newValue) }
     }
 }

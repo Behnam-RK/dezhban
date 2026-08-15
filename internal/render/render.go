@@ -41,7 +41,7 @@ const (
 	KeyOn      = "on"      // guarding, traffic flows through the tunnel
 	KeyOff     = "off"     // standby or stopped — nothing is enforced
 	KeyBlocked = "blocked" // full block, or a guard holding a downed tunnel
-	KeyWarning = "warning" // a switch/redial window is open, or enforcement failed
+	KeyWarning = "warning" // a switch/redial window is open, enforcement failed, or verification/liveness flagged something
 	KeyPaused  = "paused"  // an operator-requested pause is open
 )
 
@@ -79,17 +79,57 @@ func Posture(s state.Snapshot) Display {
 // not recognise (an older or newer daemon), so a caller never needs its own
 // fallback.
 func Text(s state.Snapshot) Display {
+	if s.PanicDisarmed {
+		// `dezhban panic` tore the rules down deliberately and this daemon is
+		// standing down rather than silently reinstating them (see
+		// runner.Options.PanicDisarmed). Wins over posture AND EnforcementErr:
+		// every automatic Apply is being skipped, so nothing below this would
+		// describe what the firewall is actually doing — Blocked/Posture may
+		// still say "full-block" or "guard" while egress is wide open.
+		return Display{
+			Key:      KeyWarning,
+			Headline: "Panic disarmed",
+			Detail: "`dezhban panic` tore down the firewall rules and dezhban is not re-applying them. " +
+				"Run `dezhban unblock` (or restart the background service) to resume enforcement.",
+		}
+	}
 	if s.EnforcementErr != "" {
 		// Wins over posture: the daemon tried to enforce and the backend
 		// refused, so posture/blocked describe the data plane truthfully but
 		// the intended posture was not achieved. That is more urgent than
 		// whatever the intended posture was, so there is no point deriving
 		// its display just to discard it.
+		//
+		// A verification repair that failed sets BOTH EnforcementErr and
+		// Verify.Missing+Err (the run loop publishes the same error through
+		// both), so without this the more specific sentence below could never
+		// be reached from a real snapshot — the reader would see the raw
+		// backend error with no hint that the rules are GONE. Same headline,
+		// the detail that actually says what happened.
+		if note := verifyNote(s); note != "" && s.Verify.Missing && s.Verify.Err != "" {
+			return Display{Key: KeyWarning, Headline: "Enforcement failed", Detail: note}
+		}
 		return Display{Key: KeyWarning, Headline: "Enforcement failed", Detail: s.EnforcementErr}
 	}
 	d := postureDisplay(s)
+	vNote := verifyNote(s)
 	d.Detail = joinSentences(d.Detail, lookupNote(s))
+	d.Detail = joinSentences(d.Detail, zombieNote(s))
+	d.Detail = joinSentences(d.Detail, vNote)
 	d.Detail = joinSentences(d.Detail, pendingNote(s.Pending))
+	// Zombie/Verify only ever UPGRADE a healthy-looking Key to KeyWarning, never
+	// downgrade one that is already worse. Both conditions are diagnosis, not a
+	// leak — the guard is enforcing correctly either way, or (for Verify) was
+	// already repaired before this is read — so KeyBlocked (an actual exposure
+	// risk: FULL BLOCK, or the guard holding a downed tunnel) must stay
+	// KeyBlocked, and an open window's KeyWarning/KeyPaused is already the
+	// right tier. Without this, a user glancing at the menubar during "rules
+	// were found missing and re-applied" or a hung tunnel saw a plain green
+	// "Guarding" icon — the Detail sentence existed, but nothing drew the eye
+	// to it.
+	if d.Key == KeyOn && (s.Zombie != nil || vNote != "") {
+		d.Key = KeyWarning
+	}
 	return d
 }
 
@@ -433,6 +473,49 @@ func lookupNote(s state.Snapshot) string {
 		return ""
 	}
 	return fmt.Sprintf("Last exit-country check failed: %s.", s.LookupErr)
+}
+
+// zombieNote reports a tunnel that reports up but has stopped passing traffic
+// — diagnosis, not a leak: the guard is holding exactly as designed, same as
+// any other tunnel-down state. Appended alongside lookupNote rather than
+// replacing the posture headline, so "Guarding" stays accurate (it is) while
+// the detail explains why the checks keep failing.
+func zombieNote(s state.Snapshot) string {
+	if s.Zombie == nil {
+		return ""
+	}
+	return "Your VPN's interface looks up, but exit checks through it keep failing — it may need reconnecting."
+}
+
+// verifyNote reports enforcement verification's last unhappy answer.
+//
+// Missing means the rules were found gone and have ALREADY been re-applied by
+// the time this is read — the guard's current state is correct, this only
+// explains why "something removed them" is worth knowing about. Err means the
+// backend could not be read at all, which is not evidence the rules are gone
+// (the same discipline as an undeterminable exit country holding the current
+// posture): nothing was re-applied, and the note says so rather than
+// implying a repair that did not happen.
+func verifyNote(s state.Snapshot) string {
+	if s.Verify == nil {
+		return ""
+	}
+	if s.Verify.Missing {
+		if s.Verify.Err != "" {
+			// Missing AND Err: the rules are gone and putting them back FAILED,
+			// so the host is unenforced right now. Saying "have been re-applied"
+			// here would be the single most dangerous sentence this renderer
+			// can produce — see state.VerifyState.Err.
+			return fmt.Sprintf("Your firewall rules were found missing and could NOT be re-applied: %s. "+
+				"Your traffic is not being guarded.", s.Verify.Err)
+		}
+		return fmt.Sprintf("Your firewall rules were found missing and have been re-applied (%d time(s) since startup).",
+			s.Verify.Repairs)
+	}
+	if s.Verify.Err != "" {
+		return fmt.Sprintf("Could not verify your firewall rules are still installed: %s.", s.Verify.Err)
+	}
+	return ""
 }
 
 // pendingNote reports a hysteresis streak in progress, in the one spelling

@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // version is the on-disk schema version. Bump on an incompatible change.
@@ -100,28 +102,8 @@ func (r *Record) Save(path string) error {
 	if err != nil {
 		return fmt.Errorf("armed: marshal: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".armed-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("armed: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("armed: write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("armed: sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("armed: close temp: %w", err)
-	}
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return fmt.Errorf("armed: chmod temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("armed: rename into place: %w", err)
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
+		return fmt.Errorf("armed: write %q: %w", path, err)
 	}
 	return nil
 }

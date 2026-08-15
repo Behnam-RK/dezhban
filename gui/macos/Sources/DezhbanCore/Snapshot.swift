@@ -116,6 +116,39 @@ public struct RedialState: Codable {
     public let fastDrops: Int?
 }
 
+/// Enforcement verification's last unhappy answer — mirrors Go's
+/// `state.VerifyState`. Present only while something is wrong; a clean check
+/// clears it. Distinguishes three different problems: `missing` alone means
+/// the backend answered, the rules were actually gone, and they were already
+/// re-applied by the time this is read; `missing` WITH `err` means the
+/// re-apply itself failed and the host is unenforced right now; `err` alone
+/// means the backend could not be read at all, which is NOT evidence the
+/// rules are gone and changes nothing — the same discipline as an
+/// undeterminable exit country holding the current posture.
+/// See ADR-0010 and docs/usage/config.md's `verifyInterval` row.
+public struct VerifyState: Codable {
+    /// Optional to match Go's `omitzero` — see `SwitchState.until`.
+    public let at: Date?
+    /// Omitted (nil here) rather than `false` when the last check was the
+    /// `err` case instead — Go's `omitempty` never writes a literal `false`.
+    public let missing: Bool?
+    public let err: String?
+    /// How many times verification has re-applied the posture since startup.
+    /// Omitted (nil here, read as 0) when it hasn't repaired anything yet —
+    /// e.g. the very first check already failed to read the backend.
+    public let repairs: Int?
+}
+
+/// A tunnel interface that reports up while a run of exit-country lookups
+/// through it has failed — mirrors Go's `state.ZombieState`. Present only
+/// while such a streak stands. This is diagnosis, not a leak: the guard is
+/// holding exactly as designed either way. See ADR-0010.
+public struct ZombieState: Codable {
+    /// Optional to match Go's `omitzero` — see `SwitchState.until`.
+    public let since: Date?
+    public let checks: Int
+}
+
 /// The daemon's posture at a point in time — mirrors Go's `state.Snapshot`.
 /// JSON keys match the lowerCamelCase struct tags in internal/state/state.go.
 public struct Snapshot: Codable {
@@ -132,6 +165,10 @@ public struct Snapshot: Codable {
     public let lookupErr: String?          // a GENUINE failure: a tunnel was up and measuring it failed
     public let exitUnknown: String?        // EXPECTED: no tunnel up, so there is no exit to measure
     public let enforcementErr: String?     // last firewall-action failure, nil when clear
+    /// `dezhban panic` tore the rules down and the daemon is standing down
+    /// rather than reinstating them — already folded into `display` by the
+    /// Go renderer, carried here only for parity with the rest of Snapshot.
+    public let panicDisarmed: Bool?
     public let tunnels: [Tunnel]?
     public let endpoints: [String]?
     public let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness
@@ -144,6 +181,12 @@ public struct Snapshot: Codable {
     public let drop: DropRecord?          // present from a tunnel drop until a tunnel is up again
     public let hold: HoldState?           // present only while "hold the line" is armed
     public let redial: RedialState?       // present only while a redial window stands refused
+    public let verify: VerifyState?       // present only while enforcement verification found something wrong
+    public let zombie: ZombieState?       // present only while a hung-tunnel streak stands
+    /// When the observed exit IP last differed from the previous successful
+    /// reading. Optional to match Go's `omitzero` — see `SwitchState.until`.
+    /// Purely observational: never affects `blocked`/`countryCode`/`pending`.
+    public let exitIpChangedAt: Date?
 
     /// Wall-clock age of this snapshot.
     public var age: TimeInterval { Date().timeIntervalSince(time) }

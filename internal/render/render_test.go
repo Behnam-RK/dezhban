@@ -307,6 +307,123 @@ func TestText(t *testing.T) {
 			wantDetail:   "Traffic leaves only through your VPN tunnel. Last exit-country check failed: malformed response.",
 		},
 		{
+			name: "zombie note appended to guard detail, Key upgraded to warning",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Zombie:  &state.ZombieState{Checks: 2},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Your VPN's interface looks up, " +
+				"but exit checks through it keep failing — it may need reconnecting.",
+		},
+		{
+			name: "verify-missing note appended to guard detail, Key upgraded to warning",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{Missing: true, Repairs: 2},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Your firewall rules were found " +
+				"missing and have been re-applied (2 time(s) since startup).",
+		},
+		{
+			// Missing WITH Err: the rules were gone and the re-apply FAILED, so
+			// the host is unenforced. The note must not claim a repair that did
+			// not happen — that sentence is the one this renderer must never
+			// produce for an unguarded host.
+			name: "verify-missing with a failed repair says so, never 'has been re-applied'",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{Missing: true, Err: "pfctl: /dev/pf: Device busy", Repairs: 0},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Your firewall rules were found " +
+				"missing and could NOT be re-applied: pfctl: /dev/pf: Device busy. " +
+				"Your traffic is not being guarded.",
+		},
+		{
+			// What the run loop ACTUALLY publishes for a failed repair: it sets
+			// enfErr and Verify.Missing+Err from the same error, so the generic
+			// EnforcementErr short-circuit would otherwise swallow the sentence
+			// above and leave the reader with a bare backend error that never
+			// says the rules are gone.
+			name: "failed repair keeps the specific sentence even with EnforcementErr set",
+			snap: state.Snapshot{
+				Posture:        PostureGuard,
+				Tunnels:        []state.Tunnel{{Name: "utun4", Up: true}},
+				EnforcementErr: "pfctl: /dev/pf: Device busy",
+				Verify:         &state.VerifyState{Missing: true, Err: "pfctl: /dev/pf: Device busy"},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Enforcement failed",
+			wantDetail: "Your firewall rules were found missing and could NOT be re-applied: " +
+				"pfctl: /dev/pf: Device busy. Your traffic is not being guarded.",
+		},
+		{
+			// An EnforcementErr with no verification finding behind it still
+			// reports the raw backend error — the specific sentence above must
+			// not swallow the general case.
+			name: "enforcement error with a read-only verify finding keeps the raw error",
+			snap: state.Snapshot{
+				Posture:        PostureGuard,
+				Tunnels:        []state.Tunnel{{Name: "utun4", Up: true}},
+				EnforcementErr: "nft: permission denied",
+				Verify:         &state.VerifyState{Err: "nft: permission denied"},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Enforcement failed",
+			wantDetail:   "nft: permission denied",
+		},
+		{
+			name: "verify-read-error note appended to guard detail, Key upgraded to warning",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{Err: "pfctl: no such process"},
+			},
+			wantKey:      KeyWarning,
+			wantHeadline: "Guarding",
+			wantDetail: "Traffic leaves only through your VPN tunnel. Could not verify your firewall " +
+				"rules are still installed: pfctl: no such process.",
+		},
+		{
+			// A clean verification check (Verify present but neither Missing nor
+			// Err set) must never happen in practice — the run loop always clears
+			// Verify to nil on success — but render must not crash or append an
+			// empty sentence if it somehow did.
+			name: "verify present but clean is not surfaced and does not upgrade Key",
+			snap: state.Snapshot{
+				Posture: PostureGuard,
+				Tunnels: []state.Tunnel{{Name: "utun4", Up: true}},
+				Verify:  &state.VerifyState{},
+			},
+			wantKey:      KeyOn,
+			wantHeadline: "Guarding",
+			wantDetail:   "Traffic leaves only through your VPN tunnel.",
+		},
+		{
+			// Zombie/Verify only ever UPGRADE Key — a posture that is already
+			// KeyBlocked (a real exposure risk: FULL BLOCK) must stay KeyBlocked,
+			// never get quietly downgraded to the less alarming amber warning.
+			name: "verify-missing during full block never downgrades Key from blocked",
+			snap: state.Snapshot{
+				Posture:     PostureFullBlock,
+				CountryCode: "IR",
+				Verify:      &state.VerifyState{Missing: true, Repairs: 1},
+			},
+			wantKey:      KeyBlocked,
+			wantHeadline: "Full block (IR)",
+			wantDetail: "Your VPN is exiting through a country you've blocked (IR). Everything is cut " +
+				"until it moves. Your firewall rules were found missing and have been re-applied " +
+				"(1 time(s) since startup).",
+		},
+		{
 			name: "exit-unknown never surfaced",
 			snap: state.Snapshot{
 				Posture:     PostureGuard,

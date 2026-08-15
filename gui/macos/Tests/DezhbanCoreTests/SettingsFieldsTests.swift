@@ -54,6 +54,9 @@ private func testSchema() -> ConfigSchema {
                 defaultValue: "256"),
         tunable("vpn.advanced.windowProtocols", "Window protocols", "list"),
         tunable("vpn.advanced.windowPorts", "Window ports", "list"),
+        tunable("vpn.advanced.verifyInterval", "Enforcement verification interval", "duration",
+                defaultValue: "1m0s", disablable: true),
+        tunable("vpn.advanced.livenessRedial", "Redial on a hung tunnel", "bool", defaultValue: "false"),
     ])
 }
 
@@ -96,6 +99,8 @@ struct SettingsFieldsTests {
         f.advEndpointWarnThreshold = "512"
         f.advWindowProtocols = "udp,tcp"
         f.advWindowPorts = "51820,443"
+        f.advVerifyInterval = "90s"
+        f.advLivenessRedial = true
 
         // Named accessor and keyed lookup are the same storage, not two copies.
         #expect(f.value(for: "vpn.tunnelInterfaces") == "utun9")
@@ -104,6 +109,8 @@ struct SettingsFieldsTests {
         #expect(f.value(for: "vpn.advanced.windowPorts") == "51820,443")
         #expect(f.value(for: "vpn.autoDetect") == "true")
         #expect(f.value(for: "vpn.allowLocalNetwork") == "false")
+        #expect(f.value(for: "vpn.advanced.verifyInterval") == "90s")
+        #expect(f.value(for: "vpn.advanced.livenessRedial") == "true")
 
         let pairs = f.pairs()
         #expect(pairs.contains("vpn.switchWindow=10s"))
@@ -156,7 +163,7 @@ struct SettingsFieldsTests {
             "VPN server address grace", "VPN server address refresh", "Tunnel check interval",
             "Switch window cap", "Redial window cap", "Redial anti-flap uptime",
             "Command freshness", "Window discovery interval", "Tunnel prune delay",
-            "Learned address lifetime",
+            "Learned address lifetime", "Enforcement verification interval",
         ])
     }
 

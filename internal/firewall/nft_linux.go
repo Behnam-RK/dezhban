@@ -67,10 +67,19 @@ func (b *nftBackend) Apply(p Policy) error {
 // Unblock removes ONLY dezhban's table (surgical — touches nothing else). A
 // missing table is not an error: unblock must be safe to run when nothing is
 // blocked.
+//
+// Gated on the table EXISTING, deliberately not on IsBlocked: IsBlocked is the
+// stricter "is this actually enforcing" question and answers false for a table
+// whose output-chain policy drifted to accept. Teardown must not inherit that
+// strictness — a drifted table is still dezhban's table, and skipping the
+// delete would have `unblock`/`panic`/`Cleanup` report success while leaving
+// our ruleset installed, breaking the surgical-teardown invariant.
 func (b *nftBackend) Unblock() error {
-	if blocked, err := b.IsBlocked(); err != nil {
+	_, exists, err := b.listTable()
+	if err != nil {
 		return err
-	} else if !blocked {
+	}
+	if !exists {
 		return nil
 	}
 	if _, err := nft("", "delete", "table", "inet", tableName); err != nil {
@@ -79,19 +88,84 @@ func (b *nftBackend) Unblock() error {
 	return nil
 }
 
-// IsBlocked reports whether the `inet dezhban` table exists. Unlike pf there is
-// no separate enabled/disabled state: a present table is always enforcing.
-func (b *nftBackend) IsBlocked() (bool, error) {
-	if _, err := nft("", "list", "table", "inet", tableName); err != nil {
+// listTable renders `nft list table inet dezhban`, reporting whether the table
+// exists at all separately from a real failure to ask. Shared by Unblock (which
+// only cares about existence) and IsBlocked (which also inspects the rendered
+// policy), so the two can never drift on what "the table is not there" looks
+// like.
+func (b *nftBackend) listTable() (out string, exists bool, err error) {
+	out, err = nft("", "list", "table", "inet", tableName)
+	if err != nil {
 		// nft exits non-zero when the table does not exist. Distinguish that
 		// (not blocked) from a real failure by matching the kernel's message.
 		if strings.Contains(err.Error(), "No such file or directory") ||
 			strings.Contains(err.Error(), "does not exist") {
-			return false, nil
+			return "", false, nil
 		}
+		return "", false, err
+	}
+	return out, true, nil
+}
+
+// IsBlocked reports whether the `inet dezhban` table exists AND its output
+// chain's policy is still drop.
+//
+// The table existing is not sufficient on its own: nft lets a chain's hook
+// policy be rewritten in place (`nft add chain inet dezhban output { policy
+// accept; }`) without deleting or recreating the table, which leaves every
+// accept rule we installed intact while unmatched egress — the actual
+// default-deny this whole ruleset exists to provide — sails straight through.
+// A bare table-existence check would report "blocked" through that gap the
+// whole time. `policy drop` is the literal text nft echoes back for the
+// chain's hook policy in `list table`, so checking for it here catches that
+// drift the same way pf's anchor-reference check (pf_darwin.go) and
+// Windows' DefaultOutboundAction check (wfp_windows.go) catch theirs.
+func (b *nftBackend) IsBlocked() (bool, error) {
+	out, exists, err := b.listTable()
+	if err != nil || !exists {
 		return false, err
 	}
-	return true, nil
+	return outputChainPolicyIsDrop(out), nil
+}
+
+// outputChainPolicyIsDrop reports whether nft's rendered `list table` output
+// still shows the output chain's hook policy as drop. Split out from
+// IsBlocked so it can be exercised in tests against captured `nft list table`
+// output without shelling out — nft requires root/CAP_NET_ADMIN and this
+// package has no test seam for it, the same rationale as pf_darwin's
+// mainRulesetReferencesAnchor and wfp_windows' parseProfileQuery.
+func outputChainPolicyIsDrop(out string) bool {
+	// Scoped to the "output" chain block specifically (matching
+	// renderNftRuleset's `add chain inet %s output {...}`), not a table-wide
+	// substring search: a table-wide search would report "blocked" as long as
+	// the text "policy drop" appears ANYWHERE in `list table`'s output — which
+	// would go on being true even after the output chain's own policy drifted
+	// to accept, as long as some other chain in the table still says "policy
+	// drop". Only the "output" chain's own policy line may answer this.
+	inOutputChain := false
+	depth := 0
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !inOutputChain {
+			if trimmed == "chain output {" || strings.HasPrefix(trimmed, "chain output ") {
+				inOutputChain = true
+				depth = strings.Count(line, "{") - strings.Count(line, "}")
+			}
+			continue
+		}
+		if strings.Contains(line, "policy drop") {
+			return true
+		}
+		depth += strings.Count(line, "{") - strings.Count(line, "}")
+		if depth <= 0 {
+			// The output chain's block closed without ever showing "policy
+			// drop" — its policy is something else (accept), or nft's output
+			// shape changed in a way this no longer recognises. Either way,
+			// this is not the confirmed-drop state IsBlocked promises.
+			return false
+		}
+	}
+	return false
 }
 
 // Cleanup is best-effort teardown for shutdown/panic. It is just Unblock; any

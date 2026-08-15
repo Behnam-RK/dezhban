@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // Allowlist names the destinations that must stay reachable even while blocking,
@@ -223,6 +225,44 @@ type Advanced struct {
 	// EndpointWarnThreshold is the union-size at which doctor warns about
 	// rule-list bloat. Default 256.
 	EndpointWarnThreshold int
+	// VerifyInterval is how often the daemon re-reads the firewall to confirm
+	// its rules are still installed, re-applying the posture in force when they
+	// are not. Default 1m; an explicit "0" disables the check entirely (negative
+	// sentinel internally, same convention as RedialMinUptime).
+	//
+	// It exists because every other Apply is triggered by something dezhban
+	// itself did — a tunnel change, an endpoint refresh, a posture flip. Nothing
+	// noticed a ruleset removed from OUTSIDE (another firewall tool, `pfctl -F
+	// all`, `nft flush ruleset`, an OS ruleset reload), so the daemon went on
+	// reporting GUARD while the host was open. A guard that can fail silently is
+	// the worst failure this tool has.
+	//
+	// The cadence is deliberately slow. Backend.IsBlocked costs two pfctl calls
+	// on macOS and one nft on Linux, but a whole PowerShell invocation on
+	// Windows, and it runs in the single run-loop goroutine that also owns window
+	// expiry and geo ticks — see docs/usage/config.md.
+	VerifyInterval time.Duration
+	// LivenessRedial lets a hung tunnel — the interface reports up, but a run of
+	// exit lookups through it has failed — open an automatic redial window, the
+	// same as an ordinary tunnel-down edge (trigger 2; see the package doc
+	// comment's "THREE sanctioned triggers"). Default false.
+	//
+	// This is the one knob in this file that WIDENS a relaxation trigger rather
+	// than narrowing or bounding one, which is why it defaults off and ships
+	// with its own ADR (docs/adr/0010-tunnel-liveness.md) rather than living
+	// here as a plain tunable. The hazard: an exit that CENSORS the geo
+	// providers produces the exact same failure streak as a genuinely dead
+	// tunnel — state.Snapshot's LookupErr doc names this case by name ("an
+	// Iranian exit blocking them looks exactly like this"). With this on, that
+	// censoring exit can trigger a relaxation window on a tunnel that was never
+	// actually down. The streak, its diagnosis, and the state field that
+	// reports it (state.ZombieState) are unconditional and on by default —
+	// only ACTING on the streak is gated by this key.
+	//
+	// Every existing rail on the automatic trigger still applies unchanged:
+	// vpn.advanced.redialBudget, redialMinUptime backoff, `dezhban hold`,
+	// one window per drop, redialWindowMax.
+	LivenessRedial bool
 	// RedialMinUptime seeds the backoff on the automatic redial window: a tunnel
 	// that was up for less than this, with no confirmed exit during that uptime,
 	// still gets a window but a shortened one, halved again for each consecutive
@@ -400,20 +440,24 @@ type fileProfile struct {
 }
 
 type fileAdvanced struct {
-	SwitchWindowMax         string   `json:"switchWindowMax,omitempty"`
-	RedialWindowMax         string   `json:"redialWindowMax,omitempty"`
-	CommandFreshness        string   `json:"commandFreshness,omitempty"`
-	WindowDiscoveryInterval string   `json:"windowDiscoveryInterval,omitempty"`
-	TunnelPruneAfter        string   `json:"tunnelPruneAfter,omitempty"`
-	LearnedEndpointTTL      string   `json:"learnedEndpointTTL,omitempty"`
-	LearnedMaxPerProfile    int      `json:"learnedMaxPerProfile,omitempty"`
-	PromoteAfterRefreshes   int      `json:"promoteAfterRefreshes,omitempty"`
-	EndpointWarnThreshold   int      `json:"endpointWarnThreshold,omitempty"`
-	WindowProtocols         []string `json:"windowProtocols,omitempty"`
-	WindowPorts             []int    `json:"windowPorts,omitempty"`
-	RedialMinUptime         string   `json:"redialMinUptime,omitempty"`
-	RedialBudget            string   `json:"redialBudget,omitempty"`
-	RedialBudgetWindow      string   `json:"redialBudgetWindow,omitempty"`
+	SwitchWindowMax         string `json:"switchWindowMax,omitempty"`
+	RedialWindowMax         string `json:"redialWindowMax,omitempty"`
+	CommandFreshness        string `json:"commandFreshness,omitempty"`
+	WindowDiscoveryInterval string `json:"windowDiscoveryInterval,omitempty"`
+	TunnelPruneAfter        string `json:"tunnelPruneAfter,omitempty"`
+	LearnedEndpointTTL      string `json:"learnedEndpointTTL,omitempty"`
+	LearnedMaxPerProfile    int    `json:"learnedMaxPerProfile,omitempty"`
+	PromoteAfterRefreshes   int    `json:"promoteAfterRefreshes,omitempty"`
+	EndpointWarnThreshold   int    `json:"endpointWarnThreshold,omitempty"`
+	VerifyInterval          string `json:"verifyInterval,omitempty"`
+	// Pointer, like every other bool in this file: an absent key must keep the
+	// default rather than being indistinguishable from an explicit "off".
+	LivenessRedial     *bool    `json:"livenessRedial,omitempty"`
+	WindowProtocols    []string `json:"windowProtocols,omitempty"`
+	WindowPorts        []int    `json:"windowPorts,omitempty"`
+	RedialMinUptime    string   `json:"redialMinUptime,omitempty"`
+	RedialBudget       string   `json:"redialBudget,omitempty"`
+	RedialBudgetWindow string   `json:"redialBudgetWindow,omitempty"`
 }
 
 // Default returns a Config with safe, security-first defaults.
@@ -744,6 +788,23 @@ func applyAdvanced(fa *fileAdvanced) (Advanced, error) {
 			a.RedialMinUptime = d
 		}
 	}
+	if fa.VerifyInterval != "" {
+		d, err := time.ParseDuration(fa.VerifyInterval)
+		if err != nil {
+			return a, fmt.Errorf("vpn.advanced.verifyInterval: %w", err)
+		}
+		if d < 0 {
+			return a, fmt.Errorf("vpn.advanced.verifyInterval: must not be negative (got %s); use \"0\" to disable", d)
+		}
+		if d == 0 {
+			a.VerifyInterval = Disabled // explicit opt-out of enforcement verification
+		} else {
+			a.VerifyInterval = d
+		}
+	}
+	if fa.LivenessRedial != nil {
+		a.LivenessRedial = *fa.LivenessRedial
+	}
 	// The two budget keys take no Disabled sentinel (see Advanced.RedialBudget):
 	// they are limits, so "0" would have to mean "no limit", which is the opposite
 	// of what "0" means everywhere else in this config. Both a written "0" and a
@@ -904,6 +965,10 @@ func toFileAdvanced(a Advanced) *fileAdvanced {
 		fa.RedialMinUptime = optDurString(a.RedialMinUptime)
 		nonDefault = true
 	}
+	if a.VerifyInterval != defaultVerifyInterval {
+		fa.VerifyInterval = optDurString(a.VerifyInterval)
+		nonDefault = true
+	}
 	// durString, not optDurString: these two carry no Disabled sentinel, so there
 	// is no "0" to render.
 	if a.RedialBudget != defaultRedialBudget {
@@ -912,6 +977,11 @@ func toFileAdvanced(a Advanced) *fileAdvanced {
 	}
 	if a.RedialBudgetWindow != defaultRedialBudgetWindow {
 		fa.RedialBudgetWindow = durString(a.RedialBudgetWindow)
+		nonDefault = true
+	}
+	if a.LivenessRedial {
+		v := true
+		fa.LivenessRedial = &v
 		nonDefault = true
 	}
 	if !nonDefault {
@@ -958,37 +1028,14 @@ func Save(path string, c *Config) error {
 			return fmt.Errorf("create config dir %q: %w", dir, err)
 		}
 	}
-	tmp, err := os.CreateTemp(dir, ".dezhban-config-*")
-	if err != nil {
-		return fmt.Errorf("stage config %q: %w", path, err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }() // no-op once the rename succeeds
-
-	// CreateTemp makes 0600; the published file must stay readable by the
-	// unprivileged tools that inspect it.
-	if err := tmp.Chmod(0o644); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write config %q: %w", path, err)
-	}
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("write config %q: %w", path, err)
-	}
 	// Flushed before the rename, or the rename could publish a name whose contents
 	// are not on disk yet: a power loss then leaves a zero-length config, which is
 	// the very "unparseable at boot, host unprotected" outcome staging exists to
 	// prevent. The same reason internal/learned, internal/armed and internal/state
-	// all sync here.
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("flush config %q: %w", path, err)
-	}
-	if err := tmp.Close(); err != nil {
+	// all sync here. 0644, not the temp file's default 0600: the published config
+	// must stay readable by the unprivileged tools that inspect it.
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
 		return fmt.Errorf("write config %q: %w", path, err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("install config %q: %w", path, err)
 	}
 	return nil
 }
@@ -1088,6 +1135,12 @@ func normalizeAdvanced(a *Advanced) {
 	if a.RedialMinUptime == 0 {
 		a.RedialMinUptime = defaultRedialMinUptime
 	}
+	// `== 0`, not `<= 0`: the negative Disabled sentinel is an explicit opt-out
+	// and must survive Normalize, exactly like the three windows above. Coercing
+	// it back to the default would silently re-enable a check the user turned off.
+	if a.VerifyInterval == 0 {
+		a.VerifyInterval = defaultVerifyInterval
+	}
 	// Reached only for an ABSENT key: unlike the three windows and RedialMinUptime
 	// above, these two take no Disabled sentinel, and applyAdvanced rejects any
 	// written "0" or negative by name rather than letting it arrive here. So this
@@ -1132,6 +1185,7 @@ const (
 	defaultLearnedMaxPerProfile    = 16
 	defaultPromoteAfterRefreshes   = 3
 	defaultEndpointWarnThreshold   = 256
+	defaultVerifyInterval          = 1 * time.Minute
 
 	defaultEndpointRefresh = 1 * time.Minute
 	defaultTunnelWatch     = 1 * time.Second // how fast a tunnel drop is noticed

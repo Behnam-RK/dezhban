@@ -313,6 +313,47 @@ func cmdRun(args []string) int {
 		return 1
 	}
 
+	// Single-instance guard: nothing about `--no-daemon` or a bare `run` stops
+	// two copies of this process calling Backend.Apply at once, and the
+	// "single run-loop goroutine owns every Apply" invariant
+	// (docs/contribute/architecture.md) is a per-process guarantee that
+	// enforces nothing across a second process. `panic`, `unblock`, and the
+	// service-lifecycle commands deliberately do NOT take this lock — they are
+	// the escape hatch and must stay usable with no daemon running.
+	//
+	// This EnsureDir is the one call for the whole `run` invocation — the
+	// Builder below is documented (internal/svc.Builder) to run exactly once,
+	// so assembleOptions takes the result rather than re-establishing the
+	// directory itself.
+	stateDirErr := state.EnsureDir(stateDir())
+	if stateDirErr != nil {
+		log.Warn("state directory not reachable; the single-instance lock will still be attempted", "err", stateDirErr)
+	}
+	if err := acquireRunLock(stateDir()); err != nil {
+		// Only genuine contention — another dezhban already holds the lock —
+		// is a reason to refuse to start: two daemons both calling
+		// Backend.Apply is the exact race this lock exists to prevent. Any
+		// other failure (the state directory above being unwritable, a full
+		// disk, a permission error) must degrade to "no single-instance
+		// protection this run", never to "the kill switch does not start" —
+		// the same principle EnsureDir's own tolerated failure follows for
+		// the directory underneath it.
+		if errors.Is(err, ErrRunLockHeld) {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		log.Warn("single-instance lock unavailable; continuing without it — enforcement is not gated on this lock", "err", err)
+	}
+
+	// A fresh daemon start already re-applies the initial posture
+	// unconditionally below (runGuard's startup Apply), so any panic-disarm
+	// marker left over from a PRIOR run has done its job — clear it now, or
+	// it would silently suppress this run's own enforcement verification
+	// forever, until someone thought to run `dezhban unblock`.
+	clearPanicMarkerBestEffort(stateDir(), func(err error) {
+		log.Debug("clear panic-disarm marker failed", "err", err)
+	})
+
 	// Persistent log capture, always on: every daemon run appends to
 	// <state dir>/logs/dezhban.log (size-rotated), whether launched from a shell
 	// or by the service manager — stderr is lost when the shell closes and the
@@ -335,7 +376,7 @@ func cmdRun(args []string) int {
 	// platform logger. The build closure assembles the run loop lazily so it can
 	// use whichever logger the service selects.
 	build := func(l *slog.Logger) (runner.Options, error) {
-		return assembleOptions(cfg, resolveConfigPath(*cfgPath), l, ov)
+		return assembleOptions(cfg, resolveConfigPath(*cfgPath), l, ov, stateDirErr)
 	}
 	if err := svc.Run(build, log, effectiveLevel(cfg), *cfgPath, persist); err != nil {
 		log.Error("run loop failed", "err", err)
@@ -374,15 +415,19 @@ func parseOverrides(simCountry, simTunDown string) (runOverrides, error) {
 // live reload re-reads exactly the same file, rather than re-running resolution
 // and possibly landing on a different one mid-run. Empty means built-in
 // defaults, which is a config that cannot change, so reloading is not offered.
-func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov runOverrides) (runner.Options, error) {
-	// Everything the daemon publishes to the outside world lives under this one
-	// directory — state.json for the menubar app, control.sock for passwordless
-	// routine ops. It must be traversable by the unprivileged user or both silently
-	// stop working, so establish (and repair) its mode once, here, before anything
-	// writes into it. Non-fatal: a stale mode degrades observability, it must never
-	// stop the kill switch from enforcing.
-	if err := state.EnsureDir(stateDir()); err != nil {
-		log.Warn("state directory not reachable by unprivileged readers; the menubar app and control socket may not work", "err", err)
+// stateDirErr is the result of establishing (and repairing) the state
+// directory's mode, already done once by the caller before this runs —
+// internal/svc.Builder documents that the Builder this feeds is called exactly
+// once per process, so a second state.EnsureDir here would just repeat the same
+// mkdir/chmod for no new information. Everything the daemon publishes to the
+// outside world lives under that one directory — state.json for the menubar
+// app, control.sock for passwordless routine ops — and it must be traversable
+// by the unprivileged user or both silently stop working; a stale mode is
+// non-fatal and must never stop the kill switch from enforcing, hence a
+// warning here rather than an aborted startup.
+func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov runOverrides, stateDirErr error) (runner.Options, error) {
+	if stateDirErr != nil {
+		log.Warn("state directory not reachable by unprivileged readers; the menubar app and control socket may not work", "err", stateDirErr)
 	}
 
 	providers := monitor.ProvidersFromURLs(cfg.Providers, log)
@@ -416,7 +461,10 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	if _, lerr := learned.Load(learnedPath); lerr != nil {
 		log.Warn("learned endpoints store unreadable; starting empty", "err", lerr)
 	}
-	epSrc.Learned = func() []netip.Addr {
+	// A plain func value, not a method — reused below to give the startup
+	// self-test's own endpoint source (never epSrc itself) the same
+	// fresh-from-disk behavior without a second copy of the parsing logic.
+	loadLearnedEndpoints := func() []netip.Addr {
 		store, lerr := learned.Load(learnedPath)
 		if lerr != nil {
 			log.Debug("learned endpoints reload failed; skipping this cycle", "err", lerr)
@@ -435,6 +483,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		}
 		return out
 	}
+	epSrc.Learned = loadLearnedEndpoints
 	learnHook := func(profile, iface string, addrs []netip.Addr) {
 		// Reload before mutating so a concurrent forget/edit is merged with, not
 		// overwritten by, the new entry (Load returns a usable empty store on error).
@@ -598,6 +647,89 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		}
 	}
 
+	// Startup self-test: one Info line summarizing whether the pieces this
+	// daemon depends on are actually reachable. Diagnostic only, like CVG's
+	// equivalent — every enforcement decision downstream is fail-closed
+	// regardless of what this reports.
+	//
+	// Backgrounded, not inline: fw.IsBlocked() shells out (pfctl/nft/WFP —
+	// up to psTimeout on Windows) and an endpoint resolve can hit the network,
+	// and assembleOptions runs before runner.Run's first Apply(guard), so
+	// doing either synchronously here would directly delay that boot-time
+	// apply — undermining ADR-0008's promise to close the post-reboot leak
+	// window immediately. Logged from its own goroutine instead, arriving a
+	// beat after "run loop started" rather than gating it.
+	//
+	// Uses its OWN backend and endpoint-source instances — never the `fw`/
+	// `epSrc` handed to runner.Options below — so this goroutine cannot touch
+	// the objects the run loop's single goroutine owns, per that invariant
+	// (see epSrc.Learned's doc comment above). Both constructors are cheap:
+	// firewall.New() and buildEndpointSource() build stateless value types,
+	// so a second instance costs nothing and keeps the invariant true by
+	// construction rather than by the backends happening to have no fields
+	// today.
+	selftestFW, selftestFWErr := firewall.New()
+	// withDiscovery is gated on darwin rather than passed as a bare `true`:
+	// buildEndpointSource only wires a Discover on darwin, and on every other
+	// OS a `true` here does nothing except re-emit its "live discovery is only
+	// supported on macOS" warning — a second copy of a line the epSrc above
+	// already logged, at every daemon start, for a condition that has not
+	// changed between the two calls.
+	selftestEpSrc := buildEndpointSource(cfg, log, tunnels, runtime.GOOS == "darwin")
+	selftestEpSrc.Learned = loadLearnedEndpoints
+	go func() {
+		backendReachable := selftestFWErr == nil
+		if backendReachable {
+			if _, err := selftestFW.IsBlocked(); err != nil {
+				backendReachable = false
+			}
+		}
+
+		// EnsureDir (called once by the caller before this) only creates,
+		// stats, and repairs the directory's mode — it never attempts a
+		// write. A directory that already existed with the right bits keeps
+		// reporting writable even after going read-only underneath it (a
+		// remount, a quota, an ACL change), so probe an actual write rather
+		// than trust stateDirErr alone.
+		// Reuses elevate.go's pathWritable rather than a second inline probe:
+		// a nonexistent name under stateDir() hits its IsNotExist branch,
+		// which walks up to the nearest existing ancestor and probes with
+		// os.CreateTemp's random suffix — unlike a fixed probe filename, that
+		// can't collide if something else probes the same directory
+		// concurrently.
+		stateDirWritable := stateDirErr == nil
+		if stateDirWritable {
+			stateDirWritable = pathWritable(filepath.Join(stateDir(), ".selftest-write"))
+		}
+
+		// cfg.VPN.AutoDiscoverEndpoints==true only means discovery is
+		// configured to run — it says nothing about whether it actually
+		// found anything on this host. Resolve for real (safe here, off the
+		// critical path) so this reports the endpoint set that exists, not
+		// just the intent to look for one.
+		//
+		// EffectiveEndpoints, not cfg.VPN.Endpoints: the union of the flat list
+		// and every profile's own endpoints is what buildEndpointSource (and so
+		// the guard itself) actually resolves. Reading the flat list alone
+		// reported endpointsKnown=false for a profile-only config — a host that
+		// is fully configured — which is exactly the wrong answer from a check
+		// whose whole job is telling an operator whether the pieces are there.
+		endpointCount := len(config.EffectiveEndpoints(cfg, nil))
+		if cfg.VPN.AutoDiscoverEndpoints {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			endpointCount = len(selftestEpSrc.Resolve(ctx).Addrs)
+			cancel()
+		}
+
+		log.Info("startup self-test",
+			"firewallBackendReachable", backendReachable,
+			"stateDirWritable", stateDirWritable,
+			"tunnelsConfiguredOrDetected", len(tunnels) > 0,
+			"endpointsKnown", endpointCount > 0,
+			"tunnelEverUpOnThisHost", armedRec.TunnelEverUp,
+		)
+	}()
+
 	return runner.Options{
 		Monitor:           mon,
 		Decider:           decision.New(cfg.BlockedCountries, cfg.Hysteresis),
@@ -624,6 +756,10 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		},
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
 		EndpointGrace:           cfg.VPN.EndpointGrace,
+		VerifyInterval:          adv.VerifyInterval,
+		PanicDisarmed:           func() bool { return panicMarkerPresent(stateDir()) },
+		ClearPanicDisarm:        func() error { return clearPanicMarker(stateDir()) },
+		LivenessRedial:          adv.LivenessRedial,
 		AutoArm:                 cfg.VPN.AutoArm,
 		ArmAtBoot:               armAtBoot,
 		TunnelEverUp:            armedRec.TunnelEverUp,
@@ -699,6 +835,8 @@ func liveSettingsFrom(cfg *config.Config) runner.LiveSettings {
 		WindowDiscoveryInterval: adv.WindowDiscoveryInterval,
 		EndpointRefresh:         cfg.VPN.EndpointRefresh,
 		EndpointGrace:           cfg.VPN.EndpointGrace,
+		VerifyInterval:          adv.VerifyInterval,
+		LivenessRedial:          adv.LivenessRedial,
 		AllowSwitchOps:          cfg.Control.AllowSwitchOps,
 		AllowPauseOps:           cfg.Control.AllowPauseOps,
 		AllowConfigOps:          cfg.Control.AllowConfigOps,
@@ -891,6 +1029,15 @@ func cmdBlock(args []string) int {
 			log.Info("network full-blocked (vpn)", "tunnels", d.Tunnels)
 		}
 	}
+	// This path runs as root with no daemon involved (or bypassing one via
+	// --force/--guard), so it clears the panic-disarm marker itself, mirroring
+	// cmdUnblock — a direct block is just as much an explicit operator engaging
+	// with enforcement as an explicit unblock is, and leaving a stale marker
+	// here would keep any co-running daemon's enforcement verification
+	// suspended even after real rules were just installed by hand.
+	clearPanicMarkerBestEffort(stateDir(), func(err error) {
+		fmt.Fprintln(os.Stderr, "block: warning — could not clear the panic-disarm marker:", err)
+	})
 	return 0
 }
 
@@ -1051,6 +1198,13 @@ func cmdUnblock(args []string) int {
 		fmt.Fprintln(os.Stderr, "unblock failed:", err)
 		return 1
 	}
+	// This path runs as root with no daemon involved (or bypassing one via
+	// --force), so it clears the panic-disarm marker itself — the
+	// control-socket path instead asks the running daemon to clear it (see
+	// runner.Options.ClearPanicDisarm), since that path may run unprivileged.
+	clearPanicMarkerBestEffort(stateDir(), func(err error) {
+		fmt.Fprintln(os.Stderr, "unblock: warning — could not clear the panic-disarm marker:", err)
+	})
 	fmt.Println("dezhban: network unblocked")
 	return 0
 }
@@ -1071,6 +1225,23 @@ func cmdPanic(args []string) int {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "firewall backend unavailable:", err)
 		return 1
+	}
+	// Tell a daemon that might still be running (this command is deliberately
+	// daemon-independent, so there is no other way to reach it) to stand its
+	// enforcement verification down — otherwise it would notice the rules
+	// missing on its next VerifyInterval tick and silently put them back,
+	// turning this escape hatch into a brief flicker. Set BEFORE Cleanup, not
+	// after: every automatic path a live daemon might take (verifyC's tick,
+	// reapplyStanding, applyWindowPolicy, reapplyCurrent) checks the marker
+	// first and only THEN reads the firewall — marker-after-Cleanup left a
+	// window where such a tick could land between the two calls, see the
+	// rules already gone, find no marker yet, and silently reinstate them.
+	// Best-effort: a failure to write the marker must never abort the
+	// teardown below, which is the half of this command that actually
+	// matters.
+	if err := setPanicMarker(stateDir()); err != nil {
+		fmt.Fprintln(os.Stderr, "panic: warning — could not record the teardown; if dezhban is still "+
+			"running, its enforcement verification may re-apply the rules within a minute:", err)
 	}
 	// Cleanup is best-effort and idempotent: it restores any saved prior state
 	// (e.g. pf) and removes dezhban's rules whether or not a daemon owns them.
@@ -1875,6 +2046,89 @@ func buildArmAtBootCheck(armAtBoot bool, haveTunnel bool, rec *armed.Record, loa
 	return c
 }
 
+// buildLivenessCheck reports the enforcement-diagnostic conditions the run
+// loop tracks between polls but doctor cannot recompute on its own — a missing
+// ruleset (Verify), a tunnel that reports up but is not passing traffic
+// (Zombie), and the exit IP's last observed change (ExitIPChangedAt) — from
+// the running daemon's own last-published snapshot. Pure: takes the snapshot
+// and liveness already resolved by the caller, same shape as buildServiceCheck.
+//
+// All three are read-only diagnoses, not lockout risks — none moves the exit
+// code — so this stays informational like the service and arm-at-boot checks.
+// A stale or absent snapshot says nothing (the daemon isn't running or hasn't
+// published yet, which buildServiceCheck already reports); it does not read as
+// "everything is fine".
+func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
+	c := doctorCheck{Name: "liveness", Status: checkOK, Summary: "OK"}
+	if !daemonLive {
+		c.Summary = "not checked — dezhban isn't running."
+		return c
+	}
+	var lines []string
+	// cannotConfirm distinguishes "enforcement is holding, but something
+	// needs attention" (a repair happened, or a diagnosis needs a look) from
+	// genuinely not knowing: an unreadable backend or a failed enforcement
+	// action means doctor has no basis to claim the firewall is holding at
+	// all, so it must not say so.
+	cannotConfirm := false
+	if snap.Verify != nil {
+		// The three cases below are exhaustive over what the run loop publishes
+		// (state.VerifyState's own doc comment): rules missing and repaired,
+		// rules missing and the repair FAILED (Missing with Err — the host is
+		// unenforced), or the backend unreadable (Err alone, nothing changed).
+		switch {
+		case snap.Verify.Missing && snap.Verify.Err != "":
+			lines = append(lines, fmt.Sprintf(
+				"Firewall rules were found missing and could NOT be re-applied: %s — "+
+					"this host is not being guarded right now.", snap.Verify.Err))
+			cannotConfirm = true
+		case snap.Verify.Missing:
+			lines = append(lines, fmt.Sprintf(
+				"Firewall rules were found missing and re-applied %d time(s) since startup — "+
+					"something on this host keeps removing them.", snap.Verify.Repairs))
+		case snap.Verify.Err != "":
+			lines = append(lines, fmt.Sprintf("Could not read the firewall to verify enforcement: %s", snap.Verify.Err))
+			cannotConfirm = true
+		}
+	}
+	if snap.EnforcementErr != "" {
+		lines = append(lines, fmt.Sprintf(
+			"The last enforcement action failed: %s — dezhban could not confirm the firewall is enforcing.",
+			snap.EnforcementErr))
+		cannotConfirm = true
+	}
+	if snap.Zombie != nil {
+		lines = append(lines, fmt.Sprintf(
+			"Tunnel interface reports up, but %d consecutive exit checks through it have failed — "+
+				"it may need reconnecting. Guard holds either way; this is diagnosis, not a leak.", snap.Zombie.Checks))
+	}
+	switch {
+	case snap.PanicDisarmed:
+		c.Status = checkWarn
+		c.Summary = "`dezhban panic` tore the rules down and dezhban has not re-armed — enforcement verification is suspended."
+		lines = append(lines, "Run `dezhban unblock` (or restart dezhban) to resume automatic enforcement repair.")
+	case cannotConfirm:
+		c.Status = checkWarn
+		c.Summary = "could not confirm enforcement is holding — see details."
+	case len(lines) > 0:
+		c.Status = checkWarn
+		c.Summary = "enforcement is holding, but something needs attention."
+	}
+	// Purely observational — never flips Status — since a legitimate failover
+	// between two VPN servers in the same allowed country changes nothing
+	// CountryCode reports, but changes this. It is the one signal that
+	// explains "my exit flapped" when the blocked-country check alone would
+	// say nothing happened.
+	if !snap.ExitIPChangedAt.IsZero() {
+		lines = append(lines, fmt.Sprintf(
+			"Exit IP last changed at %s (a failover between VPN servers in the same "+
+				"country would show here even though the blocked-country check saw no change).",
+			snap.ExitIPChangedAt.Local().Format(time.RFC1123)))
+	}
+	c.Details = lines
+	return c
+}
+
 // buildEndpointRetentionCheck reports on the learned-endpoint store, which is
 // what lets a dropped tunnel redial with no window at all: the guard passes
 // known server addresses on the physical link, so a drop whose endpoint is still
@@ -2024,6 +2278,7 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 	snap, snapErr := state.Read(defaultStatePath())
 	daemonLive := snapErr == nil && !render.IsStale(snap, now)
 	checks = append(checks, buildServiceCheck(svc.Boot(), daemonLive))
+	checks = append(checks, buildLivenessCheck(snap, daemonLive))
 
 	armedPath := defaultArmedPath()
 	armedRec, armedErr := armed.Load(armedPath)
@@ -2110,6 +2365,7 @@ var unattendedSections = []struct{ name, heading string }{
 	{"service", "boot service"},
 	{"armAtBoot", "arm at boot"},
 	{"endpointRetention", "learned endpoints"},
+	{"liveness", "enforcement liveness"},
 }
 
 // sectionedChecks names every check printDoctor has a hand-written section for.
@@ -2119,7 +2375,7 @@ var unattendedSections = []struct{ name, heading string }{
 // instead of being appended, unformatted, after `discover`.
 var sectionedChecks = []string{
 	"config", "tunnels", "endpoints", "lockout",
-	"service", "armAtBoot", "endpointRetention",
+	"service", "armAtBoot", "endpointRetention", "liveness",
 	"control", "touchID", "discover",
 }
 
@@ -2190,9 +2446,10 @@ func printDoctor(r doctorReport) {
 	}
 	fmt.Println()
 
-	// The three "will this need me again" checks share one shape — heading,
-	// summary, details, fixes — so they share one printer rather than three
-	// copies that would drift apart the first time one of them grew a line.
+	// The "will this need me again" / "is enforcement actually holding" checks
+	// share one shape — heading, summary, details, fixes — so they share one
+	// printer rather than one copy per check that would drift apart the first
+	// time one of them grew a line.
 	for _, s := range unattendedSections {
 		c, ok := get(s.name)
 		if !ok {

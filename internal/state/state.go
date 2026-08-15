@@ -15,6 +15,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // Tunnel is one VPN tunnel interface's observed state (VPN mode only).
@@ -67,9 +69,17 @@ type Snapshot struct {
 	// failure (see runner.publishStopped and docs/contribute/architecture.md); a clean, operator-requested
 	// stop leaves it empty. Either way the contract holds: the intended posture (enforcing)
 	// was not achieved.
-	EnforcementErr string   `json:"enforcementErr,omitempty"`
-	Tunnels        []Tunnel `json:"tunnels,omitempty"`   // VPN mode
-	Endpoints      []string `json:"endpoints,omitempty"` // resolved VPN endpoints (VPN mode)
+	EnforcementErr string `json:"enforcementErr,omitempty"`
+	// PanicDisarmed reports that `dezhban panic` tore the firewall rules down
+	// and this daemon is standing down rather than silently reinstating them
+	// (see runner.Options.PanicDisarmed). Distinct from EnforcementErr: this is
+	// not a failed Apply, it is every automatic Apply being deliberately
+	// skipped, so Posture/Blocked can describe an intended posture (e.g.
+	// "full-block") the data plane is not actually enforcing at all. Cleared
+	// once the marker is gone (`dezhban unblock` or a fresh daemon start).
+	PanicDisarmed bool     `json:"panicDisarmed,omitempty"`
+	Tunnels       []Tunnel `json:"tunnels,omitempty"`   // VPN mode
+	Endpoints     []string `json:"endpoints,omitempty"` // resolved VPN endpoints (VPN mode)
 	// PollIntervalSeconds is the daemon's poll cadence, so a reader can size its own
 	// staleness threshold off the actual interval instead of hardcoding one. 0 when unknown.
 	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
@@ -99,6 +109,31 @@ type Snapshot struct {
 	// while such a refusal stands. Additive field: absent from older snapshots,
 	// so nil means "nothing refused", never "no budget exists".
 	Redial *RedialState `json:"redial,omitempty"`
+	// Verify reports that enforcement verification found something wrong: the
+	// rules dezhban believes it installed are missing, or the backend could not
+	// be read at all. Present only while such a condition stands, and cleared by
+	// the next clean check. Additive field: absent from older snapshots, so nil
+	// means "nothing wrong is being reported", never "no verification happens".
+	//
+	// Distinct from EnforcementErr, which means the daemon TRIED to enforce and
+	// the backend rejected it. This one means enforcement previously SUCCEEDED
+	// and the rules are gone now — the silent-failure case that had no signal
+	// at all before.
+	Verify *VerifyState `json:"verify,omitempty"`
+	// Zombie reports a hung tunnel: interface up, exit lookups through it
+	// failing. Present only while such a streak stands. Additive field, like
+	// Verify: absent from older snapshots, so nil means "nothing wrong is being
+	// reported", never "no tunnel is being watched".
+	Zombie *ZombieState `json:"zombie,omitempty"`
+	// ExitIPChangedAt is when the observed exit IP last differed from the
+	// previous successful reading — purely observational, like CVG's
+	// equivalent check: it never flips posture and never touches the
+	// hysteresis streak (CountryCode/Pending already own that). It is the
+	// signal that best explains "my exit country flapped" — a failover between
+	// two VPN servers in the same allowed country changes nothing CountryCode
+	// reports, but changes this. omitzero: zero means no change has been
+	// observed yet, not "the exit has never had an IP".
+	ExitIPChangedAt time.Time `json:"exitIpChangedAt,omitzero"`
 	// Display is the rendered posture sentence — see internal/render, the
 	// package that composes it from this same Snapshot. Carried here for the
 	// one consumer that cannot call Go directly: the macOS menubar app reads
@@ -185,6 +220,62 @@ type DropRecord struct {
 	// clause this codebase knows how to omit into a total decode failure in the
 	// app.
 	At time.Time `json:"at,omitzero"`
+}
+
+// VerifyState is what enforcement verification found the last time it did not
+// like the answer. It exists because every other Apply the daemon makes is
+// triggered by something the daemon itself did, so a ruleset removed from
+// OUTSIDE — another firewall tool, `pfctl -F all`, `nft flush ruleset`, an OS
+// ruleset reload — used to go entirely unnoticed. The daemon kept reporting its
+// posture, `status` kept reporting blocked, and the host was open.
+//
+// Present only while something is wrong; a clean check clears it. Publishing it
+// only on failure is deliberate: a field that says "verified OK" on every
+// snapshot is noise, and its absence must not be readable as "never checked" —
+// that is what the configured interval is for.
+type VerifyState struct {
+	// At is when the failing check ran.
+	At time.Time `json:"at,omitzero"`
+	// Missing is true when the backend answered and said the rules are gone.
+	// This is the actionable case: the daemon re-applies immediately.
+	Missing bool `json:"missing,omitempty"`
+	// Err carries the reason this check is unhappy, and its meaning depends on
+	// Missing:
+	//
+	//   - Err WITHOUT Missing: the backend could not be READ at all. Not the
+	//     same as absence — an unreadable backend is not evidence the rules are
+	//     gone — so the daemon changes nothing and only reports, the same
+	//     discipline as an undeterminable exit country holding the current
+	//     posture.
+	//   - Err WITH Missing: the rules were confirmed gone AND the re-apply that
+	//     was supposed to put them back failed. The host is unenforced right
+	//     now. Readers must not word this as "found missing and re-applied";
+	//     Repairs has deliberately NOT been incremented for it.
+	Err string `json:"err,omitempty"`
+	// Repairs counts how many times verification has re-applied the posture
+	// since the daemon started. A number that keeps climbing means something on
+	// this host is repeatedly removing dezhban's rules, which is worth seeing.
+	Repairs int `json:"repairs,omitempty"`
+}
+
+// ZombieState reports a tunnel interface that reports up while a run of exit
+// lookups through it has failed — the interface object still looks fine, but
+// nothing is getting through it. dezhban's posture never escalates on a lookup
+// failure alone (an unknown country holds, never flips — see decision.Evaluate),
+// so without this a hung tunnel stayed correctly cut but explained itself to
+// no one and recovered only if a person noticed and intervened.
+//
+// This is diagnosis, not a leak: the guard is holding exactly as designed.
+// Present only while a streak stands; cleared the moment a lookup succeeds, the
+// tunnel reports down, or anything else ends the streak's eligibility (standby,
+// a switch window, a manual block). Additive field, like Verify: absent from
+// older snapshots, so nil means "nothing wrong is being reported".
+type ZombieState struct {
+	// Since is when the failing streak started.
+	Since time.Time `json:"since,omitzero"`
+	// Checks is how many consecutive geo lookups have failed through this
+	// otherwise-up tunnel.
+	Checks int `json:"checks"`
 }
 
 // HoldState reports that "hold the line" is armed: the next tunnel drop will
@@ -323,36 +414,9 @@ func Write(path string, s Snapshot) error {
 	if err != nil {
 		return fmt.Errorf("state: marshal: %w", err)
 	}
-
-	tmp, err := os.CreateTemp(dir, ".state-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("state: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	// Best-effort cleanup if we bail before the rename.
-	defer func() { _ = os.Remove(tmpName) }()
-
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("state: write temp: %w", err)
-	}
-	// fsync before rename so a crash/power-loss right after the rename can't leave a
-	// truncated snapshot behind (same guarantee internal/firewall/pf_darwin.go's
-	// atomicWrite provides for its state files; kept as a separate impl because that
-	// helper is darwin build-tagged).
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("state: sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("state: close temp: %w", err)
-	}
-	// CreateTemp makes the file 0600; the reader is the unprivileged user.
-	if err := os.Chmod(tmpName, 0o644); err != nil {
-		return fmt.Errorf("state: chmod temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("state: rename into place: %w", err)
+	// 0644, not the temp file's default 0600: the reader is the unprivileged user.
+	if err := atomicfile.Write(path, data, 0o644); err != nil {
+		return fmt.Errorf("state: write %q: %w", path, err)
 	}
 	return nil
 }

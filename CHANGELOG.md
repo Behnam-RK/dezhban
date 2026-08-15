@@ -12,6 +12,219 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Enforcement verification** (`vpn.advanced.verifyInterval`, default `1m`).
+  The run loop now periodically confirms the firewall rules it believes are
+  installed are actually still there AND still enforcing — not just present
+  but disconnected from what makes them bite (the pf main ruleset no longer
+  referencing our anchor, an nft chain's policy rewritten off `drop` in
+  place, a Windows profile's outbound default flipped back to Allow while
+  our rules sit untouched) — re-applying whatever posture is currently in
+  force (the standing guard, a full block, or an open switch/redial window
+  or pause) the instant either check fails. Every other rule change was
+  already triggered by something dezhban itself did — a tunnel change, an
+  endpoint refresh, a posture flip; this is the only one that notices a
+  ruleset (or the switch that makes it matter) disturbed from OUTSIDE the
+  daemon (another firewall tool, `pfctl -F all`, `nft flush ruleset`, an OS
+  ruleset reload). Reported in `state.verify`
+  (`status --json`), the plain-text `dezhban status`/menubar posture sentence,
+  and turns the menubar icon amber, only while something is wrong;
+  disablable (`"0"`) from the CLI or the macOS app's Settings pane, and an
+  unreadable backend is never treated as evidence the rules are gone. See
+  [docs/usage/config.md](docs/usage/config.md#advanced-tunables-vpnadvanced).
+- **Zombie-tunnel detection.** A tunnel interface that reports up while a run
+  of exit-country lookups through it has failed is now diagnosed as such —
+  reported in `state.zombie`, `dezhban doctor`'s new "enforcement liveness"
+  check, and the rendered posture sentence (which now also turns the menubar
+  icon amber for the duration of the streak) — instead of sitting correctly
+  cut with no signal to anyone. Detection is always on; letting a confirmed
+  streak open an automatic redial window is a separate, off-by-default key
+  (`vpn.advanced.livenessRedial`, settable from the CLI or the macOS app's
+  Settings pane), because an exit that censors the geo providers produces the
+  identical symptom on a tunnel that was never actually down. See
+  [ADR-0010](docs/adr/0010-tunnel-liveness.md).
+- **A single-instance guard on `run`.** A second `dezhban run` — with or
+  without `--no-daemon` — started alongside an already-running daemon now
+  refuses immediately instead of racing it to apply firewall rules. The lock
+  is released by the OS the moment the holding process ends, by any means, so
+  a killed daemon never wedges the next start. `panic`, `unblock`, and the
+  service-lifecycle commands deliberately take no such lock — they remain the
+  escape hatch, usable with no daemon running at all.
+- **Exit-IP change observation.** The daemon now logs and publishes
+  (`state.exitIpChangedAt`) when the observed exit IP differs from the
+  previous successful reading — purely informational, like the exit-country
+  check it sits beside: it never affects `blocked`, `countryCode`, or the
+  hysteresis streak. A failover between two servers in the same allowed
+  country changes nothing those fields report, but changes this. Now also
+  reported in `dezhban doctor`'s "enforcement liveness" check (text and
+  `--json`) and the macOS app's Diagnostics pane — previously the field was
+  published but rendered nowhere.
+- **A startup self-test log line.** `dezhban run` now logs one summary at
+  startup — firewall backend reachable, state directory writable, tunnels
+  configured/detected, endpoints known, whether this host has ever observed a
+  tunnel up — diagnostic only, never blocking startup.
+- **Panic-disarm status visibility.** `dezhban panic` tearing down the
+  firewall while a daemon keeps running (and every automatic Apply path
+  standing down because of it) is now reported to the operator instead of
+  being silent — `state.panicDisarmed` (`status --json`) and a "Panic
+  disarmed" headline that wins over the plain-text `dezhban status`/menubar
+  posture sentence, so `status`/the menubar can no longer say "Guarding" or
+  "Full block" while enforcement is actually torn down and waiting on
+  `dezhban unblock` (or a daemon restart).
+
+### Changed
+
+- The automatic-redial-refusal log lines no longer hardcode "vpn tunnel
+  down", since a refusal can now also come from the zombie-tunnel liveness
+  trigger, whose interface never goes down: `"vpn tunnel down — no redial
+  window (...)"` is now `"no automatic redial window (...)"`, and
+  `"vpn tunnel down — redial window suppressed"` is now `"redial window
+  suppressed"`. Anyone grepping or alerting on the old strings should update
+  the pattern.
+
+### Fixed
+
+- **`dezhban panic`'s teardown now stays effective across every automatic
+  enforcement path, not just periodic verification.** Previously the
+  panic-disarm marker (which tells enforcement verification to stand down
+  after a deliberate `panic` teardown) was consulted only by the
+  `verifyInterval` tick — the automatic redial window, the geo-provider
+  GUARD/FULL BLOCK state machine, tunnel/endpoint-change re-applies, and
+  auto-arm from standby could all still silently reinstall rules within
+  moments, turning the documented lockout escape hatch into a brief flicker.
+  Every automatic path now stands down while the marker is set; every
+  explicit operator command (`block`, `unblock`, `switch`, `pause`/`resume`)
+  clears it unconditionally instead, exactly as `unblock` already did — an
+  explicit command is never blocked by the marker.
+- **A hung tunnel `vpn.advanced.livenessRedial` refused to redial could stay
+  refused forever**, even once it had genuinely been up long enough to pass
+  `redialMinUptime`'s anti-flap check. The re-decision that fires once that
+  bound lifts was reusing the uptime captured at the very first widening
+  attempt — correct for an ordinary drop (the tunnel is down, so uptime is a
+  frozen historical fact) but wrong for a zombie streak, where the tunnel
+  never goes down and its uptime keeps growing for real. It now re-derives
+  the uptime for a standing zombie streak instead of reusing the stale value.
+- **A manual `block` no longer leaves a stale "tunnel reports up but exit
+  checks failing" warning on screen.** If a zombie-tunnel streak was showing
+  when the operator ran `dezhban block` (or the control-socket equivalent),
+  the warning previously lingered until the next periodic geo check cleared
+  it; it is now cleared in the same publish as the block itself.
+- **Exit-IP change observation now also covers the window between daemon
+  startup and the first periodic geo check.** A VPN failover landing in that
+  window was previously invisible to `state.exitIpChangedAt` because only the
+  periodic check recorded the last-seen exit IP; the startup reading now
+  records it too.
+- **Windows enforcement verification (`vpn.advanced.verifyInterval`) no
+  longer needs two sequential PowerShell calls per tick.** The group-existence
+  check and the per-profile default-action query are now one invocation, so a
+  slow PowerShell/WMI response can no longer nearly double the time a verify
+  tick can hold up the run loop.
+- **macOS enforcement verification's three `pfctl` reads now share one
+  deadline instead of each getting its own.** Under `pf` lock contention a
+  verify tick could previously stall the run loop's single goroutine — window
+  timers, geo ticks, control-socket replies — for up to 3x `pfctl`'s 10s
+  timeout; it is now bounded to that timeout once, the same fix already
+  applied to the Windows backend above.
+- **A live daemon could briefly reinstate rules `dezhban panic` had just torn
+  down.** `panic` now records the panic-disarm marker BEFORE tearing down the
+  firewall rather than after — every automatic Apply path a running daemon
+  might take checks the marker first and only then reads the firewall, so the
+  old ordering left a window where such a check could land between the two
+  calls, see the rules already gone, find no marker yet, and silently
+  reinstate them.
+- **Windows enforcement verification no longer reports false rule drift when
+  a PowerShell/WMI hiccup drops one firewall profile's line from the query
+  output.** A profile missing from the parsed result used to read as the Go
+  zero value, which never matched the wanted action and triggered an
+  unwarranted repair; it is now treated as an unreadable check, the same
+  discipline already applied to a fully failed query.
+- **A local, unprivileged process could block the Windows kill switch from
+  ever starting.** The single-instance lock's mutex lived under a predictable
+  `Global\` name, so anyone could pre-create it first and either get treated
+  as the legitimate "already running" holder or deny the daemon's own
+  `CreateMutexW` with a hostile DACL. It now lives inside a boundary-restricted
+  private namespace that only `LocalSystem` or `BUILTIN\Administrators` can
+  create or open objects in, falling back to the old name only if that setup
+  fails.
+- **`dezhban panic`'s teardown could be silently undone by a transient read
+  error.** The running daemon checked whether its panic marker was still
+  present with a bare stat that treated ANY error — not just a missing file —
+  as "gone", so a momentary I/O or permission hiccup could make enforcement
+  verification re-apply the very posture the operator just tore down. Only a
+  definite "not found" now counts as absent.
+- **`dezhban doctor`'s liveness check now reports a suspended `dezhban panic`
+  teardown**, and no longer claims "enforcement is holding" when it genuinely
+  can't confirm that (an unreadable firewall, or a repair attempt that itself
+  failed) — both previously fell through to the same reassuring summary a
+  routine, already-repaired finding gets.
+- **Enforcement verification's repair counter and log line no longer claim
+  success before the re-apply actually lands.** A repair whose
+  `Backend.Apply` call itself failed was previously counted and reported as
+  completed; it is now counted only once the re-apply confirms, and a failed
+  attempt surfaces through the daemon's normal enforcement-error reporting
+  instead.
+- **Live-disabling `vpn.advanced.verifyInterval` while `dezhban panic` had
+  suspended verification could silently swallow the next "verification
+  suspended" warning** if the interval was later re-enabled. The suspended
+  flag is now reset when the interval is turned off, so the warning fires
+  again on the next suspend.
+- **Live-disabling `vpn.advanced.livenessRedial` no longer leaves a standing
+  zombie-tunnel redial refusal free to open a window anyway** once its
+  budget/cooldown lifts — the retry now re-checks the live setting, not just
+  whether the streak is still standing.
+- **Exit-IP change observation now also covers readings that land FULL
+  BLOCK**, not only allowed ones — a failover between two servers in the same
+  forbidden country previously went unrecorded, as did the very first
+  reading whenever startup itself observed a blocked country.
+- **`dezhban run`'s startup self-test no longer delays the boot-time firewall
+  apply.** Its firewall-reachability check (and, with auto-discovery on, its
+  endpoint resolve) now run off the startup path instead of ahead of the very
+  `Apply(guard)` call ADR-0008's arm-at-boot promise depends on landing
+  immediately. The self-test's "state directory writable" and "endpoints
+  known" fields also now probe a real write and a real resolve instead of
+  inferring success from configuration alone.
+- **Windows enforcement verification no longer misreports drift after its own
+  bookkeeping write fails.** The write that records what `Apply` last set is
+  atomic, so a failure left the PREVIOUS `Apply`'s value on disk; `IsBlocked`'s
+  drift check then compared a live, correctly re-applied profile against that
+  stale value and could report a false repair. The stale record is now
+  cleared on a failed write instead of left in place.
+- Config/state writes made through the shared `atomicfile` helper now also
+  fsync the containing directory after the rename, hardening durability
+  across a crash on filesystems that require it (covers the panic marker and
+  the arm-at-boot record, among others).
+- **A failed enforcement-verification repair's error could be silently
+  overwritten by the very next ordinary geo-poll tick**, replacing it with a
+  falsely reassuring "rules re-applied" message even though the repair
+  actually failed and the firewall was still unenforced. The geo-poll step
+  now only overwrites the enforcement-error surface on a tick that actually
+  touched the backend, never on an uneventful no-op reading.
+- **A manual `block`/`unblock` over the control socket no longer leaves a
+  stale "rules missing, re-applied N times" message on screen** after
+  installing fresh rules — enforcement-verification state is now reset in
+  the same command, the same fix already applied to the zombie-tunnel
+  warning.
+- **`dezhban hold` armed during a hung-tunnel (zombie) streak no longer
+  permanently forfeits that streak's one-shot `vpn.advanced.livenessRedial`
+  attempt.** Because that attempt is suppressed without being "spent" by
+  hold (a later real disconnect still needs its own hold), cancelling hold
+  previously had nothing to act on and the attempt was lost for the rest of
+  the streak. Cancelling hold now restores it, the same way it already
+  restores a refused-and-waiting ordinary drop's retry.
+- **Windows enforcement verification could misreport rules as missing when
+  PowerShell wrote incidental output ahead of the group-existence check's
+  own marker line.** The check required that marker on the exact first line
+  of output; it now scans for it instead, still requiring an exact line
+  match (never a substring) so unrelated text can't be mistaken for it
+  either.
+- **Linux (`nft`) enforcement verification's drift check is now scoped to
+  the `output` chain specifically**, instead of searching the whole `nft
+  list table` output for the text "policy drop" anywhere. A table with more
+  than one chain could previously have its `output` chain's policy drift to
+  `accept` while another chain's unrelated "policy drop" text kept the check
+  reporting enforcement as healthy.
+
 ## [0.9.0] - 2026-07-29
 
 ### Added

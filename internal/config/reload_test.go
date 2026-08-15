@@ -207,6 +207,8 @@ func TestMergeLiveCoversExactlyTheLiveKeys(t *testing.T) {
 	cur.VPN.Advanced.RedialBudget = base.VPN.Advanced.RedialBudget + time.Second
 	cur.VPN.Advanced.RedialBudgetWindow = base.VPN.Advanced.RedialBudgetWindow + time.Second
 	cur.VPN.Advanced.WindowDiscoveryInterval = base.VPN.Advanced.WindowDiscoveryInterval + time.Second
+	cur.VPN.Advanced.VerifyInterval = base.VPN.Advanced.VerifyInterval + time.Second
+	cur.VPN.Advanced.LivenessRedial = !base.VPN.Advanced.LivenessRedial
 
 	moved := map[string]bool{}
 	for _, ch := range Changes(&base, MergeLive(&base, &cur)) {

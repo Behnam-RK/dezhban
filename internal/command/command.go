@@ -22,6 +22,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/atomicfile"
 )
 
 // Op identifies a control operation. New ops are additive.
@@ -71,25 +73,8 @@ func Write(path string, c Command) error {
 	if err != nil {
 		return fmt.Errorf("command: marshal: %w", err)
 	}
-	tmp, err := os.CreateTemp(dir, ".command-*.json.tmp")
-	if err != nil {
-		return fmt.Errorf("command: create temp: %w", err)
-	}
-	tmpName := tmp.Name()
-	defer func() { _ = os.Remove(tmpName) }()
-	if _, err := tmp.Write(data); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("command: write temp: %w", err)
-	}
-	if err := tmp.Sync(); err != nil {
-		_ = tmp.Close()
-		return fmt.Errorf("command: sync temp: %w", err)
-	}
-	if err := tmp.Close(); err != nil {
-		return fmt.Errorf("command: close temp: %w", err)
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		return fmt.Errorf("command: rename into place: %w", err)
+	if err := atomicfile.Write(path, data, 0o600); err != nil {
+		return fmt.Errorf("command: write %q: %w", path, err)
 	}
 	return nil
 }
