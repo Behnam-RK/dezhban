@@ -303,17 +303,23 @@ dezhban token status                                          # daemon's side
 security find-generic-password -s sh.dezhban.menu -a control-token   # app's side
 ```
 
-**The toggle is disabled and says this build can't use the keychain.** Expected,
-and not a fault on your machine. A Touch ID–gated keychain item needs a
-code-signing entitlement that the released, ad-hoc-signed builds cannot carry, so
-the app declines rather than half-enrolling. Settings changes keep asking for
-your password, exactly as they did before the toggle existed. See
-[Changing settings without a password](cli.md#changing-settings-without-a-password).
+**The toggle is disabled because this Mac has no Touch ID.** Nothing to fix —
+settings changes keep asking for your password, exactly as they did before the
+toggle existed.
 
-**Touch ID stopped working after you added or removed a fingerprint.** The item
-is deliberately bound to the fingerprint set enrolled at the time, so changing
-that set invalidates it — that is the security property working, not a bug. Turn
-the toggle off and on again to re-enrol.
+**The toggle is disabled and blames the keychain.** Not expected. The token is an
+ordinary keychain item, so macOS refusing to store it points at a damaged or
+locked login keychain rather than at dezhban. The message carries the `OSStatus`;
+check Keychain Access, then
+[open an issue](https://github.com/Behnam-RK/dezhban/issues) with that number.
+
+**Saving still asks for your password even though the toggle is on.** Reading the
+token requires a successful fingerprint, and dezhban never falls back to your
+login password for it — a password that unlocks a settings change is the thing
+the token exists to avoid. A cancelled or failed prompt therefore drops to the
+ordinary `sudo` path, which is honest about being a password. Try again, or check
+that Touch ID still works elsewhere (clamshell mode and some external keyboards
+have no sensor).
 
 **`token status` says enrolled, but the keychain has nothing.** The daemon holds
 a hash for a token nobody can present. Config writes over the socket will be

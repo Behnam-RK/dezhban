@@ -3,9 +3,9 @@ import Testing
 @testable import DezhbanCore
 
 struct TokenCapabilityTests {
-    /// The bug this whole change exists for: an ad-hoc build gets -34018 from
-    /// SecItemAdd, and that has to come back as "this build can't", not as a
-    /// generic failure the user might reasonably retry.
+    /// No longer the expected outcome — the token is a plain keychain item since
+    /// ADR-0011 — but -34018 must keep its own words if it ever returns, rather
+    /// than degrading into a bare number the user might retry past.
     @Test func missingEntitlementIsItsOwnVerdict() {
         let v = TokenCapability.classify(addStatus: -34018, biometryAvailable: true)
         #expect(v == .notEntitled)

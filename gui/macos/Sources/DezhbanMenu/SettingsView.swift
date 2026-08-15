@@ -150,10 +150,13 @@ struct SettingsView: View {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
                         .disabled(tokenBusy || !tokenCapability.isAvailable)
                         .help("Applying a change asks dezhban to make it, authorised by a "
-                            + "secret kept in your login keychain behind Touch ID — so saving costs a "
-                            + "fingerprint instead of your password. Turning this on stores that secret "
-                            + "(one password prompt, now); turning it off removes it from both the "
-                            + "keychain and dezhban. Nothing else about what dezhban enforces changes.")
+                            + "secret kept in your login keychain — so saving costs a fingerprint "
+                            + "instead of your password. Dezhban checks your fingerprint and then "
+                            + "reads the secret; the keychain is not itself holding it back, so this "
+                            + "raises the bar rather than making it unforgeable. Turning this on "
+                            + "stores the secret (one password prompt, now); turning it off removes "
+                            + "it from both the keychain and dezhban. Nothing else about what dezhban "
+                            + "enforces changes.")
                     // Says WHICH of the reasons applies. A disabled toggle with no
                     // explanation reads as a bug; "no Touch ID on this Mac" and
                     // "this build can't reach the keychain" send you to different

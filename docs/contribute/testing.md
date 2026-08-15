@@ -446,10 +446,19 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       works. This is the revocation path for a leaked token.
 - [ ] **`token forget` recovers a stranded host.** After forgetting, config
       changes fall back to `sudo` rather than being impossible.
-- [ ] **The app refuses enrollment it cannot complete, for free.** On an
-      ad-hoc-signed build (i.e. any build from `build-app.sh`), the Settings
-      toggle "Use Touch ID for settings changes" is disabled and says why.
-      Flipping it must produce **no password prompt** and leave
+- [ ] **The toggle works on an ordinary ad-hoc build.** On any build from
+      `build-app.sh`, "Use Touch ID for settings changes" enables, enrolls with
+      one password prompt, and a subsequent settings change costs a **fingerprint
+      and no password**. See
+      [ADR-0011](../adr/0011-app-checked-biometrics-on-unsigned-builds.md).
+- [ ] **A cancelled fingerprint falls back to sudo, never to a login password.**
+      Dismiss the Touch ID prompt on a settings save: the change must fall to the
+      ordinary privileged path, and the biometric prompt must never offer "Use
+      Password…" as a way through — `load()` uses
+      `.deviceOwnerAuthenticationWithBiometrics` precisely so it cannot.
+- [ ] **The app refuses enrollment it cannot complete, for free.** Simulate a
+      failing store (e.g. temporarily point `store` at an invalid attribute set):
+      flipping the toggle must produce **no password prompt** and leave
       `dezhban token status` reporting "not enrolled" — the failure this checks
       for cost a password and then stranded an enrollment. See
       [ADR-0010](../adr/0010-biometric-enrollment-requires-a-signed-build.md).

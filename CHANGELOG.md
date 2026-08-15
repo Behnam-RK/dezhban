@@ -241,32 +241,36 @@ current as you land changes.
   covered by tests, and the loader refuses to hand WebKit anything that is not a
   file URL — a bad anchor now lands the reader at the top of the right page,
   matching what `HelpBundle.resolve` already did with a stale one.
-- **Turning on "Use Touch ID for settings changes" no longer costs a password
-  and then strands the host.** A Touch ID–gated keychain item lives only in
-  macOS's data protection keychain, which needs a code-signing entitlement that
-  the ad-hoc-signed builds this project ships cannot carry — so `SecItemAdd`
-  always failed with `-34018` (`errSecMissingEntitlement`). The app checked only
-  whether the Mac *had* Touch ID, which meant it took a root password, minted a
-  token and wrote the daemon's hash **before** discovering the keychain would
-  refuse it, leaving an enrollment no client could present and a manual
-  `sudo dezhban token forget` to clean up. The app now probes the keychain
-  before spending anything: the toggle is disabled with the actual reason, no
-  password is taken, and nothing is enrolled. If a store fails anyway, the
-  daemon's hash is rolled back automatically. Settings changes keep using the
-  password path, as they did before. Adding the entitlement was tested and is
-  not an option — an ad-hoc signature that declares `keychain-access-groups` is
-  SIGKILLed at launch. See
-  [ADR-0010](docs/adr/0010-biometric-enrollment-requires-a-signed-build.md).
+- **"Use Touch ID for settings changes" now works — it never did.** The token was
+  stored under a `SecAccessControl` with `.biometryCurrentSet`, which macOS keeps
+  only in a keychain reachable with a code-signing entitlement that the
+  ad-hoc-signed builds this project ships cannot carry, so `SecItemAdd` failed
+  with `-34018` (`errSecMissingEntitlement`) on every Mac, every time. Worse, the
+  app checked only whether the Mac *had* Touch ID, so it took a root password,
+  minted a token and wrote the daemon's hash **before** discovering the keychain
+  would refuse it — leaving an enrollment no client could present and a manual
+  `sudo dezhban token forget` to clean up, while the About pane went on inviting
+  you to try again. The token is now an ordinary keychain item read after an
+  explicit `LAContext` fingerprint check, which needs no entitlement and no Apple
+  Developer account, so the daily path costs one fingerprint and no password.
+  **The check is performed by the app rather than enforced by the keychain**, and
+  the toggle's help text and
+  [the CLI reference](docs/usage/cli.md#changing-settings-without-a-password) now
+  say so — a gate that reads stronger than it is would be worse than none. See
+  [ADR-0011](docs/adr/0011-app-checked-biometrics-on-unsigned-builds.md), and
+  [ADR-0010](docs/adr/0010-biometric-enrollment-requires-a-signed-build.md) for
+  the signing constraint (adding the entitlement was tested: an ad-hoc signature
+  declaring `keychain-access-groups` is SIGKILLed at launch).
+- **Enrollment can no longer half-succeed.** The app probes the keychain before
+  spending anything privileged, so an enrollment that cannot complete costs no
+  password and enrolls nothing; if a store fails anyway, the daemon's hash is
+  rolled back automatically instead of being left for you to clear.
 - **The About pane no longer advertises "turn on Touch ID in Settings" when that
-  cannot work.** It now distinguishes a Mac with no Touch ID from a build that
-  cannot reach the keychain, so it stops sending people to a toggle that could
-  only fail.
-- **The app's four keychain calls now address the same keychain.** `store` used
-  the data protection keychain implicitly (via `kSecAttrAccessControl`) while
-  `isStored`, `load` and `remove` used the legacy one. Harmless only for as long
-  as `store` never succeeded; on a signed build it would have reported "not
-  enrolled" immediately after a successful save, and re-enrolling would have
-  collided with the item the replace failed to clear.
+  cannot work.** It distinguishes a Mac with no Touch ID from a keychain that
+  refused, so it stops sending people to a toggle that could only fail.
+- **A cancelled fingerprint falls back to `sudo`, never to your login password.**
+  The check uses `.deviceOwnerAuthenticationWithBiometrics` deliberately: a login
+  password that unlocks a settings change is the thing the token exists to avoid.
 
 ## [0.9.0] - 2026-07-29
 
