@@ -208,6 +208,18 @@ enum ConfigApply {
                 // host must not be left stranded either way, so undo the half we
                 // did complete instead of asking the user to.
                 let rollback = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
+                // A successful rollback removes the daemon's hash — so anything
+                // `store` left in the keychain (the item from a previous build it
+                // could not replace, which is why `isStored` stays true and the
+                // toggle snaps back on) is now orphaned, exactly as it is after a
+                // `forgetToken` whose removal failed. Mark it for the same reason:
+                // `writeConfig` would otherwise keep presenting a secret the daemon
+                // must refuse, and a refusal is never retried through the
+                // privileged path, so EVERY later save would fail instead of
+                // falling back to the password.
+                if rollback.ok, ControlToken.isStored {
+                    ControlToken.markOrphaned()
+                }
                 DispatchQueue.main.async {
                     guard rollback.ok else {
                         completion(Outcome(ok: false,

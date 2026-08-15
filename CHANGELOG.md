@@ -285,7 +285,10 @@ current as you land changes.
   refusal, and a refusal is deliberately never retried with your password, so
   every settings save would have failed until the item was cleared from the
   command line. The app now notices and stops offering it, falling back to the
-  password path, which is where turning the toggle off was heading anyway.
+  password path, which is where turning the toggle off was heading anyway. The
+  same applies to an enrollment rolled back after a failed store, which leaves
+  the identical state, and the About pane says "Password" for a stale secret
+  rather than claiming a Touch ID it will not actually ask you for.
 - **Re-enrolling works after an app update.** A login-keychain item's access
   control is bound to the exact binary that created it, and an ad-hoc signature's
   identity is its cdhash — so every rebuild produced an app the keychain treated
@@ -305,9 +308,9 @@ current as you land changes.
   — reports no usable sensor, and a menubar app runs for weeks, so a frozen
   verdict would have left the toggle greyed out with "this Mac has no Touch ID"
   until you quit and relaunched. Re-checking has a cost the Settings pane now
-  pays properly: the keychain half is established once, in the background, at
-  launch — but that warm-up is skipped when no sensor is available *then*, so
-  opening a clamshelled Mac and going straight to Settings used to leave the
+  pays properly: the keychain half is established once, in the background, when
+  the window opens — but that warm-up is skipped when no sensor is available
+  *then*, so opening a clamshelled Mac and going straight to Settings used to leave the
   pane to run its first keychain write on the main thread, behind a system
   dialog if your login keychain was locked. The pane now shows "Checking…"
   for the moment that takes instead of freezing.

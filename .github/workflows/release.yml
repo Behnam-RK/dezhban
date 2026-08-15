@@ -275,10 +275,10 @@ jobs:
           # Liveness is checked with `kill -0` BEFORE any signal is sent, and the
           # exit status is only consulted when the process is already gone. Asking
           # `wait` for the status of a process we have merely SIGTERMed is an
-          # unbounded wait: the app now runs a keychain probe at launch, and a
-          # runner whose login keychain is locked answers that with a modal dialog
-          # nobody can dismiss — the step would hang until the job timeout instead
-          # of failing. A process still alive three seconds in has, by definition,
+          # unbounded wait: the app can raise a modal system dialog no runner can
+          # dismiss (a locked login keychain answers the token capability probe
+          # with one) — the step would hang until the job timeout instead of
+          # failing. A process still alive three seconds in has, by definition,
           # survived exec, which is the entire assertion; SIGKILL it and move on.
           /Applications/Dezhban.app/Contents/MacOS/DezhbanMenu >/dev/null 2>&1 &
           app_pid=$!

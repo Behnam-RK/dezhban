@@ -129,8 +129,11 @@ remain the recorded future fix.
 
 - macOS app users get no Touch ID for settings changes until the project ships a
   signed build. They keep the password path, which is what they had.
-- One more capability probe on app launch — a keychain add plus delete, cached
-  for the process lifetime.
+- One more capability probe — a keychain add plus delete. As shipped it runs when
+  the main window first appears, not at launch (a keychain write on every login,
+  for a feature a menubar-only session never opens, is an unexplained unlock
+  dialog), and only a *permanent* verdict is cached for the process lifetime;
+  a transient refusal is left uncached so the next pane can re-probe.
 - ADR-0003's "no signing prerequisite" now reads as false without this record
   beside it. It is deliberately not edited: a shipped ADR is superseded, not
   rewritten, and its *decision* still stands — only that consequence was wrong.
