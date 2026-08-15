@@ -151,8 +151,8 @@ struct AboutView: View {
     }
 
     /// What an enrolled host is told — which is NOT unconditionally "Touch ID".
-    /// A secret the daemon has already forgotten (`isKnownOrphaned`, set when
-    /// `forgetToken`'s keychain removal or an enroll rollback left one behind)
+    /// A secret the daemon will not accept (`isKnownOrphaned`, set when
+    /// `forgetToken`'s keychain removal or a failed enrollment left one behind)
     /// authorises nothing: `ConfigApply.writeConfig` deliberately skips it and the
     /// save falls to the password path. Saying "Touch ID" here would name a cost
     /// the user will not actually pay, and this row exists precisely to answer
