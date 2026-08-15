@@ -5,13 +5,18 @@ import Foundation
 ///
 /// This is deliberately NOT the same question as "does this Mac have Touch ID".
 /// The app used to ask only that one, and it is the weaker of the two: a Mac can
-/// have a perfectly good sensor while the app is still unable to create the
-/// keychain item, because a biometry-gated item lives only in the macOS data
-/// protection keychain and reaching that keychain takes an entitlement an ad-hoc
-/// signature cannot carry. Asking the weak question let the app take a root
-/// password, mint a token, write the daemon's hash, and only THEN discover the
-/// keychain would not have it — leaving a host whose daemon holds a hash nobody
-/// can present. See docs/adr/0010-biometric-enrollment-requires-a-signed-build.md.
+/// have a perfectly good sensor while the keychain still refuses the item.
+/// Asking the weak question let the app take a root password, mint a token, write
+/// the daemon's hash, and only THEN discover the keychain would not have it —
+/// leaving a host whose daemon holds a hash nobody can present. See
+/// docs/adr/0010-biometric-enrollment-requires-a-signed-build.md.
+///
+/// `notEntitled` is no longer the expected outcome — the token is stored as an
+/// ordinary keychain item since
+/// docs/adr/0011-app-checked-biometrics-on-unsigned-builds.md — but it is kept,
+/// with its own words, because that is the status a future OS change or a
+/// different storage scheme would report, and "we stopped being able to store
+/// anything" deserves better than a bare number.
 ///
 /// It lives in DezhbanCore, away from the Security framework calls that produce
 /// the status code, so the mapping from "what the keychain said" to "what the
@@ -22,9 +27,8 @@ public enum TokenCapability: Equatable {
     case available
     /// No usable biometric sensor. Nothing is wrong with the build.
     case noBiometry
-    /// `errSecMissingEntitlement`. The Mac is fine; this *build* cannot reach
-    /// the data protection keychain. The expected state for any ad-hoc build,
-    /// which is every build this project currently produces.
+    /// `errSecMissingEntitlement`. The Mac is fine; this *build* is not allowed
+    /// to store the item. No longer expected — see the type comment.
     case notEntitled
     /// The keychain refused for some reason we do not have specific words for.
     /// Carries the status so a bug report can name it.
@@ -62,7 +66,7 @@ public enum TokenCapability: Equatable {
         case .noBiometry:
             return "Password — this Mac has no Touch ID"
         case .notEntitled:
-            return "Password — this build can't use the keychain for Touch ID"
+            return "Password — this build isn't allowed to use the keychain"
         case let .failed(status):
             return "Password — the keychain refused Touch ID (OSStatus \(status))"
         }
@@ -77,8 +81,8 @@ public enum TokenCapability: Equatable {
         case .noBiometry:
             return "This Mac has no Touch ID, so settings changes ask for your password."
         case .notEntitled:
-            return "This copy of Dezhban isn't signed for keychain access, so Touch ID "
-                + "can't hold the secret. Settings changes ask for your password instead."
+            return "macOS won't let this copy of Dezhban store the secret in your "
+                + "keychain, so settings changes ask for your password instead."
         case let .failed(status):
             return "The keychain refused to hold the secret (OSStatus \(status)), so "
                 + "settings changes ask for your password."
@@ -95,9 +99,8 @@ public enum TokenCapability: Equatable {
         case .noBiometry:
             return "This Mac has no Touch ID, so settings changes keep using your password."
         case .notEntitled:
-            return "This copy of Dezhban isn't signed for keychain access, so it can't "
-                + "store the secret Touch ID would unlock. Nothing was changed — settings "
-                + "changes keep using your password."
+            return "macOS won't let this copy of Dezhban store the secret in your "
+                + "keychain. Nothing was changed — settings changes keep using your password."
         case let .failed(status):
             return "The keychain won't hold the secret (OSStatus \(status)). Nothing was "
                 + "changed — settings changes keep using your password."

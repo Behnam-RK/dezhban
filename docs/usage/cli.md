@@ -391,24 +391,24 @@ decision, and re-running it as root would make the gate advisory.
 
 In the macOS app this is the **"Use Touch ID for settings changes"** toggle in
 Settings. Turning it on enrolls a token (one password prompt, once) and stores it
-in the login keychain under `.biometryCurrentSet`, so *reading* the token is the
-Touch ID prompt — there is no separate "is this allowed?" question for a tampered
-app to answer for itself. Because the item is bound to the fingerprints enrolled
-at the time, changing your fingerprints invalidates it; re-enrolling from the same
-toggle restores it. Turning the toggle off removes **both** copies, the keychain
-item and the daemon's hash. Macs without Touch ID keep using the password path,
-which is exactly what they had before.
+in your login keychain. Saving a change then asks for a fingerprint instead of a
+password. Turning the toggle off removes **both** copies, the keychain item and
+the daemon's hash. Macs without Touch ID keep using the password path, which is
+exactly what they had before.
 
-**The toggle needs a signed build, and the released builds are not signed.**
-Storing a secret behind Touch ID requires a code-signing entitlement that an
-ad-hoc signature cannot carry — which is what every build this project currently
-ships has. On such a build the app reports *"this build can't use the keychain for
-Touch ID"*, disables the toggle, and settings changes keep asking for your
-password. Nothing is lost that you had before, and nothing is enrolled that you
-would then have to clean up. The CLI is unaffected: `sudo dezhban token enroll`
-still works, and `--token-stdin` still authorises writes for scripts that hold
-the token themselves. Rationale:
-[ADR 0010](../adr/0010-biometric-enrollment-requires-a-signed-build.md).
+**What the fingerprint check is, precisely.** Dezhban asks macOS for a
+fingerprint and reads the token once macOS says yes. The keychain is not itself
+withholding the token pending biometrics — that stronger arrangement needs a
+code-signing entitlement an ad-hoc signature cannot carry, and every build this
+project ships is ad-hoc signed. So the check raises the bar rather than making it
+unforgeable: a modified copy of the app could skip it. Two things bound that. The
+keychain item keeps its ordinary access control, tied to the app's code identity,
+so another program reading it gets a keychain password prompt rather than silent
+access; and modifying the app needs admin rights, which already allow
+`sudo dezhban config set` and bypass the token outright. Rationale:
+[ADR 0011](../adr/0011-app-checked-biometrics-on-unsigned-builds.md), and
+[ADR 0010](../adr/0010-biometric-enrollment-requires-a-signed-build.md) for the
+signing constraint behind it.
 
 ## Connect & switch VPNs
 
