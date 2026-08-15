@@ -156,7 +156,8 @@ enum ConfigApply {
     }
 
     /// Sets up password-free settings changes: the daemon mints a token (one
-    /// privileged step), and the app stores it behind Touch ID.
+    /// privileged step), and the app stores it in the login keychain, to be read
+    /// back only after a Touch ID check the app performs (see `ControlToken`).
     ///
     /// The token is read from the CLI's stdout and never written anywhere else —
     /// `token enroll` prints it exactly once by design, so the only lasting copies

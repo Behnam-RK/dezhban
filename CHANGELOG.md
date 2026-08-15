@@ -283,12 +283,13 @@ current as you land changes.
   is always a clean escape. The keychain probe that guards enrollment removes its
   own leftovers the same way, so a probe stranded by one build cannot make every
   later build believe the keychain refuses it.
-- **The Touch ID toggle re-checks the sensor instead of freezing its answer at
-  launch.** A MacBook in clamshell mode — or one in Touch ID lockout after
-  repeated failures — reports no usable sensor, and the menubar app runs for
-  weeks; the toggle would have stayed greyed out with "this Mac has no Touch ID"
-  until you quit and relaunched. Only the keychain half of the check, which
-  genuinely cannot change while the app runs, is now remembered.
+- **The Touch ID toggle keeps re-checking the sensor.** The new capability check
+  could easily have been cached whole for the life of the app; only its keychain
+  half, which genuinely cannot change while a process runs, is remembered. A
+  MacBook in clamshell mode — or one in Touch ID lockout after repeated failures
+  — reports no usable sensor, and a menubar app runs for weeks, so a frozen
+  verdict would have left the toggle greyed out with "this Mac has no Touch ID"
+  until you quit and relaunched.
 
 ## [0.9.0] - 2026-07-29
 

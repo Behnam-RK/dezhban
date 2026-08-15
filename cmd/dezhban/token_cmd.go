@@ -23,8 +23,10 @@ between dezhban's fail-closed postures and needs no token.
 
 Only the token's HASH is stored, root-owned. 'enroll' prints the token itself
 exactly once, on stdout — it is never recoverable afterwards. The macOS app
-enrolls on your behalf and keeps its copy in the login keychain behind Touch ID;
-enroll by hand only when scripting a client of your own.
+enrolls on your behalf and keeps its copy in the login keychain, reading it only
+after a Touch ID check the app performs; the keychain is not itself withholding
+it (docs/adr/0012-app-checked-biometrics-on-unsigned-builds.md). Enroll by hand
+only when scripting a client of your own.
 
 Enrolling again replaces the previous token, which is how you revoke one that
 has leaked. See docs/adr/0003-biometric-token-over-existing-daemon.md.`

@@ -100,7 +100,6 @@ enum ControlToken {
         _ = remove(account: probeAccount)
         var add = query(account: probeAccount)
         add[kSecValueData as String] = Data("probe".utf8)
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(add as CFDictionary, nil)
         if status == errSecSuccess {
             _ = remove(account: probeAccount)
@@ -220,10 +219,18 @@ enum ControlToken {
     /// The item lands in the legacy (file) login keychain, which does not sync to
     /// iCloud Keychain at all — which is what this design needs, since the daemon
     /// that checks the token runs on THIS host and syncing it would hand other
-    /// Macs a credential they have no matching enrollment for. `kSecAttrAccessible`
-    /// is set for the day this moves to the data protection keychain; that
-    /// attribute applies only there, so on the store we actually use it is inert
-    /// and is NOT what keeps the token off iCloud.
+    /// Macs a credential they have no matching enrollment for.
+    ///
+    /// **No `kSecAttrAccessible` here, deliberately.** It applies only to the data
+    /// protection keychain, so on this store it does nothing: measured, an add
+    /// with it and an add without it both produce an item that vends a
+    /// `SecKeychainItem` ref and is invisible to a `kSecUseDataProtectionKeychain`
+    /// query — identical placement. Carrying it anyway would name a protection
+    /// that is not in force and, worse, invite someone to reconcile the mismatch
+    /// by pinning `kSecUseDataProtectionKeychain` — which would send this add to a
+    /// store `remove()`'s `SecKeychainItemDelete` cannot reach, breaking
+    /// re-enrollment after an app upgrade. The type comment's rule is that every
+    /// query addresses one keychain and carries nothing that could point elsewhere.
     @discardableResult
     static func store(_ token: String) -> String? {
         guard let data = token.data(using: .utf8) else { return "token is not valid UTF-8" }
@@ -238,7 +245,6 @@ enum ControlToken {
 
         var add = query()
         add[kSecValueData as String] = data
-        add[kSecAttrAccessible as String] = kSecAttrAccessibleWhenUnlockedThisDeviceOnly
         let status = SecItemAdd(add as CFDictionary, nil)
         guard status == errSecSuccess else {
             // `toggleExplanation`, NOT `enrollRefusal`: the latter promises
@@ -303,7 +309,13 @@ enum ControlToken {
             // swiftlint:disable:next force_cast
             guard SecKeychainItemDelete(ref as! SecKeychainItem) == errSecSuccess else { return false }
         }
-        return false
+        // Falling out of the loop is not itself a failure — sixteen successful
+        // deletions could have cleared everything. Ask, rather than assume:
+        // returning false here with nothing left would tell `store` the item is
+        // unreplaceable and send the user to `security delete-generic-password`
+        // for an item that is already gone.
+        var last: CFTypeRef?
+        return SecItemCopyMatching(q as CFDictionary, &last) == errSecItemNotFound
     }
 
     /// What to tell the user to run when this app cannot clear the item itself.
