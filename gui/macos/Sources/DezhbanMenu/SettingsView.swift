@@ -59,8 +59,8 @@ struct SettingsView: View {
     /// Deliberately NOT cached for the process's lifetime. The keychain half of
     /// `capability` is memoized inside `ControlToken`; the biometry half is
     /// re-asked on every `.onAppear`, because it really does change (clamshell
-    /// mode, Touch ID lockout) and a menubar app that froze it at launch would
-    /// leave the toggle greyed out until the user quit.
+    /// mode, Touch ID lockout) and a menubar app that froze it once per process
+    /// would leave the toggle greyed out until the user quit.
     ///
     /// **`refreshTokenCapability()` — called from `seed()` — is what re-asks it,
     /// and that is not an optimisation, it is the only thing that does.** The
@@ -76,9 +76,10 @@ struct SettingsView: View {
     /// `capabilityIfKnown`, never `capability`: the latter may run the keychain
     /// probe, and a stored-property initialiser runs on the main thread. That is
     /// not merely slow — a locked login keychain answers a write with a system
-    /// dialog, so it is a frozen window. `warmCapability()` covers this at launch
-    /// but cannot cover a sensor that was unavailable *then* and is available
-    /// now, which is exactly the clamshell case the paragraph above describes.
+    /// dialog, so it is a frozen window. `warmCapability()` covers this when the
+    /// main window first appears, but cannot cover a sensor that was unavailable
+    /// *then* and is available now, which is exactly the clamshell case the
+    /// paragraph above describes.
     @State private var tokenCapability: TokenCapability? = ControlToken.capabilityIfKnown
 
     var body: some View {
@@ -200,8 +201,9 @@ struct SettingsView: View {
                     // reasons: "not known yet" is a fourth state, and showing a
                     // verdict we do not have would be a guess the user cannot tell
                     // from an answer. It is normally invisible — `warmCapability()`
-                    // resolves this during launch, so nil survives only when the
-                    // sensor was unavailable then and is available now.
+                    // resolves this as soon as the main window appears, so nil
+                    // survives only when the sensor was unavailable then and is
+                    // available now.
                     //
                     // An ENROLLED host is answered without the verdict at all, the
                     // same rule `AboutView.describeSettingsAuthIfKnown` follows: the

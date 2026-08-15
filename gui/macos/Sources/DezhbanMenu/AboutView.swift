@@ -123,7 +123,7 @@ struct AboutView: View {
     /// practice, which is the finding that produced the control token.
     private static func describeSettingsAuth(_ capability: TokenCapability) -> String {
         if ControlToken.isStored {
-            return "Touch ID (control token enrolled)"
+            return enrolledSummary
         }
         // Not "turn on Touch ID in Settings" unless that would actually work.
         // The old copy said it unconditionally, so a Mac whose keychain refuses
@@ -145,9 +145,22 @@ struct AboutView: View {
     /// every time the pane opened, for a row whose value was already known.
     private static func describeSettingsAuthIfKnown() -> String? {
         if ControlToken.isStored {
-            return "Touch ID (control token enrolled)"
+            return enrolledSummary
         }
         return ControlToken.capabilityIfKnown.map(describeSettingsAuth)
+    }
+
+    /// What an enrolled host is told — which is NOT unconditionally "Touch ID".
+    /// A secret the daemon has already forgotten (`isKnownOrphaned`, set when
+    /// `forgetToken`'s keychain removal or an enroll rollback left one behind)
+    /// authorises nothing: `ConfigApply.writeConfig` deliberately skips it and the
+    /// save falls to the password path. Saying "Touch ID" here would name a cost
+    /// the user will not actually pay, and this row exists precisely to answer
+    /// "why did I get a password dialog?".
+    private static var enrolledSummary: String {
+        ControlToken.isKnownOrphaned
+            ? "Password — the stored secret is stale; turn Touch ID off and on in Settings"
+            : "Touch ID (control token enrolled)"
     }
 
     /// Lifecycle actions (install/start/stop/panic) cannot go through the daemon,
@@ -176,10 +189,12 @@ struct AboutView: View {
         binaryPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
         DispatchQueue.global(qos: .userInitiated).async {
             // `ControlToken.capability` is a keychain probe — an ADD plus a DELETE
-            // — the first time anything asks for it. `AppDelegate` warms it at
-            // launch, but only when biometry was usable at that moment: a Mac woken
-            // from clamshell, or one in Touch ID lockout at launch, reaches this
-            // pane with the probe still unresolved. Doing it here rather than on
+            // — the first time anything asks for it. `MainView` warms it when the
+            // window first appears (NOT `AppDelegate`, deliberately — see
+            // `ControlToken.warmCapability`), but only when biometry was usable at
+            // that moment: a Mac woken from clamshell, or one in Touch ID lockout
+            // then, reaches this pane with the probe still unresolved. Doing it
+            // here rather than on
             // `.onAppear`'s main thread means the worst case is a row that fills in
             // late, not a frozen window behind a keychain-unlock dialog.
             //

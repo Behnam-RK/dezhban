@@ -188,12 +188,13 @@ enum ControlToken {
     /// run.
     ///
     /// This exists because `warmCapability()` cannot cover that case. The warm
-    /// runs at launch and is gated on biometry too, so a Mac booted in clamshell
-    /// mode — or one in a Touch ID lockout — warms nothing. Open the lid and the
-    /// sensor comes back, and the *next* reader is the one that pays for the
-    /// probe. If that reader is a SwiftUI view initialiser, it pays on the main
-    /// thread, behind a keychain-unlock dialog if the login keychain is locked.
-    /// A pane asks this first and only resolves in the background when it is nil.
+    /// runs when the main window first appears and is gated on biometry too, so a
+    /// Mac whose lid was shut then — or one in a Touch ID lockout — warms nothing.
+    /// Open the lid and the sensor comes back, and the *next* reader is the one
+    /// that pays for the probe. If that reader is a SwiftUI view initialiser, it
+    /// pays on the main thread, behind a keychain-unlock dialog if the login
+    /// keychain is locked. A pane asks this first and only resolves in the
+    /// background when it is nil.
     static var capabilityIfKnown: TokenCapability? {
         guard biometryAvailable else {
             return TokenCapability.classify(addStatus: errSecSuccess, biometryAvailable: false)
@@ -372,25 +373,6 @@ enum ControlToken {
         return nil
     }
 
-    /// Forgets the app's copy. The daemon's hash is separate — removing only this
-    /// leaves an enrollment no client can satisfy, so the UI pairs it with
-    /// `dezhban token forget`.
-    ///
-    /// **Uses the deprecated SecKeychain API deliberately, and must keep doing
-    /// so.** A login-keychain item's ACL is bound to the creating binary's code
-    /// identity, and for an ad-hoc signature that identity is the cdhash — which
-    /// changes on every single build. So after any app upgrade, the new build
-    /// asking `SecItemDelete` to remove the token it "owns" is refused with
-    /// `-25244` (`errSecInvalidOwnerEdit`), and the `SecItemAdd` that follows
-    /// then collides with `-25299` (`errSecDuplicateItem`). That made
-    /// re-enrolling — the documented recovery, and the revocation path for a
-    /// leaked token — impossible after an upgrade.
-    ///
-    /// `SecKeychainItemDelete` is not subject to that check: it is the call
-    /// behind `security delete-generic-password`, and it succeeds across code
-    /// identities without a prompt. Measured, not assumed — `SecItemUpdate` also
-    /// succeeds cross-identity but does NOT re-own the ACL, so it writes a token
-    /// the new build can never read back, which is worse than failing.
     /// Set when the daemon's hash has been removed but the app's copy could not
     /// be — the one state in which the stored secret is known to authorise
     /// nothing.
@@ -415,7 +397,10 @@ enum ControlToken {
     /// token path is offered.
     static var isKnownOrphaned: Bool { orphanFlag.sync { orphaned } }
 
-    /// Called when a `token forget` succeeded but the keychain removal did not.
+    /// Called from both paths that can leave the daemon without a hash while an
+    /// item survives in the keychain: a `forgetToken` whose keychain removal
+    /// failed, and an `enrollToken` whose store failed and whose rollback
+    /// `token forget` then succeeded.
     static func markOrphaned() { orphanFlag.sync { orphaned = true } }
 
     /// Cleared by a successful `store`, and only there. Everywhere else the flag
@@ -425,6 +410,28 @@ enum ControlToken {
     /// suppress the token path for a token that works.
     private static func clearOrphaned() { orphanFlag.sync { orphaned = false } }
 
+    /// Forgets the app's copy. The daemon's hash is separate — removing only this
+    /// leaves an enrollment no client can satisfy, so the UI pairs it with
+    /// `dezhban token forget`.
+    ///
+    /// **Uses the deprecated SecKeychain API deliberately, and must keep doing
+    /// so.** A login-keychain item's ACL is bound to the creating binary's code
+    /// identity, and for an ad-hoc signature that identity is the cdhash — which
+    /// changes on every single build. So after any app upgrade, the new build
+    /// asking `SecItemDelete` to remove the token it "owns" is refused with
+    /// `-25244` (`errSecInvalidOwnerEdit`), and the `SecItemAdd` that follows
+    /// then collides with `-25299` (`errSecDuplicateItem`). That made
+    /// re-enrolling — the documented recovery, and the revocation path for a
+    /// leaked token — impossible after an upgrade.
+    ///
+    /// `SecKeychainItemDelete` is not subject to that check: it is the call
+    /// behind `security delete-generic-password`, and it succeeds across code
+    /// identities without a prompt. Measured, not assumed — `SecItemUpdate` also
+    /// succeeds cross-identity but does NOT re-own the ACL, so it writes a token
+    /// the new build can never read back, which is worse than failing. See
+    /// docs/adr/0012-app-checked-biometrics-on-unsigned-builds.md, which records
+    /// the measurements and names "modernising this back to `SecItemDelete`" as
+    /// the regression to watch for.
     @discardableResult
     static func remove(account: String = ControlToken.account) -> Bool {
         // Look the item up with the modern API — `kSecReturnRef` hands back a
