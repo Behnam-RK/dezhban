@@ -477,8 +477,11 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       unless that toggle would actually succeed.
 - [ ] **An entitlement does not silently brick the app.** If anyone adds
       `keychain-access-groups` to `build-app.sh`'s `codesign` call, the built app
-      is SIGKILLed at launch rather than gaining keychain access. Verify the app
-      still opens after any change to that line.
+      is SIGKILLed at launch rather than gaining keychain access — and
+      `codesign --verify` passes on such a binary, so the signature checks do not
+      catch it. The release workflow now execs the installed app and fails on a
+      `137`, so this is enforced **at release**; run it by hand after any local
+      change to that `codesign` line, since nothing checks a dev build.
 
 ## Service lifecycle
 
