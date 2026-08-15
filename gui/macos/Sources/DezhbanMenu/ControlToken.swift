@@ -14,11 +14,11 @@ import Security
 /// `LAContext.evaluatePolicy` in `load()` — the app asks macOS for a fingerprint,
 /// and reads a plain keychain item once macOS says yes. It is NOT the keychain
 /// refusing to release the item, which is the stronger arrangement ADR-0003
-/// originally specified and ADR-0011 replaced. The difference is real and worth
+/// originally specified and ADR-0012 replaced. The difference is real and worth
 /// stating plainly: a patched copy of this app could skip the check, whereas
-/// nothing could fake its way past the keychain-enforced version. What ADR-0011
+/// nothing could fake its way past the keychain-enforced version. What ADR-0012
 /// weighs is that the strong version needs an entitlement an ad-hoc signature
-/// cannot carry (ADR-0010), so on every build this project ships it did not
+/// cannot carry (ADR-0011), so on every build this project ships it did not
 /// merely weaken — it failed outright, leaving users on the password path.
 ///
 /// Two things still bound the loss, and they are why this is defensible rather
@@ -36,7 +36,7 @@ import Security
 /// between fail-closed postures and too weak for one that writes settings
 /// outliving the daemon. See
 /// docs/adr/0003-biometric-token-over-existing-daemon.md and
-/// docs/adr/0011-app-checked-biometrics-on-unsigned-builds.md.
+/// docs/adr/0012-app-checked-biometrics-on-unsigned-builds.md.
 ///
 /// Every query below addresses the LEGACY (file) keychain, and they must keep
 /// agreeing. Passing `kSecUseDataProtectionKeychain: true` on any one of them

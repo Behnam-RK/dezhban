@@ -450,7 +450,7 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       `build-app.sh`, "Use Touch ID for settings changes" enables, enrolls with
       one password prompt, and a subsequent settings change costs a **fingerprint
       and no password**. See
-      [ADR-0011](../adr/0011-app-checked-biometrics-on-unsigned-builds.md).
+      [ADR-0012](../adr/0012-app-checked-biometrics-on-unsigned-builds.md).
 - [ ] **Enrollment survives an app upgrade.** Enrol, then rebuild and reinstall
       the app (`task dev` is enough — an ad-hoc rebuild changes the cdhash, and
       the keychain ACL is bound to it). Toggling off and on again must succeed:
@@ -468,7 +468,7 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       flipping the toggle must produce **no password prompt** and leave
       `dezhban token status` reporting "not enrolled" — the failure this checks
       for cost a password and then stranded an enrollment. See
-      [ADR-0010](../adr/0010-biometric-enrollment-requires-a-signed-build.md).
+      [ADR-0011](../adr/0011-biometric-enrollment-requires-a-signed-build.md).
 - [ ] **A failed store rolls the daemon back.** If `SecItemAdd` fails after
       `token enroll` has already run, `dezhban token status` must return to
       "not enrolled" without the user intervening.

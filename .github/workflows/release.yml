@@ -264,7 +264,7 @@ jobs:
           # Not hypothetical: adding `keychain-access-groups` to this ad-hoc
           # signature (the obvious fix for the Touch ID keychain refusal) was
           # tested and SIGKILLs the app at launch. See
-          # docs/adr/0010-biometric-enrollment-requires-a-signed-build.md.
+          # docs/adr/0011-biometric-enrollment-requires-a-signed-build.md.
           #
           # So exec it. The assertion is deliberately narrow — survive exec —
           # because the app has no headless mode: main.swift goes straight to

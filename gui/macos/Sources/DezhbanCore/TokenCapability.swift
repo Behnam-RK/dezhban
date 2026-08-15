@@ -9,11 +9,11 @@ import Foundation
 /// Asking the weak question let the app take a root password, mint a token, write
 /// the daemon's hash, and only THEN discover the keychain would not have it —
 /// leaving a host whose daemon holds a hash nobody can present. See
-/// docs/adr/0010-biometric-enrollment-requires-a-signed-build.md.
+/// docs/adr/0011-biometric-enrollment-requires-a-signed-build.md.
 ///
 /// `notEntitled` is no longer the expected outcome — the token is stored as an
 /// ordinary keychain item since
-/// docs/adr/0011-app-checked-biometrics-on-unsigned-builds.md — but it is kept,
+/// docs/adr/0012-app-checked-biometrics-on-unsigned-builds.md — but it is kept,
 /// with its own words, because that is the status a future OS change or a
 /// different storage scheme would report, and "we stopped being able to store
 /// anything" deserves better than a bare number.

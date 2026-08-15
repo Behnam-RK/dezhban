@@ -1,15 +1,15 @@
-# ADR-0011: App-checked biometrics on unsigned builds, rather than no biometrics
+# ADR-0012: App-checked biometrics on unsigned builds, rather than no biometrics
 
 **Date**: 2026-08-15
 **Status**: accepted, implemented
 **Supersedes**: the rejection of "Alternative 3" in
-[ADR-0010](0010-biometric-enrollment-requires-a-signed-build.md). Everything else
+[ADR-0011](0011-biometric-enrollment-requires-a-signed-build.md). Everything else
 in 0010 — the signing constraint, the entitlement that SIGKILLs the app, the
 probe-before-spending ordering — still holds and is unchanged.
 
 ## Context
 
-[ADR-0010](0010-biometric-enrollment-requires-a-signed-build.md) established that
+[ADR-0011](0011-biometric-enrollment-requires-a-signed-build.md) established that
 a keychain item whose *release* is gated on biometry needs an entitlement an
 ad-hoc signature cannot carry, and made the app refuse enrollment cleanly rather
 than half-perform it. Correct, but it left the actual outcome untouched: every
@@ -109,7 +109,7 @@ clean escape.
 
 - **Pros**: strictly better; no trade to explain.
 - **Cons**: paid membership and release-pipeline work, on no schedule.
-- **Why not**: unchanged from ADR-0010. **This ADR does not block it** — the
+- **Why not**: unchanged from ADR-0011. **This ADR does not block it** — the
   capability probe stays, and moving back to a keychain-enforced item is a change
   to `store`/`load` alone.
 
@@ -144,7 +144,7 @@ clean escape.
   the toggle, and by keeping the mechanism sentence next to the toggle rather
   than only in the docs.
 - **Someone "restores" `.biometryCurrentSet` or adds the entitlement**, believing
-  it strictly better. ADR-0010 records that the entitlement SIGKILLs the app;
+  it strictly better. ADR-0011 records that the entitlement SIGKILLs the app;
   this record explains why the access-control flags were dropped rather than
   lost.
 - **Someone "modernises" `remove()` back to `SecItemDelete`**, or swaps the
