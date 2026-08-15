@@ -53,10 +53,12 @@ struct SettingsView: View {
     @State private var presetBusy = false
     @State private var tokenBusy = false
     @State private var tokenEnrolled = ControlToken.isStored
-    /// Evaluated once rather than in `body`: neither whether this Mac has
-    /// biometry nor whether this build can reach the keychain can change while
-    /// the pane is open, and a body getter should stay cheap. `capability` is
-    /// itself cached behind a `static let`, so this is a load, not a probe.
+    /// Evaluated at init rather than in `body`, so a body getter stays cheap —
+    /// but deliberately NOT cached for the process's lifetime. The keychain half
+    /// of `capability` is memoized inside `ControlToken`; the biometry half is
+    /// re-asked here every time SwiftUI rebuilds the view, because it really does
+    /// change (clamshell mode, Touch ID lockout) and a menubar app that froze it
+    /// at launch would leave the toggle greyed out until the user quit.
     private let tokenCapability = ControlToken.capability
 
     var body: some View {

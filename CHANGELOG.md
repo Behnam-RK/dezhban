@@ -280,7 +280,15 @@ current as you land changes.
   goes through `SecKeychainItemDelete`, which is not subject to that check.
   Reading a secret stored by a previous version may ask you to approve keychain
   access once; approving keeps the enrollment, and turning the toggle off and on
-  is always a clean escape.
+  is always a clean escape. The keychain probe that guards enrollment removes its
+  own leftovers the same way, so a probe stranded by one build cannot make every
+  later build believe the keychain refuses it.
+- **The Touch ID toggle re-checks the sensor instead of freezing its answer at
+  launch.** A MacBook in clamshell mode — or one in Touch ID lockout after
+  repeated failures — reports no usable sensor, and the menubar app runs for
+  weeks; the toggle would have stayed greyed out with "this Mac has no Touch ID"
+  until you quit and relaunched. Only the keychain half of the check, which
+  genuinely cannot change while the app runs, is now remembered.
 
 ## [0.9.0] - 2026-07-29
 

@@ -247,7 +247,7 @@ enum ConfigApply {
                     completion(Outcome(ok: false,
                                        status: "Disabled — but the keychain kept a stale secret it won't let this app "
                                            + "remove. It authorises nothing now; clear it with: "
-                                           + "security delete-generic-password -s sh.dezhban.menu -a control-token",
+                                           + ControlToken.manualRemovalCommand,
                                        transcriptTitle: nil, transcript: nil))
                     return
                 }
