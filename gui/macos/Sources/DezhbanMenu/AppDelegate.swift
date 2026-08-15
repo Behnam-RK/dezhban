@@ -40,8 +40,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DezhbanCLI.warmConfigPath()
         // Same reason, different store: the token capability probe is a keychain
         // WRITE, and a locked login keychain answers one with a system dialog. The
-        // About and Settings panes read `ControlToken.capability` from the main
-        // thread, so resolve it here instead of freezing the UI on first open.
+        // About and Settings panes ask for the verdict as a pane opens, so resolve
+        // it here and they find it already settled. They fall back to
+        // `capabilityIfKnown` + `resolveCapability` when this warm-up did not run
+        // (no usable sensor at launch), never to `capability` on the main thread.
         ControlToken.warmCapability()
         AppActions.refresh = { [weak self] in self?.refresh() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
