@@ -289,7 +289,13 @@ current as you land changes.
   MacBook in clamshell mode — or one in Touch ID lockout after repeated failures
   — reports no usable sensor, and a menubar app runs for weeks, so a frozen
   verdict would have left the toggle greyed out with "this Mac has no Touch ID"
-  until you quit and relaunched.
+  until you quit and relaunched. Re-checking has a cost the Settings pane now
+  pays properly: the keychain half is established once, in the background, at
+  launch — but that warm-up is skipped when no sensor is available *then*, so
+  opening a clamshelled Mac and going straight to Settings used to leave the
+  pane to run its first keychain write on the main thread, behind a system
+  dialog if your login keychain was locked. The pane now shows "Checking…"
+  for the moment that takes instead of freezing.
 
 ## [0.9.0] - 2026-07-29
 
