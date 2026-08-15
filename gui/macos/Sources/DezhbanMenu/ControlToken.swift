@@ -373,9 +373,10 @@ enum ControlToken {
         return nil
     }
 
-    /// Set when the daemon's hash has been removed but the app's copy could not
-    /// be — the one state in which the stored secret is known to authorise
-    /// nothing.
+    /// Set when the stored secret is known not to match the daemon's hash —
+    /// because the hash was removed and the app's copy could not be, or because
+    /// enrollment replaced the hash and then failed to store the token that goes
+    /// with it. Either way the item authorises nothing.
     ///
     /// Without this, that state is a dead end rather than a degradation.
     /// `writeConfig` offers the token whenever `isStored` is true, the daemon
@@ -397,10 +398,11 @@ enum ControlToken {
     /// token path is offered.
     static var isKnownOrphaned: Bool { orphanFlag.sync { orphaned } }
 
-    /// Called from both paths that can leave the daemon without a hash while an
-    /// item survives in the keychain: a `forgetToken` whose keychain removal
-    /// failed, and an `enrollToken` whose store failed and whose rollback
-    /// `token forget` then succeeded.
+    /// Called from both paths that can leave a keychain item the daemon will not
+    /// accept: a `forgetToken` whose keychain removal failed, and an `enrollToken`
+    /// whose `store` failed with an earlier build's item still in place —
+    /// whatever its rollback did, since `token enroll` has by then replaced the
+    /// daemon's hash with one for a token that was never stored.
     static func markOrphaned() { orphanFlag.sync { orphaned = true } }
 
     /// Cleared by a successful `store`, and only there. Everywhere else the flag

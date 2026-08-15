@@ -208,16 +208,25 @@ enum ConfigApply {
                 // host must not be left stranded either way, so undo the half we
                 // did complete instead of asking the user to.
                 let rollback = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
-                // A successful rollback removes the daemon's hash — so anything
-                // `store` left in the keychain (the item from a previous build it
-                // could not replace, which is why `isStored` stays true and the
-                // toggle snaps back on) is now orphaned, exactly as it is after a
-                // `forgetToken` whose removal failed. Mark it for the same reason:
-                // `writeConfig` would otherwise keep presenting a secret the daemon
-                // must refuse, and a refusal is never retried through the
-                // privileged path, so EVERY later save would fail instead of
+                // Anything `store` left in the keychain (the item from a previous
+                // build it could not replace, which is why `isStored` stays true
+                // and the toggle snaps back on) is now orphaned, exactly as it is
+                // after a `forgetToken` whose removal failed. Mark it for the same
+                // reason: `writeConfig` would otherwise keep presenting a secret
+                // the daemon must refuse, and a refusal is never retried through
+                // the privileged path, so EVERY later save would fail instead of
                 // falling back to the password.
-                if rollback.ok, ControlToken.isStored {
+                //
+                // NOT gated on `rollback.ok`, deliberately. `token enroll` has
+                // already replaced the daemon's hash with one for a token `store`
+                // never wrote, so a surviving item is stale either way: rollback
+                // succeeded and the daemon has no hash at all, or it failed and
+                // the daemon holds the hash of the token nobody has. Gating on the
+                // rollback would leave the *worse* branch unmarked — the one whose
+                // own message sends the user to `sudo dezhban token forget`, which
+                // only makes the orphaning permanent — so every later save would
+                // spend a Touch ID prompt to collect a refusal.
+                if ControlToken.isStored {
                     ControlToken.markOrphaned()
                 }
                 DispatchQueue.main.async {
