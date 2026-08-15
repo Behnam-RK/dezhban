@@ -212,10 +212,22 @@ enum ControlToken {
     }
 
     /// Runs the keychain probe off the main thread, so the first pane to ask for
-    /// `capability` finds it already resolved. Worth doing at launch: the probe is
-    /// a keychain write, and a locked login keychain answers one with a system
-    /// dialog — on the main thread that is a frozen UI, not merely a slow one.
-    /// Same reasoning as `DezhbanCLI.warmConfigPath`.
+    /// `capability` finds it already resolved.
+    ///
+    /// **Called when the main window first appears, deliberately not at launch.**
+    /// The probe is a keychain WRITE, so warming it in
+    /// `applicationDidFinishLaunching` made every session pay for a feature the
+    /// user may never open — and on a Mac whose login keychain password has
+    /// diverged from the account password, an unexplained unlock dialog at every
+    /// login, from a menubar app. Warming it with the window means a
+    /// menubar-only session never touches the keychain, while anyone who opens
+    /// the window has the answer long before they can reach Settings or About.
+    ///
+    /// It is an optimisation and nothing more: both panes ask `capabilityIfKnown`
+    /// and resolve through `resolveCapability` when it comes back nil, so they
+    /// stay off the main thread whether or not this ever runs. Do not let a
+    /// caller start depending on it having run.
+    ///
     /// Goes through `capability`, NOT `probeStatus` directly: the biometry guard
     /// there is what keeps a Mac with no sensor from writing to the keychain at
     /// all, and warming the probe behind its back would break that promise on

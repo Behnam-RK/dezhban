@@ -271,6 +271,13 @@ current as you land changes.
 - **A cancelled fingerprint falls back to `sudo`, never to your login password.**
   The check uses `.deviceOwnerAuthenticationWithBiometrics` deliberately: a login
   password that unlocks a settings change is the thing the token exists to avoid.
+- **The app no longer touches your keychain unless you open its window.** The
+  check for whether this Mac can hold the secret is a keychain write, and doing
+  it at launch meant every session paid for a feature you may never open — on a
+  Mac whose login keychain password has drifted from your account password, that
+  is an unexplained unlock prompt at every login, from a menubar app. It now runs
+  when the main window first appears, so a session spent entirely in the menubar
+  never asks.
 - **A half-completed "turn Touch ID off" no longer leaves the app unable to save
   anything.** Removing the enrollment clears the daemon's half first, since that
   is the half that can be declined — but if the keychain removal then fails, what
