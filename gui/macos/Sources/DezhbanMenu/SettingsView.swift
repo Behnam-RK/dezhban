@@ -170,7 +170,15 @@ struct SettingsView: View {
                         // enabling the toggle before the answer is in would let
                         // someone start an enrollment the probe is about to refuse,
                         // which is the whole failure this design exists to prevent.
-                        .disabled(tokenBusy || !(tokenCapability?.isAvailable ?? false))
+                        //
+                        // But an EXISTING enrollment must always be removable. The
+                        // capability gate is about whether enrolling can succeed,
+                        // and applying it to a host that is already enrolled leaves
+                        // the only in-app way to revoke a token greyed out — a Mac
+                        // put in clamshell mode, or one whose probe hit a transient
+                        // keychain refusal, would otherwise have no way to turn it
+                        // off at all.
+                        .disabled(tokenBusy || !(tokenEnrolled || (tokenCapability?.isAvailable ?? false)))
                         .help("Applying a change asks dezhban to make it, authorised by a "
                             + "secret kept in your login keychain — so saving costs a fingerprint "
                             + "instead of your password. Dezhban checks your fingerprint and then "
