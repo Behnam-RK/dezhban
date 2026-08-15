@@ -62,15 +62,16 @@ struct SettingsView: View {
     /// mode, Touch ID lockout) and a menubar app that froze it at launch would
     /// leave the toggle greyed out until the user quit.
     ///
-    /// **`seed()` is what re-asks it, and that is not an optimisation — it is the
-    /// only thing that does.** The initialiser below runs exactly once per view
-    /// identity: SwiftUI installs `@State` storage the first time and DISCARDS the
-    /// initial value on every later re-creation of the struct, so re-creating
-    /// `SettingsView` (which `MainView.body` does on every `AppState` publish)
-    /// does *not* re-run this. The predecessor of this property was a plain
-    /// `let`, which did refresh that way; converting it to `@State` moved the
-    /// responsibility to `seed()`. Deleting the assignment there would silently
-    /// freeze the verdict for the life of the window.
+    /// **`refreshTokenCapability()` — called from `seed()` — is what re-asks it,
+    /// and that is not an optimisation, it is the only thing that does.** The
+    /// initialiser below runs exactly once per view identity: SwiftUI installs
+    /// `@State` storage the first time and DISCARDS the initial value on every
+    /// later re-creation of the struct, so re-creating `SettingsView` (which
+    /// `MainView.body` does on every `AppState` publish) does *not* re-run this.
+    /// The predecessor of this property was a plain `let`, which did refresh that
+    /// way; converting it to `@State` moved the responsibility to `seed()`.
+    /// Deleting that call would silently freeze the verdict for the life of the
+    /// window. `tokenEnrolled` above is re-read there for exactly the same reason.
     ///
     /// `capabilityIfKnown`, never `capability`: the latter may run the keychain
     /// probe, and a stored-property initialiser runs on the main thread. That is
@@ -201,16 +202,28 @@ struct SettingsView: View {
                     // from an answer. It is normally invisible — `warmCapability()`
                     // resolves this during launch, so nil survives only when the
                     // sensor was unavailable then and is available now.
-                    if let tokenCapability {
-                        if !tokenCapability.isAvailable {
-                            Text(tokenCapability.toggleExplanation)
+                    //
+                    // An ENROLLED host is answered without the verdict at all, the
+                    // same rule `AboutView.describeSettingsAuthIfKnown` follows: the
+                    // capability is about whether *enrolling* could succeed, and a
+                    // transient probe refusal (a cancelled keychain-unlock dialog
+                    // answers -25293) would otherwise print "the keychain refused to
+                    // hold the secret, so settings changes ask for your password"
+                    // underneath a working Touch ID enrollment — a flat lie about
+                    // what the next save will cost. Clamshell is the same story with
+                    // a different sentence: the sensor is back the moment the lid is.
+                    if !tokenEnrolled {
+                        if let tokenCapability {
+                            if !tokenCapability.isAvailable {
+                                Text(tokenCapability.toggleExplanation)
+                                    .font(.callout)
+                                    .foregroundStyle(.secondary)
+                            }
+                        } else {
+                            Text("Checking whether this Mac can hold the secret…")
                                 .font(.callout)
                                 .foregroundStyle(.secondary)
                         }
-                    } else {
-                        Text("Checking whether this Mac can hold the secret…")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
                     }
                 }
                 Section { advancedGroup }
@@ -652,6 +665,10 @@ struct SettingsView: View {
         let done: (ConfigApply.Outcome) -> Void = { outcome in
             tokenBusy = false
             tokenEnrolled = ControlToken.isStored
+            // A forget that succeeded turns the verdict back into something the
+            // pane shows, and nothing else would ask for it before the next
+            // `.onAppear` — leaving "Checking…" under a toggle that is finished.
+            refreshTokenCapability()
             status = outcome.status
             if let title = outcome.transcriptTitle, let text = outcome.transcript {
                 state.showInLogs(title: title, text: text)
@@ -661,6 +678,26 @@ struct SettingsView: View {
             ConfigApply.enrollToken(completion: done)
         } else {
             ConfigApply.forgetToken(completion: done)
+        }
+    }
+
+    /// Re-asks the capability, and only when the answer is going to be used.
+    ///
+    /// An enrolled host is skipped entirely — the verdict says whether *enrolling*
+    /// could succeed, the toggle is enabled by `tokenEnrolled` regardless, and the
+    /// explanation line is suppressed above. Asking anyway would run the probe's
+    /// keychain ADD (a modal unlock dialog on a locked login keychain) on every
+    /// entry to this pane, for a value nothing renders. Same rule, and the same
+    /// reason, as `AboutView.describeSettingsAuthIfKnown`.
+    ///
+    /// `capabilityIfKnown` first, never `capability`: this runs on the main thread,
+    /// and the probe may block. Re-asked rather than cached because the biometry
+    /// half genuinely changes (clamshell, Touch ID lockout).
+    private func refreshTokenCapability() {
+        guard !tokenEnrolled else { return }
+        tokenCapability = ControlToken.capabilityIfKnown
+        if tokenCapability == nil {
+            ControlToken.resolveCapability { tokenCapability = $0 }
         }
     }
 
@@ -692,14 +729,14 @@ struct SettingsView: View {
     /// written back as a value), service state via AppState, login-item state
     /// from SMAppService.
     private func seed() {
-        // Only when init could not answer for free — the nil case is biometry
-        // present with the keychain probe not yet run, and resolving it here keeps
-        // that one keychain write off the main thread. Re-asked on every appear
-        // rather than once, because the biometry half genuinely changes.
-        tokenCapability = ControlToken.capabilityIfKnown
-        if tokenCapability == nil {
-            ControlToken.resolveCapability { tokenCapability = $0 }
-        }
+        // Re-read for the same reason `tokenCapability` is: the `@State`
+        // initialiser above runs once per view identity and SwiftUI discards its
+        // value on every later re-creation, so without this the toggle would show
+        // whatever was true when the window first opened — a token forgotten from
+        // the CLI would leave it reading "on" for the life of the window, and that
+        // stale `true` is also what keeps the control enabled.
+        tokenEnrolled = ControlToken.isStored
+        refreshTokenCapability()
         status = "Loading…"
         canApply = false
         loginEnabled = LoginItem.isEnabled

@@ -142,7 +142,14 @@ enum ConfigApply {
         // `config reset --all` is not offered over the socket: it resets keys the
         // op cannot express, so serving it there would reset less than it claims.
         // Skipping the token here avoids a Touch ID prompt that could only fail.
-        if !args.contains("--all"), ControlToken.isStored, let token = ControlToken.load() {
+        // `isKnownOrphaned` is checked BEFORE `isStored`, and before `load()`'s
+        // biometric prompt: a secret the daemon has already forgotten can only
+        // draw a refusal, and a refusal is never retried through the privileged
+        // path — so offering it would fail every save rather than fall back.
+        // Skipping it is not routing around the daemon's decision; the daemon has
+        // no enrollment to decide with.
+        if !args.contains("--all"), !ControlToken.isKnownOrphaned,
+           ControlToken.isStored, let token = ControlToken.load() {
             let result = DezhbanCLI.runWithToken(args + ["--token-stdin"], token: token)
             if result.ok || result.refused {
                 return result
@@ -257,12 +264,20 @@ enum ConfigApply {
             // Report a keychain removal that did not happen, rather than claiming
             // both copies are gone.
             let removed = ControlToken.remove()
+            if !removed {
+                // The daemon has forgotten its half, so what is left in the
+                // keychain authorises nothing. Record that, so `writeConfig` stops
+                // offering it: otherwise every later save presents a secret the
+                // daemon must refuse, and refusals are never retried, which turns
+                // a failed cleanup into a pane that cannot save anything at all.
+                ControlToken.markOrphaned()
+            }
             DispatchQueue.main.async {
                 guard removed else {
                     completion(Outcome(ok: false,
-                                       status: "Disabled — but the keychain kept a stale secret it won't let this app "
-                                           + "remove. It authorises nothing now; clear it with: "
-                                           + ControlToken.manualRemovalCommand,
+                                       status: "Disabled — settings changes ask for your password again. The keychain "
+                                           + "kept a stale secret this app can't remove; it authorises nothing, but "
+                                           + "clear it with: " + ControlToken.manualRemovalCommand,
                                        transcriptTitle: nil, transcript: nil))
                     return
                 }

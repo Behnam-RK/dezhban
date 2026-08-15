@@ -271,6 +271,14 @@ current as you land changes.
 - **A cancelled fingerprint falls back to `sudo`, never to your login password.**
   The check uses `.deviceOwnerAuthenticationWithBiometrics` deliberately: a login
   password that unlocks a settings change is the thing the token exists to avoid.
+- **A half-completed "turn Touch ID off" no longer leaves the app unable to save
+  anything.** Removing the enrollment clears the daemon's half first, since that
+  is the half that can be declined — but if the keychain removal then fails, what
+  is left is a secret the daemon has already forgotten. Offering it draws a
+  refusal, and a refusal is deliberately never retried with your password, so
+  every settings save would have failed until the item was cleared from the
+  command line. The app now notices and stops offering it, falling back to the
+  password path, which is where turning the toggle off was heading anyway.
 - **Re-enrolling works after an app update.** A login-keychain item's access
   control is bound to the exact binary that created it, and an ad-hoc signature's
   identity is its cdhash — so every rebuild produced an app the keychain treated

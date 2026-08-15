@@ -340,21 +340,21 @@ Current versions cannot get into this state — enrollment checks the keychain
 before it mints anything, and rolls the daemon's hash back if the store fails
 anyway — but a host enrolled by an older build can still be carrying one.
 
-**Every settings save says "Rejected", and `token status` says not enrolled.**
-The mirror image of the above: the keychain still holds a secret the daemon no
-longer recognises. The app sees a stored secret, so it keeps presenting it, and
-the daemon refuses — correctly, since it has no hash to check it against. A
-refusal is never retried with your password, so every save fails the same way
-until the stale secret is gone. This is what turning the toggle off looks like
-when the daemon's half was removed and the keychain's half was not:
+**The keychain kept a stale secret when you turned the toggle off.** The mirror
+image of the above: the daemon has forgotten its half and the keychain still
+holds one. Saving keeps working — the app notices and goes back to asking for
+your password — but the leftover is worth clearing, and a copy of dezhban that
+did not notice would refuse every save instead, since the daemon correctly
+rejects a secret it has no hash for and a refusal is never retried with your
+password:
 
 ```sh
 security find-generic-password -s sh.dezhban.menu -a control-token   # confirms it is there
 security delete-generic-password -s sh.dezhban.menu -a control-token
 ```
 
-Saves go back to asking for your password immediately; no restart needed. Turn
-the toggle on again to re-enrol.
+Turn the toggle on again to re-enrol; that also replaces the stale secret, so
+clearing it by hand first is optional.
 
 ## The installer upgraded the binary but the service is still running the old version
 
