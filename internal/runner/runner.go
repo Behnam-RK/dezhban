@@ -257,6 +257,17 @@ type Options struct {
 	// indistinguishable from the leak the kill switch exists for — so only an
 	// explicit unblock with the tunnel down returns to standby.
 	AutoArm bool
+	// ProbeTunnelIfaces reports which tunnel interfaces are actually present on
+	// this host. It is the one input to the AutoArm startup decision above that
+	// comes from the live machine rather than from config, so it is injectable:
+	// left alone, a test's starting posture is decided by whether the developer
+	// running it happens to have a VPN up, which is how a green suite locally
+	// turned into a red one in CI (a tunnel-down edge logs "guard holds the
+	// line" from an armed start and a different line from standby, and only the
+	// armed start reaches the transition most of these tests are about).
+	// nil → netdetect.TunnelInterfaces, the real probe. nil must never mean "do
+	// not probe": that would silently start every production caller armed.
+	ProbeTunnelIfaces func() ([]string, error)
 	// ArmAtBoot (vpn.armAtBoot): arm the guard directly at startup even when no
 	// tunnel interface is present yet — provided TunnelEverUp is true and an
 	// endpoint is known — instead of entering the AutoArm standby above. This
@@ -689,7 +700,11 @@ func (o Options) runGuard(ctx context.Context) error {
 	// interface exists. A failed probe arms immediately — fail-closed.
 	standby := false
 	if o.AutoArm {
-		if present, derr := netdetect.TunnelInterfaces(); derr != nil {
+		probe := o.ProbeTunnelIfaces
+		if probe == nil {
+			probe = netdetect.TunnelInterfaces
+		}
+		if present, derr := probe(); derr != nil {
 			o.Log.Warn("auto-arm: tunnel detection failed — arming immediately (fail-closed)", "err", derr)
 		} else {
 			standby = len(present) == 0

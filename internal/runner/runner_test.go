@@ -465,6 +465,75 @@ func downWatcher() *netdetect.Watcher {
 	}
 }
 
+// presentTunnel and noTunnel are the two answers Options.ProbeTunnelIfaces can
+// give, as AutoArm reads them: a tunnel interface exists on this host, so start
+// ARMED — or none does, so start in STANDBY. A test that sets AutoArm and
+// neither of these is not testing a posture, it is testing whether whoever runs
+// it has a VPN up.
+func presentTunnel() func() ([]string, error) {
+	return func() ([]string, error) { return []string{"utun4"}, nil }
+}
+
+func noTunnel() func() ([]string, error) {
+	return func() ([]string, error) { return nil, nil }
+}
+
+// The AutoArm startup decision itself, both ways. It had no test at all: the
+// probe read the live host, so the only way to reach either branch was to run
+// the suite on a machine that happened to be in that state — which is how the
+// standby branch stayed unexercised while the armed one silently carried
+// TestVerifyFindingClearedOnStandbyEntry.
+//
+// No tunnel present must install NOTHING (ADR-0002's rail: a fresh install
+// cannot lock itself out), and one present must raise the standing guard.
+func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		probe   func() ([]string, error)
+		posture string
+		guarded bool
+	}{
+		{"no tunnel interface → standby, nothing installed", noTunnel(), "standby", false},
+		{"tunnel interface present → armed", presentTunnel(), "guard", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			be := &fakeBackend{}
+			o := vpnOpts(be)
+			o.AutoArm = true
+			o.ProbeTunnelIfaces = tc.probe
+			o.Watcher = downWatcher()
+			o.Log = discardLog()
+			// The FIRST snapshot is the startup posture under test; the last one
+			// is always "stopped", published as the loop tears down. Publish runs
+			// on the run-loop goroutine, which is this one (Run is called
+			// inline), so a plain capture needs no synchronization.
+			var first state.Snapshot
+			var published bool
+			o.Publish = func(s state.Snapshot) {
+				if !published {
+					first, published = s, true
+				}
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+			defer cancel()
+			if err := Run(ctx, o); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			if !published {
+				t.Fatal("the run loop published no snapshot at all")
+			}
+			if first.Posture != tc.posture {
+				t.Errorf("start posture = %q, want %q", first.Posture, tc.posture)
+			}
+			if got := hasCall(be.calls, "apply-guard"); got != tc.guarded {
+				t.Errorf("standing guard applied = %v, want %v; calls=%v", got, tc.guarded, be.calls)
+			}
+		})
+	}
+}
+
 // In legacy mode a tunnel drop must block immediately, with no geo reading at
 // all, and a still-down tunnel must not auto-unblock.
 func TestVPNWatcherObservabilityOnly(t *testing.T) {

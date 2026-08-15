@@ -385,17 +385,13 @@ func TestVerifyFindingClearedOnStandbyEntry(t *testing.T) {
 	be := &fakeBackend{isBlockedFn: func() (bool, error) { return false, nil }} // rules always "missing"
 	o := vpnOpts(be)
 	// AutoArm is what makes the unblock below land in STANDBY rather than an
-	// open guard — but on its own it also decides the STARTING posture from a
-	// live probe of the host's own interfaces (netdetect.TunnelInterfaces),
-	// which is not something a unit test may depend on: a developer machine
-	// with a VPN up starts armed, a CI runner with no tunnel interface starts
-	// in standby, and the transition under test only exists on the first.
-	// ArmAtBoot + TunnelEverUp is the supported override for exactly that
-	// startup race (see shouldArmAtBoot), so pin the armed start through it and
-	// let the host probe say whatever it likes.
+	// open guard, so it has to be on — but it also decides the STARTING posture
+	// from a live probe of the host, and only an armed start reaches the
+	// transition under test. Say which host this is rather than inheriting the
+	// developer's: presentTunnel() starts armed everywhere, including a CI
+	// runner with no tunnel interface of its own.
 	o.AutoArm = true
-	o.ArmAtBoot = true
-	o.TunnelEverUp = true
+	o.ProbeTunnelIfaces = presentTunnel()
 	o.Watcher = downWatcher()
 	o.VerifyInterval = 5 * time.Millisecond
 	var downEdges atomic.Int64
