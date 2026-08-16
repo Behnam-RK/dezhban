@@ -1,21 +1,8 @@
 # ADR-0003: Biometric-gated token over the existing daemon, not an SMAppService helper
 
 **Date**: 2026-07-20
-**Status**: implemented (2026-07-24); storage mechanism superseded by
-[ADR-0012](0012-app-checked-biometrics-on-unsigned-builds.md) (2026-08-15)
+**Status**: implemented (2026-07-24)
 **Deciders**: Behnam RK
-
-> **What below is no longer true.** The decision — a token proved over the
-> existing control socket, checked against a root-owned hash — stands, and so
-> does everything about the socket, the ops, and what still elevates. What
-> changed is the storage: the item is **not** held under
-> `kSecAccessControlBiometryCurrentSet`, and reading it is **not** itself the
-> authentication. On macOS that arrangement needs a code-signing entitlement an
-> ad-hoc signature cannot carry ([ADR-0011](0011-biometric-enrollment-requires-a-signed-build.md)),
-> so it did not merely weaken on the builds this project ships — it failed
-> outright. The token is now an ordinary keychain item and the app performs the
-> biometric check. The body below is left as written, as a record of what was
-> decided at the time.
 
 ## Context
 

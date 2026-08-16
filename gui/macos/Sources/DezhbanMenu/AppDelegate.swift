@@ -38,13 +38,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // it — every later read is then a memoized lookup rather than a shell-out on
         // whatever thread the caller happened to be on. See DezhbanCLI.exec.
         DezhbanCLI.warmConfigPath()
-        // The token capability probe is deliberately NOT warmed here, unlike the
-        // config path above. It is a keychain WRITE, so warming it at launch made
-        // every session touch the login keychain for a feature the user may never
-        // open — and on a Mac whose login keychain password has diverged from the
-        // account password, that is an unexplained unlock dialog at every login.
-        // `MainView` warms it when the window first appears instead, so a
-        // menubar-only session costs nothing. See `ControlToken.warmCapability`.
         AppActions.refresh = { [weak self] in self?.refresh() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         menu.delegate = self

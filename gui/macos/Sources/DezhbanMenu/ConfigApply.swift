@@ -142,14 +142,7 @@ enum ConfigApply {
         // `config reset --all` is not offered over the socket: it resets keys the
         // op cannot express, so serving it there would reset less than it claims.
         // Skipping the token here avoids a Touch ID prompt that could only fail.
-        // `isKnownOrphaned` is checked BEFORE `isStored`, and before `load()`'s
-        // biometric prompt: a secret the daemon has already forgotten can only
-        // draw a refusal, and a refusal is never retried through the privileged
-        // path — so offering it would fail every save rather than fall back.
-        // Skipping it is not routing around the daemon's decision; the daemon has
-        // no enrollment to decide with.
-        if !args.contains("--all"), !ControlToken.isKnownOrphaned,
-           ControlToken.isStored, let token = ControlToken.load() {
+        if !args.contains("--all"), ControlToken.isStored, let token = ControlToken.load() {
             let result = DezhbanCLI.runWithToken(args + ["--token-stdin"], token: token)
             if result.ok || result.refused {
                 return result
@@ -163,8 +156,7 @@ enum ConfigApply {
     }
 
     /// Sets up password-free settings changes: the daemon mints a token (one
-    /// privileged step), and the app stores it in the login keychain, to be read
-    /// back only after a Touch ID check the app performs (see `ControlToken`).
+    /// privileged step), and the app stores it behind Touch ID.
     ///
     /// The token is read from the CLI's stdout and never written anywhere else —
     /// `token enroll` prints it exactly once by design, so the only lasting copies
@@ -173,15 +165,10 @@ enum ConfigApply {
     /// leaked is revoked.
     static func enrollToken(completion: @escaping (Outcome) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            // Ask whether the keychain will ACCEPT the item before minting one.
-            // `token enroll` needs root and writes the daemon's hash, so a check
-            // made after it is a check made too late: that ordering is what left
-            // hosts with an enrollment no client could satisfy. The probe is
-            // silent and costs nothing.
-            let capability = ControlToken.capability
-            guard capability.isAvailable else {
+            guard ControlToken.biometryAvailable else {
                 DispatchQueue.main.async {
-                    completion(Outcome(ok: false, status: capability.enrollRefusal,
+                    completion(Outcome(ok: false,
+                                       status: "This Mac has no Touch ID, so settings changes keep using your password.",
                                        transcriptTitle: nil, transcript: nil))
                 }
                 return
@@ -193,13 +180,7 @@ enum ConfigApply {
                 .split(separator: "\n")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .first(where: { $0.count >= 32 && $0.allSatisfy(\.isHexDigit) })
-            // Two failures, deliberately NOT one guard: they leave the host in
-            // opposite states and need opposite recoveries. `token enroll` writes
-            // the hash and only then prints, so a non-zero exit means no hash was
-            // written — the host is exactly as it was, and any keychain item still
-            // matches whatever the daemon had before. Nothing to undo, nothing to
-            // mark.
-            guard result.ok else {
+            guard result.ok, let token = token else {
                 DispatchQueue.main.async {
                     completion(Outcome(ok: false, status: "Could not enroll — see output.",
                                        transcriptTitle: "Enroll control token — failed",
@@ -207,75 +188,13 @@ enum ConfigApply {
                 }
                 return
             }
-            guard let token = token else {
-                // The other half: `token enroll` SUCCEEDED, so the daemon's hash is
-                // already the new token's — but nothing this app can read came
-                // back, so nobody holds that token. That is the same stranded state
-                // a failed `store` leaves, so it gets the same two halves undone:
-                // roll the daemon back, and mark whatever survives in the keychain,
-                // which the enroll has by now made stale. Not gated on the
-                // rollback, for the reason spelled out in the `store` path below.
-                let rollback = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
-                if ControlToken.isStored {
-                    ControlToken.markOrphaned()
-                }
-                DispatchQueue.main.async {
-                    let tail = rollback.ok
-                        ? "the enrollment was rolled back."
-                        : "rolling the enrollment back also failed — run 'sudo dezhban token forget'."
-                    completion(Outcome(ok: false,
-                                       status: "dezhban enrolled a token but printed none this app could read — \(tail)",
-                                       transcriptTitle: "Enroll control token — no token in the output",
-                                       transcript: result.output + "\n\nRolling the enrollment back:\n" + rollback.output))
-                }
-                return
-            }
             if let err = ControlToken.store(token) {
-                // The daemon now holds a hash for a token nobody has. The probe
-                // above should have caught this, so reaching here means the
-                // keychain refused for a reason the probe could not see — but the
-                // host must not be left stranded either way, so undo the half we
-                // did complete instead of asking the user to.
-                let rollback = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
-                // Anything `store` left in the keychain (the item from a previous
-                // build it could not replace, which is why `isStored` stays true
-                // and the toggle snaps back on) is now orphaned, exactly as it is
-                // after a `forgetToken` whose removal failed. Mark it for the same
-                // reason: `writeConfig` would otherwise keep presenting a secret
-                // the daemon must refuse, and a refusal is never retried through
-                // the privileged path, so EVERY later save would fail instead of
-                // falling back to the password.
-                //
-                // NOT gated on `rollback.ok`, deliberately. `token enroll` has
-                // already replaced the daemon's hash with one for a token `store`
-                // never wrote, so a surviving item is stale either way: rollback
-                // succeeded and the daemon has no hash at all, or it failed and
-                // the daemon holds the hash of the token nobody has. Gating on the
-                // rollback would leave the *worse* branch unmarked — the one whose
-                // own message sends the user to `sudo dezhban token forget`, which
-                // only makes the orphaning permanent — so every later save would
-                // spend a Touch ID prompt to collect a refusal.
-                if ControlToken.isStored {
-                    ControlToken.markOrphaned()
-                }
+                // The daemon now holds a hash for a token nobody has. Say so plainly
+                // and name the recovery, rather than leaving a host that silently
+                // refuses every config write.
                 DispatchQueue.main.async {
-                    guard rollback.ok else {
-                        completion(Outcome(ok: false,
-                                           status: "dezhban enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
-                                           transcriptTitle: "Enroll control token — keychain failed",
-                                           transcript: err + "\n\nRolling the enrollment back also failed:\n" + rollback.output))
-                        return
-                    }
-                    // Report `err`, not a blanket "nothing was changed". The
-                    // daemon's half is genuinely undone, but `store` also fails
-                    // when it cannot REPLACE an item a previous build left behind
-                    // — and that item is still there, so `isStored` stays true and
-                    // the toggle snaps back on. Claiming nothing changed would
-                    // send the user to a settings save that then presents a token
-                    // the daemon no longer knows. `err` names the one-line
-                    // `security delete-generic-password` that clears it.
                     completion(Outcome(ok: false,
-                                       status: "The keychain refused the secret and the enrollment was rolled back — \(err)",
+                                       status: "dezhban enrolled a token but the keychain refused it — run 'sudo dezhban token forget'.",
                                        transcriptTitle: "Enroll control token — keychain failed",
                                        transcript: err))
                 }
@@ -293,42 +212,14 @@ enum ConfigApply {
     /// token that authorises nothing or an enrollment no client can satisfy.
     static func forgetToken(completion: @escaping (Outcome) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
-            // ORDER MATTERS: the daemon's hash goes first. It is the half that
-            // actually revokes — an orphaned keychain item authorises nothing once
-            // the hash is gone — and it is also the half that can be DECLINED,
-            // since it needs an admin prompt. Removing the app's copy first meant
-            // that dismissing that prompt destroyed a working enrollment while
-            // leaving the daemon's hash in place: the user is then worse off than
-            // before, having to re-enroll (another password) to get back what they
-            // had. Failing before either copy is touched leaves everything intact.
+            ControlToken.remove()
             let result = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
-            guard result.ok else {
-                DispatchQueue.main.async {
+            DispatchQueue.main.async {
+                guard result.ok else {
                     completion(Outcome(ok: false,
-                                       status: "dezhban still has the enrollment, so nothing was removed — see output.",
+                                       status: "Removed the app's copy, but dezhban still has an enrollment — see output.",
                                        transcriptTitle: "Forget control token — failed",
                                        transcript: result.output))
-                }
-                return
-            }
-            // Report a keychain removal that did not happen, rather than claiming
-            // both copies are gone.
-            let removed = ControlToken.remove()
-            if !removed {
-                // The daemon has forgotten its half, so what is left in the
-                // keychain authorises nothing. Record that, so `writeConfig` stops
-                // offering it: otherwise every later save presents a secret the
-                // daemon must refuse, and refusals are never retried, which turns
-                // a failed cleanup into a pane that cannot save anything at all.
-                ControlToken.markOrphaned()
-            }
-            DispatchQueue.main.async {
-                guard removed else {
-                    completion(Outcome(ok: false,
-                                       status: "Disabled — settings changes ask for your password again. The keychain "
-                                           + "kept a stale secret this app can't remove; it authorises nothing, but "
-                                           + "clear it with: " + ControlToken.manualRemovalCommand,
-                                       transcriptTitle: nil, transcript: nil))
                     return
                 }
                 completion(Outcome(ok: true, status: "Disabled — settings changes ask for your password again.",
