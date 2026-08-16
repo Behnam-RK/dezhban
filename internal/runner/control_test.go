@@ -416,9 +416,17 @@ func TestVerifyFindingClearedOnStandbyEntry(t *testing.T) {
 		t.Fatalf("unblock response = %+v, want an OK standby", resp)
 	}
 
-	if s := last.Load(); s.Verify != nil {
-		t.Fatalf("a stale verify finding survived the standby transition: %+v", s.Verify)
-	}
+	// The socket reply is ordered against the run loop; the SNAPSHOT is not.
+	// Publish hands off to a background writer goroutine (see Options.Publish),
+	// so reading last.Load() the instant the reply lands can still observe the
+	// pre-transition snapshot — a stale-read flake, not a regression. Poll
+	// instead, which is also the exact shape of the failure this test guards:
+	// an unreset finding is "republished forever", so it never goes nil and the
+	// poll fails by its own message.
+	pollUntil(t, 2*time.Second, func() bool {
+		s := last.Load()
+		return s != nil && s.Verify == nil
+	}, "a stale verify finding survived the standby transition")
 }
 
 func contains(calls []string, want string) bool {

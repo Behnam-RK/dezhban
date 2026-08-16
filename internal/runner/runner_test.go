@@ -465,11 +465,12 @@ func downWatcher() *netdetect.Watcher {
 	}
 }
 
-// presentTunnel and noTunnel are the two answers Options.ProbeTunnelIfaces can
-// give, as AutoArm reads them: a tunnel interface exists on this host, so start
-// ARMED — or none does, so start in STANDBY. A test that sets AutoArm and
-// neither of these is not testing a posture, it is testing whether whoever runs
-// it has a VPN up.
+// presentTunnel, noTunnel and brokenProbe are the three answers
+// Options.ProbeTunnelIfaces can give, as AutoArm reads them: a tunnel interface
+// exists on this host, so start ARMED — none does, so start in STANDBY — or the
+// probe itself failed, which arms immediately (fail-closed). A test that sets
+// AutoArm and none of these is not testing a posture, it is testing whether
+// whoever runs it has a VPN up.
 func presentTunnel() func() ([]string, error) {
 	return func() ([]string, error) { return []string{"utun4"}, nil }
 }
@@ -478,38 +479,62 @@ func noTunnel() func() ([]string, error) {
 	return func() ([]string, error) { return nil, nil }
 }
 
-// The AutoArm startup decision itself, both ways. It had no test at all: the
-// probe read the live host, so the only way to reach either branch was to run
-// the suite on a machine that happened to be in that state — which is how the
-// standby branch stayed unexercised while the armed one silently carried
+func brokenProbe() func() ([]string, error) {
+	return func() ([]string, error) { return nil, errors.New("interface enumeration failed") }
+}
+
+// The AutoArm startup decision itself, every way it can go. It had no test at
+// all: the probe read the live host, so the only way to reach any branch was to
+// run the suite on a machine that happened to be in that state — which is how
+// the standby branch stayed unexercised while the armed one silently carried
 // TestVerifyFindingClearedOnStandbyEntry.
 //
-// No tunnel present must install NOTHING (ADR-0002's rail: a fresh install
-// cannot lock itself out), and one present must raise the standing guard.
+// The four branches, and why each matters:
+//   - no tunnel present must install NOTHING (ADR-0002's rail: a fresh install
+//     cannot lock itself out);
+//   - one present must raise the standing guard;
+//   - a FAILED probe must arm anyway — an unreadable host is not evidence that
+//     no tunnel exists, and guessing "standby" there would silently open the
+//     network on exactly the host whose state we cannot see;
+//   - ArmAtBoot overrides an empty probe, but only on a host that has connected
+//     before and knows an endpoint (shouldArmAtBoot); this is the branch every
+//     normal boot takes, since the VPN client starts after this daemon.
 func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
 	for _, tc := range []struct {
-		name    string
-		probe   func() ([]string, error)
-		posture string
-		guarded bool
+		name      string
+		probe     func() ([]string, error)
+		armAtBoot bool
+		posture   string
+		guarded   bool
 	}{
-		{"no tunnel interface → standby, nothing installed", noTunnel(), "standby", false},
-		{"tunnel interface present → armed", presentTunnel(), "guard", true},
+		{name: "no tunnel interface → standby, nothing installed", probe: noTunnel(), posture: "standby"},
+		{name: "tunnel interface present → armed", probe: presentTunnel(), posture: "guard", guarded: true},
+		{name: "probe failed → armed, fail-closed", probe: brokenProbe(), posture: "guard", guarded: true},
+		{name: "no tunnel but armAtBoot on a host that has connected → armed", probe: noTunnel(), armAtBoot: true, posture: "guard", guarded: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			be := &fakeBackend{}
 			o := vpnOpts(be)
 			o.AutoArm = true
 			o.ProbeTunnelIfaces = tc.probe
+			// ArmAtBoot needs BOTH rails to override standby: a tunnel observed
+			// up before on this host, and a known endpoint (vpnOpts pins one).
+			o.ArmAtBoot = tc.armAtBoot
+			o.TunnelEverUp = tc.armAtBoot
 			o.Watcher = downWatcher()
 			o.Log = discardLog()
 			// The FIRST snapshot is the startup posture under test; the last one
-			// is always "stopped", published as the loop tears down. Publish runs
-			// on the run-loop goroutine, which is this one (Run is called
-			// inline), so a plain capture needs no synchronization.
+			// is always "stopped", published as the loop tears down. Run hands
+			// snapshots to a BACKGROUND writer goroutine (see Options.Publish),
+			// not to the run loop, so the capture is guarded — the read below is
+			// only ordered after the writer by Run's bounded flush, and that
+			// bound can expire.
+			var mu sync.Mutex
 			var first state.Snapshot
 			var published bool
 			o.Publish = func(s state.Snapshot) {
+				mu.Lock()
+				defer mu.Unlock()
 				if !published {
 					first, published = s, true
 				}
@@ -521,14 +546,24 @@ func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
 				t.Fatalf("Run: %v", err)
 			}
 
-			if !published {
+			mu.Lock()
+			got, ok := first, published
+			mu.Unlock()
+			if !ok {
 				t.Fatal("the run loop published no snapshot at all")
 			}
-			if first.Posture != tc.posture {
-				t.Errorf("start posture = %q, want %q", first.Posture, tc.posture)
+			if got.Posture != tc.posture {
+				t.Errorf("start posture = %q, want %q", got.Posture, tc.posture)
 			}
-			if got := hasCall(be.calls, "apply-guard"); got != tc.guarded {
-				t.Errorf("standing guard applied = %v, want %v; calls=%v", got, tc.guarded, be.calls)
+			if applied := hasCall(be.calls, "apply-guard"); applied != tc.guarded {
+				t.Errorf("standing guard applied = %v, want %v; calls=%v", applied, tc.guarded, be.calls)
+			}
+			// "Nothing installed" is the whole ADR-0002 claim, so assert it as
+			// such: not merely that the guard shape was skipped, but that NO
+			// policy reached the backend. Checking only apply-guard would let a
+			// standby that installed a full block pass.
+			if !tc.guarded && len(be.policies) > 0 {
+				t.Errorf("standby installed %d policy/policies (calls=%v), want none — a host with no tunnel gets no rules", len(be.policies), be.calls)
 			}
 		})
 	}
