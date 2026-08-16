@@ -491,6 +491,14 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
 - [ ] **The About pane never invites an impossible retry.** With no token
       enrolled, "Settings changes" must not read "turn on Touch ID in Settings"
       unless that toggle would actually succeed.
+- [ ] **An enrolled host with an unusable sensor says "Password", not "Touch
+      ID".** With a token enrolled, shut the lid on an external display (or fail
+      Touch ID until it locks out) and open the About pane: "Settings changes"
+      must read "Password — Touch ID is unavailable right now…the enrollment is
+      intact", and a settings save must complete through the sudo prompt.
+      Restore the sensor, re-enter the pane, and it must read "Touch ID (control
+      token enrolled)" again. The row is evaluated on appearance, so navigate
+      away and back rather than watching it in place.
 - [ ] **An entitlement does not silently brick the app.** If anyone adds
       `keychain-access-groups` to `build-app.sh`'s `codesign` call, the built app
       is SIGKILLed at launch rather than gaining keychain access — and
