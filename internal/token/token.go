@@ -8,11 +8,13 @@
 // that writes configuration.
 //
 // A token raises that bar rather than lowering it. The client proves it holds a
-// secret the user enrolled — on macOS, held in the login keychain behind
-// biometry, so producing it is a Touch ID prompt — and the daemon checks it
-// against a root-owned hash no unprivileged process can read or replace. Adding
-// a config-writing op behind this is a net tightening, not an escalation:
-// filesystem permissions alone would have been a weaker gate.
+// secret the user enrolled — on macOS, held in the login keychain and read only
+// after a Touch ID check the app performs, so producing it costs a fingerprint
+// rather than a password (the keychain does not itself withhold the item; see
+// docs/adr/0012-app-checked-biometrics-on-unsigned-builds.md) — and the daemon
+// checks it against a root-owned hash no unprivileged process can read or
+// replace. Adding a config-writing op behind this is a net tightening, not an
+// escalation: filesystem permissions alone would have been a weaker gate.
 //
 // Only the hash is stored on disk. The daemon never holds the token itself, so
 // a readable state directory would leak nothing usable.

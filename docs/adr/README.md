@@ -14,7 +14,7 @@ New records use [template.md](template.md) and take the next free number.
 |---|---|---|
 | [0001](0001-single-guard-mode.md) | Collapse the two enforcement modes into one guard-only product | accepted, implemented |
 | [0002](0002-standby-no-tunnel-posture.md) | Standby is the resting posture when no tunnel exists | accepted, implemented |
-| [0003](0003-biometric-token-over-existing-daemon.md) | Biometric-gated token over the existing daemon, not an SMAppService helper | accepted, implemented |
+| [0003](0003-biometric-token-over-existing-daemon.md) | Biometric-gated token over the existing daemon, not an SMAppService helper | accepted, implemented (storage mechanism superseded by 0012 — the token is a plain keychain item, and the app performs the biometric check) |
 | [0004](0004-switch-window-fully-disableable.md) | The switch window must be fully disableable | accepted, implemented |
 | [0005](0005-allow-local-network-by-default.md) | Local network access is allowed by default | accepted, implemented |
 | [0006](0006-geo-providers-tunnel-scoped.md) | Geo-provider passes are tunnel-scoped, never physical | accepted, implemented |
@@ -22,6 +22,8 @@ New records use [template.md](template.md) and take the next free number.
 | [0008](0008-arm-at-boot.md) | Arm at boot from a persisted observation, plus a bounded pause | accepted, implemented |
 | [0009](0009-redial-budget.md) | The automatic redial window spends from a bounded budget | accepted, implemented |
 | [0010](0010-tunnel-liveness.md) | Zombie-tunnel detection is unconditional; acting on it is opt-in | accepted, implemented |
+| [0011](0011-biometric-enrollment-requires-a-signed-build.md) | Biometric token enrollment requires a signed build, so unsigned builds must refuse it | accepted, implemented (Alternative 3 superseded by 0012) |
+| [0012](0012-app-checked-biometrics-on-unsigned-builds.md) | App-checked biometrics on unsigned builds, rather than no biometrics | accepted, implemented |
 
 > **0006 is the one to read first if you are touching the geo lookup.** It records why
 > the obvious implementation silently defeats the exit-country check, and it exists
@@ -38,6 +40,14 @@ New records use [template.md](template.md) and take the next free number.
 > or pause. It records why the obvious shape — one window per drop, suppressed
 > outright on a flap — is simultaneously unbounded across drops and useless on
 > the poor connection it was meant to serve.
+>
+> **0011 is the one to read before adding an entitlement to the macOS app.** It
+> records that the obvious fix — declaring `keychain-access-groups` on the
+> ad-hoc signature — makes the app unlaunchable rather than working, and that
+> this was tested rather than assumed. **0012 is its other half**: read it before
+> "hardening" the Touch ID check back into a keychain-enforced one, or before
+> repeating anywhere that reading the token *is* the authentication. On an
+> unsigned build it is not, deliberately, and the UI says so.
 >
 > **0008 is the one to read before adding a fourth relaxation trigger** (or
 > before treating "the switch window is the only sanctioned relaxation" as

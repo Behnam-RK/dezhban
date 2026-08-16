@@ -37,5 +37,14 @@ struct MainView: View {
             }
             .environmentObject(state)
         }
+        // The token capability probe is a keychain WRITE, and a locked login
+        // keychain answers one with a system dialog. Warming it here rather than
+        // at launch is the whole point: a menubar-only session — which is most of
+        // them — then never touches the keychain for a feature nobody asked
+        // about, while anyone who opens this window has the answer settled long
+        // before they can navigate to Settings or About. Both panes still fall
+        // back to `capabilityIfKnown` + `resolveCapability`, so this is an
+        // optimisation and never the thing that keeps them off the main thread.
+        .onAppear { ControlToken.warmCapability() }
     }
 }
