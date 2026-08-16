@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/country"
 	"github.com/behnam-rk/dezhban/internal/state"
 )
 
@@ -245,12 +246,14 @@ func GuardHoldsDownedTunnel(s state.Snapshot) bool {
 
 func fullBlockDisplay(s state.Snapshot) Display {
 	if s.CountryCode != "" {
+		// An em dash, not another set of parentheses: country.Label already
+		// ends in "(IR)", so "Full block (Iran (IR))" would nest them.
 		return Display{
 			Key:      KeyBlocked,
-			Headline: fmt.Sprintf("Full block (%s)", s.CountryCode),
+			Headline: fmt.Sprintf("Full block — %s", country.Label(s.CountryCode)),
 			Detail: fmt.Sprintf(
-				"Your VPN is exiting through a country you've blocked (%s). Everything is cut until it moves.",
-				s.CountryCode,
+				"Your VPN is exiting through %s, a country you've blocked. Everything is cut until it moves.",
+				country.Label(s.CountryCode),
 			),
 		}
 	}

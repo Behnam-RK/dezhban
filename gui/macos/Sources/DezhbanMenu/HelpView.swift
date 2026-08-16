@@ -30,7 +30,6 @@ struct HelpView: View {
                 unavailable
             }
         }
-        .navigationTitle("Help")
         .onAppear { openPendingTarget() }
         .onChange(of: state.helpTarget) { _ in openPendingTarget() }
     }
@@ -89,7 +88,11 @@ struct HelpView: View {
                     }
                 }
             }
-            .listStyle(.sidebar)
+            // .inset, not .sidebar: this list sits INSIDE the detail column, so
+            // the sidebar treatment gave the window two nested vibrant sidebars
+            // competing with each other. The window's one real sidebar is
+            // SidebarListView.
+            .listStyle(.inset)
         }
     }
 
@@ -129,7 +132,7 @@ struct HelpView: View {
             Image(systemName: "book").font(.system(size: 40)).foregroundStyle(.secondary)
             Text("Pick a page").font(.title3.weight(.semibold))
             Text("Everything here ships inside the app, so it works even while dezhban has cut your traffic.")
-                .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 420)
+                .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: PaneMetrics.proseColumn)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)
@@ -143,7 +146,7 @@ struct HelpView: View {
             Image(systemName: "book.closed").font(.system(size: 40)).foregroundStyle(.secondary)
             Text("No documentation in this build").font(.title3.weight(.semibold))
             Text("This copy of Dezhban was built without its bundled help. The same pages are in the repository under docs/.")
-                .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 420)
+                .multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: PaneMetrics.proseColumn)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)

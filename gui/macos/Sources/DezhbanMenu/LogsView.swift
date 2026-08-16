@@ -15,7 +15,6 @@ struct LogsView: View {
             Divider()
             ConsoleTextView(console: console)
         }
-        .navigationTitle("Logs")
     }
 
     private var toolbar: some View {
@@ -48,7 +47,7 @@ struct LogsView: View {
                 .lineLimit(1)
                 .truncationMode(.tail)
         }
-        .padding(12)
+        .padding(PaneMetrics.footerPadding)
     }
 
     private func showRecent() {

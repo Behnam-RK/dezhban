@@ -26,6 +26,20 @@ func makeMainMenu() -> NSMenu {
     editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
     editItem.submenu = editMenu
 
+    // The titlebar's toggle is an NSToolbarItem (MainWindow's NSToolbarDelegate);
+    // this is the keyboard route to the same responder-chain action, which
+    // MainSplitViewController supplies. A sidebar app without it is a defect in
+    // its own right — ⌃⌘S is the system-standard equivalent.
+    let viewItem = NSMenuItem()
+    main.addItem(viewItem)
+    let viewMenu = NSMenu(title: "View")
+    let toggleSidebar = viewMenu.addItem(
+        withTitle: "Toggle Sidebar",
+        action: #selector(NSSplitViewController.toggleSidebar(_:)),
+        keyEquivalent: "s")
+    toggleSidebar.keyEquivalentModifierMask = [.control, .command]
+    viewItem.submenu = viewMenu
+
     let windowItem = NSMenuItem()
     main.addItem(windowItem)
     let windowMenu = NSMenu(title: "Window")

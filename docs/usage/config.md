@@ -40,7 +40,7 @@ command set.
 | Field | Type | Default | Notes |
 |---|---|---|---|
 | `pollInterval` | duration string | `"15s"` | How often the public IP / country is checked. Must be > 0. With the default `hysteresis: 2`, a forbidden exit is confirmed in ~30s worst-case; the default provider order keeps this volume on unmetered endpoints. |
-| `blockedCountries` | `[]string` | `["IR","RU","KP"]` | ISO-3166 alpha-2 codes (e.g. `"RU"`, `"IR"`). Upper-cased on load; each must be exactly 2 letters. A match triggers a block. **The default applies only when the key is absent** — an explicit `[]` is a deliberate "block nothing" and is never overridden (2026-07-22 defaults review). |
+| `blockedCountries` | `[]string` | `["IR","RU","KP"]` | ISO-3166 alpha-2 codes (e.g. `"RU"`, `"IR"`). Upper-cased on load; each must be exactly 2 letters. A match triggers a block. **The default applies only when the key is absent** — an explicit `[]` is a deliberate "block nothing" and is never overridden (2026-07-22 defaults review). Written as codes, but *displayed* as `Iran (IR)` everywhere a person reads it — see [Country names](#country-names). |
 | `hysteresis` | int | `2` | Consecutive agreeing readings required before toggling block/allow. Must be ≥ 1. Damps flapping. A *failed* lookup is neutral — it neither commits a pending flip nor cancels one. |
 | `providers` | `[]string` | 8 geo-IP URLs | Geo-location endpoints, tried **in order** for redundancy — the first reachable one absorbs nearly all poll traffic, so the default list is ordered by rate-limit headroom: `get.geojs.io`, `api.country.is`, `ip-api.com`, `ipwho.is`, `freeipapi.com`, `ifconfig.co`, `ipinfo.io`, `ipapi.co`. Only these known URLs are usable (each needs a response parser); unknown URLs are skipped with a warning. At least one required. |
 | `providerQuorum` | bool | `false` | Require a majority of providers to agree on the country before acting. |
@@ -214,7 +214,9 @@ and installs no rules at all.
 - `pollInterval` > 0
 - `hysteresis` ≥ 1
 - at least one `providers` entry
-- every `blockedCountries` code is 2 letters
+- every `blockedCountries` code is 2 letters (length only — membership in ISO-3166
+  is deliberately *not* checked, so a code the name table doesn't know still loads
+  and simply displays as the bare code)
 - `vpn.profiles`: unique names (`[A-Za-z0-9._-]`, ≤64), each with ≥1 valid endpoint
 - `vpn.switchWindow` within `(0, advanced.switchWindowMax]` (no floor), or exactly `"0"` (disabled)
 - `vpn.redialWindow` within `(0, advanced.redialWindowMax]` (no floor, independent cap), or exactly `"0"` (disabled)
@@ -406,6 +408,32 @@ anything, and the way forward is to raise the cap or pick another preset.
 
 See [cli.md](cli.md#create--manage-the-config) for `dezhban config preset
 list/show/diff/apply`.
+
+## Country names
+
+A country is **entered** as an ISO-3166 alpha-2 code and **displayed** with its
+name beside it: `Iran (IR)`. That covers `dezhban status`, `validate`, `monitor`,
+the posture sentence (`Full block — Iran (IR)`), the macOS menubar, and the app's
+Overview. The code stays visible on purpose — it is the token you have to type
+back into `blockedCountries` or pass to `--simulate-country`.
+
+Machine-readable output is untouched and still carries bare codes:
+`config get blockedCountries` prints `IR,RU,KP`, `config show` prints the file
+as written, and `status --json` keeps `countryCode` / `blockedCountries` as they
+were. The names ride alongside in the new `countryName` and
+`blockedCountryNames` fields, which an older daemon simply omits — every reader
+falls back to the code.
+
+Both carry **bare names** — `"Iran"`, not `"Iran (IR)"` — and
+`blockedCountryNames` pairs with `blockedCountries` index for index, holding an
+empty string where the table has no name. One shape for a single country and
+for a list, so a reader composes `Name (CODE)` the one way; a field that looked
+parallel but held a ready-made label would have that same reader print
+`Iran (IR) (IR)`.
+
+Names come from a table built into the daemon (CLDR's English short names), so
+the CLI, the menubar and the window can never disagree about what a code is
+called. A code the table doesn't know displays as the bare code.
 
 ## Sample configs
 

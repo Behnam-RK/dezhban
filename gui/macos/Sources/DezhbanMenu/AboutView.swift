@@ -53,7 +53,6 @@ struct AboutView: View {
             updateSection
         }
         .formStyle(.grouped)
-        .navigationTitle("About Dezhban")
         .onAppear(perform: load)
     }
 
@@ -220,7 +219,7 @@ struct AboutView: View {
         binaryPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
         DispatchQueue.global(qos: .userInitiated).async {
             // `ControlToken.capability` is a keychain probe — an ADD plus a DELETE
-            // — the first time anything asks for it. `MainView` warms it when the
+            // — the first time anything asks for it. `DetailHostView` warms it when the
             // window first appears (NOT `AppDelegate`, deliberately — see
             // `ControlToken.warmCapability`), but only when biometry was usable at
             // that moment: a Mac woken from clamshell, or one in Touch ID lockout

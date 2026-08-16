@@ -29,6 +29,7 @@ import (
 	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/config"
 	"github.com/behnam-rk/dezhban/internal/control"
+	"github.com/behnam-rk/dezhban/internal/country"
 	"github.com/behnam-rk/dezhban/internal/decision"
 	"github.com/behnam-rk/dezhban/internal/firewall"
 	"github.com/behnam-rk/dezhban/internal/learned"
@@ -1489,7 +1490,7 @@ func cmdValidate(args []string) int {
 	if src == "" {
 		src = "(built-in defaults — no config file found)"
 	}
-	blocked := cfg.BlockedCountries
+	blocked := country.Labels(cfg.BlockedCountries)
 	if len(blocked) == 0 {
 		blocked = []string{"(none)"}
 	}
@@ -1544,7 +1545,7 @@ func cmdMonitor(args []string) int {
 		Once(ctx context.Context) (monitor.Reading, error)
 	} = base
 	if c := strings.TrimSpace(*simCountry); c != "" {
-		fmt.Fprintf(os.Stderr, "SIMULATION: forcing country %s\n", strings.ToUpper(c))
+		fmt.Fprintf(os.Stderr, "SIMULATION: forcing country %s\n", country.Label(c))
 		mon = monitor.NewSimMonitor(base, c)
 	}
 
@@ -1565,7 +1566,7 @@ func cmdMonitor(args []string) int {
 		if lookupErr != nil {
 			fmt.Printf("public IP:  (lookup failed: %v)\n", lookupErr)
 		} else {
-			fmt.Printf("public IP:  %s   country: %s   provider: %s\n", r.IP, r.CountryCode, r.Provider)
+			fmt.Printf("public IP:  %s   country: %s   provider: %s\n", r.IP, country.Label(r.CountryCode), r.Provider)
 		}
 
 		fmt.Println("tunnels:")
@@ -2582,7 +2583,7 @@ func cmdStatus(args []string) int {
 		return statusJSON(cfg)
 	}
 
-	blocked := cfg.BlockedCountries
+	blocked := country.Labels(cfg.BlockedCountries)
 	if len(blocked) == 0 {
 		blocked = []string{"(none)"}
 	}

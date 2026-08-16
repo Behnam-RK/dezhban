@@ -34,6 +34,18 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .about: return "info.circle"
         }
     }
+
+    /// The window title for this section. The window is an AppKit NSWindow with
+    /// an AppKit split view (MainWindow), so there is no NavigationSplitView to
+    /// bridge a `.navigationTitle` into the titlebar — MainWindow binds the
+    /// title to the selection through this instead.
+    ///
+    /// Five cases are just `label`; About is the one that differs, because the
+    /// pane it names has always titled itself "About Dezhban" while the sidebar
+    /// row says "About".
+    var windowTitle: String {
+        self == .about ? "About Dezhban" : label
+    }
 }
 
 /// The Logs pane's backing store: one shared monospaced transcript

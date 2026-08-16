@@ -47,6 +47,12 @@ type Snapshot struct {
 	Blocked     bool   `json:"blocked"`      // egress currently cut
 	IP          string `json:"ip,omitempty"` // last observed public IP
 	CountryCode string `json:"countryCode,omitempty"`
+	// CountryName is CountryCode's English short name ("Kazakhstan"), resolved
+	// by internal/country so the CLI, the menubar and the window cannot
+	// disagree about it. Purely additive: CountryCode remains the machine
+	// identifier and is what every comparison uses. Empty when the code is
+	// empty or is not in the table.
+	CountryName string `json:"countryName,omitempty"`
 	Provider    string `json:"provider,omitempty"` // geo provider of the last reading
 	// LookupErr is a GENUINE exit-country lookup failure: a tunnel was up, so
 	// there was an exit to measure, and measuring it did not work — the exit may
@@ -84,6 +90,18 @@ type Snapshot struct {
 	// staleness threshold off the actual interval instead of hardcoding one. 0 when unknown.
 	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
 	BlockedCountries    []string `json:"blockedCountries,omitempty"`
+	// BlockedCountryNames parallels BlockedCountries index-for-index, holding
+	// each code's English short name ("Iran"). Bare names, NOT display labels
+	// like "Iran (IR)" — the same contract as CountryName above, so a consumer
+	// composes a label the one way whether it holds a single country or a list.
+	// A field pair that looked parallel but held different shapes would have a
+	// reader render "Iran (IR) (IR)" by following the obvious analogy.
+	// An entry is empty when its code is not in the table, exactly as
+	// CountryName is. Written together with BlockedCountries in one place
+	// (runner.publish) so the two cannot drift; consumers that read it must
+	// still fall back to the code, because a daemon older than this field
+	// sends only BlockedCountries.
+	BlockedCountryNames []string `json:"blockedCountryNames,omitempty"`
 	PID                 int      `json:"pid,omitempty"`
 	// ActiveProfile is the profile the most recent switch window verified onto
 	// (VPN mode); "" until a switch window has completed. Normal guard operation

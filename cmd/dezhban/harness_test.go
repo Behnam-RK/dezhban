@@ -205,8 +205,10 @@ func TestCmdValidate(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("validate exited %d, want 0 (stdout=%q)", code, stdout)
 	}
-	if !strings.Contains(stdout, "config OK") || !strings.Contains(stdout, "IR, CN") {
-		t.Errorf("validate output = %q, want it to confirm the config and list the blocked countries", stdout)
+	// Named, not bare codes — but the code stays visible, because it is the
+	// token the user has to type back into blockedCountries.
+	if !strings.Contains(stdout, "config OK") || !strings.Contains(stdout, "Iran (IR), China (CN)") {
+		t.Errorf("validate output = %q, want it to confirm the config and name the blocked countries", stdout)
 	}
 
 	bad := filepath.Join(t.TempDir(), "bad.json")

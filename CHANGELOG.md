@@ -14,6 +14,30 @@ current as you land changes.
 
 ### Added
 
+- **Countries are named, not just coded.** `Iran (IR)` rather than `IR`,
+  everywhere a person reads one: `dezhban status`, `validate`, `monitor`
+  (including its `--simulate-country` banner), the rendered posture sentence
+  (`Full block — Iran (IR)`), the macOS menubar dropdown, and the app's
+  Overview. The code stays visible on purpose — it is the token you type back
+  into `blockedCountries` or pass to `--simulate-country`. Machine-readable
+  output is deliberately unchanged: `config get blockedCountries` still prints
+  `IR,RU,KP`, `config show` still prints the file as written, and
+  `status --json` keeps `countryCode`/`blockedCountries` as they were, with the
+  names carried alongside in the new `countryName` and `blockedCountryNames`
+  snapshot fields. Names come from one table in the daemon
+  (`internal/country`, CLDR English short names, stdlib only — no new
+  dependency), so the CLI, menubar and window cannot disagree; a code the
+  table does not know displays as the bare code, and validation is unchanged
+  (still length-only, so an unrecognised code still loads). An older daemon
+  omits the new fields and every reader falls back to the code.
+- **macOS app: "Open minimized" (Never / Always / Only at login).** Decides
+  whether the main window opens when Dezhban starts. Defaults to "Only at
+  login", which is exactly what the app already did, so an upgrade changes
+  nothing for anyone who leaves it alone. It is an app preference on this Mac
+  (like the notification and update-check toggles), not a daemon config key —
+  so it needs no password and never touches `/etc/dezhban`. The Dock icon and
+  the menubar's "Open Dezhban…" open the window in every mode.
+
 - **Enforcement verification** (`vpn.advanced.verifyInterval`, default `1m`).
   The run loop now periodically confirms the firewall rules it believes are
   installed are actually still there AND still enforcing — not just present
@@ -83,6 +107,12 @@ current as you land changes.
   suppressed"`. Anyone grepping or alerting on the old strings should update
   the pattern.
 
+- **macOS app: the Overview hero now shows the brand state tile for the
+  healthy state too**, instead of the crimson app icon. The hero is a status
+  readout — colour is the state — and the menubar has always shown the teal
+  guardian for a healthy guard, so the two surfaces disagreed about the same
+  snapshot. The Dock tile is unchanged and still shows the app icon.
+
 ### Fixed
 
 - **STANDBY no longer full-blocks the host at startup when the physical
@@ -96,6 +126,46 @@ current as you land changes.
   this tool) got a FULL BLOCK applied on top of standby on any boot that beat
   the VPN client to it — the lockout standby exists to prevent. The startup
   observation now skips standby, matching the loop.
+- **macOS app: the main window's sidebar and titlebar are now real macOS
+  chrome.** The sidebar rendered as a floating, bordered card inset from the
+  window edges instead of a full-height source list, and the sidebar-toggle
+  button — together with an orphaned separator hairline — jumped from the
+  middle of the titlebar to the far right whenever the sidebar collapsed. The
+  window sets `toolbarStyle = .unified` but never actually installed a
+  toolbar, which left the unified titlebar treatment inert and let SwiftUI
+  supply one containing nothing but a toggle and a tracking separator with no
+  trailing content. The window now owns an `NSToolbar` and an
+  `NSSplitViewController` whose sidebar item is a real AppKit source list, so
+  the sidebar runs edge to edge and up behind the titlebar, the toggle stays
+  put, and the separator tracks the actual split divider. The section name
+  moved from the titlebar into the toolbar beside it, and each pane's
+  now-inert `.navigationTitle` was removed in favour of one binding on the
+  sidebar selection. Adds a **View ▸ Toggle Sidebar (⌃⌘S)** menu item, which
+  the app never had. The window's minimum width also rises to 820pt: the Help
+  pane's inner split needs 620pt and could not fit at the old 640pt minimum.
+- **macOS app: the Overview's buttons no longer truncate, and its content no
+  longer sprawls.** At a narrow window every label in the action row shortened
+  at once — "Block n…", "Switchin…", "Guard…" — because an `HStack` given less
+  width than its children need compresses all of them rather than admitting it
+  does not fit; the row's natural width exceeds the pane at the minimum window
+  size, so this was reachable by simply resizing. The row now wraps onto as
+  many lines as it needs, keeping the trailing lifecycle action ("Guard down",
+  "Apply…") flush right, and the Panic caption wraps instead of truncating.
+  At the other end, nothing capped the content width, so the divider ran the
+  full width of a large display and the trailing button was flung far from the
+  rest; content is now capped at a readable column. The Settings footer had
+  the identical defect and gets the identical fix.
+- **macOS app: the "off" states showed a generic SF Symbol shield instead of a
+  dezhban artifact.** `build-app.sh` ships only two Dock state images, because
+  the Dock deliberately coarsens every posture to "blocked" or "on" — but the
+  Overview asked that same two-file set for the full five-state key, so `off`,
+  `warning` and `paused` resolved to no file at all and fell back to a plain
+  system shield. The three degraded pages (CLI missing, service not installed,
+  daemon stopped) hit this every single time. All five official state tiles
+  from `gui/artifacts/png` now ship as their own resource family, and the
+  build warns if one is missing rather than letting it go unnoticed until
+  someone reaches that state.
+
 - **`dezhban panic`'s teardown now stays effective across every automatic
   enforcement path, not just periodic verification.** Previously the
   panic-disarm marker (which tells enforcement verification to stand down

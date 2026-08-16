@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/behnam-rk/dezhban/internal/config"
+	"github.com/behnam-rk/dezhban/internal/country"
 )
 
 // Question kinds. The set is small on purpose: every kind must be renderable
@@ -77,17 +78,24 @@ type Question struct {
 // Gated reports whether this question depends on an earlier answer.
 func (q Question) Gated() bool { return q.RequiresID != "" }
 
-// CommonBlocked are the countries offered as checkboxes. Any other ISO code can
-// be typed into the free-text question that follows.
-var CommonBlocked = []Option{
-	{Label: "Iran (IR)", Value: "IR"},
-	{Label: "Russia (RU)", Value: "RU"},
-	{Label: "China (CN)", Value: "CN"},
-	{Label: "North Korea (KP)", Value: "KP"},
-	{Label: "Syria (SY)", Value: "SY"},
-	{Label: "Cuba (CU)", Value: "CU"},
-	{Label: "Belarus (BY)", Value: "BY"},
-}
+// commonBlockedCodes are the countries offered as checkboxes, in the order they
+// are shown. Any other ISO code can be typed into the free-text question that
+// follows — so this list is a convenience, never a restriction, and adding a
+// code here changes nothing about what the guard can block.
+var commonBlockedCodes = []string{"IR", "RU", "CN", "KP", "SY", "CU", "BY"}
+
+// CommonBlocked are those codes with their display labels. The labels come from
+// internal/country rather than being written out here, so the wizard, the CLI
+// and the window all name a country identically — this list used to be the
+// repo's only code→name mapping, and its "Iran (IR)" form is the one every
+// other surface now follows.
+var CommonBlocked = func() []Option {
+	out := make([]Option, 0, len(commonBlockedCodes))
+	for _, code := range commonBlockedCodes {
+		out = append(out, Option{Label: country.Label(code), Value: code})
+	}
+	return out
+}()
 
 // Options is what the question set is seeded from.
 type Options struct {

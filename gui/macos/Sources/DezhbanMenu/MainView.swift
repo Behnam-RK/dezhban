@@ -1,21 +1,20 @@
 import SwiftUI
 
-/// The main window's root: sidebar navigation over the window's sections. The
-/// selection lives in AppState so actions elsewhere (e.g. a window-triggered
-/// panic) can navigate to the Logs pane programmatically.
-struct MainView: View {
+/// The detail column the window's AppKit split view hosts (see MainWindow).
+///
+/// This file was one `MainView` wrapping a SwiftUI `NavigationSplitView`. The
+/// split is AppKit's now, because the window itself is a hand-built NSWindow
+/// with no SwiftUI scene anywhere — so every chrome behaviour was riding an
+/// undocumented NSHostingController→NSWindow bridge that had already broken
+/// once. AppKit owns the chrome and the sidebar (SidebarViewController);
+/// SwiftUI owns the panes.
+
+/// The detail column: the selected pane, plus the first-run sheet.
+struct DetailHostView: View {
     @EnvironmentObject var state: AppState
 
     var body: some View {
-        NavigationSplitView {
-            List(selection: $state.selectedSection) {
-                ForEach(SidebarSection.allCases) { section in
-                    Label(section.label, systemImage: section.systemImage)
-                        .tag(section)
-                }
-            }
-            .navigationSplitViewColumnWidth(min: 180, ideal: 200)
-        } detail: {
+        Group {
             switch state.selectedSection ?? .overview {
             case .overview: OverviewView()
             case .diagnostics: DiagnosticsView()
@@ -25,6 +24,7 @@ struct MainView: View {
             case .about: AboutView()
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         // A sheet rather than a second window: the wizard is a step you are in,
         // not a place you can leave open behind the thing it configures.
         .sheet(isPresented: $state.showFirstRun) {

@@ -22,7 +22,6 @@ struct OverviewView: View {
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .navigationTitle("Overview")
     }
 
     // MARK: - live
@@ -60,15 +59,30 @@ struct OverviewView: View {
 
                 panicRow
             }
-            .padding(20)
+            .padding(PaneMetrics.panePadding)
+            // Cap the column and keep it anchored to the leading edge. Without
+            // the cap the Divider ran edge-to-edge on a wide display and the
+            // action row's trailing button was flung to the far right with a
+            // window-wide void beside it. Anchored rather than centered: this
+            // is a left-aligned data pane — hero at the left margin, grid
+            // labels right-aligned into a left column, Divider starting at the
+            // margin — and centering it would unmoor it from the sidebar it
+            // reads out of. (The centered treatment stays in `guided`, where
+            // it belongs.) Two stacked frames is the required idiom: the inner
+            // one caps, the outer claims the ScrollView's width to pin it.
+            .frame(maxWidth: PaneMetrics.contentColumn, alignment: .leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private func hero(state iconState: String, symbol: String, title: String) -> some View {
         HStack(spacing: 16) {
-            // The bundled dock-size brand bitmap when available (color IS the
-            // state), SF Symbol fallback for a bare `swift run` binary.
-            if let img = PostureUI.dockIcon(iconState) {
+            // The bundled brand state tile when available (color IS the state),
+            // SF Symbol fallback for a bare `swift run` binary. A state TILE,
+            // not the Dock icon: the Dock's family holds only the two coarsened
+            // keys, so off / warning / paused used to find no file here and
+            // drop to a generic SF Symbol shield.
+            if let img = PostureUI.stateTile(iconState) {
                 Image(nsImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -101,9 +115,13 @@ struct OverviewView: View {
     private func detailsGrid(_ s: Snapshot) -> some View {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
             if let ip = s.ip, !ip.isEmpty {
-                let cc = s.countryCode ?? "??"
+                // An em dash, not a parenthetical: `countryLabel` already ends
+                // in "(IR)", so "1.2.3.4 (Iran (IR) via ipinfo)" would nest one
+                // set of parentheses inside another. Same call render.go's
+                // fullBlockDisplay makes.
+                let cc = s.countryLabel ?? "unknown country"
                 let prov = s.provider.map { " via \($0)" } ?? ""
-                row("Public IP", "\(ip) (\(cc)\(prov))")
+                row("Public IP", "\(ip) — \(cc)\(prov)")
             } else if let err = s.lookupErr, !err.isEmpty {
                 // Only genuine failures reach lookupErr: a tunnel was up, so
                 // there was an exit to measure, and measuring it did not work.
@@ -128,8 +146,9 @@ struct OverviewView: View {
             } else if let p = s.activeProfile, !p.isEmpty {
                 row("VPN profile", p)
             }
-            if let bc = s.blockedCountries, !bc.isEmpty {
-                row("Blocking", bc.joined(separator: ", "))
+            let blocking = s.blockedCountryLabels
+            if !blocking.isEmpty {
+                row("Blocking", blocking.joined(separator: ", "))
             }
             row("Updated", PostureUI.agoString(state.now.timeIntervalSince(s.time)))
         }
@@ -147,7 +166,13 @@ struct OverviewView: View {
     private func actionButtons(_ s: Snapshot) -> some View {
         let blocked = s.blocked
         let guardHolds = PostureUI.guardHoldsDownedTunnel(s)
-        return HStack(spacing: 10) {
+        // ActionRow, not HStack: an HStack given less width than its children's
+        // ideal sum compresses every one of them, so at a narrow window all
+        // five labels truncated at once ("Block n…", "Switchin…", "Guard…").
+        // ActionRow wraps instead, and pins "Guard down" to the trailing edge
+        // of whatever line it lands on — which is also why the Spacer that used
+        // to sit before it is gone.
+        return ActionRow(trailingCount: 1) {
             Button("Block now") { AppActions.routine(["block"], "block") }
                 .disabled(blocked)
                 .help(state.routineHint("Cuts all traffic and holds it until you unblock."))
@@ -175,10 +200,10 @@ struct OverviewView: View {
                         ? state.routineHint("Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
                         : "Disabled — vpn.pauseMax is \"0\" in your config.")
             }
-            Spacer()
             Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
                 .help("Stops dezhban. Asks for your password — it can’t stop itself while running.")
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// Opens a switch window, optionally targeted at a known VPN profile so the
@@ -208,7 +233,7 @@ struct OverviewView: View {
     }
 
     private var panicRow: some View {
-        HStack {
+        HStack(alignment: .firstTextBaseline, spacing: PaneMetrics.controlSpacing) {
             Button(role: .destructive) {
                 guard AppActions.confirmPanic() else { return }
                 AppActions.capturedPrivileged(["panic"]) { result in
@@ -218,9 +243,13 @@ struct OverviewView: View {
                 Label("Panic — force unblock…", systemImage: "exclamationmark.octagon.fill")
             }
             .tint(.red)
+            .fixedSize()
             Text("Removes every dezhban firewall rule, even with dezhban not running.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
+                // Wrap to a second line rather than truncate: this caption is
+                // the sentence that stops someone pressing panic by accident.
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -272,7 +301,10 @@ struct OverviewView: View {
     private func guided<Content: View>(symbol: String, title: String, message: String,
                                        @ViewBuilder action: () -> Content) -> some View {
         VStack(spacing: 12) {
-            if let img = PostureUI.dockIcon("off") {
+            // "off" is right for all three degraded pages — CLI missing, service
+            // not installed, and stopped are all "not enforcing". It just
+            // resolves to a real file now.
+            if let img = PostureUI.stateTile("off") {
                 Image(nsImage: img)
                     .resizable()
                     .aspectRatio(contentMode: .fit)
@@ -286,7 +318,7 @@ struct OverviewView: View {
             Text(message)
                 .multilineTextAlignment(.center)
                 .foregroundStyle(.secondary)
-                .frame(maxWidth: 420)
+                .frame(maxWidth: PaneMetrics.proseColumn)
             action()
                 .padding(.top, 4)
             // Panic stays reachable even from a degraded state — stale rules with

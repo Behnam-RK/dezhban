@@ -161,6 +161,11 @@ public struct Snapshot: Codable {
     public let blocked: Bool
     public let ip: String?
     public let countryCode: String?
+    /// The country's English short name, resolved daemon-side by
+    /// internal/country so the CLI, menubar and window can never disagree.
+    /// nil from a daemon older than the field — every reader falls back to the
+    /// bare code, which is why `countryLabel` exists rather than raw access.
+    public let countryName: String?
     public let provider: String?
     public let lookupErr: String?          // a GENUINE failure: a tunnel was up and measuring it failed
     public let exitUnknown: String?        // EXPECTED: no tunnel up, so there is no exit to measure
@@ -173,6 +178,12 @@ public struct Snapshot: Codable {
     public let endpoints: [String]?
     public let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness
     public let blockedCountries: [String]?
+    /// English short names for `blockedCountries`, index-for-index ("Iran").
+    /// Bare names, exactly like `countryName` — the label is composed here, not
+    /// by the daemon. nil from an older daemon; read it through
+    /// `blockedCountryLabels`, which falls back to the codes rather than
+    /// showing nothing.
+    public let blockedCountryNames: [String]?
     public let pid: Int?
     public let activeProfile: String?      // matched VPN profile name, nil if unknown
     public let `switch`: SwitchState?      // present only while a switch window is open
@@ -193,12 +204,48 @@ public struct Snapshot: Codable {
 
     /// The next VPN drop will stay cut rather than opening a redial window.
     public var holdArmed: Bool { hold?.armed ?? false }
+
+    /// The exit country for display: "Kazakhstan (KZ)" when the daemon sent a
+    /// name, the bare code when it did not, nil when there is no reading.
+    ///
+    /// Every surface goes through this rather than reading `countryName`
+    /// directly, because a daemon older than that field sends only the code —
+    /// and an app that showed nothing in that case would be reporting "no exit
+    /// country" for a guard that knows perfectly well where it is exiting.
+    public var countryLabel: String? {
+        guard let code = countryCode, !code.isEmpty else { return nil }
+        guard let name = countryName, !name.isEmpty else { return code }
+        return "\(name) (\(code))"
+    }
+
+    /// Display labels for the blocked list, falling back to the bare codes.
+    ///
+    /// Composed here, by the same rule `countryLabel` applies to the single
+    /// country: a name present means "Iran (IR)", a name absent means the bare
+    /// code. The daemon sends bare names for both, so there is one rule to get
+    /// right rather than two that can disagree.
+    ///
+    /// Two different fallbacks, deliberately. A LENGTH mismatch falls back
+    /// wholesale: the two arrays are written together by the daemon, so unequal
+    /// lengths mean the pairing itself is untrustworthy and zipping them would
+    /// mislabel countries — the one mistake this feature must not make. An
+    /// EMPTY entry at a trustworthy index is not a pairing failure, only a code
+    /// missing from the table, so it degrades alone to its own bare code.
+    public var blockedCountryLabels: [String] {
+        let codes = blockedCountries ?? []
+        guard let names = blockedCountryNames, names.count == codes.count else { return codes }
+        return zip(codes, names).map { code, name in
+            name.isEmpty ? code : "\(name) (\(code))"
+        }
+    }
 }
 
 /// The rendered form of a Snapshot — mirrors Go's `render.Display` (carried via
 /// `state.Display`). `key` is the stable machine classification
 /// ("on"/"off"/"blocked"/"warning"/"paused") and is also a PNG filename
-/// component (menubar-state-<key>.png, dock-state-<key>.png); `headline` and
+/// component (menubar-state-<key>.png and state-tile-<key>.png, both shipped
+/// for all five keys; dock-state-<key>.png only for the two `dockState`
+/// coarsens to); `headline` and
 /// `detail` are the sentences every surface displays instead of composing its
 /// own. Optional because an older daemon's snapshot won't have one.
 public struct Display: Codable {
