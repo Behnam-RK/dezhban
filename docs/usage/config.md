@@ -371,16 +371,16 @@ profiles — the same carve-out `config reset --all` uses, which is what keeps
 `vpn.profiles` (VPN identities) cleanly distinct from presets (strictness
 strategies).
 
-| Key | Strict | Balanced (shipped default) | Relaxed |
-|---|---|---|---|
-| `vpn.switchWindow` | `0` (disabled) | `5s` | `30s` |
-| `vpn.redialWindow` | `0` (disabled) | `30s` | `2m` |
-| `vpn.pauseMax` | `0` (disabled) | `30m` | `2h` |
-| `pollInterval` | `10s` | `15s` | `30s` |
-| `hysteresis` | `1` | `2` | `3` |
-| `vpn.allowLocalNetwork` | `false` | `true` | `true` |
-| `vpn.allowPhysicalDNS` | `false` | `true` | `true` |
-| `vpn.armAtBoot` | `true` | `true` | `false` |
+| Key | Strict | Focused | Balanced (shipped default) | Relaxed |
+|---|---|---|---|---|
+| `vpn.switchWindow` | `0` (disabled) | `0` (disabled) | `5s` | `30s` |
+| `vpn.redialWindow` | `0` (disabled) | `15s` | `30s` | `2m` |
+| `vpn.pauseMax` | `0` (disabled) | `0` (disabled) | `30m` | `2h` |
+| `pollInterval` | `10s` | `10s` | `15s` | `30s` |
+| `hysteresis` | `1` | `1` | `2` | `3` |
+| `vpn.allowLocalNetwork` | `false` | `true` | `true` | `true` |
+| `vpn.allowPhysicalDNS` | `false` | `false` | `true` | `true` |
+| `vpn.armAtBoot` | `true` | `true` | `true` | `false` |
 
 Each preset states its cost in plain words, never a bare "safe"/"strict" label
 (see [glossary.md](../concepts/glossary.md)'s "Words we do not use"):
@@ -391,6 +391,14 @@ Each preset states its cost in plain words, never a bare "safe"/"strict" label
   real IP is unavailable; a VPN endpoint given as a hostname can't re-resolve
   while the tunnel is down (`allowPhysicalDNS` off); faster polling means more
   geo-provider requests.
+- **Focused** — redial-only: the automatic redial window stays, everything an
+  operator could open by hand is off, exit checks fastest. Cost: connecting a
+  brand-new VPN needs its server in `vpn.endpoints` ahead of time — only a drop
+  of the VPN you already use gets a (15s) window; pausing is unavailable; a
+  hostname endpoint can't re-resolve while the tunnel is down
+  (`allowPhysicalDNS` off); faster polling means more geo-provider requests;
+  local devices stay reachable, which also lets them reach you on an untrusted
+  network.
 - **Balanced** — the shipped defaults. Cost: a brief, bounded exposure window
   whenever the VPN redials or a new one connects; local devices stay reachable,
   which also lets them reach you on an untrusted network.

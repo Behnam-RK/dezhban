@@ -38,8 +38,8 @@ Subcommands:
   reset --all       Reset every tunable to defaults, preserving identity data
                     (blockedCountries, vpn.tunnelInterfaces/endpoints/profiles).
                     Delete the config file for a true wipe.
-  preset list       List strict/balanced/relaxed, their cost, and which (if any)
-                    matches the current config
+  preset list       List strict/focused/balanced/relaxed, their cost, and which
+                    (if any) matches the current config
   preset show <name>       Print one preset's key/value set
   preset diff [<name>]     Show keys that differ from a preset (default: the
                     matched-or-nearest one)
@@ -980,8 +980,8 @@ func configReset(flagVal string, args []string, useToken bool) int {
 const presetUsage = `usage: dezhban config preset <subcommand>
 
 Subcommands:
-  list              List strict/balanced/relaxed, their cost, and which (if
-                    any) matches the current config
+  list              List strict/focused/balanced/relaxed, their cost, and
+                    which (if any) matches the current config
   show <name>       Print one preset's key/value set
   diff [<name>]     Show keys that differ from a preset (default: the
                     matched-or-nearest one)
@@ -1088,7 +1088,7 @@ func configPreset(flagVal string, args []string, useToken bool) int {
 func presetByNameOrUsage(name, usage string) (config.Preset, int) {
 	p, ok := config.PresetByName(name)
 	if !ok {
-		fmt.Fprintf(os.Stderr, "unknown preset %q (want strict, balanced, or relaxed)\n%s\n", name, usage)
+		fmt.Fprintf(os.Stderr, "unknown preset %q (want strict, focused, balanced, or relaxed)\n%s\n", name, usage)
 		return config.Preset{}, 2
 	}
 	return p, 0
@@ -1144,10 +1144,10 @@ func presetList(flagVal string, jsonOut bool) int {
 
 func presetShow(rest []string, jsonOut bool) int {
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: dezhban config preset show <strict|balanced|relaxed>")
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset show <strict|focused|balanced|relaxed>")
 		return 2
 	}
-	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset show <strict|balanced|relaxed>")
+	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset show <strict|focused|balanced|relaxed>")
 	if code != 0 {
 		return code
 	}
@@ -1177,7 +1177,7 @@ func presetShow(rest []string, jsonOut bool) int {
 
 func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
 	if len(rest) > 1 {
-		fmt.Fprintln(os.Stderr, "usage: dezhban config preset diff [<strict|balanced|relaxed>]")
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset diff [<strict|focused|balanced|relaxed>]")
 		return 2
 	}
 	cfg, err := loadConfig(flagVal)
@@ -1189,7 +1189,7 @@ func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
 	var target config.Preset
 	if len(rest) == 1 {
 		var code int
-		target, code = presetByNameOrUsage(rest[0], "usage: dezhban config preset diff [<strict|balanced|relaxed>]")
+		target, code = presetByNameOrUsage(rest[0], "usage: dezhban config preset diff [<strict|focused|balanced|relaxed>]")
 		if code != 0 {
 			return code
 		}
@@ -1238,10 +1238,10 @@ func presetDiffCmd(flagVal string, rest []string, jsonOut bool) int {
 
 func presetApply(flagVal string, rest []string, useToken bool) int {
 	if len(rest) != 1 {
-		fmt.Fprintln(os.Stderr, "usage: dezhban config preset apply <strict|balanced|relaxed>")
+		fmt.Fprintln(os.Stderr, "usage: dezhban config preset apply <strict|focused|balanced|relaxed>")
 		return 2
 	}
-	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset apply <strict|balanced|relaxed>")
+	p, code := presetByNameOrUsage(rest[0], "usage: dezhban config preset apply <strict|focused|balanced|relaxed>")
 	if code != 0 {
 		return code
 	}

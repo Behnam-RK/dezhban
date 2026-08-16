@@ -329,7 +329,7 @@ touches — see [config.md](config.md#presets) for exactly what each one sets an
 what it costs you:
 
 ```sh
-dezhban config preset list                  # strict/balanced/relaxed, cost, and which matches now
+dezhban config preset list                  # strict/focused/balanced/relaxed, cost, and which matches now
 dezhban config preset show strict           # one preset's key/value set
 dezhban config preset diff                  # keys that differ from the matched-or-nearest preset
 dezhban config preset diff relaxed          # keys that differ from a specific preset
@@ -598,7 +598,7 @@ The main window's sidebar sections:
   starts, defaulting to "Only at login", which is what the app always did; the
   Dock icon and the menubar's "Open Dezhban…" open it regardless;
   essential-event notifications), a **strictness preset
-  picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
+  picker** (Strict/Focused/Balanced/Relaxed, each showing its cost, or "Custom" with
   the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
   countries, poll interval), windows (switch/redial/endpoint grace), timing,
   all applied through one validated `config set` batch, an **Advanced**
