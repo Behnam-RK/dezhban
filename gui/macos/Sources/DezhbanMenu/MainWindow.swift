@@ -126,7 +126,12 @@ final class MainWindow: NSObject, NSWindowDelegate {
         apply(section: AppState.shared.selectedSection)
         AppState.shared.$selectedSection
             // @Published emits in willSet, so hop a turn to read the new value.
-            .receive(on: RunLoop.main)
+            // DispatchQueue.main, not RunLoop.main: RunLoop.main only delivers in
+            // the default run-loop mode, so a hop scheduled during event tracking
+            // (a click-drag in the sidebar) waits for mouse-up — while the SwiftUI
+            // detail pane, which observes AppState directly, has already switched.
+            // The title would visibly lag the pane it names.
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] section in
                 self?.apply(section: section)
             }

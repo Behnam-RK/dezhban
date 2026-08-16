@@ -76,7 +76,11 @@ final class SidebarViewController: NSViewController {
         select(AppState.shared.selectedSection)
         AppState.shared.$selectedSection
             // @Published emits in willSet, so hop a turn to read the new value.
-            .receive(on: RunLoop.main)
+            // DispatchQueue.main, not RunLoop.main: RunLoop.main delivers only in
+            // the default run-loop mode, so a programmatic jump made during event
+            // tracking (AppState.openHelp from a control the user is still holding)
+            // would not move the highlight until tracking ended.
+            .receive(on: DispatchQueue.main)
             .sink { [weak self] section in self?.select(section) }
             .store(in: &cancellables)
     }

@@ -55,6 +55,7 @@ something to describe — absent in STANDBY, before any tunnel is known.
   "blocked": false,                     // egress currently cut
   "ip": "203.0.113.45",
   "countryCode": "US",
+  "countryName": "United States",       // countryCode's English short name; omitted when the code has no name. BARE — a reader composes "United States (US)" itself
   "provider": "ipinfo.io",
   "lookupErr": "",                      // GENUINE failure: a tunnel was up and measuring its exit failed
   "exitUnknown": "",                    // EXPECTED: no tunnel up, so there is no exit to measure
@@ -65,6 +66,7 @@ something to describe — absent in STANDBY, before any tunnel is known.
   "endpoints": ["198.51.100.7"],        // (vpn) resolved VPN endpoints
   "pollIntervalSeconds": 30,            // daemon poll cadence, for sizing staleness
   "blockedCountries": ["IR"],
+  "blockedCountryNames": ["Iran"],      // pairs with blockedCountries index-for-index; "" where the code has no name. Bare, like countryName — see usage/config.md#country-names
   "pid": 4242,
   "activeProfile": "proton",            // (vpn) profile of the last completed switch window; omitted until one completes
   "switch": {                            // (vpn) present only while a switch window is open

@@ -361,12 +361,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let e = s.enforcementErr, !e.isEmpty {
             line = "⚠︎ Enforcement failed — open Dezhban for details"
         } else if let cc = s.countryLabel, !cc.isEmpty {
-            // Only if the headline does not already name it. `render.Text`'s
+            // Only if the headline does not already END with it. `render.Text`'s
             // FULL BLOCK headline is "Full block — Iran (IR)", so appending
             // unconditionally produced "Full block — Iran (IR) — Iran (IR) via
             // ipinfo": the country twice, with two em-dash separators, in the
             // one-line glance for the exact state this tool exists for.
-            if !line.contains(cc) { line += " — \(cc)" }
+            //
+            // hasSuffix, not contains: the label is the last thing that headline
+            // says, and `contains` matches anywhere. A daemon older than
+            // `countryName` sends only the code, so `cc` is then a bare two-letter
+            // token — and "VPN down — traffic cut" CONTAINS "PN" (Pitcairn),
+            // which suppressed the country and left a dangling "via ipinfo".
+            if !line.hasSuffix(cc) { line += " — \(cc)" }
             if let p = s.provider, !p.isEmpty { line += " via \(p)" }
         }
         return line

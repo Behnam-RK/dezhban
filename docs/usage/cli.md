@@ -582,8 +582,8 @@ Two surfaces, split by urgency:
 
 The main window's sidebar sections:
 
-- **Overview** — live status hero (posture, IP/country — named in full, e.g.
-  `Kazakhstan (KZ)` — tunnel, endpoints,
+- **Overview** — live status hero (posture; IP and exit country, named in full
+  as e.g. `Kazakhstan (KZ)`; tunnel, endpoints,
   every configured VPN profile with the matched one marked, switch-window
   countdown, enforcement-error banner) plus the daily controls, Pause, and a
   visually-separated Panic. With profiles configured, "Switching VPN…"
