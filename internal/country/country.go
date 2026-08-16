@@ -36,6 +36,22 @@ func Label(code string) string {
 	return c
 }
 
+// Names maps Name over a list, preserving length so the result pairs with the
+// input index-for-index. An unrecognised code yields "" at its index — the same
+// degradation Name gives for one code, so a consumer applies one rule ("empty
+// name means show the bare code") whether it is holding a single country or a
+// list. Use this for structured output; use Labels for text meant to be read.
+func Names(codes []string) []string {
+	if len(codes) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(codes))
+	for _, c := range codes {
+		out = append(out, Name(c))
+	}
+	return out
+}
+
 // Labels maps Label over a list, for the several places that print a
 // comma-joined blocklist.
 func Labels(codes []string) []string {

@@ -73,6 +73,39 @@ func TestLabels(t *testing.T) {
 	}
 }
 
+// Names is what structured output carries, so the contract that matters is
+// length: the result pairs with the input index-for-index, and an unknown code
+// holds its place with "" rather than being dropped. Dropping it would shorten
+// the slice and silently pair every later name with the wrong country.
+func TestNamesPairsIndexForIndex(t *testing.T) {
+	got := Names([]string{"IR", "ZZ", "RU"})
+	want := []string{"Iran", "", "Russia"}
+	if len(got) != len(want) {
+		t.Fatalf("Names() = %v (len %d), want %v (len %d)", got, len(got), want, len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("Names()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if Names(nil) != nil {
+		t.Error("Names(nil) should be nil so callers can test emptiness")
+	}
+}
+
+// Names must NOT return what Labels returns. state.BlockedCountryNames holds
+// bare names so a consumer composes "Iran (IR)" itself, by the one rule it
+// already applies to state.CountryName; a label here renders "Iran (IR) (IR)".
+func TestNamesAreBareNotLabels(t *testing.T) {
+	n, l := Names([]string{"IR"}), Labels([]string{"IR"})
+	if n[0] != "Iran" {
+		t.Errorf("Names()[0] = %q, want the bare %q", n[0], "Iran")
+	}
+	if n[0] == l[0] {
+		t.Errorf("Names() and Labels() agree (%q); the two shapes must stay distinct", n[0])
+	}
+}
+
 // The table feeds internal/setup.CommonBlocked, whose test depends on "AQ"
 // existing as a real code but NOT being a common-blocked option.
 func TestTableCoversTheCodesOtherPackagesRelyOn(t *testing.T) {

@@ -478,7 +478,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		CountryName:         country.Name(r.CountryCode),
 		Provider:            r.Provider,
 		BlockedCountries:    o.BlockedCountries,
-		BlockedCountryNames: country.Labels(o.BlockedCountries),
+		BlockedCountryNames: country.Names(o.BlockedCountries),
 		Tunnels:             tunnels,
 		PollIntervalSeconds: int(o.Interval.Seconds()),
 		PID:                 os.Getpid(),

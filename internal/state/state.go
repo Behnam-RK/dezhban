@@ -91,7 +91,13 @@ type Snapshot struct {
 	PollIntervalSeconds int      `json:"pollIntervalSeconds,omitempty"`
 	BlockedCountries    []string `json:"blockedCountries,omitempty"`
 	// BlockedCountryNames parallels BlockedCountries index-for-index, holding
-	// each code's display label ("Iran (IR)"). Written together in one place
+	// each code's English short name ("Iran"). Bare names, NOT display labels
+	// like "Iran (IR)" — the same contract as CountryName above, so a consumer
+	// composes a label the one way whether it holds a single country or a list.
+	// A field pair that looked parallel but held different shapes would have a
+	// reader render "Iran (IR) (IR)" by following the obvious analogy.
+	// An entry is empty when its code is not in the table, exactly as
+	// CountryName is. Written together with BlockedCountries in one place
 	// (runner.publish) so the two cannot drift; consumers that read it must
 	// still fall back to the code, because a daemon older than this field
 	// sends only BlockedCountries.

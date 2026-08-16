@@ -424,6 +424,13 @@ were. The names ride alongside in the new `countryName` and
 `blockedCountryNames` fields, which an older daemon simply omits — every reader
 falls back to the code.
 
+Both carry **bare names** — `"Iran"`, not `"Iran (IR)"` — and
+`blockedCountryNames` pairs with `blockedCountries` index for index, holding an
+empty string where the table has no name. One shape for a single country and
+for a list, so a reader composes `Name (CODE)` the one way; a field that looked
+parallel but held a ready-made label would have that same reader print
+`Iran (IR) (IR)`.
+
 Names come from a table built into the daemon (CLDR's English short names), so
 the CLI, the menubar and the window can never disagree about what a code is
 called. A code the table doesn't know displays as the bare code.

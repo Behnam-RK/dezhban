@@ -178,9 +178,11 @@ public struct Snapshot: Codable {
     public let endpoints: [String]?
     public let pollIntervalSeconds: Int?   // daemon poll cadence, for sizing staleness
     public let blockedCountries: [String]?
-    /// Display labels for `blockedCountries`, index-for-index ("Iran (IR)").
-    /// nil from an older daemon; read it through `blockedCountryLabels`, which
-    /// falls back to the codes rather than showing nothing.
+    /// English short names for `blockedCountries`, index-for-index ("Iran").
+    /// Bare names, exactly like `countryName` — the label is composed here, not
+    /// by the daemon. nil from an older daemon; read it through
+    /// `blockedCountryLabels`, which falls back to the codes rather than
+    /// showing nothing.
     public let blockedCountryNames: [String]?
     public let pid: Int?
     public let activeProfile: String?      // matched VPN profile name, nil if unknown
@@ -217,14 +219,24 @@ public struct Snapshot: Codable {
     }
 
     /// Display labels for the blocked list, falling back to the bare codes.
-    /// Falls back wholesale rather than per-index: the two arrays are written
-    /// together by the daemon, so a length mismatch means the pairing itself is
-    /// untrustworthy and zipping them would mislabel countries — the one
-    /// mistake this feature must not make.
+    ///
+    /// Composed here, by the same rule `countryLabel` applies to the single
+    /// country: a name present means "Iran (IR)", a name absent means the bare
+    /// code. The daemon sends bare names for both, so there is one rule to get
+    /// right rather than two that can disagree.
+    ///
+    /// Two different fallbacks, deliberately. A LENGTH mismatch falls back
+    /// wholesale: the two arrays are written together by the daemon, so unequal
+    /// lengths mean the pairing itself is untrustworthy and zipping them would
+    /// mislabel countries — the one mistake this feature must not make. An
+    /// EMPTY entry at a trustworthy index is not a pairing failure, only a code
+    /// missing from the table, so it degrades alone to its own bare code.
     public var blockedCountryLabels: [String] {
         let codes = blockedCountries ?? []
         guard let names = blockedCountryNames, names.count == codes.count else { return codes }
-        return names
+        return zip(codes, names).map { code, name in
+            name.isEmpty ? code : "\(name) (\(code))"
+        }
     }
 }
 

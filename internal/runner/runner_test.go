@@ -582,6 +582,60 @@ func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
 	}
 }
 
+// BlockedCountryNames ships BARE names, and this pins the wiring rather than
+// the helper. country.Names and country.Labels differ by one word at the call
+// site and the compiler is happy with either, so nothing but an assertion on a
+// really-published snapshot stops the field going back to labels — at which
+// point a consumer that composes a label the documented way, as the macOS app
+// does, renders "Iran (IR) (IR)".
+//
+// Bare because CountryName beside it is bare: one shape for a single country
+// and for a list, so a reader applies one rule and cannot be misled by the
+// analogy between two fields that look parallel.
+func TestPublishedBlockedCountryNamesAreBare(t *testing.T) {
+	be := &fakeBackend{}
+	o := vpnOpts(be)
+	// A recognised code and an unrecognised one: the second must hold its index
+	// with "" rather than being dropped, or every later name pairs with the
+	// wrong country.
+	o.BlockedCountries = []string{"IR", "ZZ"}
+	o.Log = discardLog()
+
+	var mu sync.Mutex
+	var first state.Snapshot
+	var published bool
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	o.Publish = func(s state.Snapshot) {
+		mu.Lock()
+		defer mu.Unlock()
+		if !published {
+			first, published = s, true
+			cancel()
+		}
+	}
+	if err := Run(ctx, o); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	mu.Lock()
+	got, ok := first, published
+	mu.Unlock()
+	if !ok {
+		t.Fatal("the run loop published no snapshot at all")
+	}
+	want := []string{"Iran", ""}
+	if len(got.BlockedCountryNames) != len(want) {
+		t.Fatalf("blockedCountryNames = %q, want %q (it must pair with blockedCountries index-for-index)",
+			got.BlockedCountryNames, want)
+	}
+	for i := range want {
+		if got.BlockedCountryNames[i] != want[i] {
+			t.Errorf("blockedCountryNames[%d] = %q, want the bare %q", i, got.BlockedCountryNames[i], want[i])
+		}
+	}
+}
+
 // In legacy mode a tunnel drop must block immediately, with no geo reading at
 // all, and a still-down tunnel must not auto-unblock.
 func TestVPNWatcherObservabilityOnly(t *testing.T) {

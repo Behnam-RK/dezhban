@@ -38,12 +38,25 @@ struct CountryLabelTests {
         #expect(snapshot("\"countryCode\": \"\"").countryLabel == nil)
     }
 
-    @Test func blockedListPrefersLabels() {
+    /// The daemon sends BARE names, the same shape as `countryName`, and the
+    /// label is composed here. A daemon that sent "Iran (IR)" would render
+    /// "Iran (IR) (IR)" — which is the whole reason the field holds names.
+    @Test func blockedListComposesLabelsFromBareNames() {
         let s = snapshot("""
         "blockedCountries": ["IR", "RU"],
-        "blockedCountryNames": ["Iran (IR)", "Russia (RU)"]
+        "blockedCountryNames": ["Iran", "Russia"]
         """)
         #expect(s.blockedCountryLabels == ["Iran (IR)", "Russia (RU)"])
+    }
+
+    /// An empty entry is a code missing from the daemon's table, not a broken
+    /// pairing, so it degrades alone rather than taking the whole list with it.
+    @Test func anUnnamedCodeDegradesAloneToItsBareCode() {
+        let s = snapshot("""
+        "blockedCountries": ["IR", "ZZ", "RU"],
+        "blockedCountryNames": ["Iran", "", "Russia"]
+        """)
+        #expect(s.blockedCountryLabels == ["Iran (IR)", "ZZ", "Russia (RU)"])
     }
 
     @Test func blockedListFallsBackToCodesFromAnOlderDaemon() {
@@ -59,7 +72,7 @@ struct CountryLabelTests {
     @Test func aLengthMismatchFallsBackRatherThanMislabelling() {
         let s = snapshot("""
         "blockedCountries": ["IR", "RU", "KP"],
-        "blockedCountryNames": ["Iran (IR)", "Russia (RU)"]
+        "blockedCountryNames": ["Iran", "Russia"]
         """)
         #expect(s.blockedCountryLabels == ["IR", "RU", "KP"])
     }
