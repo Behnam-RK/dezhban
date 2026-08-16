@@ -2499,13 +2499,23 @@ func (o Options) runGuard(ctx context.Context) error {
 	// Startup observation: only meaningful with a tunnel up and an endpoint known.
 	// With zero tunnels (standing posture) a lookup egresses nowhere useful.
 	//
+	// Skipped in STANDBY, exactly as the geoTick case below skips it: standby
+	// installs no rules by design (ADR-0002), and this call can Apply — a
+	// blocked-country verdict escalates straight to FULL BLOCK. Worse, the
+	// reading it would escalate on is not a VPN exit at all: with no tunnel
+	// present the lookup leaves over the physical link and reports the user's
+	// own ISP country, so precisely the user this tool is for (blockedCountries
+	// naming their real location) would have the daemon full-block the host at
+	// every boot that beat the VPN client to it — the lockout standby exists to
+	// prevent, and the destination-country model that ADR-0001 deleted.
+	//
 	// Also skipped while panic-disarmed: unlike the startup Apply(guard) above
 	// (guaranteed marker-free in the real `dezhban run` entrypoint, since
 	// cmd/dezhban clears it before calling Run), this vpnGeoStep call can
 	// escalate straight to FULL BLOCK, and Run's own contract — never silently
 	// undo a deliberate `dezhban panic` teardown — must not depend on every
 	// caller having cleared the marker first.
-	if len(tunnels) > 0 && len(endpoints) > 0 && (!o.panicDisarmed()) {
+	if !standby && len(tunnels) > 0 && len(endpoints) > 0 && (!o.panicDisarmed()) {
 		res, err, attempted := o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
 		lastRes = res
 		if attempted {

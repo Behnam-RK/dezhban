@@ -471,17 +471,14 @@ func downWatcher() *netdetect.Watcher {
 // probe itself failed, which arms immediately (fail-closed). A test that sets
 // AutoArm and none of these is not testing a posture, it is testing whether
 // whoever runs it has a VPN up.
-func presentTunnel() func() ([]string, error) {
-	return func() ([]string, error) { return []string{"utun4"}, nil }
-}
+// They are the probes themselves, not factories for one: each is stateless, so
+// a call layer that only ever returns the same closure would buy nothing and
+// hide the signature that has to match Options.ProbeTunnelIfaces.
+func presentTunnel() ([]string, error) { return []string{"utun4"}, nil }
 
-func noTunnel() func() ([]string, error) {
-	return func() ([]string, error) { return nil, nil }
-}
+func noTunnel() ([]string, error) { return nil, nil }
 
-func brokenProbe() func() ([]string, error) {
-	return func() ([]string, error) { return nil, errors.New("interface enumeration failed") }
-}
+func brokenProbe() ([]string, error) { return nil, errors.New("interface enumeration failed") }
 
 // The AutoArm startup decision itself, every way it can go. It had no test at
 // all: the probe read the live host, so the only way to reach any branch was to
@@ -504,17 +501,26 @@ func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
 		name      string
 		probe     func() ([]string, error)
 		armAtBoot bool
-		posture   string
-		guarded   bool
+		// country is what the exit-country lookup answers at startup. It is a
+		// case field rather than vpnOpts' steady "US" because "nothing
+		// installed" has to hold for a BLOCKED answer too — and that is the
+		// only answer that can reach an Apply from standby, since an allowed
+		// one has nothing to escalate to. A standby row pinned to "US" agrees
+		// with itself while the rail it names is broken.
+		country string
+		posture string
+		guarded bool
 	}{
-		{name: "no tunnel interface → standby, nothing installed", probe: noTunnel(), posture: "standby"},
-		{name: "tunnel interface present → armed", probe: presentTunnel(), posture: "guard", guarded: true},
-		{name: "probe failed → armed, fail-closed", probe: brokenProbe(), posture: "guard", guarded: true},
-		{name: "no tunnel but armAtBoot on a host that has connected → armed", probe: noTunnel(), armAtBoot: true, posture: "guard", guarded: true},
+		{name: "no tunnel interface → standby, nothing installed", probe: noTunnel, country: "US", posture: "standby"},
+		{name: "no tunnel interface, blocked country → standby, still nothing installed", probe: noTunnel, country: "IR", posture: "standby"},
+		{name: "tunnel interface present → armed", probe: presentTunnel, country: "US", posture: "guard", guarded: true},
+		{name: "probe failed → armed, fail-closed", probe: brokenProbe, country: "US", posture: "guard", guarded: true},
+		{name: "no tunnel but armAtBoot on a host that has connected → armed", probe: noTunnel, country: "US", armAtBoot: true, posture: "guard", guarded: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			be := &fakeBackend{}
 			o := vpnOpts(be)
+			o.Monitor = steadyMonitor{cc: tc.country}
 			o.AutoArm = true
 			o.ProbeTunnelIfaces = tc.probe
 			// ArmAtBoot needs BOTH rails to override standby: a tunnel observed
@@ -532,16 +538,22 @@ func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
 			var mu sync.Mutex
 			var first state.Snapshot
 			var published bool
+			// Bounded, but not paid in full: the startup posture is published
+			// before the loop's first select, so stop the loop the moment it
+			// lands instead of sitting out a fixed timeout in every case. The
+			// timeout stays as the backstop for "no snapshot ever arrived",
+			// which the !ok check below reports by name.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 			o.Publish = func(s state.Snapshot) {
 				mu.Lock()
 				defer mu.Unlock()
 				if !published {
 					first, published = s, true
+					cancel()
 				}
 			}
 
-			ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-			defer cancel()
 			if err := Run(ctx, o); err != nil {
 				t.Fatalf("Run: %v", err)
 			}
@@ -555,7 +567,7 @@ func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
 			if got.Posture != tc.posture {
 				t.Errorf("start posture = %q, want %q", got.Posture, tc.posture)
 			}
-			if applied := hasCall(be.calls, "apply-guard"); applied != tc.guarded {
+			if applied := containsCall(be.calls, "apply-guard"); applied != tc.guarded {
 				t.Errorf("standing guard applied = %v, want %v; calls=%v", applied, tc.guarded, be.calls)
 			}
 			// "Nothing installed" is the whole ADR-0002 claim, so assert it as

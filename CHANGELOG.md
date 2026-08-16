@@ -85,6 +85,17 @@ current as you land changes.
 
 ### Fixed
 
+- **STANDBY no longer full-blocks the host at startup when the physical
+  connection's country is in `vpn.blockedCountries`.** With `vpn.autoArm` on
+  and no tunnel interface present yet, the daemon entered standby — installing
+  no rules, by design ([ADR-0002](docs/adr/0002-standby-no-tunnel-posture.md))
+  — but the one-off exit-country observation at startup ran anyway, unlike the
+  periodic one in the run loop, which has always skipped standby. With no
+  tunnel up that lookup leaves over the physical link and reports the user's
+  own ISP country, so anyone blocking their real location (the primary use for
+  this tool) got a FULL BLOCK applied on top of standby on any boot that beat
+  the VPN client to it — the lockout standby exists to prevent. The startup
+  observation now skips standby, matching the loop.
 - **`dezhban panic`'s teardown now stays effective across every automatic
   enforcement path, not just periodic verification.** Previously the
   panic-disarm marker (which tells enforcement verification to stand down

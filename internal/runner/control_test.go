@@ -391,7 +391,7 @@ func TestVerifyFindingClearedOnStandbyEntry(t *testing.T) {
 	// developer's: presentTunnel() starts armed everywhere, including a CI
 	// runner with no tunnel interface of its own.
 	o.AutoArm = true
-	o.ProbeTunnelIfaces = presentTunnel()
+	o.ProbeTunnelIfaces = presentTunnel
 	o.Watcher = downWatcher()
 	o.VerifyInterval = 5 * time.Millisecond
 	var downEdges atomic.Int64
