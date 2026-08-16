@@ -193,11 +193,40 @@ enum ConfigApply {
                 .split(separator: "\n")
                 .map { $0.trimmingCharacters(in: .whitespaces) }
                 .first(where: { $0.count >= 32 && $0.allSatisfy(\.isHexDigit) })
-            guard result.ok, let token = token else {
+            // Two failures, deliberately NOT one guard: they leave the host in
+            // opposite states and need opposite recoveries. `token enroll` writes
+            // the hash and only then prints, so a non-zero exit means no hash was
+            // written — the host is exactly as it was, and any keychain item still
+            // matches whatever the daemon had before. Nothing to undo, nothing to
+            // mark.
+            guard result.ok else {
                 DispatchQueue.main.async {
                     completion(Outcome(ok: false, status: "Could not enroll — see output.",
                                        transcriptTitle: "Enroll control token — failed",
                                        transcript: result.output))
+                }
+                return
+            }
+            guard let token = token else {
+                // The other half: `token enroll` SUCCEEDED, so the daemon's hash is
+                // already the new token's — but nothing this app can read came
+                // back, so nobody holds that token. That is the same stranded state
+                // a failed `store` leaves, so it gets the same two halves undone:
+                // roll the daemon back, and mark whatever survives in the keychain,
+                // which the enroll has by now made stale. Not gated on the
+                // rollback, for the reason spelled out in the `store` path below.
+                let rollback = DezhbanCLI.runPrivileged(batch: [["token", "forget"]])
+                if ControlToken.isStored {
+                    ControlToken.markOrphaned()
+                }
+                DispatchQueue.main.async {
+                    let tail = rollback.ok
+                        ? "the enrollment was rolled back."
+                        : "rolling the enrollment back also failed — run 'sudo dezhban token forget'."
+                    completion(Outcome(ok: false,
+                                       status: "dezhban enrolled a token but printed none this app could read — \(tail)",
+                                       transcriptTitle: "Enroll control token — no token in the output",
+                                       transcript: result.output + "\n\nRolling the enrollment back:\n" + rollback.output))
                 }
                 return
             }

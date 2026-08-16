@@ -481,6 +481,13 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
 - [ ] **A failed store rolls the daemon back.** If `SecItemAdd` fails after
       `token enroll` has already run, `dezhban token status` must return to
       "not enrolled" without the user intervening.
+- [ ] **A failed store stops offering the stale secret — rollback or not.** With
+      a leftover keychain item the app cannot replace, force BOTH branches of the
+      rollback: one that succeeds, and one that fails (dismiss its admin prompt).
+      In each, the About pane's "Settings changes" must read "Password — the
+      stored secret is stale", and a settings save must complete through the
+      password prompt rather than failing with a daemon refusal. The flag is
+      session-only, so check without relaunching the app.
 - [ ] **The About pane never invites an impossible retry.** With no token
       enrolled, "Settings changes" must not read "turn on Touch ID in Settings"
       unless that toggle would actually succeed.
