@@ -274,4 +274,25 @@ struct SnapshotTests {
         #expect(s.zombie == nil)
         #expect(s.exitIpChangedAt == nil)
     }
+
+    @Test func decodesIPv6WhenPresent() {
+        let json = """
+        { "time": "2026-08-16T10:00:00Z", "posture": "guard", "blocked": false,
+          "ip": "203.0.113.9", "ipv6": "2001:db8::42" }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.ipv6 == "2001:db8::42")
+        #expect(s.ip == "203.0.113.9")
+    }
+
+    /// Additive rule, same as every optional field: an older daemon (or a
+    /// v4-only host) sends no ipv6, and absence must decode as nothing to
+    /// show, never a failure.
+    @Test func absentIPv6IsNotAFailure() {
+        let json = """
+        { "time": "2026-08-16T10:00:00Z", "posture": "guard", "blocked": false, "ip": "203.0.113.9" }
+        """.data(using: .utf8)!
+        let s = try! #require(StateReader.decode(json))
+        #expect(s.ipv6 == nil)
+    }
 }

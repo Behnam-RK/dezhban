@@ -160,6 +160,11 @@ public struct Snapshot: Codable {
     public let posture: String         // "standby" | "guard" | "full-block" | "switch-window" | "stopped"
     public let blocked: Bool
     public let ip: String?
+    /// Last observed public IPv6 address, from the daemon's separate
+    /// best-effort lookup while the guard is healthy. Observational only —
+    /// never part of a country decision — and nil from an older daemon or on a
+    /// v4-only host, so absence means "nothing to show", never an error.
+    public let ipv6: String?
     public let countryCode: String?
     /// The country's English short name, resolved daemon-side by
     /// internal/country so the CLI, menubar and window can never disagree.

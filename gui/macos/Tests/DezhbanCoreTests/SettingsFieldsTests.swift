@@ -69,6 +69,41 @@ struct SettingsFieldsTests {
         }
     }
 
+    /// The optional-key contract: unregistered, the key contributes no pair
+    /// (an old CLI must never be sent a key it can't parse — and its `config
+    /// get` for it must never be attempted, which is the caller's half);
+    /// registered, it seeds, edits, and emits like any other key.
+    @Test func optionalKeyParticipatesOnlyWhenRegistered() {
+        let bare = SettingsFields(seeded: ["vpn.allowGeoProviders": "false"])
+        #expect(!bare.pairs().contains { $0.hasPrefix("vpn.allowGeoProviders=") })
+        #expect(bare.allowGeoProviders) // resting read is the daemon default
+        #expect(!bare.stagedKeys.contains("vpn.allowGeoProviders"))
+
+        let with = SettingsFields(seeded: ["vpn.allowGeoProviders": "false"],
+                                  extraKeys: ["vpn.allowGeoProviders"])
+        #expect(with.pairs().contains("vpn.allowGeoProviders=false"))
+        #expect(!with.allowGeoProviders)
+    }
+
+    @Test func writingAnUnregisteredOptionalKeyIsDropped() {
+        var f = SettingsFields()
+        f.allowGeoProviders = false
+        #expect(!f.pairs().contains { $0.hasPrefix("vpn.allowGeoProviders=") })
+    }
+
+    @Test func registerRefusesKeysOutsideTheOptionalList() {
+        var f = SettingsFields()
+        f.register(key: "vpn.enabled") // retired; must never gain storage
+        #expect(!f.stagedKeys.contains("vpn.enabled"))
+    }
+
+    @Test func allowPhysicalDNSIsStagedAndRestsOn() {
+        var f = SettingsFields()
+        #expect(f.allowPhysicalDNS) // daemon default is true; resting must match
+        f.allowPhysicalDNS = false
+        #expect(f.pairs().contains("vpn.allowPhysicalDNS=false"))
+    }
+
     /// The bug this storage change exists to make unrepresentable: a value must
     /// come back out under the key it went in under, whatever the key order is.
     @Test func everyValueIsStagedUnderItsOwnKey() {
