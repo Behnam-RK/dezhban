@@ -81,7 +81,9 @@ struct FirstRunView: View {
     }
 
     private var stepLabel: String {
-        guard !visibleGroups.isEmpty else { return "" }
+        // "Step 1 of 1" is noise on a flow with nothing to step through —
+        // which the wizard now often is, after the question shrink.
+        guard visibleGroups.count > 1 else { return "" }
         return "Step \(min(groupIndex + 1, visibleGroups.count)) of \(visibleGroups.count)"
     }
 

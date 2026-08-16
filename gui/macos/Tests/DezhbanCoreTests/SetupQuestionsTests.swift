@@ -143,4 +143,71 @@ struct SetupQuestionsTests {
                 "a VPN configured from the CLI means these questions were already answered")
         #expect(!FirstRunDecision.offer(isComplete: true, vpnKnown: false))
     }
+
+    // MARK: - the shrunk wizard
+
+    /// The daemon's question list after the 2026-08 shrink: blocked countries,
+    /// configure-VPN?, auto-vs-manual, and the gated VPN details — nothing
+    /// else. Everything above must keep working with this list, because the
+    /// view renders whatever arrives, and the id-keyed special cases
+    /// (blockedCountries+otherCountries fold, autoMode's tunnel clearing) must
+    /// hold with the surrounding questions gone.
+    static let shrunkJSON = """
+    [
+      {"id":"blockedCountries","key":"blockedCountries","kind":"multiselect","title":"Blocked countries",
+       "options":[{"label":"Iran (IR)","value":"IR"},{"label":"Russia (RU)","value":"RU"}],
+       "selected":["IR"],"group":1},
+      {"id":"otherCountries","kind":"list","title":"Other country codes","default":"AQ","group":1},
+      {"id":"configureVPN","kind":"bool","title":"Configure your VPN now?","default":"true","group":1},
+      {"id":"autoMode","kind":"bool","title":"Use automatic VPN detection? (recommended)",
+       "default":"true","group":2,"requiresId":"configureVPN","requiresValue":"true"},
+      {"id":"tunnels","key":"vpn.tunnelInterfaces","kind":"multiselect","title":"Tunnel interface(s)",
+       "options":[{"label":"utun4","value":"utun4"}],"selected":[],"group":3,
+       "requiresId":"autoMode","requiresValue":"false"},
+      {"id":"profileFiles","kind":"list","title":"Self-hosted VPN config files","group":4,
+       "requiresId":"configureVPN","requiresValue":"true"},
+      {"id":"endpoints","key":"vpn.endpoints","kind":"list","title":"VPN endpoint(s)","group":4,
+       "requiresId":"configureVPN","requiresValue":"true"}
+    ]
+    """
+
+    static func shrunkQuestions() throws -> [SetupQuestion] {
+        try #require(SetupQuestion.decodeList(Data(shrunkJSON.utf8)))
+    }
+
+    @Test func shrunkListDecodesAndGates() throws {
+        let qs = try Self.shrunkQuestions()
+        #expect(qs.count == 7)
+        var a = SetupAnswers(questions: qs)
+        // Default flow: configure yes, automatic yes — the tunnel question is
+        // never asked.
+        let tunnels = try #require(qs.first { $0.id == "tunnels" })
+        #expect(!a.shouldAsk(tunnels))
+        a["autoMode"] = "false"
+        #expect(a.shouldAsk(tunnels))
+    }
+
+    @Test func shrunkListFoldsOtherCountries() throws {
+        let qs = try Self.shrunkQuestions()
+        var a = SetupAnswers(questions: qs)
+        a["otherCountries"] = "AQ, SY"
+        let pairs = a.configPairs(for: qs)
+        #expect(pairs.contains("blockedCountries=IR,AQ,SY"))
+        // No stray dropped-question keys can appear: the list carries none.
+        #expect(!pairs.contains { $0.hasPrefix("pollInterval=") })
+        #expect(!pairs.contains { $0.hasPrefix("logLevel=") })
+        #expect(!pairs.contains { $0.hasPrefix("providerQuorum=") })
+        #expect(!pairs.contains { $0.hasPrefix("vpn.allowPhysicalDNS=") })
+        #expect(!pairs.contains { $0.hasPrefix("vpn.autoDiscoverEndpoints=") })
+    }
+
+    @Test func shrunkListStillClearsPinsForAutoMode() throws {
+        let qs = try Self.shrunkQuestions()
+        var a = SetupAnswers(questions: qs)
+        a["endpoints"] = "203.0.113.7"
+        let pairs = a.configPairs(for: qs)
+        // configureVPN + autoMode both default true → pinned interfaces cleared.
+        #expect(pairs.contains("vpn.tunnelInterfaces="))
+        #expect(pairs.contains("vpn.endpoints=203.0.113.7"))
+    }
 }

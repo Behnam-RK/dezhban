@@ -611,34 +611,47 @@ Two surfaces, split by urgency:
 
 The main window's sidebar sections:
 
-- **Overview** — live status hero (posture; IP and exit country, named in full
-  as e.g. `Kazakhstan (KZ)`; tunnel, endpoints,
-  every configured VPN profile with the matched one marked, switch-window
-  countdown, enforcement-error banner) plus the daily controls, Pause, and a
-  visually-separated Panic. With profiles configured, "Switching VPN…"
-  becomes a menu so a switch window can target one by name. Degraded states
-  are guided: CLI missing, service not installed, and daemon stopped each
-  render an explanation with the one relevant action inline (Install
-  service… / Guard up).
+- **Overview** — live status hero (posture; public IPv4 — and IPv6 when the
+  daemon has observed one — with the exit country named in full as e.g.
+  `Kazakhstan (KZ)`; the strictness preset; tunnel, the connected VPN app when
+  detection can name it, endpoints (collapsed past three), every configured
+  VPN profile with the matched one marked, switch-window countdown) plus the
+  daily controls, Pause, and a visually-separated Panic. Faults render as
+  banners above the grid — enforcement problems in red, failing exit checks in
+  orange, first line only with the full text behind a disclosure — while an
+  *expected* unknown exit stays a plain row. With profiles configured,
+  "Switching VPN…" becomes a menu so a switch window can target one by name.
+  Degraded states are guided: CLI missing, service not installed, and daemon
+  stopped each render an explanation with the one relevant action inline
+  (Install service… / Guard up).
 - **Settings** — startup ("Start the guard at boot" installs the launchd
   system service so enforcement survives reboots; "Open this app at login" via
   `SMAppService`; **"Open minimized"** — Never / Always / Only at login, an
   app-local preference that decides whether the main window opens when Dezhban
   starts, defaulting to "Only at login", which is what the app always did; the
   Dock icon and the menubar's "Open Dezhban…" open it regardless;
-  essential-event notifications), a **strictness preset
+  **per-event notifications** — a master toggle plus a checkbox per essential
+  event class), a **strictness preset
   picker** (Strict/Focused/Balanced/Relaxed, each showing its cost, or "Custom" with
   the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
-  countries, poll interval), windows (switch/redial/endpoint grace), timing,
-  all applied through one validated `config set` batch, an **Advanced**
-  disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
-  settings changes"** (see below), an explicit **Restart dezhban…**, and the
-  raw config file escape hatch (control socket, geo providers, allowlist are
-  JSON-only).
-- **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
-  with fixes inline instead of a text dump; an optional "Find my VPN's
-  server" checkbox runs it with `--discover`. Read-only, same guarantee as
-  running `dezhban doctor` in a terminal.
+  countries, poll interval, the DNS and exit-check passes with their
+  consequences stated inline), windows (switch/redial/endpoint grace) as
+  **sliders** over each key's real range — Off detent only where "0" is a
+  persisted choice, cap from the live config, Custom escape hatch — all
+  applied through one validated `config set` batch, a **Developer**
+  disclosure generated from the schema's advanced flag (every
+  `vpn.advanced.*` key plus hysteresis/providerQuorum/logLevel), **"Use Touch
+  ID for settings changes"** (see below), an explicit **Restart dezhban…**,
+  and the raw config file escape hatch (control socket, geo providers,
+  allowlist are JSON-only).
+- **Diagnostics** — a **Your VPNs** inventory (`detect-vpn --json`: tunnels
+  found, VPN apps detection can attribute, the connected one marked, an
+  unrecognized client flagged) above `doctor`'s findings (`--json`), rendered
+  as status rows with fixes inline instead of a text dump; an optional "Find
+  my VPN's server" checkbox runs it with `--discover`. Read-only, same
+  guarantee as running `dezhban doctor` in a terminal. When the last report
+  found something to look at, the sidebar's Diagnostics row carries a yellow
+  dot until a later run comes back clean.
 - **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
   (also opens Console.app), and the transcripts of window-triggered
   panic/install/uninstall/apply/restart runs.

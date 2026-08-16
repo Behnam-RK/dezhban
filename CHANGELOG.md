@@ -38,8 +38,39 @@ current as you land changes.
   macOS discovery candidates (`{vpn, server, port, process}`), the connected
   NetworkExtension VPN's name, and the client/interface patterns detection
   recognizes, so an unrecognized VPN can be told apart from a missing one.
+- **macOS app: per-event notifications.** The single "Notify on essential
+  events" toggle grows a per-event disclosure — one checkbox per essential
+  class (guard armed / traffic cut / warning / paused / standby / stopped).
+  The old single setting migrates (off means all off) and survives a
+  downgrade; an event class a future daemon adds that this build has no
+  checkbox for still notifies rather than being silently muted.
+- **macOS app: Overview shows more, and shows trouble better.** Public IPv4
+  and (when observed) IPv6, the strictness preset, the connected VPN app, and
+  endpoints collapsed past three entries. Faults are now banners above the
+  grid — enforcement problems in red (previously not shown in this pane at
+  all), failing exit checks in orange, first line only with the full text
+  behind "Show more" — while an expected unknown exit stays a plain row.
+- **macOS app: Diagnostics gains a "Your VPNs" inventory** (from
+  `detect-vpn --json`) — tunnels found, VPN apps detection can attribute, the
+  connected one marked, unrecognized clients flagged — and the sidebar's
+  Diagnostics row carries a **yellow attention dot** whenever the last doctor
+  report found something to look at (refreshed on window open and when the
+  posture turns to warning/blocked, never on the 1-second timer).
 
 ### Changed
+
+- **macOS app: Settings redesigned for non-power-users.** Durations are
+  sliders over each key's real range (Off detent only where `"0"` is a
+  persisted choice, top bound by the live cap, snap to human steps, a Custom
+  field for anything else) instead of raw Go-duration text fields; integer
+  keys get steppers. `vpn.allowPhysicalDNS` and the new `vpn.allowGeoProviders`
+  appear as toggles whose consequences are stated visibly under the control,
+  not in a hover tooltip. The hand-listed "Advanced" disclosure is now a
+  **Developer** section generated from the daemon's schema (`advanced` keys:
+  every `vpn.advanced.*` plus hysteresis, providerQuorum, logLevel), so a new
+  advanced key appears in the app by existing. Against an older CLI the pane
+  degrades: no geo toggle, menu/text fallbacks for sliders, the old Advanced
+  list.
 
 - **The setup wizard asks only what has no safe default**: blocked countries,
   whether to configure the VPN now, automatic vs. manual detection, and the
