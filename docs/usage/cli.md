@@ -118,6 +118,13 @@ menubar app uses to grey its icon. It is always present, so its absence means
 you are reading something other than this CLI's output — never "the snapshot is
 fresh".
 
+`preset`/`presetExact` report the strictness preset the config matches
+(`presetExact: true`), or — for a drifted, "Custom" config — the *nearest*
+preset with `presetExact: false`, the same default target `config preset diff`
+picks. `state.ipv6` (when present) is the last observed public IPv6 address
+from a separate best-effort lookup; observational only, never used for country
+decisions, and absent on v4-only hosts or from older daemons.
+
 `state.redial` is present only when an automatic redial window was **refused**
 for the drop currently being carried, and it is how a script tells "the VPN has
 not come back yet" from "dezhban will not let it try again until 3:15PM". It

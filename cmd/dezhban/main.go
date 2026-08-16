@@ -2735,6 +2735,12 @@ func statusJSON(cfg *config.Config) int {
 		// same convention as ControlReachable — since the CLI/daemon still
 		// refuse for real regardless of what this said last.
 		PauseEnabled bool `json:"pauseEnabled"`
+		// Preset is the strictness preset this config matches (PresetExact true),
+		// or the NEAREST one for a drifted config (PresetExact false) — the same
+		// default target `config preset diff` picks, so a Custom config still
+		// reports a strictness anchor instead of an empty string.
+		Preset      string `json:"preset"`
+		PresetExact bool   `json:"presetExact"`
 		// No `vpnEnabled`: with one enforcement model it could only ever be true,
 		// and a constant field invites consumers to branch on nothing. Read
 		// `state.posture` instead — that is where the real distinction lives.
@@ -2749,6 +2755,11 @@ func statusJSON(cfg *config.Config) int {
 		PollInterval:     cfg.PollInterval.String(),
 		BlockedCountries: cfg.BlockedCountries,
 		PauseEnabled:     cfg.VPN.PauseMax > 0,
+	}
+	if name, exact := config.MatchPreset(cfg); exact {
+		out.Preset, out.PresetExact = name, true
+	} else {
+		out.Preset = nearestPreset(cfg).Name
 	}
 	if snap, err := state.Read(statePath); err == nil {
 		out.State = &snap
