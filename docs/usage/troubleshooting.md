@@ -336,25 +336,36 @@ sudo dezhban token forget
 dezhban token status            # want: not enrolled
 ```
 
-Current versions cannot get into this state — enrollment checks the keychain
-before it mints anything, and rolls the daemon's hash back if the store fails
-anyway — but a host enrolled by an older build can still be carrying one.
+Enrollment works hard to avoid this — it asks the keychain whether it will
+accept an item *before* minting anything, and rolls the daemon's hash back if
+the store fails anyway — but the rollback is a second privileged step, so it can
+itself fail or be declined, and that leaves exactly this state. A host enrolled
+by an older build can still be carrying one too. If the keychain also holds a
+secret from before the failed enrollment, clear that as well (next entry): the
+daemon's hash no longer matches it, and the app only knows to stop offering it
+for the rest of the session.
 
-**The keychain kept a stale secret when you turned the toggle off.** The mirror
-image of the above: the daemon has forgotten its half and the keychain still
-holds one. Saving keeps working — the app notices and goes back to asking for
-your password — but the leftover is worth clearing, and a copy of dezhban that
-did not notice would refuse every save instead, since the daemon correctly
-rejects a secret it has no hash for and a refusal is never retried with your
-password:
+**The keychain kept a stale secret the app will not use.** Two ways in. Turning
+the toggle *off* removes the daemon's hash first and then the keychain item, so
+a failed removal leaves a secret the daemon has already forgotten. Turning it
+*on* mints a new token and only then writes the keychain, so a failed write
+leaves whatever was there before — which `token enroll` has by then made stale,
+whether or not the rollback got through. Saving keeps working: the app notices
+and goes back to asking for your password. Clear the leftover anyway — the flag
+is session-only, so a relaunched app offers the stale secret again, and the
+daemon correctly rejects a secret it has no hash for, a refusal that is never
+retried with your password:
 
 ```sh
 security find-generic-password -s sh.dezhban.menu -a control-token   # confirms it is there
 security delete-generic-password -s sh.dezhban.menu -a control-token
 ```
 
-Turn the toggle on again to re-enrol; that also replaces the stale secret, so
-clearing it by hand first is optional.
+Turn the toggle on again to re-enrol; that also replaces the stale secret when
+the app can remove it. But a removal the app could not do is exactly what leaves
+the leftover, so if re-enrolling reports the same refusal, run the
+`security delete-generic-password` above first — and, if the enrollment's
+rollback also failed, `sudo dezhban token forget` to clear the daemon's half.
 
 ## The installer upgraded the binary but the service is still running the old version
 
