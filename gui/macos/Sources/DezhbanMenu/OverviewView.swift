@@ -42,12 +42,17 @@ struct OverviewView: View {
                     // reads as an accidental exposure.
                     let left = sw.timeLeft(asOf: state.now).map { PostureUI.mmss($0) }
                     if sw.isPause {
+                        // pause.circle.fill, not the warning triangle: a pause
+                        // is deliberate, and a warning glyph on it teaches
+                        // people to ignore warning glyphs.
                         banner(left.map { "Guard re-arms in \($0)" } ?? "Guard re-arms when the pause ends",
-                               color: .blue)
+                               color: .blue, symbol: "pause.circle.fill")
                     } else {
                         banner(left.map { "Closes in \($0)" } ?? "Closes when the window ends", color: .orange)
                     }
                 }
+
+                errorBanners(s)
 
                 detailsGrid(s)
 
@@ -72,6 +77,53 @@ struct OverviewView: View {
             // one caps, the outer claims the ScrollView's width to pin it.
             .frame(maxWidth: PaneMetrics.contentColumn, alignment: .leading)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        // The "VPN app" row's source. `.onAppear` (fires per pane selection),
+        // staleness-gated inside — never the 1s timer; detect-vpn is a
+        // process-scanning subprocess.
+        .onAppear { state.refreshVPNInventoryIfStale() }
+    }
+
+    /// Faults get banners above the grid, not rows inside it: colored, glyphed,
+    /// first line only, with the full text behind a disclosure and anything
+    /// transcript-sized routed to Logs. `exitUnknown` is deliberately NOT here —
+    /// it is a state, not a fault (see the grid row below).
+    @ViewBuilder
+    private func errorBanners(_ s: Snapshot) -> some View {
+        if let err = s.enforcementErr, !err.isEmpty {
+            // Previously invisible in this pane: the daemon TRIED to enforce
+            // and the firewall backend refused, so posture describes an intent
+            // the data plane may not be honoring. The most important line here.
+            errorBanner(err, title: "Enforcement problem", color: .red)
+        }
+        if let err = s.lookupErr, !err.isEmpty {
+            // Genuine failures only (tunnel up, measuring failed) — the daemon
+            // already filters the expected cases into exitUnknown.
+            errorBanner(err, title: "Exit check failing", color: .orange)
+        }
+    }
+
+    private func errorBanner(_ text: String, title: String, color: Color) -> some View {
+        let cut = CollapsedText.firstLine(text, max: 120)
+        return VStack(alignment: .leading, spacing: 4) {
+            banner("\(title): \(cut.line)", color: color)
+            if cut.truncated {
+                DisclosureGroup("Show more") {
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(text)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button("Show in Logs") {
+                            state.showInLogs(title: "dezhban — \(title)", text: text)
+                        }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                    }
+                }
+                .font(.callout)
+            }
         }
     }
 
@@ -104,8 +156,9 @@ struct OverviewView: View {
         }
     }
 
-    private func banner(_ text: String, color: Color) -> some View {
-        Label(text, systemImage: "exclamationmark.triangle.fill")
+    private func banner(_ text: String, color: Color,
+                        symbol: String = "exclamationmark.triangle.fill") -> some View {
+        Label(text, systemImage: symbol)
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(color.opacity(0.15), in: RoundedRectangle(cornerRadius: 8))
@@ -113,7 +166,8 @@ struct OverviewView: View {
     }
 
     private func detailsGrid(_ s: Snapshot) -> some View {
-        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+        let ipv6 = (s.ipv6?.isEmpty == false) ? s.ipv6 : nil
+        return Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
             if let ip = s.ip, !ip.isEmpty {
                 // An em dash, not a parenthetical: `countryLabel` already ends
                 // in "(IR)", so "1.2.3.4 (Iran (IR) via ipinfo)" would nest one
@@ -121,22 +175,32 @@ struct OverviewView: View {
                 // fullBlockDisplay makes.
                 let cc = s.countryLabel ?? "unknown country"
                 let prov = s.provider.map { " via \($0)" } ?? ""
-                row("Public IP", "\(ip) — \(cc)\(prov)")
-            } else if let err = s.lookupErr, !err.isEmpty {
-                // Only genuine failures reach lookupErr: a tunnel was up, so
-                // there was an exit to measure, and measuring it did not work.
-                row("Last lookup", "failed: \(err)")
+                // "Public IPv4" only when a v6 row will sit under it — with one
+                // address the family qualifier is noise.
+                row(ipv6 != nil ? "Public IPv4" : "Public IP", "\(ip) — \(cc)\(prov)")
             } else if let why = s.exitUnknown, !why.isEmpty {
                 // Expected, not a fault — phrased as a state rather than an
                 // error, because reporting it as one is what made the geo
-                // providers look broken during every switch window.
+                // providers look broken during every switch window. Genuine
+                // lookup failures render as a banner above the grid instead.
                 row("Exit country", "unknown — \(why)")
+            }
+            if let ipv6 {
+                // Best-effort observation; hidden on v4-only hosts and from
+                // older daemons rather than shown empty.
+                row("Public IPv6", ipv6)
+            }
+            if let preset = state.presetLabel {
+                row("Strictness", preset)
             }
             if let t = s.tunnels?.first {
                 row("Tunnel", "\(t.up ? "up" : "down")\(t.detail.map { " (\($0))" } ?? "")")
             }
+            if let app = state.vpnInventory?.connectedName {
+                row("VPN app", app)
+            }
             if let eps = s.endpoints, !eps.isEmpty {
-                row("Endpoints", eps.joined(separator: ", "))
+                endpointsRow(eps)
             }
             if let profiles = state.profiles, !profiles.profiles.isEmpty {
                 let names = profiles.profiles.map { p in
@@ -151,6 +215,31 @@ struct OverviewView: View {
                 row("Blocking", blocking.joined(separator: ", "))
             }
             row("Updated", PostureUI.agoString(state.now.timeIntervalSince(s.time)))
+        }
+    }
+
+    /// The endpoints row collapses past three: a learned set can run to dozens
+    /// of addresses, and a wall of IPs buries every other row. The full list
+    /// stays one click away, in place.
+    private func endpointsRow(_ eps: [String]) -> some View {
+        let summary = CollapsedText.listSummary(eps, limit: 3)
+        return GridRow {
+            Text("Endpoints").foregroundStyle(.secondary).gridColumnAlignment(.trailing)
+            if summary.more == 0 {
+                Text(summary.line).textSelection(.enabled)
+            } else {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(summary.line).textSelection(.enabled)
+                    DisclosureGroup("+\(summary.more) more") {
+                        Text(eps.joined(separator: ", "))
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .font(.callout)
+                }
+            }
         }
     }
 
