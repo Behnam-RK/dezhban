@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1033,13 +1034,12 @@ func TestSwitchWindowVerifiedCloseHoldsOpenOnApplyFailure(t *testing.T) {
 	}
 }
 
+// containsCall reports whether the backend recorded a given call. The one copy
+// for this package: it used to exist three times over (contains, hasCall,
+// containsCall), so a test could assert against a helper that had quietly
+// drifted from the others.
 func containsCall(calls []string, want string) bool {
-	for _, c := range calls {
-		if c == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(calls, want)
 }
 
 func applyGuardAfterSwitch(calls []string) bool {

@@ -215,7 +215,7 @@ func TestControlBlockRefusedDuringSwitchWindow(t *testing.T) {
 	if resp.OK {
 		t.Fatal("block accepted while a switch window was open; it must refuse rather than tear the window down")
 	}
-	if !contains(be.calls, "apply-switch") {
+	if !containsCall(be.calls, "apply-switch") {
 		t.Fatalf("calls = %v, want a switch-window policy applied", be.calls)
 	}
 }
@@ -313,7 +313,7 @@ func TestControlSwitchOpsDisabled(t *testing.T) {
 	if resp := do(t, path, control.Request{Op: control.OpBlock}); !resp.OK {
 		t.Fatalf("block refused with switch ops disabled: %+v", resp)
 	}
-	if contains(be.calls, "apply-switch") {
+	if containsCall(be.calls, "apply-switch") {
 		t.Fatalf("a switch-window policy was applied despite allowSwitchOps=false: %v", be.calls)
 	}
 }
@@ -427,15 +427,6 @@ func TestVerifyFindingClearedOnStandbyEntry(t *testing.T) {
 		s := last.Load()
 		return s != nil && s.Verify == nil
 	}, "a stale verify finding survived the standby transition")
-}
-
-func contains(calls []string, want string) bool {
-	for _, c := range calls {
-		if c == want {
-			return true
-		}
-	}
-	return false
 }
 
 var errFake = errors.New("backend refused")
