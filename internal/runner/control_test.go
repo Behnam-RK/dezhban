@@ -215,7 +215,7 @@ func TestControlBlockRefusedDuringSwitchWindow(t *testing.T) {
 	if resp.OK {
 		t.Fatal("block accepted while a switch window was open; it must refuse rather than tear the window down")
 	}
-	if !contains(be.calls, "apply-switch") {
+	if !containsCall(be.calls, "apply-switch") {
 		t.Fatalf("calls = %v, want a switch-window policy applied", be.calls)
 	}
 }
@@ -313,7 +313,7 @@ func TestControlSwitchOpsDisabled(t *testing.T) {
 	if resp := do(t, path, control.Request{Op: control.OpBlock}); !resp.OK {
 		t.Fatalf("block refused with switch ops disabled: %+v", resp)
 	}
-	if contains(be.calls, "apply-switch") {
+	if containsCall(be.calls, "apply-switch") {
 		t.Fatalf("a switch-window policy was applied despite allowSwitchOps=false: %v", be.calls)
 	}
 }
@@ -385,17 +385,13 @@ func TestVerifyFindingClearedOnStandbyEntry(t *testing.T) {
 	be := &fakeBackend{isBlockedFn: func() (bool, error) { return false, nil }} // rules always "missing"
 	o := vpnOpts(be)
 	// AutoArm is what makes the unblock below land in STANDBY rather than an
-	// open guard — but on its own it also decides the STARTING posture from a
-	// live probe of the host's own interfaces (netdetect.TunnelInterfaces),
-	// which is not something a unit test may depend on: a developer machine
-	// with a VPN up starts armed, a CI runner with no tunnel interface starts
-	// in standby, and the transition under test only exists on the first.
-	// ArmAtBoot + TunnelEverUp is the supported override for exactly that
-	// startup race (see shouldArmAtBoot), so pin the armed start through it and
-	// let the host probe say whatever it likes.
+	// open guard, so it has to be on — but it also decides the STARTING posture
+	// from a live probe of the host, and only an armed start reaches the
+	// transition under test. Say which host this is rather than inheriting the
+	// developer's: presentTunnel() starts armed everywhere, including a CI
+	// runner with no tunnel interface of its own.
 	o.AutoArm = true
-	o.ArmAtBoot = true
-	o.TunnelEverUp = true
+	o.ProbeTunnelIfaces = presentTunnel
 	o.Watcher = downWatcher()
 	o.VerifyInterval = 5 * time.Millisecond
 	var downEdges atomic.Int64
@@ -420,18 +416,17 @@ func TestVerifyFindingClearedOnStandbyEntry(t *testing.T) {
 		t.Fatalf("unblock response = %+v, want an OK standby", resp)
 	}
 
-	if s := last.Load(); s.Verify != nil {
-		t.Fatalf("a stale verify finding survived the standby transition: %+v", s.Verify)
-	}
-}
-
-func contains(calls []string, want string) bool {
-	for _, c := range calls {
-		if c == want {
-			return true
-		}
-	}
-	return false
+	// The socket reply is ordered against the run loop; the SNAPSHOT is not.
+	// Publish hands off to a background writer goroutine (see Options.Publish),
+	// so reading last.Load() the instant the reply lands can still observe the
+	// pre-transition snapshot — a stale-read flake, not a regression. Poll
+	// instead, which is also the exact shape of the failure this test guards:
+	// an unreset finding is "republished forever", so it never goes nil and the
+	// poll fails by its own message.
+	pollUntil(t, 2*time.Second, func() bool {
+		s := last.Load()
+		return s != nil && s.Verify == nil
+	}, "a stale verify finding survived the standby transition")
 }
 
 var errFake = errors.New("backend refused")

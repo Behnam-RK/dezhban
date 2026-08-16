@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -465,6 +466,122 @@ func downWatcher() *netdetect.Watcher {
 	}
 }
 
+// presentTunnel, noTunnel and brokenProbe are the three answers
+// Options.ProbeTunnelIfaces can give, as AutoArm reads them: a tunnel interface
+// exists on this host, so start ARMED — none does, so start in STANDBY — or the
+// probe itself failed, which arms immediately (fail-closed). A test that sets
+// AutoArm and none of these is not testing a posture, it is testing whether
+// whoever runs it has a VPN up.
+// They are the probes themselves, not factories for one: each is stateless, so
+// a call layer that only ever returns the same closure would buy nothing and
+// hide the signature that has to match Options.ProbeTunnelIfaces.
+func presentTunnel() ([]string, error) { return []string{"utun4"}, nil }
+
+func noTunnel() ([]string, error) { return nil, nil }
+
+func brokenProbe() ([]string, error) { return nil, errors.New("interface enumeration failed") }
+
+// The AutoArm startup decision itself, every way it can go. It had no test at
+// all: the probe read the live host, so the only way to reach any branch was to
+// run the suite on a machine that happened to be in that state — which is how
+// the standby branch stayed unexercised while the armed one silently carried
+// TestVerifyFindingClearedOnStandbyEntry.
+//
+// The four branches, and why each matters:
+//   - no tunnel present must install NOTHING (ADR-0002's rail: a fresh install
+//     cannot lock itself out);
+//   - one present must raise the standing guard;
+//   - a FAILED probe must arm anyway — an unreadable host is not evidence that
+//     no tunnel exists, and guessing "standby" there would silently open the
+//     network on exactly the host whose state we cannot see;
+//   - ArmAtBoot overrides an empty probe, but only on a host that has connected
+//     before and knows an endpoint (shouldArmAtBoot); this is the branch every
+//     normal boot takes, since the VPN client starts after this daemon.
+func TestAutoArmStartPostureFollowsTheProbe(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		probe     func() ([]string, error)
+		armAtBoot bool
+		// country is what the exit-country lookup answers at startup. It is a
+		// case field rather than vpnOpts' steady "US" because "nothing
+		// installed" has to hold for a BLOCKED answer too — and that is the
+		// only answer that can reach an Apply from standby, since an allowed
+		// one has nothing to escalate to. A standby row pinned to "US" agrees
+		// with itself while the rail it names is broken.
+		country string
+		posture string
+		guarded bool
+	}{
+		{name: "no tunnel interface → standby, nothing installed", probe: noTunnel, country: "US", posture: "standby"},
+		{name: "no tunnel interface, blocked country → standby, still nothing installed", probe: noTunnel, country: "IR", posture: "standby"},
+		{name: "tunnel interface present → armed", probe: presentTunnel, country: "US", posture: "guard", guarded: true},
+		{name: "probe failed → armed, fail-closed", probe: brokenProbe, country: "US", posture: "guard", guarded: true},
+		{name: "no tunnel but armAtBoot on a host that has connected → armed", probe: noTunnel, country: "US", armAtBoot: true, posture: "guard", guarded: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			be := &fakeBackend{}
+			o := vpnOpts(be)
+			o.Monitor = steadyMonitor{cc: tc.country}
+			o.AutoArm = true
+			o.ProbeTunnelIfaces = tc.probe
+			// ArmAtBoot needs BOTH rails to override standby: a tunnel observed
+			// up before on this host, and a known endpoint (vpnOpts pins one).
+			o.ArmAtBoot = tc.armAtBoot
+			o.TunnelEverUp = tc.armAtBoot
+			o.Watcher = downWatcher()
+			o.Log = discardLog()
+			// The FIRST snapshot is the startup posture under test; the last one
+			// is always "stopped", published as the loop tears down. Run hands
+			// snapshots to a BACKGROUND writer goroutine (see Options.Publish),
+			// not to the run loop, so the capture is guarded — the read below is
+			// only ordered after the writer by Run's bounded flush, and that
+			// bound can expire.
+			var mu sync.Mutex
+			var first state.Snapshot
+			var published bool
+			// Bounded, but not paid in full: the startup posture is published
+			// before the loop's first select, so stop the loop the moment it
+			// lands instead of sitting out a fixed timeout in every case. The
+			// timeout stays as the backstop for "no snapshot ever arrived",
+			// which the !ok check below reports by name.
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			o.Publish = func(s state.Snapshot) {
+				mu.Lock()
+				defer mu.Unlock()
+				if !published {
+					first, published = s, true
+					cancel()
+				}
+			}
+
+			if err := Run(ctx, o); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+
+			mu.Lock()
+			got, ok := first, published
+			mu.Unlock()
+			if !ok {
+				t.Fatal("the run loop published no snapshot at all")
+			}
+			if got.Posture != tc.posture {
+				t.Errorf("start posture = %q, want %q", got.Posture, tc.posture)
+			}
+			if applied := containsCall(be.calls, "apply-guard"); applied != tc.guarded {
+				t.Errorf("standing guard applied = %v, want %v; calls=%v", applied, tc.guarded, be.calls)
+			}
+			// "Nothing installed" is the whole ADR-0002 claim, so assert it as
+			// such: not merely that the guard shape was skipped, but that NO
+			// policy reached the backend. Checking only apply-guard would let a
+			// standby that installed a full block pass.
+			if !tc.guarded && len(be.policies) > 0 {
+				t.Errorf("standby installed %d policy/policies (calls=%v), want none — a host with no tunnel gets no rules", len(be.policies), be.calls)
+			}
+		})
+	}
+}
+
 // In legacy mode a tunnel drop must block immediately, with no geo reading at
 // all, and a still-down tunnel must not auto-unblock.
 func TestVPNWatcherObservabilityOnly(t *testing.T) {
@@ -917,13 +1034,12 @@ func TestSwitchWindowVerifiedCloseHoldsOpenOnApplyFailure(t *testing.T) {
 	}
 }
 
+// containsCall reports whether the backend recorded a given call. The one copy
+// for this package: it used to exist three times over (contains, hasCall,
+// containsCall), so a test could assert against a helper that had quietly
+// drifted from the others.
 func containsCall(calls []string, want string) bool {
-	for _, c := range calls {
-		if c == want {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(calls, want)
 }
 
 func applyGuardAfterSwitch(calls []string) bool {

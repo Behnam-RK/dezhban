@@ -257,6 +257,17 @@ type Options struct {
 	// indistinguishable from the leak the kill switch exists for — so only an
 	// explicit unblock with the tunnel down returns to standby.
 	AutoArm bool
+	// ProbeTunnelIfaces reports which tunnel interfaces are actually present on
+	// this host. It is the one input to the AutoArm startup decision above that
+	// comes from the live machine rather than from config, so it is injectable:
+	// left alone, a test's starting posture is decided by whether the developer
+	// running it happens to have a VPN up, which is how a green suite locally
+	// turned into a red one in CI (a tunnel-down edge logs "guard holds the
+	// line" from an armed start and a different line from standby, and only the
+	// armed start reaches the transition most of these tests are about).
+	// nil → netdetect.TunnelInterfaces, the real probe. nil must never mean "do
+	// not probe": that would silently start every production caller armed.
+	ProbeTunnelIfaces func() ([]string, error)
 	// ArmAtBoot (vpn.armAtBoot): arm the guard directly at startup even when no
 	// tunnel interface is present yet — provided TunnelEverUp is true and an
 	// endpoint is known — instead of entering the AutoArm standby above. This
@@ -689,7 +700,11 @@ func (o Options) runGuard(ctx context.Context) error {
 	// interface exists. A failed probe arms immediately — fail-closed.
 	standby := false
 	if o.AutoArm {
-		if present, derr := netdetect.TunnelInterfaces(); derr != nil {
+		probe := o.ProbeTunnelIfaces
+		if probe == nil {
+			probe = netdetect.TunnelInterfaces
+		}
+		if present, derr := probe(); derr != nil {
 			o.Log.Warn("auto-arm: tunnel detection failed — arming immediately (fail-closed)", "err", derr)
 		} else {
 			standby = len(present) == 0
@@ -2484,13 +2499,23 @@ func (o Options) runGuard(ctx context.Context) error {
 	// Startup observation: only meaningful with a tunnel up and an endpoint known.
 	// With zero tunnels (standing posture) a lookup egresses nowhere useful.
 	//
+	// Skipped in STANDBY, exactly as the geoTick case below skips it: standby
+	// installs no rules by design (ADR-0002), and this call can Apply — a
+	// blocked-country verdict escalates straight to FULL BLOCK. Worse, the
+	// reading it would escalate on is not a VPN exit at all: with no tunnel
+	// present the lookup leaves over the physical link and reports the user's
+	// own ISP country, so precisely the user this tool is for (blockedCountries
+	// naming their real location) would have the daemon full-block the host at
+	// every boot that beat the VPN client to it — the lockout standby exists to
+	// prevent, and the destination-country model that ADR-0001 deleted.
+	//
 	// Also skipped while panic-disarmed: unlike the startup Apply(guard) above
 	// (guaranteed marker-free in the real `dezhban run` entrypoint, since
 	// cmd/dezhban clears it before calling Run), this vpnGeoStep call can
 	// escalate straight to FULL BLOCK, and Run's own contract — never silently
 	// undo a deliberate `dezhban panic` teardown — must not depend on every
 	// caller having cleared the marker first.
-	if len(tunnels) > 0 && len(endpoints) > 0 && (!o.panicDisarmed()) {
+	if !standby && len(tunnels) > 0 && len(endpoints) > 0 && (!o.panicDisarmed()) {
 		res, err, attempted := o.vpnGeoStep(ctx, guard, fullBlock, &blocked, tunnelUp)
 		lastRes = res
 		if attempted {

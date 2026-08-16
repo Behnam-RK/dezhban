@@ -5,7 +5,6 @@ import (
 	"log/slog"
 	"net/netip"
 	"reflect"
-	"slices"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -18,10 +17,6 @@ import (
 	"github.com/behnam-rk/dezhban/internal/netdetect"
 	"github.com/behnam-rk/dezhban/internal/state"
 )
-
-func hasCall(calls []string, want string) bool {
-	return slices.Contains(calls, want)
-}
 
 // The point of live reload: an edit reaches enforcement, not just bookkeeping.
 // The loop starts with a country list that allows the observed exit and is handed
@@ -54,7 +49,7 @@ func TestReloadedCountryListReachesEnforcement(t *testing.T) {
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
 	}
-	if !hasCall(be.calls, "apply-fullblock") {
+	if !containsCall(be.calls, "apply-fullblock") {
 		t.Errorf("no FULL BLOCK after reloading a country list that forbids the exit; calls=%v", be.calls)
 	}
 }
@@ -133,10 +128,10 @@ func TestReloadLeavesTheStandingPostureIntact(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Nothing opened a window, so nothing may have relaxed the guard.
-	if hasCall(be.calls, "apply-switch") {
+	if containsCall(be.calls, "apply-switch") {
 		t.Errorf("a reload opened or altered a window; calls=%v", be.calls)
 	}
-	if !hasCall(be.calls, "apply-guard") {
+	if !containsCall(be.calls, "apply-guard") {
 		t.Errorf("the guard was not standing after a reload; calls=%v", be.calls)
 	}
 }
@@ -270,7 +265,7 @@ func TestReloadReEnablingAWindowRevivesTheCommandPath(t *testing.T) {
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
 	}
-	if !hasCall(be.calls, "apply-switch") {
+	if !containsCall(be.calls, "apply-switch") {
 		t.Errorf("re-enabling vpn.switchWindow left the command path deaf; calls=%v", be.calls)
 	}
 }
@@ -301,7 +296,7 @@ func TestADisabledWindowIgnoresCommandsForever(t *testing.T) {
 	if err := Run(ctx, o); err != nil {
 		t.Fatal(err)
 	}
-	if hasCall(be.calls, "apply-switch") {
+	if containsCall(be.calls, "apply-switch") {
 		t.Errorf("a disabled switch window was opened by a command file; calls=%v", be.calls)
 	}
 }
@@ -468,7 +463,7 @@ func TestReloadedRedialBudgetDecidesTheNextDrop(t *testing.T) {
 		if err := Run(ctx, o); err != nil {
 			t.Fatal(err)
 		}
-		if !hasCall(be.calls, "apply-switch") {
+		if !containsCall(be.calls, "apply-switch") {
 			t.Errorf("no redial window opened after the budget was raised; the ledger is still "+
 				"enforcing the boot value. calls = %v", be.calls)
 		}
@@ -508,7 +503,7 @@ func TestReloadedRedialBudgetDecidesTheNextDrop(t *testing.T) {
 		if err := Run(ctx, o); err != nil {
 			t.Fatal(err)
 		}
-		if hasCall(be.calls, "apply-switch") {
+		if containsCall(be.calls, "apply-switch") {
 			t.Errorf("a redial window opened after the budget was lowered to nothing; a tightened "+
 				"bound did not bind until restart. calls = %v", be.calls)
 		}
@@ -786,7 +781,7 @@ func TestReloadedLivenessRedialLetsAStandingStreakOpenAWindow(t *testing.T) {
 	if !reloaded {
 		t.Fatal("the zombie streak never reached hysteresis; this fixture tests nothing")
 	}
-	if !hasCall(be.calls, "apply-switch") {
+	if !containsCall(be.calls, "apply-switch") {
 		t.Errorf("no automatic window opened after vpn.advanced.livenessRedial was reloaded on for an "+
 			"already-standing streak; calls = %v", be.calls)
 	}
