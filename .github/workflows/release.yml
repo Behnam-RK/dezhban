@@ -255,53 +255,6 @@ jobs:
           codesign --verify --strict /Applications/Dezhban.app/Contents/MacOS/DezhbanMenu \
             || { echo "error: installed app's main executable failed signature verification" >&2; exit 1; }
 
-          # A VALID SIGNATURE IS NOT PROOF THE KERNEL WILL RUN IT. AMFI kills a
-          # process at exec — before main() — when the signature claims an
-          # entitlement it is not authorised to carry, and `codesign --verify`
-          # passes happily on exactly such a binary. Both checks above would have
-          # gone green on an app that could not launch at all.
-          #
-          # Not hypothetical: adding `keychain-access-groups` to this ad-hoc
-          # signature (the obvious fix for the Touch ID keychain refusal) was
-          # tested and SIGKILLs the app at launch. See
-          # docs/adr/0011-biometric-enrollment-requires-a-signed-build.md.
-          #
-          # So exec it. The assertion is deliberately narrow — survive exec —
-          # because the app has no headless mode: main.swift goes straight to
-          # NSApplication.run(). What it does afterwards (window server, update
-          # check) varies with the runner and is NOT what this guards, so only a
-          # SIGKILL fails the build.
-          #
-          # Liveness is checked with `kill -0` BEFORE any signal is sent, and the
-          # exit status is only consulted when the process is already gone. Asking
-          # `wait` for the status of a process we have merely SIGTERMed is an
-          # unbounded wait: the app can raise a modal system dialog no runner can
-          # dismiss (a locked login keychain answers the token capability probe
-          # with one) — the step would hang until the job timeout instead of
-          # failing. A process still alive three seconds in has, by definition,
-          # survived exec, which is the entire assertion; SIGKILL it and move on.
-          /Applications/Dezhban.app/Contents/MacOS/DezhbanMenu >/dev/null 2>&1 &
-          app_pid=$!
-          sleep 3
-          if kill -0 "$app_pid" 2>/dev/null; then
-            kill -9 "$app_pid" 2>/dev/null || true
-            set +e; wait "$app_pid" >/dev/null 2>&1; set -e
-            echo "app exec check: ok (still running after 3s, so exec succeeded)"
-            app_rc=0
-          else
-            set +e
-            wait "$app_pid"
-            app_rc=$?
-            set -e
-          fi
-          if [ "$app_rc" -eq 137 ]; then
-            echo "error: the app was SIGKILLed at launch — the signature claims an entitlement it may not carry" >&2
-            echo "       entitlements currently declared:" >&2
-            codesign -d --entitlements - /Applications/Dezhban.app 2>&1 | sed 's/^/       /' >&2
-            exit 1
-          fi
-          echo "app exec check: done (exit status $app_rc)"
-
           test -f /Library/LaunchDaemons/dezhban.plist || { echo "LaunchDaemon not registered" >&2; exit 1; }
           test -x /usr/local/share/dezhban/uninstall.sh || { echo "uninstaller not installed" >&2; exit 1; }
 

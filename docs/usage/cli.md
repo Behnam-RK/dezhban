@@ -391,24 +391,13 @@ decision, and re-running it as root would make the gate advisory.
 
 In the macOS app this is the **"Use Touch ID for settings changes"** toggle in
 Settings. Turning it on enrolls a token (one password prompt, once) and stores it
-in your login keychain. Saving a change then asks for a fingerprint instead of a
-password. Turning the toggle off removes **both** copies, the keychain item and
-the daemon's hash. Macs without Touch ID keep using the password path, which is
-exactly what they had before.
-
-**What the fingerprint check is, precisely.** Dezhban asks macOS for a
-fingerprint and reads the token once macOS says yes. The keychain is not itself
-withholding the token pending biometrics — that stronger arrangement needs a
-code-signing entitlement an ad-hoc signature cannot carry, and every build this
-project ships is ad-hoc signed. So the check raises the bar rather than making it
-unforgeable: a modified copy of the app could skip it. Two things bound that. The
-keychain item keeps its ordinary access control, tied to the app's code identity,
-so another program reading it gets a keychain password prompt rather than silent
-access; and modifying the app needs admin rights, which already allow
-`sudo dezhban config set` and bypass the token outright. Rationale:
-[ADR 0012](../adr/0012-app-checked-biometrics-on-unsigned-builds.md), and
-[ADR 0011](../adr/0011-biometric-enrollment-requires-a-signed-build.md) for the
-signing constraint behind it.
+in the login keychain under `.biometryCurrentSet`, so *reading* the token is the
+Touch ID prompt — there is no separate "is this allowed?" question for a tampered
+app to answer for itself. Because the item is bound to the fingerprints enrolled
+at the time, changing your fingerprints invalidates it; re-enrolling from the same
+toggle restores it. Turning the toggle off removes **both** copies, the keychain
+item and the daemon's hash. Macs without Touch ID keep using the password path,
+which is exactly what they had before.
 
 ## Connect & switch VPNs
 

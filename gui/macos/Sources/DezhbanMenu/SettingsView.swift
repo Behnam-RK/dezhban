@@ -53,34 +53,9 @@ struct SettingsView: View {
     @State private var presetBusy = false
     @State private var tokenBusy = false
     @State private var tokenEnrolled = ControlToken.isStored
-    /// Seeded at init with the answer only when giving it costs nothing, and
-    /// resolved in the background otherwise — nil means "not known yet".
-    ///
-    /// Deliberately NOT cached for the process's lifetime. The keychain half of
-    /// `capability` is memoized inside `ControlToken`; the biometry half is
-    /// re-asked on every `.onAppear`, because it really does change (clamshell
-    /// mode, Touch ID lockout) and a menubar app that froze it once per process
-    /// would leave the toggle greyed out until the user quit.
-    ///
-    /// **`refreshTokenCapability()` — called from `seed()` — is what re-asks it,
-    /// and that is not an optimisation, it is the only thing that does.** The
-    /// initialiser below runs exactly once per view identity: SwiftUI installs
-    /// `@State` storage the first time and DISCARDS the initial value on every
-    /// later re-creation of the struct, so re-creating `SettingsView` (which
-    /// `MainView.body` does on every `AppState` publish) does *not* re-run this.
-    /// The predecessor of this property was a plain `let`, which did refresh that
-    /// way; converting it to `@State` moved the responsibility to `seed()`.
-    /// Deleting that call would silently freeze the verdict for the life of the
-    /// window. `tokenEnrolled` above is re-read there for exactly the same reason.
-    ///
-    /// `capabilityIfKnown`, never `capability`: the latter may run the keychain
-    /// probe, and a stored-property initialiser runs on the main thread. That is
-    /// not merely slow — a locked login keychain answers a write with a system
-    /// dialog, so it is a frozen window. `warmCapability()` covers this when the
-    /// main window first appears, but cannot cover a sensor that was unavailable
-    /// *then* and is available now, which is exactly the clamshell case the
-    /// paragraph above describes.
-    @State private var tokenCapability: TokenCapability? = ControlToken.capabilityIfKnown
+    /// Evaluated once rather than in `body`: whether this Mac has biometry cannot
+    /// change while the pane is open, and a body getter should stay cheap.
+    private let biometryAvailable = ControlToken.biometryAvailable
 
     var body: some View {
         VStack(spacing: 0) {
@@ -171,61 +146,16 @@ struct SettingsView: View {
 
                 Section("Authorization") {
                     Toggle("Use Touch ID for settings changes", isOn: tokenBinding)
-                        // Unknown is treated as unavailable, never as available:
-                        // enabling the toggle before the answer is in would let
-                        // someone start an enrollment the probe is about to refuse,
-                        // which is the whole failure this design exists to prevent.
-                        //
-                        // But an EXISTING enrollment must always be removable. The
-                        // capability gate is about whether enrolling can succeed,
-                        // and applying it to a host that is already enrolled leaves
-                        // the only in-app way to revoke a token greyed out — a Mac
-                        // put in clamshell mode, or one whose probe hit a transient
-                        // keychain refusal, would otherwise have no way to turn it
-                        // off at all.
-                        .disabled(tokenBusy || !(tokenEnrolled || (tokenCapability?.isAvailable ?? false)))
+                        .disabled(tokenBusy || !biometryAvailable)
                         .help("Applying a change asks dezhban to make it, authorised by a "
-                            + "secret kept in your login keychain — so saving costs a fingerprint "
-                            + "instead of your password. Dezhban checks your fingerprint and then "
-                            + "reads the secret; the keychain is not itself holding it back, so this "
-                            + "raises the bar rather than making it unforgeable. Turning this on "
-                            + "stores the secret (one password prompt, now); turning it off removes "
-                            + "it from both the keychain and dezhban. Nothing else about what dezhban "
-                            + "enforces changes.")
-                    // Says WHICH of the reasons applies. A disabled toggle with no
-                    // explanation reads as a bug; "no Touch ID on this Mac" and
-                    // "this build can't reach the keychain" send you to different
-                    // places, and only the second is fixable by us.
-                    //
-                    // The nil case says so rather than borrowing one of the real
-                    // reasons: "not known yet" is a fourth state, and showing a
-                    // verdict we do not have would be a guess the user cannot tell
-                    // from an answer. It is normally invisible — `warmCapability()`
-                    // resolves this as soon as the main window appears, so nil
-                    // survives only when the sensor was unavailable then and is
-                    // available now.
-                    //
-                    // An ENROLLED host is answered without the verdict at all, the
-                    // same rule `AboutView.describeSettingsAuthIfKnown` follows: the
-                    // capability is about whether *enrolling* could succeed, and a
-                    // transient probe refusal (a cancelled keychain-unlock dialog
-                    // answers -25293) would otherwise print "the keychain refused to
-                    // hold the secret, so settings changes ask for your password"
-                    // underneath a working Touch ID enrollment — a flat lie about
-                    // what the next save will cost. Clamshell is the same story with
-                    // a different sentence: the sensor is back the moment the lid is.
-                    if !tokenEnrolled {
-                        if let tokenCapability {
-                            if !tokenCapability.isAvailable {
-                                Text(tokenCapability.toggleExplanation)
-                                    .font(.callout)
-                                    .foregroundStyle(.secondary)
-                            }
-                        } else {
-                            Text("Checking whether this Mac can hold the secret…")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
+                            + "secret kept in your login keychain behind Touch ID — so saving costs a "
+                            + "fingerprint instead of your password. Turning this on stores that secret "
+                            + "(one password prompt, now); turning it off removes it from both the "
+                            + "keychain and dezhban. Nothing else about what dezhban enforces changes.")
+                    if !biometryAvailable {
+                        Text("This Mac has no Touch ID, so settings changes ask for your password.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
                     }
                 }
                 Section { advancedGroup }
@@ -667,10 +597,6 @@ struct SettingsView: View {
         let done: (ConfigApply.Outcome) -> Void = { outcome in
             tokenBusy = false
             tokenEnrolled = ControlToken.isStored
-            // A forget that succeeded turns the verdict back into something the
-            // pane shows, and nothing else would ask for it before the next
-            // `.onAppear` — leaving "Checking…" under a toggle that is finished.
-            refreshTokenCapability()
             status = outcome.status
             if let title = outcome.transcriptTitle, let text = outcome.transcript {
                 state.showInLogs(title: title, text: text)
@@ -680,26 +606,6 @@ struct SettingsView: View {
             ConfigApply.enrollToken(completion: done)
         } else {
             ConfigApply.forgetToken(completion: done)
-        }
-    }
-
-    /// Re-asks the capability, and only when the answer is going to be used.
-    ///
-    /// An enrolled host is skipped entirely — the verdict says whether *enrolling*
-    /// could succeed, the toggle is enabled by `tokenEnrolled` regardless, and the
-    /// explanation line is suppressed above. Asking anyway would run the probe's
-    /// keychain ADD (a modal unlock dialog on a locked login keychain) on every
-    /// entry to this pane, for a value nothing renders. Same rule, and the same
-    /// reason, as `AboutView.describeSettingsAuthIfKnown`.
-    ///
-    /// `capabilityIfKnown` first, never `capability`: this runs on the main thread,
-    /// and the probe may block. Re-asked rather than cached because the biometry
-    /// half genuinely changes (clamshell, Touch ID lockout).
-    private func refreshTokenCapability() {
-        guard !tokenEnrolled else { return }
-        tokenCapability = ControlToken.capabilityIfKnown
-        if tokenCapability == nil {
-            ControlToken.resolveCapability { tokenCapability = $0 }
         }
     }
 
@@ -731,14 +637,6 @@ struct SettingsView: View {
     /// written back as a value), service state via AppState, login-item state
     /// from SMAppService.
     private func seed() {
-        // Re-read for the same reason `tokenCapability` is: the `@State`
-        // initialiser above runs once per view identity and SwiftUI discards its
-        // value on every later re-creation, so without this the toggle would show
-        // whatever was true when the window first opened — a token forgotten from
-        // the CLI would leave it reading "on" for the life of the window, and that
-        // stale `true` is also what keeps the control enabled.
-        tokenEnrolled = ControlToken.isStored
-        refreshTokenCapability()
         status = "Loading…"
         canApply = false
         loginEnabled = LoginItem.isEnabled

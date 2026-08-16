@@ -121,46 +121,14 @@ struct AboutView: View {
     /// read "Authorization Services (Touch ID capable)" unconditionally, which was
     /// false in every case that mattered: that dialog is password-only in
     /// practice, which is the finding that produced the control token.
-    private static func describeSettingsAuth(_ capability: TokenCapability) -> String {
+    private static func describeSettingsAuth() -> String {
         if ControlToken.isStored {
-            return enrolledSummary
+            return "Touch ID (control token enrolled)"
         }
-        // Not "turn on Touch ID in Settings" unless that would actually work.
-        // The old copy said it unconditionally, so a Mac whose keychain refuses
-        // the item was sent to a toggle that could only spend a password and fail.
-        return capability.settingsAuthSummary
-    }
-
-    /// The row's value when it can be given without touching the keychain — which
-    /// `warmCapability()` makes the normal case — so the pane does not render a
-    /// blank "Settings changes" for as long as two subprocesses take to answer.
-    /// nil only when nothing is enrolled, the probe has not run, and biometry is
-    /// available.
-    ///
-    /// An enrolled host is answered FIRST and without consulting the capability at
-    /// all: the verdict is about whether *enrolling* could succeed, and a host that
-    /// already has a token does not need it. Asking anyway would have shown
-    /// "Checking…" — and, on a host whose probe status is not cacheable, run a
-    /// keychain add/delete (a modal unlock dialog on a locked login keychain) —
-    /// every time the pane opened, for a row whose value was already known.
-    private static func describeSettingsAuthIfKnown() -> String? {
-        if ControlToken.isStored {
-            return enrolledSummary
+        if ControlToken.biometryAvailable {
+            return "Password — turn on Touch ID in Settings"
         }
-        return ControlToken.capabilityIfKnown.map(describeSettingsAuth)
-    }
-
-    /// What an enrolled host is told — which is NOT unconditionally "Touch ID".
-    /// A secret the daemon will not accept (`isKnownOrphaned`, set when
-    /// `forgetToken`'s keychain removal or a failed enrollment left one behind)
-    /// authorises nothing: `ConfigApply.writeConfig` deliberately skips it and the
-    /// save falls to the password path. Saying "Touch ID" here would name a cost
-    /// the user will not actually pay, and this row exists precisely to answer
-    /// "why did I get a password dialog?".
-    private static var enrolledSummary: String {
-        ControlToken.isKnownOrphaned
-            ? "Password — the stored secret is stale; turn Touch ID off and on in Settings"
-            : "Touch ID (control token enrolled)"
+        return "Password — this Mac has no Touch ID"
     }
 
     /// Lifecycle actions (install/start/stop/panic) cannot go through the daemon,
@@ -178,35 +146,16 @@ struct AboutView: View {
     }
 
     private func load() {
+        settingsAuth = Self.describeSettingsAuth()
         privilegedAuth = Self.describePrivilegedAuth()
-        // Same "show it now, confirm it below" shape as the paths: an empty
-        // LabeledContent value for the length of two subprocess calls reads as a
-        // missing row, not a pending one.
-        settingsAuth = Self.describeSettingsAuthIfKnown() ?? "Checking…"
         // Show the memoized path immediately; the authoritative resolution happens
         // below, off the main thread (DezhbanCLI.exec explains why that matters).
         configPath = DezhbanCLI.displayConfigPath
         binaryPath = DezhbanCLI.binaryPath() ?? "(not found — install it first)"
         DispatchQueue.global(qos: .userInitiated).async {
-            // `ControlToken.capability` is a keychain probe — an ADD plus a DELETE
-            // — the first time anything asks for it. `MainView` warms it when the
-            // window first appears (NOT `AppDelegate`, deliberately — see
-            // `ControlToken.warmCapability`), but only when biometry was usable at
-            // that moment: a Mac woken from clamshell, or one in Touch ID lockout
-            // then, reaches this pane with the probe still unresolved. Doing it
-            // here rather than on
-            // `.onAppear`'s main thread means the worst case is a row that fills in
-            // late, not a frozen window behind a keychain-unlock dialog.
-            //
-            // Asked through `…IfKnown` first so the probe runs ONLY when it is the
-            // thing standing between us and an answer — an enrolled host, or one
-            // with no sensor, never writes to the keychain here at all.
-            let auth = Self.describeSettingsAuthIfKnown()
-                ?? Self.describeSettingsAuth(ControlToken.capability)
             let path = DezhbanCLI.resolvedConfigPath()
             let v = DezhbanCLI.run(["version"]).output.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {
-                settingsAuth = auth
                 configPath = path
                 version = v
             }
