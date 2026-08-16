@@ -85,6 +85,15 @@ const (
 // rather than leaving egress relaxed while falsely reporting the window closed.
 const windowRevertRetry = 2 * time.Second
 
+// The public-IPv6 observation (Options.LookupIPv6) is fixed-cadence and
+// hard-bounded rather than configurable: it feeds no decision, so it earns no
+// key, and it runs inline in the run-loop goroutine, so its budget has to be
+// small enough that a hung lookup cannot meaningfully stall window expiry.
+const (
+	ipv6Interval     = 5 * time.Minute
+	ipv6LookupBudget = 2 * time.Second
+)
+
 // publishBuffer sizes the background state-writer queue. It comfortably absorbs
 // a transient slow write at the daemon's event rate (a poll every few tens of
 // seconds); only a sustained write stall fills it and reintroduces back-pressure.
@@ -210,6 +219,14 @@ type Options struct {
 	// would mean a FULL BLOCK that can never lift, which is worse than a bounded
 	// leak.
 	ResolveProviders func(ctx context.Context) []netip.Addr
+	// LookupIPv6 resolves the machine's public IPv6 address (monitor.OnceIPv6).
+	// Purely observational — the result lands in Snapshot.IPv6 and feeds no
+	// decision. Called on a slow fixed cadence, only right after a successful
+	// country reading in healthy GUARD (never FULL BLOCK: the provider pass
+	// does not cover the v6 endpoints and must not be widened for them —
+	// ADR-0006; never standby or an open window), under a short timeout so it
+	// cannot stall the run loop. nil disables the lookup entirely.
+	LookupIPv6 func(ctx context.Context) (netip.Addr, error)
 	// ResolveEndpoints recomputes the VPN endpoint set (literals + resolved
 	// hostnames + live discovery). Called once at startup and on each
 	// EndpointRefresh tick. nil → fall back to the static Endpoints above.
@@ -443,6 +460,11 @@ type diag struct {
 	// previous successful reading. Zero means no change has been observed
 	// yet. Sticky — never reset by a later clean tick, unlike verify/zombie.
 	exitIPChangedAt time.Time
+	// ipv6 is the last observed public IPv6 address (Options.LookupIPv6),
+	// refreshed on a slow cadence in healthy GUARD only and cleared whenever
+	// it can't be re-confirmed or the tunnel drops — a stale address must
+	// never be shown as current. Observational only; nothing decides on it.
+	ipv6 string
 	// panicDisarmed mirrors o.PanicDisarmed() as of this snapshot — a live read
 	// of the marker file, not state accumulated over ticks like verify/zombie,
 	// but it belongs here for the same reason: it is the one piece of context
@@ -491,6 +513,7 @@ func (o Options) publish(blocked bool, standby bool, r monitor.Reading, lookupEr
 		Zombie:              d.zombie,
 		ExitIPChangedAt:     d.exitIPChangedAt,
 		PanicDisarmed:       d.panicDisarmed,
+		IPv6:                d.ipv6,
 	}
 	if r.IP.IsValid() {
 		snap.IP = r.IP.String()
@@ -846,6 +869,7 @@ func (o Options) runGuard(ctx context.Context) error {
 	var lastRes monitor.Result
 	var lastTun []state.Tunnel
 	var enfErr error
+	var ipv6NextAt time.Time // earliest next Options.LookupIPv6 call (fixed cadence)
 
 	// Automatic redial-window tracking. sawTunnelUp distinguishes an OBSERVED
 	// healthy tunnel (watcher up sample, or a confirmed exit reading) from the
@@ -1012,6 +1036,27 @@ func (o Options) runGuard(ctx context.Context) error {
 	// everything else here, and republished on every snapshot so a condition
 	// raised by one tick stays visible until the tick that clears it.
 	var dg diag
+	// maybeLookupIPv6 refreshes the observed public IPv6 address (dg.ipv6) on
+	// its slow fixed cadence. Callers invoke it only right after a successful
+	// ALLOWED reading in healthy GUARD — never FULL BLOCK (the provider pass
+	// does not cover the v6 endpoints and must not be widened for an
+	// observational field, ADR-0006), never standby or an open window. Bounded
+	// hard, because this goroutine is the enforcement itself.
+	maybeLookupIPv6 := func() {
+		if o.LookupIPv6 == nil || time.Now().Before(ipv6NextAt) {
+			return
+		}
+		ipv6NextAt = time.Now().Add(ipv6Interval)
+		v6ctx, cancel := context.WithTimeout(ctx, ipv6LookupBudget)
+		defer cancel()
+		if addr, err := o.LookupIPv6(v6ctx); err == nil {
+			dg.ipv6 = addr.String()
+		} else {
+			// Cleared, not held: a v6 address that can't be re-confirmed may be
+			// gone, and stale is worse than absent for an observational field.
+			dg.ipv6 = ""
+		}
+	}
 	// verifyRepairs counts re-applies since startup. Deliberately cumulative and
 	// never reset by a clean check: a host where this keeps climbing has
 	// something repeatedly removing dezhban's rules, and that pattern is the
@@ -2534,6 +2579,7 @@ func (o Options) runGuard(ctx context.Context) error {
 			// from nothing. See observeExitIP's doc comment.
 			observeExitIP(lastRes.Reading.IP)
 			if !blocked {
+				maybeLookupIPv6()
 				// A confirmed allowed exit proves the tunnel is carrying traffic.
 				goodExitThisUp = true
 				// But with a watcher, up/down is the watcher's to report: this
@@ -2593,6 +2639,10 @@ func (o Options) runGuard(ctx context.Context) error {
 				// the same reset); doing it here means the down edge itself is
 				// never shown carrying a leftover zombie streak.
 				resetZombie(true)
+				// The observed public IPv6 died with the tunnel — a redial may
+				// land on a different exit, and showing the old address as
+				// current would be a lie until the next slow re-confirmation.
+				dg.ipv6 = ""
 			}
 			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
 				tunnels = next
@@ -2985,6 +3035,9 @@ func (o Options) runGuard(ctx context.Context) error {
 				if !blocked {
 					goodExitThisUp, sawTunnelUp = true, true // confirmed ALLOWED exit through the tunnel
 					markTunnelEverUp(time.Now())
+					maybeLookupIPv6()
+				} else {
+					dg.ipv6 = "" // FULL BLOCK: nothing egresses; don't show a pre-block address as current
 				}
 			}
 			// Zombie-tunnel detection: the interface reports up, but a run of exit

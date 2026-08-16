@@ -440,10 +440,14 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		return runner.Options{}, fmt.Errorf("firewall backend unavailable: %w", err)
 	}
 
-	var mon runner.Monitor = monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	// realMon stays visible past the simulation wrapper: the IPv6 observation
+	// (LookupIPv6 below) is not part of the runner.Monitor interface, and
+	// simulation only fakes the country, never the address path.
+	realMon := monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	var mon runner.Monitor = realMon
 	if ov.simCountry != "" {
 		log.Warn("SIMULATION: forcing resolved country", "country", ov.simCountry)
-		mon = monitor.NewSimMonitor(mon.(*monitor.Monitor), ov.simCountry)
+		mon = monitor.NewSimMonitor(realMon, ov.simCountry)
 	}
 
 	tunnels := resolveTunnels(cfg, log)
@@ -762,6 +766,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
 		ResolveEndpoints:  func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
 		ResolveProviders:  resolveProviders,
+		LookupIPv6:        realMon.OnceIPv6,
 		ResolveEndpointsWith: func(ctx context.Context, tuns []string) netdetect.EndpointSet {
 			return epSrc.ResolveWith(ctx, tuns)
 		},
