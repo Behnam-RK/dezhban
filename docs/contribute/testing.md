@@ -446,6 +446,58 @@ Privileged for enroll/forget, macOS-relevant but not macOS-only.
       works. This is the revocation path for a leaked token.
 - [ ] **`token forget` recovers a stranded host.** After forgetting, config
       changes fall back to `sudo` rather than being impossible.
+- [ ] **The toggle works on an ordinary ad-hoc build.** On any build from
+      `build-app.sh`, "Use Touch ID for settings changes" enables, enrolls with
+      one password prompt, and a subsequent settings change costs a **fingerprint
+      and no password**. See
+      [ADR-0012](../adr/0012-app-checked-biometrics-on-unsigned-builds.md).
+- [ ] **Settings never freezes waiting on the keychain.** Launch the app with the
+      lid shut on an external display (no usable sensor, so the launch warm-up is
+      skipped by design), then open the lid and go straight to Settings. The
+      Authorization section may read "Checking…" for a moment; the window must
+      stay responsive throughout. A freeze here means something reads
+      `ControlToken.capability` on the main thread — use `capabilityIfKnown` plus
+      `resolveCapability` instead. Worth repeating with a locked login keychain
+      (`security lock-keychain`), which is what turns the block into a modal
+      dialog rather than a pause.
+- [ ] **Enrollment survives an app upgrade.** Enrol, then rebuild and reinstall
+      the app (`task dev` is enough — an ad-hoc rebuild changes the cdhash, and
+      the keychain ACL is bound to it). Toggling off and on again must succeed:
+      before the fix this failed with `-25299` because the new build could
+      neither read nor delete the item the old one stored. The first *read* after
+      an upgrade may ask you to approve keychain access once; that is macOS, and
+      approving keeps the enrollment.
+- [ ] **A cancelled fingerprint falls back to sudo, never to a login password.**
+      Dismiss the Touch ID prompt on a settings save: the change must fall to the
+      ordinary privileged path, and the biometric prompt must never offer "Use
+      Password…" as a way through — `load()` uses
+      `.deviceOwnerAuthenticationWithBiometrics` precisely so it cannot.
+- [ ] **The app refuses enrollment it cannot complete, for free.** Simulate a
+      failing store (e.g. temporarily point `store` at an invalid attribute set):
+      flipping the toggle must produce **no password prompt** and leave
+      `dezhban token status` reporting "not enrolled" — the failure this checks
+      for cost a password and then stranded an enrollment. See
+      [ADR-0011](../adr/0011-biometric-enrollment-requires-a-signed-build.md).
+- [ ] **A failed store rolls the daemon back.** If `SecItemAdd` fails after
+      `token enroll` has already run, `dezhban token status` must return to
+      "not enrolled" without the user intervening.
+- [ ] **A failed store stops offering the stale secret — rollback or not.** With
+      a leftover keychain item the app cannot replace, force BOTH branches of the
+      rollback: one that succeeds, and one that fails (dismiss its admin prompt).
+      In each, the About pane's "Settings changes" must read "Password — the
+      stored secret is stale", and a settings save must complete through the
+      password prompt rather than failing with a daemon refusal. The flag is
+      session-only, so check without relaunching the app.
+- [ ] **The About pane never invites an impossible retry.** With no token
+      enrolled, "Settings changes" must not read "turn on Touch ID in Settings"
+      unless that toggle would actually succeed.
+- [ ] **An entitlement does not silently brick the app.** If anyone adds
+      `keychain-access-groups` to `build-app.sh`'s `codesign` call, the built app
+      is SIGKILLed at launch rather than gaining keychain access — and
+      `codesign --verify` passes on such a binary, so the signature checks do not
+      catch it. The release workflow now execs the installed app and fails on a
+      `137`, so this is enforced **at release**; run it by hand after any local
+      change to that `codesign` line, since nothing checks a dev build.
 
 ## Service lifecycle
 
@@ -815,10 +867,14 @@ end up typing a password.
       password prompt that would perform it anyway.
 - [ ] **Turning it off removes both copies.** The toggle goes off, `dezhban token
       status` reports "not enrolled", and saves ask for a password again.
-- [ ] **Changing your fingerprints invalidates the stored token** (this is the
-      point of `.biometryCurrentSet`): add or remove a fingerprint, then save →
-      it falls back to the password path, and re-enrolling from the toggle
-      restores Touch ID.
+- [ ] **Changing your fingerprints does NOT invalidate the stored token.** Add or
+      remove a fingerprint, then save → it still costs a Touch ID tap and still
+      succeeds. `.biometryCurrentSet` is gone with
+      [ADR-0012](../adr/0012-app-checked-biometrics-on-unsigned-builds.md) — the
+      keychain item is ordinary and the check is the app's, so there is nothing
+      for a fingerprint change to invalidate. Adding a finger already needs the
+      login password, which already grants `sudo`. Recorded here so the loss is
+      re-confirmed on each pass rather than rediscovered as a surprise.
 - [ ] **On a Mac without Touch ID** the toggle is disabled and explains why;
       settings changes keep working through the password path.
 
