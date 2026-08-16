@@ -4,32 +4,28 @@ import (
 	"reflect"
 	"strconv"
 	"testing"
+	"time"
 
 	"github.com/behnam-rk/dezhban/internal/config"
 )
 
 // Apply in auto mode must produce a "connect any VPN" config: no pinned
-// interfaces (autodetect implied on Normalize), profiles carried, and
-// allowPhysicalDNS honored.
+// interfaces (autodetect implied on Normalize) and profiles carried.
 func TestApplyAutoMode(t *testing.T) {
 	cfg := config.Default()
 	Apply(&cfg, Input{
-		PollInterval: "30s", Hysteresis: "3", LogLevel: "info",
+		Hysteresis:   "3",
 		ConfigureVPN: true, AutoMode: true,
-		Tunnels:          []string{"utun9"}, // must be ignored in auto mode
-		Endpoints:        []string{"vpn.example.com"},
-		Profiles:         []config.Profile{{Name: "home", Endpoints: []string{"203.0.113.7"}}},
-		AutoDiscover:     boolPtr(true),
-		AllowPhysicalDNS: true,
+		Tunnels:      []string{"utun9"}, // must be ignored in auto mode
+		Endpoints:    []string{"vpn.example.com"},
+		Profiles:     []config.Profile{{Name: "home", Endpoints: []string{"203.0.113.7"}}},
+		AutoDiscover: boolPtr(true),
 	})
 	if !cfg.VPN.AutoDiscoverEndpoints {
 		t.Error("an answered autoDiscover should be applied")
 	}
 	if len(cfg.VPN.TunnelInterfaces) != 0 {
 		t.Errorf("auto mode must not pin interfaces, got %v", cfg.VPN.TunnelInterfaces)
-	}
-	if !cfg.VPN.AllowPhysicalDNS {
-		t.Error("allowPhysicalDNS should be set")
 	}
 	if len(cfg.VPN.Profiles) != 1 || cfg.VPN.Profiles[0].Name != "home" {
 		t.Errorf("profiles not carried: %+v", cfg.VPN.Profiles)
@@ -47,18 +43,24 @@ func TestApplyAutoMode(t *testing.T) {
 func boolPtr(v bool) *bool { return &v }
 
 // A question the wizard never put on screen must not have its key rewritten.
-// The autoDiscover question is macOS-only, so off macOS there is no binding for
-// it — and reading a missing binding as "false" meant re-running setup on Linux
-// silently cleared vpn.autoDiscoverEndpoints. Same failure as the one that used
-// to delete imported profiles: a value the user never touched, overwritten.
+// This used to cover only the macOS-gated autoDiscover question; since the
+// wizard shrank to its essentials it also names every key the dropped
+// questions wrote — pollInterval, logLevel, providerQuorum,
+// vpn.allowPhysicalDNS — because "unasked means untouched" is exactly what
+// makes dropping a question safe for a tuned config.
 func TestAnUnaskedQuestionLeavesItsKeyAlone(t *testing.T) {
 	cfg := config.Default()
 	cfg.VPN.AutoDiscoverEndpoints = true
+	cfg.PollInterval = 45 * time.Second
+	cfg.LogLevel = "debug"
+	cfg.ProviderQuorum = true
+	cfg.VPN.AllowPhysicalDNS = false // an explicit tightening, the worst thing to clobber
 
-	qs := Questions(Options{Config: &cfg, GOOS: "linux", ConfigExisted: true})
+	qs := Questions(Options{Config: &cfg, GOOS: "linux"})
 	for _, q := range qs {
-		if q.ID == "autoDiscover" {
-			t.Fatal("the autoDiscover question is macOS-only; this test assumes it is absent")
+		switch q.ID {
+		case "autoDiscover", "pollInterval", "logLevel", "providerQuorum", "allowPhysicalDNS":
+			t.Fatalf("the %s question should no longer be asked", q.ID)
 		}
 	}
 
@@ -66,10 +68,24 @@ func TestAnUnaskedQuestionLeavesItsKeyAlone(t *testing.T) {
 	if answers.OptionalBool("autoDiscover") != nil {
 		t.Fatal("an unasked question should have no binding")
 	}
-	Apply(&cfg, answers.Input(strconv.Itoa(cfg.Hysteresis), nil))
+	in := answers.Input(strconv.Itoa(cfg.Hysteresis), nil)
+	in.ConfigExisted = true
+	Apply(&cfg, in)
 
 	if !cfg.VPN.AutoDiscoverEndpoints {
 		t.Error("vpn.autoDiscoverEndpoints was cleared by a wizard that never asked about it")
+	}
+	if cfg.PollInterval != 45*time.Second {
+		t.Errorf("pollInterval changed to %v by a wizard that never asked about it", cfg.PollInterval)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("logLevel changed to %q by a wizard that never asked about it", cfg.LogLevel)
+	}
+	if !cfg.ProviderQuorum {
+		t.Error("providerQuorum was cleared by a wizard that never asked about it")
+	}
+	if cfg.VPN.AllowPhysicalDNS {
+		t.Error("an explicit vpn.allowPhysicalDNS=false was flipped back by a wizard that never asked about it")
 	}
 }
 
@@ -77,7 +93,7 @@ func TestAnUnaskedQuestionLeavesItsKeyAlone(t *testing.T) {
 func TestApplyAdvancedPin(t *testing.T) {
 	cfg := config.Default()
 	Apply(&cfg, Input{
-		PollInterval: "30s", Hysteresis: "3", LogLevel: "info",
+		Hysteresis:   "3",
 		ConfigureVPN: true, AutoMode: false,
 		Tunnels:   []string{"utun4"},
 		Endpoints: []string{"203.0.113.7"},
@@ -88,15 +104,15 @@ func TestApplyAdvancedPin(t *testing.T) {
 }
 
 // Answering "no" to "configure your VPN now?" must leave a VPN somebody already
-// set up completely alone — the wizard is also how people change their log
-// level.
+// set up completely alone — the wizard is also how people change their
+// blocked-country list.
 func TestDecliningTheVPNBranchTouchesNoVPNKey(t *testing.T) {
 	cfg := config.Default()
 	cfg.VPN.TunnelInterfaces = []string{"utun4"}
 	cfg.VPN.Endpoints = []string{"203.0.113.7"}
 	cfg.VPN.AllowPhysicalDNS = true
 
-	Apply(&cfg, Input{PollInterval: "45s", LogLevel: "warn", ConfigureVPN: false})
+	Apply(&cfg, Input{Countries: []string{"IR", "SY"}, ConfigureVPN: false})
 
 	if !reflect.DeepEqual(cfg.VPN.TunnelInterfaces, []string{"utun4"}) {
 		t.Errorf("tunnels changed: %v", cfg.VPN.TunnelInterfaces)
@@ -107,8 +123,8 @@ func TestDecliningTheVPNBranchTouchesNoVPNKey(t *testing.T) {
 	if !cfg.VPN.AllowPhysicalDNS {
 		t.Error("allowPhysicalDNS was cleared")
 	}
-	if cfg.LogLevel != "warn" {
-		t.Errorf("the answers that WERE given should still apply, got logLevel %q", cfg.LogLevel)
+	if !reflect.DeepEqual(cfg.BlockedCountries, []string{"IR", "SY"}) {
+		t.Errorf("the answers that WERE given should still apply, got blockedCountries %v", cfg.BlockedCountries)
 	}
 }
 
@@ -156,7 +172,7 @@ func TestQuestionsSeedFromTheConfig(t *testing.T) {
 	cfg.VPN.Endpoints = []string{"203.0.113.7", "vpn.example.com"}
 	cfg.LogLevel = "debug"
 
-	qs := byID(Questions(Options{Config: &cfg, ConfigExisted: true, GOOS: "darwin"}))
+	qs := byID(Questions(Options{Config: &cfg, GOOS: "darwin"}))
 
 	if got := qs["blockedCountries"].Selected; !reflect.DeepEqual(got, []string{"IR", "CN"}) {
 		t.Errorf("checkbox seed = %v, want the codes that ARE on the common list", got)
@@ -169,30 +185,41 @@ func TestQuestionsSeedFromTheConfig(t *testing.T) {
 	if got := qs["endpoints"].Default; got != "203.0.113.7,vpn.example.com" {
 		t.Errorf("endpoints seed = %q", got)
 	}
-	if got := qs["logLevel"].Default; got != "debug" {
-		t.Errorf("logLevel seed = %q", got)
-	}
 }
 
-// Endpoint discovery is macOS-only, and defaults on only for a brand-new config
-// there: re-running setup must never silently flip an explicit false back on.
+// Endpoint discovery defaults on only for a brand-new macOS config: the
+// defaulting used to live on the (since-dropped) autoDiscover question and now
+// lives in Apply, and re-running setup must still never silently flip an
+// explicit false back on.
 func TestAutoDiscoverDefaultsOnlyForANewMacConfig(t *testing.T) {
-	off := config.Default()
-	off.VPN.AutoDiscoverEndpoints = false
-
-	fresh := byID(Questions(Options{Config: &off, ConfigExisted: false, GOOS: "darwin"}))
-	if fresh["autoDiscover"].Default != "true" {
-		t.Error("a brand-new macOS config should be offered discovery on")
+	fresh := config.Default()
+	fresh.VPN.AutoDiscoverEndpoints = false // Default() has it on; force the observable flip
+	Apply(&fresh, Input{ConfigureVPN: true, AutoMode: true, MacOS: true, ConfigExisted: false})
+	if !fresh.VPN.AutoDiscoverEndpoints {
+		t.Error("a brand-new macOS config should get discovery on")
 	}
 
-	existing := byID(Questions(Options{Config: &off, ConfigExisted: true, GOOS: "darwin"}))
-	if existing["autoDiscover"].Default != "false" {
+	existing := config.Default()
+	existing.VPN.AutoDiscoverEndpoints = false
+	Apply(&existing, Input{ConfigureVPN: true, AutoMode: true, MacOS: true, ConfigExisted: true})
+	if existing.VPN.AutoDiscoverEndpoints {
 		t.Error("an existing config's explicit false must be preserved")
 	}
 
-	linux := byID(Questions(Options{Config: &off, ConfigExisted: false, GOOS: "linux"}))
-	if _, asked := linux["autoDiscover"]; asked {
-		t.Error("discovery is macOS-only, so elsewhere it must not be asked at all")
+	linux := config.Default()
+	linux.VPN.AutoDiscoverEndpoints = false
+	Apply(&linux, Input{ConfigureVPN: true, AutoMode: true, MacOS: false, ConfigExisted: false})
+	if linux.VPN.AutoDiscoverEndpoints {
+		t.Error("discovery is macOS-only; a new Linux config must not have it defaulted on")
+	}
+
+	// An explicit answer (a surface that still collects one) beats the default.
+	answered := config.Default()
+	answered.VPN.AutoDiscoverEndpoints = true
+	off := false
+	Apply(&answered, Input{ConfigureVPN: true, AutoMode: true, MacOS: true, ConfigExisted: false, AutoDiscover: &off})
+	if answered.VPN.AutoDiscoverEndpoints {
+		t.Error("an explicit false answer must win over the new-config default")
 	}
 }
 
@@ -260,7 +287,7 @@ func TestAnsweringNothingChangesNothing(t *testing.T) {
 	config.Normalize(&cfg)
 	before := config.KeyValues(&cfg)
 
-	qs := Questions(Options{Config: &cfg, ConfigExisted: true, GOOS: "darwin", DetectedTunnels: []string{"utun4"}})
+	qs := Questions(Options{Config: &cfg, GOOS: "darwin", DetectedTunnels: []string{"utun4"}})
 	a := NewAnswers(qs)
 	// The one answer with no config to seed it: the VPN branch is offered, and
 	// its own sub-answers are seeded, so accepting them must be a no-op too.
@@ -269,8 +296,12 @@ func TestAnsweringNothingChangesNothing(t *testing.T) {
 
 	after := cfg
 	// Hysteresis has no question; the wizard carries the current value through,
-	// which is exactly what the caller passes here.
-	Apply(&after, a.Input(strconv.Itoa(cfg.Hysteresis), nil))
+	// which is exactly what the caller passes here. MacOS/ConfigExisted mirror
+	// the real caller: an existing config's discovery setting must not move.
+	in := a.Input(strconv.Itoa(cfg.Hysteresis), nil)
+	in.MacOS = true
+	in.ConfigExisted = true
+	Apply(&after, in)
 	config.Normalize(&after)
 
 	for key, want := range before {

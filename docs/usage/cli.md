@@ -311,6 +311,16 @@ succeeds and says so; the new values are read the next time it starts.
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
 
+The wizard asks only what has no safe default: blocked countries (plus a
+free-text field for other codes), whether to configure the VPN now, automatic
+vs. manual detection, and — when configuring — tunnel interfaces (manual mode
+only), self-hosted config files to import, and endpoints. Everything it used
+to also ask (poll interval, log level, provider quorum, physical DNS,
+auto-discovery) ships with a sane default and lives in the app's Settings or
+`config set`; a wizard run leaves those keys untouched, so re-running setup
+never clobbers a tuned value. The one silent defaulting decision it kept: a
+brand-new macOS config gets live endpoint discovery turned on.
+
 `setup --questions` is the exception: it prints what the wizard *would* ask —
 each question, what it writes, its seeded answer, and which earlier answer
 unlocks it — and asks nothing. Read-only, no root, no terminal needed.

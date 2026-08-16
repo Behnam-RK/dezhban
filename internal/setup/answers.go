@@ -143,21 +143,26 @@ func (a *Answers) ShouldAsk(q Question) bool {
 
 // Input is the collected answers, in the shape the config wants them.
 type Input struct {
-	PollInterval, Hysteresis, LogLevel string
-	Quorum                             bool
-	Countries                          []string
-	ConfigureVPN                       bool
+	Hysteresis   string
+	Countries    []string
+	ConfigureVPN bool
 	// AutoMode is automatic tunnel detection: no pinned interface names.
 	AutoMode           bool
 	Tunnels, Endpoints []string
 	Profiles           []config.Profile
-	// AutoDiscover is nil when the wizard never asked — the question is macOS-only,
-	// so on every other platform there is no answer to apply. Nil rather than
-	// false because Apply must leave an unasked key ALONE: writing false would
-	// silently clear a value the user set, which is the same failure that made
-	// re-running setup delete imported profiles (see mergeProfiles).
-	AutoDiscover     *bool
-	AllowPhysicalDNS bool
+	// AutoDiscover is nil when nothing answered it — the wizard no longer asks;
+	// a surface that still collects an explicit answer can set it. Nil rather
+	// than false because Apply must leave an unanswered key ALONE: writing
+	// false would silently clear a value the user set, which is the same
+	// failure that made re-running setup delete imported profiles (see
+	// mergeProfiles).
+	AutoDiscover *bool
+	// MacOS and ConfigExisted carry the one defaulting decision that used to
+	// live on the dropped autoDiscover question: a BRAND-NEW macOS config turns
+	// live endpoint discovery on. An existing config is never touched — setup
+	// must not flip an explicit false back.
+	MacOS         bool
+	ConfigExisted bool
 }
 
 // Input folds the answers into the shape Apply writes.
@@ -174,20 +179,16 @@ func (a *Answers) Input(hysteresis string, profiles []config.Profile) Input {
 		tunnels = SplitList(a.Text("tunnels"))
 	}
 	return Input{
-		PollInterval: a.Text("pollInterval"),
 		Hysteresis:   hysteresis,
-		LogLevel:     a.Text("logLevel"),
-		Quorum:       a.Bool("providerQuorum"),
 		Countries:    countries,
 		ConfigureVPN: a.Bool("configureVPN"),
 		AutoMode:     a.Bool("autoMode"),
 		Tunnels:      tunnels,
 		Endpoints:    SplitList(a.Text("endpoints")),
 		Profiles:     profiles,
-		// Absent on every platform but macOS, where the question is not asked at
-		// all. Nil there, so Apply leaves the configured value untouched.
-		AutoDiscover:     a.OptionalBool("autoDiscover"),
-		AllowPhysicalDNS: a.Bool("allowPhysicalDNS"),
+		// Nil unless a surface asked the (no-longer-offered) question anyway;
+		// nil leaves the configured value untouched in Apply.
+		AutoDiscover: a.OptionalBool("autoDiscover"),
 	}
 }
 
@@ -197,15 +198,14 @@ func (a *Answers) Input(hysteresis string, profiles []config.Profile) Input {
 // A question the user never reached leaves its part of the config alone. That
 // is why the VPN keys are written only when ConfigureVPN is true — answering
 // "no" must not blank out a tunnel someone configured earlier.
+// Keys the wizard no longer asks about (pollInterval, logLevel,
+// providerQuorum, vpn.allowPhysicalDNS) are deliberately not assigned at all:
+// unasked means untouched, so re-running setup can never clobber a value tuned
+// in Settings or with `config set`.
 func Apply(cfg *config.Config, in Input) {
-	if d, err := time.ParseDuration(strings.TrimSpace(in.PollInterval)); err == nil {
-		cfg.PollInterval = d
-	}
 	if n, err := strconv.Atoi(strings.TrimSpace(in.Hysteresis)); err == nil {
 		cfg.Hysteresis = n
 	}
-	cfg.LogLevel = in.LogLevel
-	cfg.ProviderQuorum = in.Quorum
 	cfg.BlockedCountries = in.Countries // config.Normalize upper-cases and de-dupes on save
 
 	if !in.ConfigureVPN {
@@ -220,12 +220,16 @@ func Apply(cfg *config.Config, in Input) {
 	}
 	cfg.VPN.Endpoints = in.Endpoints
 	cfg.VPN.Profiles = mergeProfiles(cfg.VPN.Profiles, in.Profiles)
-	// Only when the wizard asked. An unasked question leaves its key alone —
-	// the same rule ConfigureVPN applies to the whole VPN branch.
-	if in.AutoDiscover != nil {
+	switch {
+	case in.AutoDiscover != nil:
+		// An explicit answer, from a surface that still collects one.
 		cfg.VPN.AutoDiscoverEndpoints = *in.AutoDiscover
+	case in.MacOS && !in.ConfigExisted:
+		// The one defaulting decision the dropped autoDiscover question used to
+		// carry: a brand-new macOS config gets live discovery on. Never applied
+		// to an existing config — setup must not flip an explicit false back.
+		cfg.VPN.AutoDiscoverEndpoints = true
 	}
-	cfg.VPN.AllowPhysicalDNS = in.AllowPhysicalDNS
 }
 
 // mergeProfiles adds newly imported profiles to the ones already configured,
