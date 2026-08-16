@@ -316,6 +316,14 @@ current as you land changes.
   leave the pane to run its first keychain write on the main thread, behind a system
   dialog if your login keychain was locked. The pane now shows "Checking…"
   for the moment that takes instead of freezing.
+- **The About pane says "Password" while the sensor is unusable, even with Touch
+  ID enrolled.** A shut lid or a Touch ID lockout makes the read fall back to the
+  ordinary password path with the enrollment perfectly intact — so "Touch ID
+  (control token enrolled)" named a cost you were not about to pay, in the one
+  row that exists to answer "why did I get a password dialog?". It now says which
+  it is, and that nothing is wrong with the enrollment. The row also fills in as
+  soon as the answer is known rather than waiting for the version and config-path
+  lookups beside it.
 
 ## [0.9.0] - 2026-07-29
 

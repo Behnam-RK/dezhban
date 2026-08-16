@@ -345,6 +345,23 @@ enum ControlToken {
         // result matters: a failed delete means the add below collides, and
         // reporting "duplicate item" would tell the user nothing they can act on.
         guard remove() else {
+            // `remove()` reports one bit, and it covers two different failures:
+            // an item this build cannot delete, and a LOOKUP that never got far
+            // enough to see one (a locked login keychain, or an unlock dialog the
+            // user dismissed — that comes back as -128, not "not found"). Only the
+            // first is fixed by `security delete-generic-password`; sending the
+            // second there hands the user a command that answers "The specified
+            // item could not be found in the keychain."
+            //
+            // `isStored` tells them apart without a second failure mode of its own:
+            // it asks with `kSecUseAuthenticationUISkip`, so a present-but-locked
+            // item answers `errSecInteractionNotAllowed` (a yes) while a keychain
+            // holding nothing answers `errSecItemNotFound` (a no).
+            guard isStored else {
+                return "the keychain could not be read, so nothing was stored — it may be "
+                    + "locked, or the unlock prompt was dismissed. Unlock your login keychain "
+                    + "and try again."
+            }
             return "the keychain already holds a dezhban secret that this copy of the app "
                 + "cannot replace. Remove it once with: \(manualRemovalCommand)"
         }

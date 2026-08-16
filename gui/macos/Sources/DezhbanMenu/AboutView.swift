@@ -158,9 +158,24 @@ struct AboutView: View {
     /// the user will not actually pay, and this row exists precisely to answer
     /// "why did I get a password dialog?".
     private static var enrolledSummary: String {
-        ControlToken.isKnownOrphaned
-            ? "Password — the stored secret is stale; turn Touch ID off and on in Settings"
-            : "Touch ID (control token enrolled)"
+        if ControlToken.isKnownOrphaned {
+            return "Password — the stored secret is stale; turn Touch ID off and on in Settings"
+        }
+        // A sensor that is unusable RIGHT NOW — a shut lid, or a Touch ID lockout
+        // after repeated failures — makes `ControlToken.load()` return nil on its
+        // `canEvaluatePolicy` guard, so the save falls to the sudo password prompt
+        // with the enrollment perfectly intact. "Touch ID (control token enrolled)"
+        // would name a cost the user is not about to pay, in the one row that
+        // exists to answer "why did I get a password dialog?".
+        //
+        // Asked through `capabilityIfKnown`, never `capability`: the no-sensor case
+        // is answered from a local check and NEVER runs the keychain probe, which
+        // is the whole reason an enrolled host is otherwise not asked for a verdict.
+        if ControlToken.capabilityIfKnown == .noBiometry {
+            return "Password — Touch ID is unavailable right now (a closed lid, or a lockout); "
+                + "the enrollment is intact"
+        }
+        return "Touch ID (control token enrolled)"
     }
 
     /// Lifecycle actions (install/start/stop/panic) cannot go through the daemon,
@@ -203,10 +218,16 @@ struct AboutView: View {
             // with no sensor, never writes to the keychain here at all.
             let auth = Self.describeSettingsAuthIfKnown()
                 ?? Self.describeSettingsAuth(ControlToken.capability)
+            // Published on its OWN hop, before the two subprocess calls below.
+            // Bundling it with them left "Checking…" on screen for as long as
+            // `resolvedConfigPath()` and `dezhban version` took — two process
+            // spawns — even once the verdict had been in hand for milliseconds.
+            // These are independent values; only the row that is still unknown
+            // should wait for the thing that is actually slow.
+            DispatchQueue.main.async { settingsAuth = auth }
             let path = DezhbanCLI.resolvedConfigPath()
             let v = DezhbanCLI.run(["version"]).output.trimmingCharacters(in: .whitespacesAndNewlines)
             DispatchQueue.main.async {
-                settingsAuth = auth
                 configPath = path
                 version = v
             }
