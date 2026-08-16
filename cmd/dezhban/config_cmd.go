@@ -238,6 +238,10 @@ var configFields = map[string]configField{
 		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AllowPhysicalDNS) },
 		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AllowPhysicalDNS, v) },
 	},
+	"vpn.allowGeoProviders": {
+		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AllowGeoProviders) },
+		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AllowGeoProviders, v) },
+	},
 	"vpn.allowLocalNetwork": {
 		get: func(c *config.Config) string { return strconv.FormatBool(c.VPN.AllowLocalNetwork) },
 		set: func(c *config.Config, v string) error { return setBool(&c.VPN.AllowLocalNetwork, v) },

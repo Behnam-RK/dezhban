@@ -731,6 +731,21 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		)
 	}()
 
+	// Geo-provider IPs for the tunnel-scoped FULL BLOCK pass. Reuses the same
+	// resolver `block --force` uses; the runner calls it at startup and on each
+	// endpoint-refresh tick, since CDN-fronted providers rotate. With
+	// vpn.allowGeoProviders=false the resolver is nil and the runner degrades to
+	// lift-and-probe (runner.Options.ResolveProviders documents nil) — restart-
+	// required, like everything else wired here at startup.
+	var resolveProviders func(context.Context) []netip.Addr
+	if cfg.VPN.AllowGeoProviders {
+		resolveProviders = func(context.Context) []netip.Addr {
+			return buildProviderAllowlist(cfg, log).Hosts
+		}
+	} else {
+		log.Warn("vpn.allowGeoProviders is off: recovery from FULL BLOCK will briefly lift the guard to observe the exit")
+	}
+
 	return runner.Options{
 		Monitor:           mon,
 		Decider:           decision.New(cfg.BlockedCountries, cfg.Hysteresis),
@@ -746,12 +761,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
 		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
 		ResolveEndpoints:  func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
-		// Geo-provider IPs for the tunnel-scoped FULL BLOCK pass. Reuses the same
-		// resolver `block --force` uses; the runner calls it at startup and on
-		// each endpoint-refresh tick, since CDN-fronted providers rotate.
-		ResolveProviders: func(context.Context) []netip.Addr {
-			return buildProviderAllowlist(cfg, log).Hosts
-		},
+		ResolveProviders:  resolveProviders,
 		ResolveEndpointsWith: func(ctx context.Context, tuns []string) netdetect.EndpointSet {
 			return epSrc.ResolveWith(ctx, tuns)
 		},

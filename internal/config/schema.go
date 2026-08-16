@@ -206,9 +206,16 @@ var tunables = []Tunable{
 	},
 	{
 		Key:       "vpn.allowPhysicalDNS",
-		Label:     "Allow DNS on the physical link",
+		Label:     "Keep DNS working while the tunnel is down",
 		Kind:      KindBool,
-		Help:      "Lets name lookups use your ISP's resolver while the tunnel is down. Convenient, but your ISP sees what you look up.",
+		Help:      "Lets name lookups use your ISP's resolver while the tunnel is down, including during a full block. Convenient, but your ISP sees what you look up.",
+		DocAnchor: anchorVPN,
+	},
+	{
+		Key:       "vpn.allowGeoProviders",
+		Label:     "Keep exit checks running when blocked",
+		Kind:      KindBool,
+		Help:      "During a full block, exit-country checks stay reachable through the tunnel only, so the block lifts itself when your exit is allowed again. Off does not stop those checks — recovery instead briefly lifts the guard to look, which exposes more, not less.",
 		DocAnchor: anchorVPN,
 	},
 	{

@@ -34,6 +34,7 @@ var roundTripCases = map[string]roundTripCase{
 	"vpn.autoDetect":            {set: "false", want: "false"},
 	"vpn.autoDiscoverEndpoints": {set: "false", want: "false"},
 	"vpn.allowPhysicalDNS":      {set: "false", want: "false"},
+	"vpn.allowGeoProviders":     {set: "false", want: "false"},
 	"vpn.allowLocalNetwork":     {set: "false", want: "false"},
 	"vpn.autoArm":               {set: "false", want: "false"},
 	"vpn.armAtBoot":             {set: "false", want: "false"},
