@@ -14,7 +14,7 @@ import DezhbanCore
 /// moves behind it. Manual block and unblock are deliberately NOT here:
 /// somebody who wants to cut their own internet can turn off Wi-Fi, so blocking
 /// by hand is a power-user affordance and lives in the window's Overview with
-/// everything else (MainWindow/MainView).
+/// everything else (MainWindow/DetailHostView).
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var statusItem: NSStatusItem!
     private let menu = NSMenu()
@@ -43,7 +43,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // every session touch the login keychain for a feature the user may never
         // open — and on a Mac whose login keychain password has diverged from the
         // account password, that is an unexplained unlock dialog at every login.
-        // `MainView` warms it when the window first appears instead, so a
+        // `DetailHostView` warms it when the window first appears instead, so a
         // menubar-only session costs nothing. See `ControlToken.warmCapability`.
         AppActions.refresh = { [weak self] in self?.refresh() }
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -361,7 +361,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let e = s.enforcementErr, !e.isEmpty {
             line = "⚠︎ Enforcement failed — open Dezhban for details"
         } else if let cc = s.countryLabel, !cc.isEmpty {
-            line += " — \(cc)"
+            // Only if the headline does not already name it. `render.Text`'s
+            // FULL BLOCK headline is "Full block — Iran (IR)", so appending
+            // unconditionally produced "Full block — Iran (IR) — Iran (IR) via
+            // ipinfo": the country twice, with two em-dash separators, in the
+            // one-line glance for the exact state this tool exists for.
+            if !line.contains(cc) { line += " — \(cc)" }
             if let p = s.provider, !p.isEmpty { line += " via \(p)" }
         }
         return line

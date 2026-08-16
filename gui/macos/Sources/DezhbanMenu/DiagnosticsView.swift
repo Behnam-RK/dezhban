@@ -37,7 +37,7 @@ struct DiagnosticsView: View {
                 ProgressView().controlSize(.small)
             }
         }
-        .padding(12)
+        .padding(PaneMetrics.footerPadding)
     }
 
     @ViewBuilder
@@ -134,7 +134,7 @@ struct DiagnosticsView: View {
         VStack(spacing: 12) {
             Image(systemName: symbol).font(.system(size: 40)).foregroundStyle(.secondary)
             Text(title).font(.title3.weight(.semibold))
-            Text(message).multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: 420)
+            Text(message).multilineTextAlignment(.center).foregroundStyle(.secondary).frame(maxWidth: PaneMetrics.proseColumn)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .padding(24)

@@ -68,7 +68,7 @@ struct SettingsView: View {
     /// initialiser below runs exactly once per view identity: SwiftUI installs
     /// `@State` storage the first time and DISCARDS the initial value on every
     /// later re-creation of the struct, so re-creating `SettingsView` (which
-    /// `MainView.body` does on every `AppState` publish) does *not* re-run this.
+    /// `DetailHostView.body` does on every `AppState` publish) does *not* re-run this.
     /// The predecessor of this property was a plain `let`, which did refresh that
     /// way; converting it to `@State` moved the responsibility to `seed()`.
     /// Deleting that call would silently freeze the verdict for the life of the

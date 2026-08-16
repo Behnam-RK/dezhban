@@ -14,6 +14,8 @@ final class MainWindow: NSObject, NSWindowDelegate {
     private var window: NSWindow!
     private var split: MainSplitViewController!
     private var cancellables = Set<AnyCancellable>()
+    /// The title item, held only so its accessibility label can follow the text.
+    private weak var sectionItem: NSToolbarItem?
 
     static let sectionTitleItemID = NSToolbarItem.Identifier("dezhban.sectionTitle")
 
@@ -87,6 +89,13 @@ final class MainWindow: NSObject, NSWindowDelegate {
         // what the columns need.
         win.contentViewController = split
 
+        // Seed the section label BEFORE the toolbar is built. The toolbar
+        // delegate hands AppKit `sectionLabel` itself as an item view, and an
+        // item view is inserted at the intrinsic size it has at that moment —
+        // an empty NSTextField is 0pt wide, so the title could come up clipped
+        // and stay that way until the first section change moved it.
+        sectionLabel.stringValue = (AppState.shared.selectedSection ?? .overview).windowTitle
+
         // A real NSToolbar, assigned BEFORE toolbarStyle: `toolbarStyle` is
         // inert while `toolbar` is nil, and it is the presence of a toolbar
         // that makes AppKit give the sidebar split item its full-height,
@@ -130,6 +139,7 @@ final class MainWindow: NSObject, NSWindowDelegate {
         // the Window menu, Mission Control and Exposé read.
         window.title = title
         sectionLabel.stringValue = title
+        sectionItem?.label = title
     }
 
     func open() {
@@ -170,10 +180,16 @@ extension MainWindow: NSToolbarDelegate {
         if id == Self.sectionTitleItemID {
             let item = NSToolbarItem(itemIdentifier: id)
             item.view = sectionLabel
+            // Never collapsed into the overflow menu: it is the window's title,
+            // not a command. (`allowsUserCustomization = false` on the toolbar
+            // is what keeps it non-removable; `isNavigational` would only move
+            // it into the navigational region, which is not what this is.)
             item.visibilityPriority = .high
-            // Not user-removable, and never collapsed into the overflow menu:
-            // it is the window's title, not a command.
-            item.isNavigational = false
+            // A view-based item still needs a label for the overflow menu and
+            // for accessibility — without one it reads as a nameless control.
+            // Kept in step with the text by `apply(section:)`.
+            item.label = sectionLabel.stringValue
+            sectionItem = item
             return item
         }
         if id == .sidebarTrackingSeparator {

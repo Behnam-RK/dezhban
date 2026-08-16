@@ -115,9 +115,13 @@ struct OverviewView: View {
     private func detailsGrid(_ s: Snapshot) -> some View {
         Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
             if let ip = s.ip, !ip.isEmpty {
-                let cc = s.countryLabel ?? "??"
+                // An em dash, not a parenthetical: `countryLabel` already ends
+                // in "(IR)", so "1.2.3.4 (Iran (IR) via ipinfo)" would nest one
+                // set of parentheses inside another. Same call render.go's
+                // fullBlockDisplay makes.
+                let cc = s.countryLabel ?? "unknown country"
                 let prov = s.provider.map { " via \($0)" } ?? ""
-                row("Public IP", "\(ip) (\(cc)\(prov))")
+                row("Public IP", "\(ip) — \(cc)\(prov)")
             } else if let err = s.lookupErr, !err.isEmpty {
                 // Only genuine failures reach lookupErr: a tunnel was up, so
                 // there was an exit to measure, and measuring it did not work.
