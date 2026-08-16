@@ -1451,8 +1451,42 @@ func defaultLogPath() string { return filepath.Join(stateDir(), "logs", "dezhban
 // NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
 // leaks physical egress), so the endpoint must be entered deliberately from the
 // VPN client's own config. No privilege required.
+// detectVPNJSON is `detect-vpn --json`'s shape: the tunnel-interface scan plus
+// the macOS discovery layer's inventory, so a diagnostic surface (the app's
+// Diagnostics pane) can show which VPNs are detected, which one is connected,
+// and which client patterns discovery can attribute at all. Keys are
+// lowerCamelCase and stable, same convention as state.Snapshot. Discovery
+// failure degrades to an empty candidate list plus discoveryErr — the tunnel
+// scan is the load-bearing half and must still be delivered.
+type detectVPNJSON struct {
+	Tunnels []string `json:"tunnels"`
+	// ConnectedVPN is the friendly name of the connected NetworkExtension VPN
+	// service (macOS scutil); empty when none, unreadable, or off macOS.
+	ConnectedVPN string `json:"connectedVPN,omitempty"`
+	// DiscoverySupported is whether endpoint discovery exists on this platform
+	// at all (macOS only) — distinct from it finding nothing.
+	DiscoverySupported bool              `json:"discoverySupported"`
+	Candidates         []detectVPNCand   `json:"candidates"`
+	DiscoveryErr       string            `json:"discoveryErr,omitempty"`
+	SupportedVPNs      []string          `json:"supportedVPNs,omitempty"`
+	TunnelPatterns     detectVPNPatterns `json:"tunnelPatterns"`
+}
+
+type detectVPNCand struct {
+	VPN     string `json:"vpn,omitempty"`
+	Server  string `json:"server"`
+	Port    int    `json:"port"`
+	Process string `json:"process,omitempty"`
+}
+
+type detectVPNPatterns struct {
+	Prefixes []string `json:"prefixes"`
+	Keywords []string `json:"keywords"`
+}
+
 func cmdDetectVPN(args []string) int {
 	fs := flag.NewFlagSet("detect-vpn", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON (tunnels, discovery candidates, connected VPN)")
 	_ = fs.Parse(args)
 
 	tunnels, err := netdetect.TunnelInterfaces()
@@ -1460,6 +1494,47 @@ func cmdDetectVPN(args []string) int {
 		fmt.Fprintln(os.Stderr, "detect-vpn: interface scan failed:", err)
 		return 1
 	}
+
+	if *jsonOut {
+		prefixes, keywords := netdetect.TunnelPatterns()
+		out := detectVPNJSON{
+			Tunnels:        tunnels,
+			Candidates:     []detectVPNCand{}, // [] not null: "scanned, found none" is the message
+			SupportedVPNs:  netdetect.SupportedVPNs(),
+			TunnelPatterns: detectVPNPatterns{Prefixes: prefixes, Keywords: keywords},
+		}
+		if out.Tunnels == nil {
+			out.Tunnels = []string{}
+		}
+		cands, derr := netdetect.DiscoverEndpoints()
+		switch {
+		case errors.Is(derr, netdetect.ErrDiscoverUnsupported):
+			// Not an error: the platform has no discovery, and the tunnel scan
+			// above is still the answer.
+		case derr != nil:
+			out.DiscoverySupported = true
+			out.DiscoveryErr = derr.Error()
+		default:
+			out.DiscoverySupported = true
+			for _, c := range cands {
+				out.Candidates = append(out.Candidates, detectVPNCand{
+					VPN: c.VPN, Server: c.Server.String(), Port: c.Port, Process: c.Process,
+				})
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		out.ConnectedVPN = netdetect.ConnectedVPNName(ctx)
+		cancel()
+
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "detect-vpn json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
 	if len(tunnels) == 0 {
 		fmt.Println("no VPN tunnel interfaces detected.")
 		fmt.Println("connect your VPN first, then re-run; or set vpn.tunnelInterfaces manually.")
@@ -1475,7 +1550,6 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println()
 	fmt.Println("recommended config (autoDetect handles interface renumbering across redials):")
 	fmt.Println(`  "vpn": {`)
-	fmt.Println(`    "enabled": true,`)
 	fmt.Println(`    "autoDetect": true,`)
 	fmt.Println(`    "autoDiscoverEndpoints": true`)
 	fmt.Println(`  }`)

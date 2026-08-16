@@ -242,6 +242,18 @@ app's Diagnostics pane) that needs to render them itself rather than parse
 text. See [config.md](config.md) for the full field reference and
 [troubleshooting.md](troubleshooting.md) for the lockout-recovery runbook.
 
+`detect-vpn --json` is the machine-readable VPN inventory the app's
+Diagnostics pane renders: `{tunnels, connectedVPN, discoverySupported,
+candidates: [{vpn, server, port, process}], discoveryErr, supportedVPNs,
+tunnelPatterns: {prefixes, keywords}}`. `tunnels` is the same interface scan
+the prose prints; `candidates`/`connectedVPN` come from the macOS discovery
+layer (empty elsewhere — `discoverySupported: false` says why);
+`supportedVPNs` and `tunnelPatterns` name the client-process and
+interface-name patterns detection recognizes, so an *unrecognized* VPN can be
+told apart from a *missing* one. A discovery failure degrades to
+`discoveryErr` plus an empty `candidates` — the tunnel scan is still
+delivered.
+
 Beyond the lockout checks, `doctor` answers **will dezhban need me again**:
 whether a reboot brings the guard back (*boot service*, *arm at boot*) and
 whether a VPN drop can redial on its own (*learned endpoints*). Those three are
