@@ -1,41 +1,61 @@
 import Foundation
 import UserNotifications
+import DezhbanCore
 
 /// Posts macOS notifications for ESSENTIAL posture transitions only — armed,
 /// blocked, warnings (enforcement error / switch window open), standby,
 /// stopped. Finer changes (country updates, tooltip rewording) never notify;
-/// the transition classing lives in AppDelegate.essentialClass.
+/// the transition classing lives in AppDelegate.essentialClass, and which
+/// classes a user wants to hear about lives in DezhbanCore.NotificationPrefs.
 ///
-/// Gated by the Settings toggle (persisted in UserDefaults, default on) and
-/// silently unavailable outside a proper .app bundle — UNUserNotificationCenter
+/// Silently unavailable outside a proper .app bundle — UNUserNotificationCenter
 /// aborts without a bundle identifier, and a bare `swift run` binary has none.
 enum NotificationManager {
-    private static let enabledKey = "notifyEssentials"
+    /// The per-class dictionary. The legacy single bool survives under its old
+    /// key, untouched, so a downgrade to a build that only knows
+    /// "notifyEssentials" still behaves.
+    private static let prefsKey = "notifyEvents"
+    private static let legacyKey = "notifyEssentials"
 
     /// Whether a bundle exists to notify from. Checked before every center
     /// access so the bare-binary dev loop can't crash on it.
     private static var available: Bool { Bundle.main.bundleIdentifier != nil }
 
-    static var isEnabled: Bool {
-        get { UserDefaults.standard.object(forKey: enabledKey) as? Bool ?? true }
+    static var prefs: NotificationPrefs {
+        get {
+            NotificationPrefs.from(
+                storage: UserDefaults.standard.dictionary(forKey: prefsKey) as? [String: Bool],
+                legacyEnabled: UserDefaults.standard.object(forKey: legacyKey) as? Bool
+            )
+        }
         set {
-            UserDefaults.standard.set(newValue, forKey: enabledKey)
-            if newValue { requestAuthorizationIfNeeded() }
+            UserDefaults.standard.set(newValue.storage, forKey: prefsKey)
+            if newValue.anyEnabled { requestAuthorizationIfNeeded() }
         }
     }
 
+    /// The master state: anything at all can notify. Kept as the name the rest
+    /// of the app already used, so callers (the authorization request at
+    /// launch) read the same way they did with the single toggle.
+    static var isEnabled: Bool { prefs.anyEnabled }
+
     /// Asks the system once for permission (no-op when already decided). Called
-    /// at launch and when the Settings toggle turns on, not before every post —
+    /// at launch and when anything turns on in Settings, not before every post —
     /// the OS remembers the answer.
     static func requestAuthorizationIfNeeded() {
         guard available, isEnabled else { return }
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
-    static func post(title: String, body: String) {
-        guard available, isEnabled else { return }
+    /// Posts one essential-transition notification, gated per class. `rawClass`
+    /// is AppDelegate.essentialClass's output; a class this build has no
+    /// checkbox for FAILS OPEN (NotificationPrefs.shouldNotify) — a new daemon
+    /// state must never be silently muted. The title comes from the class's own
+    /// label so Settings' checkbox and the banner can never disagree.
+    static func post(rawClass: String, body: String) {
+        guard available, prefs.shouldNotify(rawClass: rawClass) else { return }
         let content = UNMutableNotificationContent()
-        content.title = title
+        content.title = NotificationPrefs.eventClass(for: rawClass)?.label ?? "Dezhban"
         content.body = body
         let req = UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)
         UNUserNotificationCenter.current().add(req)

@@ -156,6 +156,32 @@ final class AppState: ObservableObject {
     /// a failure never surfaces as an error here).
     @Published var updateCheck: UpgradeCheckResult?
 
+    // MARK: Diagnostics state
+    //
+    // The doctor report lives HERE, not in DiagnosticsView's @State, for two
+    // reasons: navigating away must not discard a report someone just read,
+    // and the sidebar badge needs the report without the pane being on screen.
+    @Published var doctorReport: DoctorReport?
+    @Published var doctorError: String?
+    @Published var doctorRunning = false
+    /// The sidebar's yellow dot: the last doctor report has something a person
+    /// should look at. A dedicated Bool (not derived in the cell) so the
+    /// sidebar can subscribe with removeDuplicates() and never reload at 1 Hz.
+    @Published var diagnosticsAttention = false
+    private var doctorRanAt: Date?
+
+    /// The VPN inventory (`detect-vpn --json`) for the Diagnostics pane's
+    /// "Your VPNs" section and the Overview's "VPN app" row. nil until read,
+    /// and nil against a CLI too old for the subcommand — both surfaces hide
+    /// rather than guess.
+    @Published var vpnInventory: VPNInventory?
+    private var vpnInventoryReadAt: Date?
+
+    /// The strictness line for the Overview ("Balanced", "Custom (closest:
+    /// Balanced)"), from `status --json`'s preset fields, falling back to
+    /// `config preset list` against an older CLI. nil hides the row.
+    @Published var presetLabel: String?
+
     let console = Console()
 
     var isLive: Bool { PostureUI.isLive(snapshot) }
@@ -221,7 +247,7 @@ final class AppState: ObservableObject {
             return
         }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            // One `status --json` subprocess for all three fields, instead of
+            // One `status --json` subprocess for all its fields, instead of
             // one subprocess per field (each of which used to probe the
             // control socket independently on top of that).
             let status = DezhbanCLI.readStatusJSON()
@@ -229,13 +255,87 @@ final class AppState: ObservableObject {
             // Read here, with the rest, so the menu can build from a cache
             // instead of shelling out while it is opening.
             let pauseOptions = DezhbanCLI.readPauseOptions()
+            // Strictness rides the same status call. Against a CLI older than
+            // the preset fields, one extra read of `config preset list` keeps
+            // the Overview row alive; when even that is missing, the row hides.
+            var presetLabel = status?.presetLabel
+            if status != nil, presetLabel == nil, let presets = DezhbanCLI.readPresets() {
+                if let matched = presets.first(where: { $0.matched == true }) {
+                    presetLabel = matched.name.capitalized
+                } else if !presets.isEmpty {
+                    presetLabel = "Custom"
+                }
+            }
+            let label = presetLabel
             DispatchQueue.main.async {
                 self?.serviceIsInstalled = status?.serviceInstalled ?? false
                 self?.controlIsReachable = status?.controlReachable ?? false
                 self?.pauseIsEnabled = status?.pauseEnabled ?? false
                 self?.profiles = profiles
                 self?.pauseOptions = pauseOptions
+                self?.presetLabel = label
             }
+        }
+    }
+
+    /// Runs `doctor --json` off the main thread and publishes the report (and
+    /// the sidebar-badge flag) here. Relocated from DiagnosticsView so the
+    /// result survives navigation and can be triggered without the pane.
+    ///
+    /// Uses DezhbanCLI.exec directly (not `.run`) so stdout and stderr stay
+    /// separate: `doctor` logs informational lines (autodetect, DNS warnings)
+    /// to stderr, and `.run`'s CommandResult joins both into one string —
+    /// which would corrupt the JSON parse the moment anything logged.
+    func runDoctor(discover: Bool = false) {
+        guard let bin = DezhbanCLI.binaryPath() else {
+            doctorError = "dezhban CLI not found in a trusted install location"
+            return
+        }
+        guard !doctorRunning else { return }
+        doctorRunning = true
+        doctorError = nil
+        let args = discover
+            ? ["doctor", "--json", "--discover", "--config", DezhbanCLI.resolvedConfigPath()]
+            : ["doctor", "--json", "--config", DezhbanCLI.resolvedConfigPath()]
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let r = DezhbanCLI.exec(bin, args)
+            let decoded = r.out.data(using: .utf8).flatMap(DoctorReport.decode)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.doctorRunning = false
+                self.doctorRanAt = Date()
+                if let decoded {
+                    self.doctorReport = decoded
+                    self.diagnosticsAttention = DoctorAttention.needsAttention(decoded)
+                } else {
+                    let text = [r.out, r.err].filter { !$0.isEmpty }.joined(separator: "\n")
+                    self.doctorError = text.isEmpty ? "No output from `dezhban doctor --json`." : text
+                }
+            }
+        }
+    }
+
+    /// The background-trigger form: runs doctor only when the last report is
+    /// older than maxAge (or absent). The staleness gate is load-bearing —
+    /// callers include the essential-class edge into warning/blocked, and a
+    /// flapping tunnel must not fork doctor subprocesses on every flap. Never
+    /// auto-passes --discover; that scan is a person's explicit ask.
+    func runDoctorIfStale(maxAge: TimeInterval) {
+        guard cliFound else { return }
+        if let at = doctorRanAt, Date().timeIntervalSince(at) < maxAge, doctorReport != nil { return }
+        runDoctor()
+    }
+
+    /// Refreshes the VPN inventory when it is older than maxAge. `.onAppear`-
+    /// and event-triggered only — detect-vpn is a process-scanning subprocess
+    /// and has no business anywhere near the 1-second timer.
+    func refreshVPNInventoryIfStale(maxAge: TimeInterval = 60) {
+        guard cliFound else { return }
+        if let at = vpnInventoryReadAt, Date().timeIntervalSince(at) < maxAge, vpnInventory != nil { return }
+        vpnInventoryReadAt = Date()
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let inv = DezhbanCLI.readVPNInventory()
+            DispatchQueue.main.async { self?.vpnInventory = inv }
         }
     }
 

@@ -234,31 +234,28 @@ enum DezhbanCLI {
         return CommandResult(ok: r.status == 0, output: combinedOutput(r), status: r.status)
     }
 
-    /// Merged fields from `status --json` that the app needs but the daemon's
-    /// Snapshot itself doesn't carry (those come from Snapshot/Display instead).
-    /// Not private: `AppState.refreshServiceState` reads it directly so a single
-    /// refresh spends one `status --json` subprocess instead of one per field.
-    struct StatusJSON: Decodable {
-        let service: String
-        let controlReachable: Bool
-        let pauseEnabled: Bool
-
-        /// `installed`, derived from `service`'s merged field (itself
-        /// `internal/svc.Status()`) — the single source of truth, so the GUI
-        /// never invents its own notion of "installed" that could drift from
-        /// the CLI's.
-        var serviceInstalled: Bool { service.hasPrefix("installed") }
-    }
-
-    /// Reads `status --json` once. Callers wanting more than one of its fields
-    /// (control reachability, service install state, pause availability)
-    /// should call this once and read every field off the result, rather than
-    /// each spending its own subprocess for the same command.
-    static func readStatusJSON() -> StatusJSON? {
+    /// Reads `status --json` once, decoded into DezhbanCore.StatusInfo (which
+    /// owns the field set and its derivations — see that type). Callers
+    /// wanting more than one of its fields (control reachability, service
+    /// install state, pause availability, strictness preset) should call this
+    /// once and read every field off the result, rather than each spending its
+    /// own subprocess for the same command.
+    static func readStatusJSON() -> StatusInfo? {
         guard let bin = binaryPath() else { return nil }
         let r = exec(bin, ["status", "--json"])
         guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
-        return try? JSONDecoder().decode(StatusJSON.self, from: data)
+        return StatusInfo.decode(data)
+    }
+
+    /// Reads the VPN inventory via `detect-vpn --json`: tunnel interfaces,
+    /// discovery candidates, the connected VPN's name. nil against a CLI too
+    /// old for the flag — callers hide the inventory UI rather than guess.
+    /// `exec` not `.run`, same stderr reasoning as the doctor call.
+    static func readVPNInventory() -> VPNInventory? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["detect-vpn", "--json"])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return VPNInventory.decode(data)
     }
 
     /// Reads the configured VPN profiles from `config show`'s `vpn` block —

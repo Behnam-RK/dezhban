@@ -45,6 +45,12 @@ struct DetailHostView: View {
         // before they can navigate to Settings or About. Both panes still fall
         // back to `capabilityIfKnown` + `resolveCapability`, so this is an
         // optimisation and never the thing that keeps them off the main thread.
-        .onAppear { ControlToken.warmCapability() }
+        .onAppear {
+            ControlToken.warmCapability()
+            // Feed the Diagnostics sidebar badge: a report older than 15 minutes
+            // (or absent) is refreshed when the window opens. Staleness-gated,
+            // never the 1s timer — doctor is a subprocess.
+            state.runDoctorIfStale(maxAge: 15 * 60)
+        }
     }
 }

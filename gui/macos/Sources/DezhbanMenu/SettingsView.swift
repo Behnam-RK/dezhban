@@ -18,7 +18,7 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
 
     @State private var loginEnabled = false
-    @State private var notifyEnabled = true
+    @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
 
@@ -166,7 +166,16 @@ struct SettingsView: View {
                     Toggle("Notify on essential events", isOn: notifyBinding)
                         .help("macOS notifications for the transitions that matter: guard armed, traffic "
                             + "cut, warnings (enforcement error / window open), standby, stopped. "
-                            + "Nothing else.")
+                            + "Nothing else. Pick individual events below.")
+                    DisclosureGroup("Which events") {
+                        ForEach(NotificationPrefs.EventClass.allCases, id: \.rawValue) { eventClass in
+                            Toggle(eventClass.label, isOn: eventClassBinding(eventClass))
+                                .toggleStyle(.checkbox)
+                        }
+                        Text(notifyPrefs.summary)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     Toggle("Check for updates automatically", isOn: checkUpdatesBinding)
                         .help("Checks GitHub for a newer release at launch and every ~24h — never from the "
                             + "background service, only here, in this app, on this schedule. Turn off to stop this "
@@ -731,13 +740,31 @@ struct SettingsView: View {
             })
     }
 
+    /// The master toggle: off zeroes every class, on restores every class —
+    /// all-or-nothing on purpose. The per-class checkboxes in the disclosure
+    /// are where partial selections are made, so the common "mute everything"
+    /// stays one click.
     private var notifyBinding: Binding<Bool> {
         Binding(
-            get: { notifyEnabled },
+            get: { notifyPrefs.anyEnabled },
             set: { on in
-                NotificationManager.isEnabled = on
-                notifyEnabled = NotificationManager.isEnabled
+                var prefs = notifyPrefs
+                prefs.setAll(on)
+                NotificationManager.prefs = prefs
+                notifyPrefs = NotificationManager.prefs
                 status = on ? "Notifications on for essential events." : "Notifications off."
+            })
+    }
+
+    private func eventClassBinding(_ eventClass: NotificationPrefs.EventClass) -> Binding<Bool> {
+        Binding(
+            get: { notifyPrefs.isEnabled(eventClass) },
+            set: { on in
+                var prefs = notifyPrefs
+                prefs.set(eventClass, enabled: on)
+                NotificationManager.prefs = prefs
+                notifyPrefs = NotificationManager.prefs
+                status = notifyPrefs.summary
             })
     }
 
@@ -770,7 +797,7 @@ struct SettingsView: View {
         status = "Loading…"
         canApply = false
         loginEnabled = LoginItem.isEnabled
-        notifyEnabled = NotificationManager.isEnabled
+        notifyPrefs = NotificationManager.prefs
         checkUpdatesEnabled = UpdateChecker.isEnabled
         launchVisibility = LaunchPreference.current
         fields = SettingsFields()

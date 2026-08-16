@@ -9,10 +9,7 @@ import DezhbanCore
 /// in a terminal.
 struct DiagnosticsView: View {
     @EnvironmentObject var state: AppState
-    @State private var report: DoctorReport?
     @State private var discover = false
-    @State private var running = false
-    @State private var error: String?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -21,31 +18,43 @@ struct DiagnosticsView: View {
             content
         }
         .onAppear {
-            if report == nil { run() }
+            // The report and the inventory live on AppState (they feed the
+            // sidebar badge and survive navigation); this pane only asks for a
+            // refresh when what is there has gone stale.
+            state.runDoctorIfStale(maxAge: 15 * 60)
+            state.refreshVPNInventoryIfStale()
         }
     }
 
     private var toolbar: some View {
         HStack(spacing: 10) {
             Button("Run diagnostics") { run() }
-                .disabled(running || !state.cliFound)
+                .disabled(state.doctorRunning || !state.cliFound)
             Toggle("Find my VPN's server", isOn: $discover)
                 .toggleStyle(.checkbox)
                 .help("macOS-only best-effort hunt for the connected VPN's real server IP (`--discover`).")
             Spacer()
-            if running {
+            if state.doctorRunning {
                 ProgressView().controlSize(.small)
             }
         }
         .padding(PaneMetrics.footerPadding)
     }
 
+    /// One refresh in a person's head: the button re-runs doctor AND re-reads
+    /// the VPN inventory (cheap next to doctor itself).
+    private func run() {
+        state.runDoctor(discover: discover)
+        state.refreshVPNInventoryIfStale(maxAge: 0)
+    }
+
     @ViewBuilder
     private var content: some View {
-        if let error {
+        if let error = state.doctorError {
             guided(symbol: "exclamationmark.triangle", title: "Couldn't run diagnostics", message: error)
-        } else if let report {
+        } else if let report = state.doctorReport {
             List {
+                vpnInventorySection
                 Section {
                     Label(report.ok ? "No lockout risk found" : "Found something to fix",
                           systemImage: report.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
@@ -62,6 +71,65 @@ struct DiagnosticsView: View {
                    message: "Install the dezhban command-line tool, then run diagnostics again.")
         } else {
             guided(symbol: "stethoscope", title: "No results yet", message: "Run diagnostics to see tunnels, endpoints, and lockout risks.")
+        }
+    }
+
+    /// The VPN inventory (`detect-vpn --json`): which tunnels and VPN apps
+    /// detection can see, and which one is connected now. Hidden entirely when
+    /// the CLI is too old for the subcommand — degrade by omission, never a
+    /// wrong claim. Same List as the doctor checks: one scroll surface.
+    @ViewBuilder
+    private var vpnInventorySection: some View {
+        if let inv = state.vpnInventory {
+            Section("Your VPNs") {
+                if !inv.hasAnything {
+                    Text("No VPN apps or tunnels found.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                ForEach(inv.tunnels ?? [], id: \.self) { tunnel in
+                    Label(tunnel, systemImage: "point.3.connected.trianglepath.dotted")
+                        .font(.callout)
+                }
+                if let connected = inv.connectedVPN, !connected.isEmpty {
+                    Label("\(connected) — connected now", systemImage: "checkmark.circle.fill")
+                        .font(.callout)
+                        .foregroundStyle(Color.accentColor)
+                }
+                ForEach(inv.candidates ?? []) { cand in
+                    candidateRow(cand, connected: inv.connectedVPN)
+                }
+                if let derr = inv.discoveryErr, !derr.isEmpty {
+                    Label(derr, systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+                if inv.discoverySupported == false {
+                    Text("VPN app discovery works on macOS only; tunnels above are still detected.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    private func candidateRow(_ cand: VPNInventory.Candidate, connected: String?) -> some View {
+        var parts: [String] = []
+        if let server = cand.server, !server.isEmpty {
+            parts.append(cand.port.map { "\(server):\($0)" } ?? server)
+        }
+        let detail = parts.joined(separator: " ")
+        // Already named by the connected row above? Then this row only adds
+        // the server address; keep the name so the pairing is readable.
+        return VStack(alignment: .leading, spacing: 2) {
+            Label(cand.displayName, systemImage: "app.badge.checkmark")
+                .font(.callout)
+            if !detail.isEmpty {
+                Text("server \(detail)")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
         }
     }
 
@@ -140,32 +208,4 @@ struct DiagnosticsView: View {
         .padding(24)
     }
 
-    /// Uses DezhbanCLI.exec directly (not `.run`) so stdout and stderr stay
-    /// separate: `doctor` logs informational lines (autodetect, DNS warnings)
-    /// to stderr, and `.run`'s CommandResult joins both into one string —
-    /// which would corrupt the JSON parse the moment anything logged.
-    private func run() {
-        guard let bin = DezhbanCLI.binaryPath() else {
-            error = "dezhban CLI not found in a trusted install location"
-            return
-        }
-        running = true
-        error = nil
-        let args = discover
-            ? ["doctor", "--json", "--discover", "--config", DezhbanCLI.resolvedConfigPath()]
-            : ["doctor", "--json", "--config", DezhbanCLI.resolvedConfigPath()]
-        DispatchQueue.global(qos: .userInitiated).async {
-            let r = DezhbanCLI.exec(bin, args)
-            let decoded = r.out.data(using: .utf8).flatMap(DoctorReport.decode)
-            DispatchQueue.main.async {
-                running = false
-                if let decoded {
-                    report = decoded
-                } else {
-                    let text = [r.out, r.err].filter { !$0.isEmpty }.joined(separator: "\n")
-                    error = text.isEmpty ? "No output from `dezhban doctor --json`." : text
-                }
-            }
-        }
-    }
 }
