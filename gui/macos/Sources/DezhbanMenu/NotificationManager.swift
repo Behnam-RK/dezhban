@@ -11,9 +11,13 @@ import DezhbanCore
 /// Silently unavailable outside a proper .app bundle — UNUserNotificationCenter
 /// aborts without a bundle identifier, and a bare `swift run` binary has none.
 enum NotificationManager {
-    /// The per-class dictionary. The legacy single bool survives under its old
-    /// key, untouched, so a downgrade to a build that only knows
-    /// "notifyEssentials" still behaves.
+    /// The per-class dictionary, plus the legacy single bool kept in sync as
+    /// the master state, so a downgrade to a build that only knows
+    /// "notifyEssentials" honours the last choice the user actually made.
+    /// Mirroring rather than leaving it untouched: a user who upgrades, mutes
+    /// everything, then downgrades would otherwise find notifications back on,
+    /// because the stale legacy bool still said "on" from before the upgrade.
+    /// Read direction is unchanged — the dictionary wins whenever it exists.
     private static let prefsKey = "notifyEvents"
     private static let legacyKey = "notifyEssentials"
 
@@ -30,6 +34,7 @@ enum NotificationManager {
         }
         set {
             UserDefaults.standard.set(newValue.storage, forKey: prefsKey)
+            UserDefaults.standard.set(newValue.anyEnabled, forKey: legacyKey)
             if newValue.anyEnabled { requestAuthorizationIfNeeded() }
         }
     }

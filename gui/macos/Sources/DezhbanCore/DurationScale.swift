@@ -70,15 +70,28 @@ public struct DurationScale: Equatable {
                 .filter { Double($0) >= floor && Double($0) <= top }
         )
         // Always offer the exact bounds, whether or not the ladder passes
-        // through them — the cap must be reachable.
-        stops.insert(Int(floor.rounded()))
-        stops.insert(Int(top.rounded()))
+        // through them — the cap must be reachable. Rounded INWARD, never to
+        // nearest: a sub-second cap ("1500ms" on redialWindowMax is a legal
+        // `config set`) would otherwise round its top UP to 2s and put a value
+        // above the ceiling on the track — reintroducing, one stop wide,
+        // exactly the "stages values the daemon rejects at Apply" bug the cap
+        // handling above exists to fix.
+        stops.insert(Int(floor.rounded(.up)))
+        stops.insert(Int(top.rounded(.down)))
         // The default only when it fits: a default above a lowered cap is not
         // a value the daemon would take, so it must not be landable-on.
         if def >= floor && def <= top {
             stops.insert(Int(def.rounded()))
         }
-        snapSteps = stops.sorted()
+        // The default is the one stop still rounded to NEAREST — it is a value,
+        // not a bound, so nudging it inward would move it off the number the
+        // schema names. That can carry it past the ceiling on its own (a 1800ms
+        // default under a 1900ms cap rounds to 2s), so re-apply the range here,
+        // and fall back to the text field if nothing survives — the same degrade
+        // as `guard top > floor`.
+        let usable = stops.filter { Double($0) >= 1 && Double($0) <= top }.sorted()
+        guard !usable.isEmpty else { return nil }
+        snapSteps = usable
     }
 
     /// The snap stops within [minSeconds, maxSeconds].

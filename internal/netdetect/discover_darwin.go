@@ -86,6 +86,16 @@ func DiscoverEndpoints() ([]Candidate, error) {
 		seen[key] = true
 		cands = append(cands, Candidate{VPN: vpn, Server: s.Server, Port: s.Port, Process: exe})
 	}
+	// The same false-authority guard physicalSockets applies to its own child,
+	// applied to the attribution loop above. lsof can finish inside the budget
+	// and the budget still expire while `ps` is being run per pid: processPath
+	// then returns "" for every socket, isVPNTransport("") is false, and this
+	// returns (nil, nil) — an empty inventory with no error, which every
+	// consumer (`detect-vpn --json`, the app's Diagnostics pane) is entitled to
+	// read as "scanned, found none". A truncated scan is not an answer.
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("vpn discovery: %w", err)
+	}
 	return cands, nil
 }
 

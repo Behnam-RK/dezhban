@@ -50,8 +50,10 @@ func newIPv6Client() *http.Client {
 // "no v6 to show", never as a fault worth surfacing.
 func (m *Monitor) OnceIPv6(ctx context.Context) (netip.Addr, error) {
 	// Read-only on the receiver, like every other Monitor method: New builds the
-	// client (a zero-value Monitor from a test that skipped New falls back here
-	// without mutating anything shared).
+	// client, and this only covers a caller that replaced v6client with nil.
+	// A Monitor must still come from New — `m.log` is dereferenced below and
+	// every other method does the same, so a zero-value receiver was never a
+	// supported shape here.
 	client := m.v6client
 	if client == nil {
 		client = newIPv6Client()
