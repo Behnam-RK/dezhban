@@ -36,20 +36,66 @@ public struct DurationScale: Equatable {
 
     /// nil when the default doesn't parse or is non-positive — the control
     /// falls back to the Menu/TextField, the same rule as
-    /// `DurationChoices.build` returning nothing.
+    /// `DurationChoices.build` returning nothing. It also returns nil when a
+    /// cap leaves no usable span, so a legitimately tiny ceiling degrades to
+    /// the text control rather than to a track that lies.
     public init?(defaultValue: String, cap: String?, disablable: Bool) {
         guard let def = DurationChoices.seconds(defaultValue), def > 0 else { return nil }
         defaultSeconds = def
-        minSeconds = Swift.max(1, def / 2)
-        if let cap, let capSecs = DurationChoices.seconds(cap), capSecs > def {
+        if let cap, let capSecs = DurationChoices.seconds(cap), capSecs > 0 {
+            // A cap binds WHEREVER it sits, including at or below the schema
+            // default: caps have no floor by design (an operator may set
+            // redialWindowMax below the default redialWindow), and a track
+            // running past the ceiling stages values the daemon rejects at
+            // Apply. Same rule `DurationChoices.build` follows by skipping
+            // choices above the ceiling — a control is a menu of things that
+            // will be accepted.
             maxSeconds = capSecs
         } else {
-            // No cap above the default: a synthetic 8× top. Arbitrary but
-            // bounded; the Custom escape hatch covers the tail beyond it.
+            // No cap: a synthetic 8× top. Arbitrary but bounded; the Custom
+            // escape hatch covers the tail beyond it.
             maxSeconds = def * 8
         }
+        // Locals, not the stored properties: referring to `self` inside the
+        // filter closure below would capture it before initialization is done.
+        let top = maxSeconds
+        let floor = Swift.max(1, Swift.min(def / 2, top / 2))
+        minSeconds = floor
         hasOff = disablable
+        guard top > floor else { return nil }
+        // Derived once, not per snap: `snapped(at:)` runs in the slider's
+        // binding on every drag tick and again on every render of the row.
+        var stops = Set(
+            Self.ladder(upTo: top)
+                .filter { Double($0) >= floor && Double($0) <= top }
+        )
+        // Always offer the exact bounds, whether or not the ladder passes
+        // through them — the cap must be reachable. Rounded INWARD, never to
+        // nearest: a sub-second cap ("1500ms" on redialWindowMax is a legal
+        // `config set`) would otherwise round its top UP to 2s and put a value
+        // above the ceiling on the track — reintroducing, one stop wide,
+        // exactly the "stages values the daemon rejects at Apply" bug the cap
+        // handling above exists to fix.
+        stops.insert(Int(floor.rounded(.up)))
+        stops.insert(Int(top.rounded(.down)))
+        // The default only when it fits: a default above a lowered cap is not
+        // a value the daemon would take, so it must not be landable-on.
+        if def >= floor && def <= top {
+            stops.insert(Int(def.rounded()))
+        }
+        // The default is the one stop still rounded to NEAREST — it is a value,
+        // not a bound, so nudging it inward would move it off the number the
+        // schema names. That can carry it past the ceiling on its own (a 1800ms
+        // default under a 1900ms cap rounds to 2s), so re-apply the range here,
+        // and fall back to the text field if nothing survives — the same degrade
+        // as `guard top > floor`.
+        let usable = stops.filter { Double($0) >= 1 && Double($0) <= top }.sorted()
+        guard !usable.isEmpty else { return nil }
+        snapSteps = usable
     }
+
+    /// The snap stops within [minSeconds, maxSeconds].
+    private let snapSteps: [Int]
 
     private var durationSpan: ClosedRange<Double> {
         (hasOff ? Self.offGap : 0.0)...1.0
@@ -108,17 +154,8 @@ public struct DurationScale: Equatable {
     }
 
     private func nearestLadderStep(to raw: Double) -> Int {
-        let candidates = Self.ladder(upTo: maxSeconds)
-            .filter { Double($0) >= minSeconds && Double($0) <= maxSeconds }
-        // Always offer the exact bounds and the exact default, whether or not
-        // the ladder passes through them — the cap must be reachable, and the
-        // default must be landable-on so "(recommended)" can show.
-        var all = Set(candidates)
-        all.insert(Int(minSeconds.rounded()))
-        all.insert(Int(maxSeconds.rounded()))
-        all.insert(Int(defaultSeconds.rounded()))
         // Log-nearest, not linear-nearest: on a log track, 90s is midway
         // between 1m and 2m, and linear distance would bias every snap upward.
-        return all.min(by: { abs(log(Double($0)) - log(raw)) < abs(log(Double($1)) - log(raw)) }) ?? Int(raw.rounded())
+        return snapSteps.min(by: { abs(log(Double($0)) - log(raw)) < abs(log(Double($1)) - log(raw)) }) ?? Int(raw.rounded())
     }
 }

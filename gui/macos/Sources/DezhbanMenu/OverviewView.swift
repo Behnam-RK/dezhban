@@ -166,7 +166,22 @@ struct OverviewView: View {
     }
 
     private func detailsGrid(_ s: Snapshot) -> some View {
-        let ipv6 = (s.ipv6?.isEmpty == false) ? s.ipv6 : nil
+        let observed = (s.ipv6?.isEmpty == false) ? s.ipv6 : nil
+        // The geo reading's IP is family-AGNOSTIC — the country lookup goes out
+        // over whichever family the OS picks — so on a v6-preferring tunnel
+        // `s.ip` is itself a v6 address. Calling it "Public IPv4" would be a
+        // wrong label on a correct value, and when it is the very address the
+        // v6 probe observed, a second row would repeat it.
+        let geoIsV6 = s.ip?.contains(":") == true
+        // Suppressed by FAMILY, not by string equality. The two are independent
+        // observers — the geo provider reports the address it saw the request
+        // arrive from, the probe reports the one the host sends from — and with
+        // privacy extensions those legitimately differ. Deduping on equality
+        // alone therefore left the grid showing two IPv6 addresses, the first
+        // labelled "Public IP" and the second "Public IPv6", which reads as a
+        // contradiction rather than as two readings. One family, one row, and
+        // the geo row is the one the country verdict is tied to.
+        let ipv6 = geoIsV6 ? nil : observed
         return Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
             if let ip = s.ip, !ip.isEmpty {
                 // An em dash, not a parenthetical: `countryLabel` already ends
@@ -175,9 +190,11 @@ struct OverviewView: View {
                 // fullBlockDisplay makes.
                 let cc = s.countryLabel ?? "unknown country"
                 let prov = s.provider.map { " via \($0)" } ?? ""
-                // "Public IPv4" only when a v6 row will sit under it — with one
-                // address the family qualifier is noise.
-                row(ipv6 != nil ? "Public IPv4" : "Public IP", "\(ip) — \(cc)\(prov)")
+                // "Public IPv4" only when this address really is v4 AND a v6 row
+                // will sit under it — with one address, or an address whose
+                // family we didn't choose, the qualifier is noise at best and
+                // wrong at worst.
+                row(!geoIsV6 && ipv6 != nil ? "Public IPv4" : "Public IP", "\(ip) — \(cc)\(prov)")
             } else if let why = s.exitUnknown, !why.isEmpty {
                 // Expected, not a fault — phrased as a state rather than an
                 // error, because reporting it as one is what made the geo

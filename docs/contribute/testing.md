@@ -73,10 +73,18 @@ root and no real firewall. `task test:cover` enforces the coverage floors in
       so the tunnel can redial, and LAN devices still answer (with
       `vpn.allowLocalNetwork` on, the default). This is FULL BLOCK — it carries
       **no** destination allowlist; a VPN posture opens the tunnel endpoint.
-- [ ] **`block --force` keeps the geo providers reachable.** `sudo dezhban block
-      --force` → all egress cut except loopback and the resolved geo-API
-      provider IPs, which it pins on the *physical* link before cutting so
-      recovery detection still works with no daemon and no tunnel.
+- [ ] **`block --force` is total.** `sudo dezhban block --force` with a tunnel
+      up → the ruleset is loopback plus `block drop out all` and nothing else.
+      Confirm **no** provider pass in either shape (no destination-only pass on
+      the physical link, no tunnel-scoped one), no endpoint pass, no port-53
+      rule, and no LAN pass. The tunnel drops, `vpn.allowGeoProviders` makes no
+      difference either way, and the log says so. Recovery is `dezhban unblock`
+      or `dezhban panic` only — verify nothing lifts it on its own.
+- [ ] **`detect-vpn --json` marks an unprivileged scan partial.** Run it as your
+      user with a VPN connected whose transport runs as root → `scanPrivileged:
+      false`, and the app's Diagnostics pane says the scan saw only your
+      sockets instead of claiming none were found. `sudo dezhban detect-vpn
+      --json` → `scanPrivileged: true` and the candidate appears.
 - [ ] **Status is truthful.** `dezhban status` reports `blocked: true`, with
       accurate country and service fields.
 - [ ] **Block is idempotent.** Re-run `sudo dezhban block` → no duplicate rules.

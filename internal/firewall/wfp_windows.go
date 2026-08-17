@@ -81,13 +81,6 @@ type savedState struct {
 	OutboundAction map[string]string `json:"outboundAction"`
 }
 
-// Block is the `block --force` entry point: a full block whose only
-// exceptions are loopback and the dst-IP allowlist. It is Apply with
-// ModeFullBlock and no tunnel interfaces.
-func (b *wfpBackend) Block(a Allowlist) error {
-	return b.Apply(Policy{Mode: ModeFullBlock, Allowlist: a})
-}
-
 // Apply installs the dezhban rule group for p and flips the profiles' outbound
 // default to Block. Re-applying first removes the group, so rules never stack
 // (idempotent). The prior outbound defaults are snapshotted only on the first
@@ -299,13 +292,14 @@ func (b *wfpBackend) Cleanup() error {
 //   - ModeGuard: allow egress on the tunnel interface(s) and the handshake to
 //     the VPN endpoint(s); the Block default cuts everything else, so a tunnel
 //     drop has no physical leak.
-//   - ModeFullBlock, no VPN context (no tunnel ifaces): allow the dst-IP DNS +
-//     geo-API allowlist — what `block --force` renders.
-//   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface allow, so no
-//     user traffic leaks to a forbidden exit — but keep the endpoint allow so the
-//     encrypted handshake reaches the server and the tunnel can redial.
-//     Identical to ModeGuard minus the tunnel-iface allow. The dst-IP allowlist
-//     is still meaningless under a tunnel.
+//   - ModeFullBlock: no tunnel-iface allow, so no user traffic leaks to a
+//     forbidden exit — but keep the endpoint allow so the encrypted handshake
+//     reaches the server and the tunnel can redial. Identical to ModeGuard minus
+//     the tunnel-iface allow.
+//   - ModeFullBlock with every optional field empty is `block --force`: loopback
+//     and nothing else. There is no destination-IP allowlist any more — see
+//     forceBlockPolicy in cmd/dezhban for why no correctly-scoped pass can
+//     survive that posture's own endpoint cut.
 //
 // The script opens by removing any existing dezhban group, so a re-block
 // replaces rather than stacks (idempotent), and sets the outbound default last.
@@ -353,29 +347,18 @@ func renderBlockScript(p Policy) string {
 		emitAllowPhysicalDNSRules(rule, p)
 		emitLocalNetworkRules(rule, p)
 	default: // ModeFullBlock
-		if isVPNPolicy(p) {
-			// VPN full block (including the zero-tunnel standing posture): no
-			// tunnel-iface allow, so no user traffic leaks to a forbidden exit — but
-			// keep the endpoint allow so the encrypted handshake reaches the server
-			// and the tunnel can redial (a cut endpoint would livelock recovery).
-			if ep := psAddrList(p.VPNEndpoints); ep != "" {
-				rule("endpoint", "-RemoteAddress "+ep)
-			}
-			emitTunnelProviderRules(rule, p)
-			emitAllowPhysicalDNSRules(rule, p)
-		} else {
-			// `block --force` (no VPN context): dst-IP allowlist.
-			if dns := psAddrList(p.Allowlist.DNS); dns != "" {
-				rule("dns-udp", "-Protocol UDP -RemotePort 53 -RemoteAddress "+dns)
-				rule("dns-tcp", "-Protocol TCP -RemotePort 53 -RemoteAddress "+dns)
-			}
-			if hosts := psAddrList(p.Allowlist.Hosts); hosts != "" {
-				rule("hosts", "-RemoteAddress "+hosts)
-			}
+		// No tunnel-iface allow, so no user traffic leaks to a forbidden exit —
+		// but keep the endpoint allow so the encrypted handshake reaches the
+		// server and the tunnel can redial (a cut endpoint would livelock
+		// recovery). Every field below is optional, and `block --force` sets
+		// none of them, which is what makes it loopback-only.
+		if ep := psAddrList(p.VPNEndpoints); ep != "" {
+			rule("endpoint", "-RemoteAddress "+ep)
 		}
-		// Outside the isVPNPolicy split on purpose — see the same hoist in
-		// pf_darwin.go. AllowLocalNetwork belongs to the posture, not to which
-		// FULL BLOCK shape rendered it.
+		emitTunnelProviderRules(rule, p)
+		emitAllowPhysicalDNSRules(rule, p)
+		// AllowLocalNetwork belongs to the posture — see the same note in
+		// pf_darwin.go.
 		emitLocalNetworkRules(rule, p)
 	}
 

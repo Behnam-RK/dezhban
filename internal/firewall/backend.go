@@ -7,16 +7,6 @@ package firewall
 
 import "net/netip"
 
-// Allowlist names the destinations that must stay reachable while blocking, so
-// recovery detection (geo-API lookups) keeps working and the machine cannot
-// lock itself out. Loopback is always allowed implicitly by every backend.
-type Allowlist struct {
-	// DNS resolvers that must stay reachable so hostnames can be re-resolved.
-	DNS []netip.Addr
-	// Hosts are extra egress IPs to always allow (geo-API provider IPs).
-	Hosts []netip.Addr
-}
-
 // Mode is the enforcement posture a Policy installs.
 type Mode int
 
@@ -27,9 +17,11 @@ const (
 	// still reaches the server and the tunnel can redial (a cut endpoint
 	// would livelock recovery: the tunnel could never re-establish to be
 	// re-evaluated). It is therefore ModeGuard minus the tunnel-interface pass.
-	// `block --force` uses this Mode with no VPN context at all — no tunnel,
-	// no endpoints — in which case the dst-IP Allowlist (DNS + geo-API IPs) is
-	// what it passes instead, so recovery detection still has a path out.
+	// `block --force` uses this Mode with every field empty — no tunnel, no
+	// endpoints, no providers — which renders as loopback plus a default deny.
+	// It deliberately passes nothing: there is no correctly-scoped rule that
+	// could survive its own endpoint cut, so it offers no recovery path and
+	// `unblock`/`panic` are the way back.
 	ModeFullBlock Mode = iota
 	// ModeGuard is the always-on VPN guard: pass egress on the tunnel
 	// interface(s) plus the handshake to the VPN endpoint(s), and block all
@@ -71,9 +63,6 @@ func (m Mode) String() string {
 type Policy struct {
 	// Mode selects the posture (ModeFullBlock or ModeGuard).
 	Mode Mode
-	// Allowlist is used by `block --force` (ModeFullBlock with no VPN context)
-	// and during the recovery probe; it is the DNS + geo-API egress IPs.
-	Allowlist Allowlist
 	// TunnelIfaces are the VPN tunnel interface names (e.g. "utun4"). Their
 	// presence marks VPN mode even in ModeFullBlock.
 	TunnelIfaces []string
@@ -130,15 +119,6 @@ type Policy struct {
 	WindowPorts  []int
 }
 
-// isVPNPolicy reports whether a ModeFullBlock policy is a VPN posture (endpoints
-// open) rather than a `block --force` override (dst-IP allowlist, no VPN
-// context at all). True when the policy carries tunnel interfaces, endpoints,
-// or the physical-DNS pass — the zero-tunnel standing posture (endpoints, no
-// ifaces) still counts. Shared by the pf and nft renderers.
-func isVPNPolicy(p Policy) bool {
-	return len(p.TunnelIfaces) > 0 || len(p.VPNEndpoints) > 0 || p.AllowPhysicalDNS
-}
-
 // FirewallBackend is the per-OS firewall driver. Implementations must be
 // idempotent and surgical: they touch only rules tagged "dezhban" and never
 // disturb unrelated firewall state.
@@ -147,12 +127,6 @@ type FirewallBackend interface {
 	// Idempotent: re-applying the same or a different policy replaces the rules,
 	// never stacks them.
 	Apply(p Policy) error
-	// Block installs a default-deny-outbound ruleset, passing only the
-	// allowlist (plus loopback). Only outbound is filtered, so return traffic is
-	// unaffected.
-	// Re-blocking must not stack duplicate rules. Equivalent to Apply with
-	// ModeFullBlock and no tunnel interfaces (the `block --force` override).
-	Block(a Allowlist) error
 	// Unblock removes ONLY dezhban's rules and restores prior firewall state.
 	Unblock() error
 	// IsBlocked reports whether dezhban's block is currently installed.

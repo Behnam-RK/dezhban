@@ -83,6 +83,111 @@ current as you land changes.
 - **`detect-vpn`'s recommended-config sample** no longer names the retired
   `vpn.enabled` key.
 
+### Fixed
+
+- **Diagnostics shows the VPN inventory even with no doctor report.** The
+  **Your VPNs** section was nested inside the report, so a
+  successfully-fetched inventory stayed invisible until the async `doctor`
+  run returned — and permanently on a host where `doctor --json` cannot run
+  at all. The two are fetched independently and now render independently. A
+  failed run with nothing retained also stops promising a "last result" that
+  is not on screen.
+- **Clicking Run diagnostics repeatedly no longer forks a `detect-vpn` per
+  click.** The forced refresh walks past the staleness gate by design, so the
+  inventory fetch now carries the same in-flight guard the doctor half already
+  had. Without it the *last to finish* — not the last started — decided what
+  the pane showed.
+- **The Overview's "Public IPv6" row repopulates after a redial.** A tunnel
+  drop and a FULL BLOCK both invalidate the observation, but neither
+  rescheduled it, so the 5-minute timer from the last successful lookup kept
+  running and the row stayed blank until it happened to expire — on a host
+  that drops more often than that, permanently. Invalidating now re-arms, with
+  a 30s floor so a flapping tunnel cannot force one lookup per flap.
+- **`block --force` is now honestly total: loopback and nothing else.** It used
+  to install a destination-only `pass out quick to { providers }` on the
+  *physical* link, justified as keeping recovery detection reachable. That is
+  the half-scoping [ADR-0006](docs/adr/0006-geo-providers-tunnel-scoped.md)
+  forbids — the lookup succeeds with the tunnel down and reports the ISP's
+  country, not the exit's — and it ignored `vpn.allowGeoProviders`, the one key
+  that turns that hole off. Scoping it correctly is impossible in this posture:
+  a tunnel-scoped rule needs a live tunnel, and `--force` cuts the endpoint the
+  tunnel handshakes to, so the rule could never match. Rather than ship a pass
+  that cannot carry a packet, `--force` now passes nothing, says so in its log
+  line, and leaves `unblock`/`panic` as the only way back. For endpoints open, a
+  working tunnel-scoped provider pass and automatic recovery, use plain `block`.
+- **The public-IPv6 fallback endpoint can actually be reached.** The run loop's
+  budget for the whole observation was 2s — exactly one endpoint's own timeout —
+  so a first endpoint that *hung* consumed all of it and the second failed
+  instantly against an already-cancelled context. The budget is now 5s, enough
+  for both attempts. It cannot delay a switch window (the observation never runs
+  while one is open); the only cost is up to 5s before a mid-lookup tunnel edge
+  is acted on, in the fail-closed direction.
+- **A `detect-vpn` scan killed by its own timeout no longer reports "found
+  none".** `os/exec` surfaces a context-killed child as an `*ExitError`, the
+  same shape `lsof` uses to say "matched nothing", so the 5s discovery budget
+  expiring on a busy host produced an authoritative-looking empty inventory.
+- **The Overview shows one row per address family.** The IPv6 de-duplication
+  compared strings, so when the geo provider and the v6 probe reported
+  *different* v6 addresses — privacy extensions, or simply two observers — the
+  grid showed both, the first labelled "Public IP" and the second "Public
+  IPv6".
+- **`detect-vpn --json` says when a VPN scan could only see part of the
+  machine.** Discovery shells out to `lsof`, which as an unprivileged user
+  lists only that user's sockets, so a VPN whose transport runs as root
+  produced `candidates: []` with no error — indistinguishable from a root scan
+  that genuinely found nothing, and rendered by the app (which always runs
+  unprivileged) as a confident "No VPN apps or tunnels found." A new
+  `scanPrivileged` field carries the three-way answer — absent for "no scan
+  ran", `false` for partial, `true` for authoritative — and the Diagnostics
+  pane now explains a partial scan instead of claiming a result. A discovery
+  run that could not execute `lsof` at all also stops being reported as an
+  empty inventory.
+- **Turning notifications off now silences everything.** The per-event
+  preferences fail open for an event class the app has no checkbox for, so a
+  newer daemon state is never silently muted — but that override no longer
+  beats an explicit all-off from the master toggle. "Off" that still posts is
+  not off.
+- **A duration slider no longer offers values its cap forbids.** A cap at or
+  below the key's default was discarded (a synthetic 8x top used instead), so
+  a strict `vpn.advanced.redialWindowMax` left most of the track staging
+  values the daemon rejects at apply. Caps have no floor by design; the track
+  now ends at the cap wherever it sits, the default stops being landable-on
+  when it sits above one, and a cap leaving no usable span falls back to the
+  text field.
+- **Diagnostics stops claiming "No VPN apps or tunnels found" when it could
+  not look.** A discovery scan that errored, or a platform with no discovery
+  at all, now shows only its own explanation — "couldn't scan" and "scanned,
+  found none" are different answers.
+- **A failed diagnostics run no longer hides the report it kept.** The last
+  result stays on screen with the failure as a banner above it, and the
+  sidebar badge is raised rather than left asserting the pre-failure verdict.
+- **The sidebar diagnostics badge clears itself on recovery,** and is no
+  longer raised by an open switch/redial window — that window classes as a
+  warning by design, and diagnostics run inside it reported the window's own
+  deliberate posture as findings.
+- **Overview no longer labels an IPv6 exit address "Public IPv4".** The
+  country lookup uses whichever family the host picks, so that row is
+  family-agnostic; it is qualified only when the address really is v4, and a
+  v6 reading that matches the observed address is no longer printed twice.
+- **The public-IPv6 observation rejects non-public answers.** Loopback,
+  link-local and unique-local addresses are IPv6 by family, so an intercepting
+  proxy could put one in a field shown as "Public IPv6".
+- **The app stops re-running `detect-vpn` and `doctor` on every pane switch**
+  when the CLI is older than the flag or a scan fails. The staleness gates
+  also required a non-nil result, so a nil — itself a result — left them
+  permanently unlatched, forking a process-scanning subprocess per `.onAppear`.
+
+### Removed
+
+- **The destination-IP allowlist is gone from the firewall layer.**
+  `firewall.Allowlist`, `Policy.Allowlist`, `PolicyInput.Allowlist` and the
+  per-backend rules that rendered them had no producer left once
+  `block --force` stopped installing one. With it goes the `isVPNPolicy` split
+  in all three backends: every posture is now a VPN posture, so there is
+  nothing left to tell apart. `vpn.allowlist` in the config file is unrelated
+  and unchanged — still a retired key, still parsed and reported rather than
+  acted on.
+
 ## [0.10.0] - 2026-08-16
 
 ### Added

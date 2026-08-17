@@ -21,10 +21,23 @@ struct DurationScaleTests {
         #expect(s.maxSeconds == 480)
     }
 
-    @Test func aCapAtOrBelowTheDefaultIsIgnored() throws {
-        // Staged values can be mid-edit nonsense; the scale must stay usable.
+    @Test func aCapBelowTheDefaultStillBindsTheTop() throws {
+        // Caps have no floor: an operator may set redialWindowMax below the
+        // schema default. The track must not stage values Apply would reject.
         let s = try #require(DurationScale(defaultValue: "1m", cap: "10s", disablable: false))
-        #expect(s.maxSeconds == 480)
+        #expect(s.maxSeconds == 10)
+        #expect(s.snapped(at: 1.0).value == "10s")
+        // The default sits above the cap, so it is not a stop the thumb can
+        // land on — offering it would be offering a rejected value.
+        for p in stride(from: 0.0, through: 1.0, by: 0.01) {
+            let secs = DurationChoices.seconds(s.snapped(at: p).value) ?? 0
+            #expect(secs <= 10)
+        }
+    }
+
+    @Test func aCapWithNoUsableSpanFailsInit() {
+        // Degrade to the Menu/TextField rather than to a one-stop track.
+        #expect(DurationScale(defaultValue: "1m", cap: "1s", disablable: false) == nil)
     }
 
     @Test func offDetentOnlyWhenDisablable() throws {

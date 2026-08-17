@@ -744,7 +744,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	var resolveProviders func(context.Context) []netip.Addr
 	if cfg.VPN.AllowGeoProviders {
 		resolveProviders = func(context.Context) []netip.Addr {
-			return buildProviderAllowlist(cfg, log).Hosts
+			return resolveProviderAddrs(cfg, log)
 		}
 	} else {
 		log.Warn("vpn.allowGeoProviders is off: recovery from FULL BLOCK will briefly lift the guard to observe the exit")
@@ -944,15 +944,46 @@ type blockDecision struct {
 	Endpoints []netip.Addr
 }
 
+// forceBlockPolicy builds `block --force`'s posture: cut ALL egress except
+// loopback, regardless of the guard's own state. The escape hatch for when
+// detection is wrong or the operator wants an unconditional hard block.
+// `unblock`/`panic` reverse it, and they are the ONLY way back — there is no
+// automatic recovery from this posture and nothing is passed to enable one.
+//
+// It carries nothing: no tunnel interfaces, no endpoints, no physical DNS, no
+// LAN pass, and no geo-provider pass. That is the whole point of the flag, and
+// each omission was reached by elimination rather than chosen:
+//
+//   - The geo-provider pass used to be here as a destination-scoped
+//     `pass out quick to { providers }` on the PHYSICAL link, justified as
+//     "recovery detection can still reach them once egress is cut". It was the
+//     half-scoping ADR-0006 forbids, and it also ignored vpn.allowGeoProviders
+//     entirely — the one key that turns the ruleset's only destination-scoped
+//     hole off.
+//
+//   - Re-scoping it the ADR-0006 way (tunnel AND destination) does not work
+//     HERE, and that is the reason there is no pass at all rather than a
+//     correctly-scoped one. A tunnel-scoped rule needs a live tunnel, and this
+//     posture deliberately drops the endpoint the tunnel handshakes to — so the
+//     tunnel dies and the rule can never match. A pass that cannot carry a
+//     packet is worse than no pass: it makes the ruleset, the log line and the
+//     docs all claim a recovery path that does not exist.
+//
+// So --force is total, says so, and vpn.allowGeoProviders is simply not one of
+// its inputs. An operator who wants the guard's own FULL BLOCK — endpoints open,
+// tunnel-scoped provider pass, automatic recovery — wants plain `block`, which
+// is what that renders.
+func forceBlockPolicy() firewall.Policy {
+	return firewall.PolicyInput{}.FullBlock()
+}
+
 // blockPlan builds the VPN-mode firewall policy `block`/`block --guard` would
-// apply — the pure decision pulled out of cmdBlock's default branch (`--force`
-// stays a manual override built directly in cmdBlock; it has no VPN state to
-// resolve) so it can be tested without root or a firewall backend. Built
-// through the same firewall.PolicyInput constructor the daemon and
-// print-rules use, so this manual override can never drift from what the run
-// loop would actually install — in particular, it must NOT carry a physical
-// dst-IP allowlist: a VPN posture opens the tunnel endpoint, never a
-// destination allowlist.
+// apply — the pure decision pulled out of cmdBlock's default branch — so it can
+// be tested without root or a firewall backend. Built through the same
+// firewall.PolicyInput constructor the daemon and print-rules use, so this
+// manual override can never drift from what the run loop would actually install
+// — in particular, it must NOT carry a physical dst-IP allowlist: a VPN posture
+// opens the tunnel endpoint, never a destination allowlist.
 func blockPlan(cfg *config.Config, log *slog.Logger, guard bool) (blockDecision, error) {
 	tunnels := resolveTunnels(cfg, log)
 	if len(tunnels) == 0 {
@@ -1014,18 +1045,11 @@ func cmdBlock(args []string) int {
 
 	switch {
 	case *force:
-		// Manual override: cut ALL egress (except loopback + the geo-API providers)
-		// regardless of the guard's own state. The escape hatch when detection is
-		// wrong or the operator wants an unconditional hard block. `unblock`/`panic`
-		// reverse it. Build the allowlist BEFORE blocking, while DNS still works:
-		// resolve the provider hostnames to IPs so recovery detection can still
-		// reach them once egress is cut.
-		al := buildProviderAllowlist(cfg, log)
-		if err := fw.Block(al); err != nil {
+		if err := fw.Apply(forceBlockPolicy()); err != nil {
 			log.Error("forced block failed", "err", err)
 			return 1
 		}
-		log.Info("network force-blocked (all egress cut except loopback + geo providers)", "hosts_allowed", len(al.Hosts))
+		log.Info("network force-blocked: all egress cut except loopback — no geo-provider pass, no automatic recovery; restore with `dezhban unblock` or `dezhban panic`")
 	default:
 		// `--guard` installs the always-on interface guard (tunnel stays open,
 		// physical egress locked to the endpoint); a plain `block` is a full block
@@ -1130,28 +1154,33 @@ func resolveEndpointsOnce(cfg *config.Config, log *slog.Logger, tunnels []string
 	return src.Resolve(ctx).Addrs
 }
 
-// buildProviderAllowlist resolves the configured geo-API providers to IPs, so
-// `block --force` — the only remaining caller — can still reach them while all
-// other egress is cut. This used to also fold in a user-configured
+// resolveProviderAddrs resolves the configured geo-API providers to IPs for the
+// daemon's provider resolver — its one caller, which gates the call on
+// vpn.allowGeoProviders. `block --force` used to call it too; it no longer
+// passes anything at all (see forceBlockPolicy), so the key is honoured
+// everywhere the pass is built simply because there is only one such place.
+//
+// It returns a plain address list, not a firewall.Allowlist: the only consumer
+// of the result is Policy.ProviderAddrs, the DNS half was never populated, and
+// an Allowlist-shaped return invited a caller to hand it to the (now
+// producerless) dst-IP allowlist instead. This used to also fold in a user-configured
 // destination allowlist (vpn.allowlist.dns/hosts); that key is retired
 // (docs/adr/0001) because it belonged to the country-blocklist model, where
 // the firewall was open at rest and needed an explicit list of exceptions.
-// `--force` is a manual, temporary override, not a standing posture, so it has
-// no equivalent need for user-supplied destinations.
-func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
-	var al firewall.Allowlist
+func resolveProviderAddrs(cfg *config.Config, log *slog.Logger) []netip.Addr {
+	var hosts []netip.Addr
 	seen := make(map[netip.Addr]bool)
 	add := func(a netip.Addr) {
 		a = a.Unmap()
 		if a.IsValid() && !seen[a] {
 			seen[a] = true
-			al.Hosts = append(al.Hosts, a)
+			hosts = append(hosts, a)
 		}
 	}
 	for _, raw := range cfg.Providers {
 		u, err := url.Parse(raw)
 		if err != nil || u.Hostname() == "" {
-			log.Warn("cannot parse provider url for allowlist", "url", raw)
+			log.Warn("cannot parse provider url", "url", raw)
 			continue
 		}
 		// Bound the lookup: this runs synchronously in the run loop's Block path,
@@ -1160,7 +1189,7 @@ func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allow
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
 		cancel()
 		if err != nil {
-			log.Warn("cannot resolve provider for allowlist", "host", u.Hostname(), "err", err)
+			log.Warn("cannot resolve provider", "host", u.Hostname(), "err", err)
 			continue
 		}
 		for _, ip := range ips {
@@ -1169,17 +1198,13 @@ func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allow
 			}
 		}
 	}
-	// The allowlist pins IPs at block time. If nothing resolved, recovery
-	// detection can never reach a geo-API once egress is cut — the block would
-	// become permanent. Warn loudly rather than silently lock the operator out.
-	// NOTE: `block --force` resolves this once, at block time, so a provider
-	// that rotates CDN IPs mid-block becomes unreachable until the next block.
-	// (The guard postures don't use this allowlist at all — they pass endpoints,
-	// and refresh geo providers while healthy.)
-	if len(al.Hosts) == 0 {
-		log.Warn("no geo-API egress IPs in allowlist — recovery detection cannot work while blocked")
+	// If nothing resolved there is no tunnel-scoped provider pass to install, so
+	// a FULL BLOCK cannot observe its own exit and recovery degrades to
+	// lift-and-probe. Warn rather than let that happen silently.
+	if len(hosts) == 0 {
+		log.Warn("no geo-API egress IPs resolved — recovery from FULL BLOCK will fall back to lifting the guard to observe the exit")
 	}
-	return al
+	return hosts
 }
 
 func cmdUnblock(args []string) int {
@@ -1446,11 +1471,6 @@ func defaultTokenPath() string { return filepath.Join(stateDir(), "control.token
 // state.json — readable history for the GUI and unprivileged operators).
 func defaultLogPath() string { return filepath.Join(stateDir(), "logs", "dezhban.log") }
 
-// cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
-// interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
-// NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
-// leaks physical egress), so the endpoint must be entered deliberately from the
-// VPN client's own config. No privilege required.
 // detectVPNJSON is `detect-vpn --json`'s shape: the tunnel-interface scan plus
 // the macOS discovery layer's inventory, so a diagnostic surface (the app's
 // Diagnostics pane) can show which VPNs are detected, which one is connected,
@@ -1465,11 +1485,25 @@ type detectVPNJSON struct {
 	ConnectedVPN string `json:"connectedVPN,omitempty"`
 	// DiscoverySupported is whether endpoint discovery exists on this platform
 	// at all (macOS only) — distinct from it finding nothing.
-	DiscoverySupported bool              `json:"discoverySupported"`
-	Candidates         []detectVPNCand   `json:"candidates"`
-	DiscoveryErr       string            `json:"discoveryErr,omitempty"`
-	SupportedVPNs      []string          `json:"supportedVPNs,omitempty"`
-	TunnelPatterns     detectVPNPatterns `json:"tunnelPatterns"`
+	DiscoverySupported bool `json:"discoverySupported"`
+	// ScanPrivileged is whether the discovery scan ran with root visibility.
+	// Absent when discovery did not run at all (unsupported platform), so the
+	// three answers stay distinct: absent = "no scan", false = "partial scan",
+	// true = "authoritative scan".
+	//
+	// This exists because discovery shells out to `lsof`, which as an
+	// unprivileged user lists only that user's sockets. A VPN whose transport
+	// runs as root therefore yields `candidates: []` with no discoveryErr —
+	// byte-identical to a root scan that genuinely found nothing, while
+	// `sudo dezhban doctor --discover` finds it. The daemon is root and never
+	// hit this; the GUI's Diagnostics pane runs in the user's context and does,
+	// so an empty list must not be presented as "found none" without saying
+	// which kind of scan produced it.
+	ScanPrivileged *bool             `json:"scanPrivileged,omitempty"`
+	Candidates     []detectVPNCand   `json:"candidates"`
+	DiscoveryErr   string            `json:"discoveryErr,omitempty"`
+	SupportedVPNs  []string          `json:"supportedVPNs,omitempty"`
+	TunnelPatterns detectVPNPatterns `json:"tunnelPatterns"`
 }
 
 type detectVPNCand struct {
@@ -1484,6 +1518,12 @@ type detectVPNPatterns struct {
 	Keywords []string `json:"keywords"`
 }
 
+// cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
+// interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
+// NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
+// leaks physical egress), so the endpoint must be entered deliberately from the
+// VPN client's own config. No privilege required. `--json` emits detectVPNJSON
+// instead, for a diagnostic surface to render.
 func cmdDetectVPN(args []string) int {
 	fs := flag.NewFlagSet("detect-vpn", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON (tunnels, discovery candidates, connected VPN)")
@@ -1507,15 +1547,21 @@ func cmdDetectVPN(args []string) int {
 			out.Tunnels = []string{}
 		}
 		cands, derr := netdetect.DiscoverEndpoints()
+		// Captured before the switch so both discovery outcomes report it: a
+		// FAILED scan is no more authoritative than a partial one, and the pane
+		// has to be able to say which.
+		priv := privilege.IsPrivileged()
 		switch {
 		case errors.Is(derr, netdetect.ErrDiscoverUnsupported):
 			// Not an error: the platform has no discovery, and the tunnel scan
 			// above is still the answer.
 		case derr != nil:
 			out.DiscoverySupported = true
+			out.ScanPrivileged = &priv
 			out.DiscoveryErr = derr.Error()
 		default:
 			out.DiscoverySupported = true
+			out.ScanPrivileged = &priv
 			for _, c := range cands {
 				out.Candidates = append(out.Candidates, detectVPNCand{
 					VPN: c.VPN, Server: c.Server.String(), Port: c.Port, Process: c.Process,
@@ -1729,10 +1775,7 @@ func cmdMonitor(args []string) int {
 // cannot drift from what the daemon would actually install.
 func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
 	tunnels := resolveTunnels(cfg, log)
-	// Every posture here is a VPN posture, so Policy.Allowlist stays empty — a
-	// posture opens endpoints, not a physical dst-IP allowlist (that field is
-	// live only for `block --force`, which builds its Policy directly). Input
-	// construction is deferred into a closure because resolving endpoints does
+	// Input construction is deferred into a closure because resolving endpoints does
 	// DNS: the error branches below must not pay for network work (and log
 	// resolution failures) for a ruleset that will never render.
 	vpnInput := func() firewall.PolicyInput {

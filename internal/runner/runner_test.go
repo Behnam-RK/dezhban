@@ -61,13 +61,12 @@ func (f *fakeMonitor) Once(context.Context) (monitor.Reading, error) {
 	return r.Reading, r.Err
 }
 
-// fakeBackend records the sequence of calls made against it. blockErr/applyErr, when
-// set, make the corresponding action fail (the call is still recorded) so tests can
-// exercise enforcement-failure paths.
+// fakeBackend records the sequence of calls made against it. applyErr, when set,
+// makes Apply fail (the call is still recorded) so tests can exercise
+// enforcement-failure paths.
 type fakeBackend struct {
 	calls    []string
 	policies []firewall.Policy
-	blockErr error
 	applyErr error
 	// isBlockedFn drives enforcement verification. nil answers "the rules are
 	// present" — the healthy reply — so every test that does not care about
@@ -86,10 +85,6 @@ func (b *fakeBackend) Apply(p firewall.Policy) error {
 		b.calls = append(b.calls, "apply-fullblock")
 	}
 	return b.applyErr
-}
-func (b *fakeBackend) Block(a firewall.Allowlist) error {
-	b.calls = append(b.calls, "block")
-	return b.blockErr
 }
 func (b *fakeBackend) Unblock() error {
 	b.calls = append(b.calls, "unblock")
@@ -242,9 +237,6 @@ func TestVPNGuardFullBlockAndProbeRecovery(t *testing.T) {
 	if len(fb.TunnelIfaces) == 0 {
 		t.Error("VPN full block must carry tunnel ifaces")
 	}
-	if len(fb.Allowlist.DNS) != 0 || len(fb.Allowlist.Hosts) != 0 {
-		t.Error("VPN full block must not carry a dst-IP allowlist")
-	}
 }
 
 // A single allowed probe must not lift a hysteresis>1 block: recovery requires
@@ -377,20 +369,18 @@ type failingGuardBackend struct {
 	cleanups int
 }
 
-func (b *failingGuardBackend) Apply(p firewall.Policy) error    { return errors.New("guard apply failed") }
-func (b *failingGuardBackend) Block(a firewall.Allowlist) error { return nil }
-func (b *failingGuardBackend) Unblock() error                   { return nil }
-func (b *failingGuardBackend) IsBlocked() (bool, error)         { return true, nil }
-func (b *failingGuardBackend) Cleanup() error                   { b.cleanups++; return nil }
+func (b *failingGuardBackend) Apply(p firewall.Policy) error { return errors.New("guard apply failed") }
+func (b *failingGuardBackend) Unblock() error                { return nil }
+func (b *failingGuardBackend) IsBlocked() (bool, error)      { return true, nil }
+func (b *failingGuardBackend) Cleanup() error                { b.cleanups++; return nil }
 
 // --- tunnel watcher ---
 
 // signalBackend is concurrency-safe (the watcher runs in its own goroutine) and
-// signals on blockCh whenever Block is called, so a test can synchronize on it.
+// records every call, so a test can assert on the sequence after the fact.
 type signalBackend struct {
-	mu      sync.Mutex
-	calls   []string
-	blockCh chan struct{}
+	mu    sync.Mutex
+	calls []string
 }
 
 func (b *signalBackend) record(s string) {
@@ -403,14 +393,6 @@ func (b *signalBackend) Apply(p firewall.Policy) error {
 		b.record("apply-guard")
 	} else {
 		b.record("apply-fullblock")
-	}
-	return nil
-}
-func (b *signalBackend) Block(a firewall.Allowlist) error {
-	b.record("block")
-	select {
-	case b.blockCh <- struct{}{}:
-	default:
 	}
 	return nil
 }
@@ -1879,10 +1861,9 @@ func (b *firstWindowFailsBackend) Apply(p firewall.Policy) error {
 	}
 	return nil
 }
-func (b *firstWindowFailsBackend) Block(a firewall.Allowlist) error { return nil }
-func (b *firstWindowFailsBackend) Unblock() error                   { return nil }
-func (b *firstWindowFailsBackend) IsBlocked() (bool, error)         { return true, nil }
-func (b *firstWindowFailsBackend) Cleanup() error                   { return nil }
+func (b *firstWindowFailsBackend) Unblock() error           { return nil }
+func (b *firstWindowFailsBackend) IsBlocked() (bool, error) { return true, nil }
+func (b *firstWindowFailsBackend) Cleanup() error           { return nil }
 func (b *firstWindowFailsBackend) seen() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()

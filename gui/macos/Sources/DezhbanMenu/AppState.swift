@@ -176,6 +176,13 @@ final class AppState: ObservableObject {
     /// rather than guess.
     @Published var vpnInventory: VPNInventory?
     private var vpnInventoryReadAt: Date?
+    /// In-flight guard, the same role `doctorRunning` plays for doctor. The
+    /// staleness gate alone cannot hold the line for a FORCED refresh
+    /// (`maxAge: 0`, what the Run-diagnostics button asks for), so without this
+    /// a person clicking that button repeatedly forks one process-scanning
+    /// `detect-vpn` subprocess per click and the last one to finish — not the
+    /// last one started — decides what the pane shows.
+    private var vpnInventoryRunning = false
 
     /// The strictness line for the Overview ("Balanced", "Custom (closest:
     /// Balanced)"), from `status --json`'s preset fields, falling back to
@@ -310,6 +317,11 @@ final class AppState: ObservableObject {
                 } else {
                     let text = [r.out, r.err].filter { !$0.isEmpty }.joined(separator: "\n")
                     self.doctorError = text.isEmpty ? "No output from `dezhban doctor --json`." : text
+                    // The retained report is kept (the pane still shows it, under
+                    // the failure) but it is no longer VERIFIED, so the badge must
+                    // not go on asserting the pre-failure verdict. A run that
+                    // can't complete is itself something to look at.
+                    self.diagnosticsAttention = true
                 }
             }
         }
@@ -322,7 +334,12 @@ final class AppState: ObservableObject {
     /// auto-passes --discover; that scan is a person's explicit ask.
     func runDoctorIfStale(maxAge: TimeInterval) {
         guard cliFound else { return }
-        if let at = doctorRanAt, Date().timeIntervalSince(at) < maxAge, doctorReport != nil { return }
+        // Gated on the timestamp ALONE: a run that produced no report still
+        // ran, and re-testing `doctorReport != nil` would leave the gate
+        // permanently unlatched on every host where doctor fails — forking a
+        // subprocess per trigger forever, which is what the gate exists to
+        // prevent.
+        if let at = doctorRanAt, Date().timeIntervalSince(at) < maxAge { return }
         runDoctor()
     }
 
@@ -331,11 +348,23 @@ final class AppState: ObservableObject {
     /// and has no business anywhere near the 1-second timer.
     func refreshVPNInventoryIfStale(maxAge: TimeInterval = 60) {
         guard cliFound else { return }
-        if let at = vpnInventoryReadAt, Date().timeIntervalSince(at) < maxAge, vpnInventory != nil { return }
+        // Timestamp alone, for the same reason as runDoctorIfStale: a nil
+        // inventory (a CLI too old for --json, or a scan that failed) is a
+        // RESULT, and re-testing it here would re-fork the process-scanning
+        // subprocess on every `.onAppear` — i.e. every sidebar pane switch.
+        if let at = vpnInventoryReadAt, Date().timeIntervalSince(at) < maxAge { return }
+        // A forced refresh (maxAge: 0) walks straight past the staleness gate,
+        // so the in-flight guard is the only thing between the Run-diagnostics
+        // button and one process-scanning subprocess per click.
+        guard !vpnInventoryRunning else { return }
+        vpnInventoryRunning = true
         vpnInventoryReadAt = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let inv = DezhbanCLI.readVPNInventory()
-            DispatchQueue.main.async { self?.vpnInventory = inv }
+            DispatchQueue.main.async {
+                self?.vpnInventoryRunning = false
+                self?.vpnInventory = inv
+            }
         }
     }
 

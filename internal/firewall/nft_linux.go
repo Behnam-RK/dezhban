@@ -34,13 +34,6 @@ func New() (FirewallBackend, error) {
 	return &nftBackend{}, nil
 }
 
-// Block is the `block --force` entry point: a full block whose only
-// exceptions are loopback and the dst-IP allowlist. It is Apply with
-// ModeFullBlock and no tunnel interfaces.
-func (b *nftBackend) Block(a Allowlist) error {
-	return b.Apply(Policy{Mode: ModeFullBlock, Allowlist: a})
-}
-
 // Apply installs the ruleset for p as the `inet dezhban` table. The whole
 // ruleset is loaded atomically in one `nft -f -` transaction that first replaces
 // any existing table, so re-applying never stacks duplicate rules (idempotent)
@@ -240,24 +233,17 @@ func renderNftRuleset(p Policy) string {
 		emitAllowPhysicalDNS(rule, p)
 		emitLocalNetwork(rule, p)
 	default: // ModeFullBlock
-		if isVPNPolicy(p) {
-			// VPN full block (including the zero-tunnel standing posture): drop the
-			// tunnel-iface accept so no user traffic can egress to a forbidden exit,
-			// but KEEP the endpoint accepts so the encrypted handshake still reaches
-			// the server and the tunnel can redial. A cut endpoint would livelock
-			// recovery (the VPN could never re-establish to be re-evaluated).
-			emitDaddrAccepts(rule, p.VPNEndpoints, "")
-			emitTunnelProviders(rule, p)
-			emitAllowPhysicalDNS(rule, p)
-		} else {
-			// `block --force` (no VPN context): dst-IP allowlist over udp and tcp port 53.
-			emitDaddrAccepts(rule, p.Allowlist.DNS, "udp dport 53")
-			emitDaddrAccepts(rule, p.Allowlist.DNS, "tcp dport 53")
-			emitDaddrAccepts(rule, p.Allowlist.Hosts, "")
-		}
-		// Outside the isVPNPolicy split on purpose — see the same hoist in
-		// pf_darwin.go. AllowLocalNetwork belongs to the posture, not to which
-		// FULL BLOCK shape rendered it.
+		// Drop the tunnel-iface accept so no user traffic can egress to a
+		// forbidden exit, but KEEP the endpoint accepts so the encrypted
+		// handshake still reaches the server and the tunnel can redial. A cut
+		// endpoint would livelock recovery (the VPN could never re-establish to
+		// be re-evaluated). Every field below is optional, and `block --force`
+		// sets none of them, which is what makes it loopback-only.
+		emitDaddrAccepts(rule, p.VPNEndpoints, "")
+		emitTunnelProviders(rule, p)
+		emitAllowPhysicalDNS(rule, p)
+		// AllowLocalNetwork belongs to the posture — see the same note in
+		// pf_darwin.go.
 		emitLocalNetwork(rule, p)
 	}
 	return b.String()

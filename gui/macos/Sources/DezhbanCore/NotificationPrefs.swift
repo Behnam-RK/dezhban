@@ -96,9 +96,13 @@ public struct NotificationPrefs: Equatable {
     }
 
     /// Whether a post for this raw class should go out: known classes follow
-    /// their toggle, unknown classes fail open.
+    /// their toggle, unknown classes fail open — but only while something is
+    /// still switched on. Failing open exists so a NEW daemon state isn't
+    /// silently muted by a pane with no checkbox for it; it must never
+    /// override an explicit "notify me about nothing", which is what the
+    /// master toggle writes (every class false).
     public func shouldNotify(rawClass: String) -> Bool {
-        guard let c = Self.eventClass(for: rawClass) else { return true }
+        guard let c = Self.eventClass(for: rawClass) else { return anyEnabled }
         return isEnabled(c)
     }
 

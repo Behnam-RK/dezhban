@@ -37,7 +37,7 @@ public struct SettingsFields {
 
     /// Keys the pane stages ONLY when the CLI's schema knows them. A key an old
     /// CLI has never heard of must not be in the seeded set at all —
-    /// `ConfigApply.seed` short-circuits on its first failed `config get`, so
+    /// `ConfigApply.seed` fails the WHOLE seed on its first failed `config get`, so
     /// one unconditionally-staged new key would brick the whole pane against an
     /// older install. The pane computes which of these to register from the
     /// schema it just read, then passes them to `init(seeded:extraKeys:)`.

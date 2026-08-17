@@ -10,7 +10,7 @@ import (
 )
 
 // hostLookupTimeout bounds a single hostname resolution, mirroring the provider
-// resolution in cmd/dezhban buildAllowlist.
+// resolution in cmd/dezhban resolveProviderAddrs.
 const hostLookupTimeout = 5 * time.Second
 
 // LookupNetIPer resolves a host to IP addresses. *net.Resolver satisfies it;

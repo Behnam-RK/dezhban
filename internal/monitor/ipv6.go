@@ -49,8 +49,14 @@ func newIPv6Client() *http.Client {
 // when every endpoint fails — routine on v4-only hosts, and callers treat it as
 // "no v6 to show", never as a fault worth surfacing.
 func (m *Monitor) OnceIPv6(ctx context.Context) (netip.Addr, error) {
-	if m.v6client == nil {
-		m.v6client = newIPv6Client()
+	// Read-only on the receiver, like every other Monitor method: New builds the
+	// client, and this only covers a caller that replaced v6client with nil.
+	// A Monitor must still come from New — `m.log` is dereferenced below and
+	// every other method does the same, so a zero-value receiver was never a
+	// supported shape here.
+	client := m.v6client
+	if client == nil {
+		client = newIPv6Client()
 	}
 	endpoints := m.v6endpoints
 	if len(endpoints) == 0 {
@@ -59,7 +65,7 @@ func (m *Monitor) OnceIPv6(ctx context.Context) (netip.Addr, error) {
 	var errs []error
 	for _, url := range endpoints {
 		pctx, cancel := context.WithTimeout(ctx, ipv6LookupTimeout)
-		ip, err := fetchIPv6(pctx, m.v6client, url)
+		ip, err := fetchIPv6(pctx, client, url)
 		cancel()
 		if err != nil {
 			m.log.Debug("ipv6 lookup failed", "endpoint", url, "err", err)
@@ -97,6 +103,12 @@ func fetchIPv6(ctx context.Context, client *http.Client, url string) (netip.Addr
 	// payload — an endpoint echoing something else must not land in the field.
 	if !ip.Is6() || ip.Is4In6() {
 		return netip.Addr{}, fmt.Errorf("endpoint returned a non-IPv6 address %s", ip)
+	}
+	// Is6 is true for ::1, fe80::/10 and fd00::/8 alike, so the family check
+	// alone would let a captive portal or an intercepting proxy put a loopback,
+	// link-local or ULA address into a field the app labels "Public IPv6".
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return netip.Addr{}, fmt.Errorf("endpoint returned a non-public IPv6 address %s", ip)
 	}
 	return ip, nil
 }

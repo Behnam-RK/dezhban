@@ -27,42 +27,27 @@ func assertDefaultDenyLast(t *testing.T, rs string) {
 	}
 }
 
-func TestRenderRulesetLegacyFullBlock(t *testing.T) {
-	p := Policy{
-		Mode: ModeFullBlock,
-		Allowlist: Allowlist{
-			DNS:   []netip.Addr{mustAddr(t, "1.1.1.1"), mustAddr(t, "8.8.8.8")},
-			Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")},
-		},
-	}
-	rs := renderRuleset(p)
-
-	wantContains := []string{
-		"pass quick on lo0 all",
-		"pass out quick proto { udp tcp } to { 1.1.1.1 8.8.8.8 } port 53",
-		"pass out quick to { 34.117.59.81 }",
-		"block drop out all",
-	}
-	for _, w := range wantContains {
-		if !strings.Contains(rs, w) {
-			t.Errorf("ruleset missing %q\n--- got ---\n%s", w, rs)
-		}
-	}
-	assertDefaultDenyLast(t, rs)
-}
-
-func TestRenderRulesetEmptyAllowlist(t *testing.T) {
+// A zero-valued FULL BLOCK is `block --force`: every optional field empty, so
+// nothing but loopback may egress. It used to carry a destination-IP allowlist
+// (DNS + geo-provider IPs) here; that pass is gone — see forceBlockPolicy for
+// why no correctly-scoped replacement is possible in this posture.
+func TestRenderRulesetForceBlockPassesNothing(t *testing.T) {
 	rs := renderRuleset(Policy{Mode: ModeFullBlock})
 	if strings.Contains(rs, "to {  }") || strings.Contains(rs, "to { }") {
-		t.Errorf("empty allowlist produced an invalid empty address list:\n%s", rs)
+		t.Errorf("an empty address list rendered as a rule:\n%s", rs)
 	}
-	if !strings.Contains(rs, "block drop out all") {
-		t.Errorf("ruleset missing default-deny:\n%s", rs)
+	if !strings.Contains(rs, "pass quick on lo0 all") {
+		t.Errorf("ruleset missing the loopback pass:\n%s", rs)
 	}
-	// With no DNS/hosts, neither pass-out rule should appear.
+	// Loopback is a `pass quick on lo0`, not a `pass out quick`, so no egress
+	// pass of any shape may appear.
 	if strings.Contains(rs, "pass out quick") {
-		t.Errorf("empty allowlist should emit no egress pass rules:\n%s", rs)
+		t.Errorf("--force emitted an egress pass rule:\n%s", rs)
 	}
+	if strings.Contains(rs, "port 53") {
+		t.Errorf("--force emitted a DNS rule:\n%s", rs)
+	}
+	assertDefaultDenyLast(t, rs)
 }
 
 func TestRenderRulesetGuard(t *testing.T) {
@@ -70,9 +55,6 @@ func TestRenderRulesetGuard(t *testing.T) {
 		Mode:         ModeGuard,
 		TunnelIfaces: []string{"utun4", "utun5"},
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		// Allowlist present but must be ignored in guard mode (dst-IP is
-		// meaningless under a tunnel).
-		Allowlist: Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
 	}
 	rs := renderRuleset(p)
 
@@ -87,9 +69,9 @@ func TestRenderRulesetGuard(t *testing.T) {
 			t.Errorf("guard ruleset missing %q\n--- got ---\n%s", w, rs)
 		}
 	}
-	// The dst-IP allowlist must NOT leak into guard rules.
-	if strings.Contains(rs, "port 53") || strings.Contains(rs, "1.1.1.1") {
-		t.Errorf("guard ruleset must not emit the dst-IP allowlist:\n%s", rs)
+	// No DNS rule: AllowPhysicalDNS is off here, and nothing else may emit one.
+	if strings.Contains(rs, "port 53") {
+		t.Errorf("guard ruleset emitted an unrequested DNS rule:\n%s", rs)
 	}
 	// Passes must be stateless so a tunnel transport connection already open at
 	// block time isn't dropped by pf's default `flags S/SA keep state`.
@@ -117,7 +99,6 @@ func TestRenderRulesetVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 		Mode:         ModeFullBlock,
 		TunnelIfaces: []string{"utun4"},
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		Allowlist:    Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
 	}
 	rs := renderRuleset(p)
 
@@ -217,17 +198,13 @@ func TestRenderRulesetTunnelGroups(t *testing.T) {
 func TestRenderRulesetZeroTunnelStandingPosture(t *testing.T) {
 	// FULL BLOCK with endpoints but NO tunnel ifaces (daemon-before-VPN standing
 	// posture): endpoints stay open so a known VPN can handshake, everything else
-	// blocked. Must NOT fall through to the legacy dst-IP allowlist path.
+	// blocked.
 	rs := renderRuleset(Policy{
 		Mode:         ModeFullBlock,
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		Allowlist:    Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
 	})
 	if !strings.Contains(rs, "pass out quick to { 203.0.113.5 }") {
 		t.Errorf("zero-tunnel standing posture must keep endpoints open:\n%s", rs)
-	}
-	if strings.Contains(rs, "1.1.1.1") {
-		t.Errorf("zero-tunnel standing posture must NOT emit the legacy allowlist:\n%s", rs)
 	}
 	assertDefaultDenyLast(t, rs)
 }
@@ -277,21 +254,20 @@ func TestRenderLocalNetwork(t *testing.T) {
 	}
 }
 
-// The LAN pass must not depend on isVPNPolicy. A FULL BLOCK with no tunnels, no
-// endpoints and allowPhysicalDNS off takes the renderer's legacy branch, and the
-// LAN emission used to be nested inside the VPN branch — so allowLocalNetwork
-// was silently discarded in exactly that shape, contradicting ADR-0005 ("a
-// blocked exit country should not also take out the printer").
+// The LAN pass must survive a FULL BLOCK with no tunnels and no endpoints. The
+// renderer used to split FULL BLOCK into a "VPN" and a "block --force" shape,
+// with the LAN emission nested inside the first — so allowLocalNetwork was
+// silently discarded in exactly this shape, contradicting ADR-0005 ("a blocked
+// exit country should not also take out the printer"). The split is gone now
+// (nothing produces a destination-IP allowlist any more), but the posture it
+// used to mis-render is still reachable and still needs pinning.
 //
 // Reachable for real: the daemon's `relaxed` start path applies this posture
 // when no endpoints are known yet, and `print-rules --mode fullblock` renders
-// it. Every other LAN test sets TunnelIfaces+VPNEndpoints, which forces
-// isVPNPolicy true and hides the bug.
+// it. Every other LAN test sets TunnelIfaces+VPNEndpoints, which is what hid
+// the bug.
 func TestRenderLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
 	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
-	if isVPNPolicy(p) {
-		t.Fatal("precondition: this policy must take the non-VPN branch")
-	}
 	rs := renderRuleset(p)
 	if !strings.Contains(rs, "10.0.0.0/8") {
 		t.Errorf("LAN pass dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", rs)
@@ -299,11 +275,8 @@ func TestRenderLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
 	assertDefaultDenyLast(t, rs)
 
 	// `block --force` must be unaffected: it never sets AllowLocalNetwork, so it
-	// still cuts everything but loopback and its geo-provider allowlist.
-	forced := renderRuleset(Policy{
-		Mode:      ModeFullBlock,
-		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
-	})
+	// still cuts everything but loopback.
+	forced := renderRuleset(Policy{Mode: ModeFullBlock})
 	if strings.Contains(forced, "10.0.0.0/8") {
 		t.Errorf("block --force must not gain a LAN pass:\n%s", forced)
 	}

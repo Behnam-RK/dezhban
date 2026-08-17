@@ -88,11 +88,40 @@ const windowRevertRetry = 2 * time.Second
 // The public-IPv6 observation (Options.LookupIPv6) is fixed-cadence and
 // hard-bounded rather than configurable: it feeds no decision, so it earns no
 // key, and it runs inline in the run-loop goroutine, so its budget has to be
-// small enough that a hung lookup cannot meaningfully stall window expiry.
+// bounded hard.
+//
+// It cannot stall WINDOW expiry, which is the bound that would matter most: the
+// observation only runs after a confirmed ALLOWED reading in healthy GUARD, and
+// the geo tick skips that path entirely while a window is open (or in standby, or
+// under a manual block). What a hung lookup can delay is reacting to a tunnel
+// EDGE that arrives mid-lookup — by at most the budget below, and in the
+// fail-closed direction: the guard stays on, only the redial window's opening
+// waits. That is why the budget can be sized to fit monitor's fallback rather
+// than shaved to the smallest possible number.
 const (
-	ipv6Interval     = 5 * time.Minute
-	ipv6LookupBudget = 2 * time.Second
+	ipv6Interval = 5 * time.Minute
+	// ipv6LookupBudget must leave room for BOTH of monitor's sequential
+	// endpoints, each of which gets its own 2s ipv6LookupTimeout derived from
+	// this context. At 2s the parent budget was exactly one endpoint's timeout,
+	// so a first endpoint that HUNG spent the whole budget and the fallback
+	// failed instantly with an already-cancelled context — the documented
+	// fallback never fired for the one failure mode it exists for. 5s fits two
+	// attempts with a margin, and a slow-but-working first endpoint still
+	// succeeds inside its own timeout rather than being cut short.
+	ipv6LookupBudget = 5 * time.Second
 )
+
+// ipv6RearmFloor is how soon the observation may be retaken after something
+// INVALIDATED it (a tunnel-down edge, or FULL BLOCK). Clearing the value without
+// rescheduling left the 5-minute timer from the last successful lookup running,
+// so the row stayed blank for up to that long after a redial — and on a host
+// that drops more often than the interval, forever.
+//
+// A floor rather than an immediate re-arm because the invalidation edge is
+// exactly the one a flapping tunnel produces repeatedly, and the lookup runs
+// inline in the enforcement goroutine. A var only so the test that pins the
+// re-arm can run in real time; nothing outside this package may set it.
+var ipv6RearmFloor = 30 * time.Second
 
 // publishBuffer sizes the background state-writer queue. It comfortably absorbs
 // a transient slow write at the daemon's event rate (a poll every few tens of
@@ -1054,7 +1083,23 @@ func (o Options) runGuard(ctx context.Context) error {
 		} else {
 			// Cleared, not held: a v6 address that can't be re-confirmed may be
 			// gone, and stale is worse than absent for an observational field.
+			// Left on the full interval on purpose — this attempt consumed its
+			// slot, unlike an external invalidation below.
 			dg.ipv6 = ""
+		}
+	}
+	// invalidateIPv6 drops the observation because something made it untrue —
+	// the tunnel went down, or FULL BLOCK cut egress — and reschedules the
+	// re-observation, which is the half that used to be missing. Clearing alone
+	// left the 5-minute timer from the last SUCCESSFUL lookup running, so the
+	// value was invalidated with nothing arranged to replace it: blank until
+	// that timer happened to expire, and never repopulated at all on a host
+	// that drops more often than the interval. Both invalidation sites go
+	// through here so they cannot drift apart again.
+	invalidateIPv6 := func() {
+		dg.ipv6 = ""
+		if next := time.Now().Add(ipv6RearmFloor); next.Before(ipv6NextAt) {
+			ipv6NextAt = next
 		}
 	}
 	// verifyRepairs counts re-applies since startup. Deliberately cumulative and
@@ -2641,8 +2686,8 @@ func (o Options) runGuard(ctx context.Context) error {
 				resetZombie(true)
 				// The observed public IPv6 died with the tunnel — a redial may
 				// land on a different exit, and showing the old address as
-				// current would be a lie until the next slow re-confirmation.
-				dg.ipv6 = ""
+				// current would be a lie until the next re-confirmation.
+				invalidateIPv6()
 			}
 			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
 				tunnels = next
@@ -3037,7 +3082,8 @@ func (o Options) runGuard(ctx context.Context) error {
 					markTunnelEverUp(time.Now())
 					maybeLookupIPv6()
 				} else {
-					dg.ipv6 = "" // FULL BLOCK: nothing egresses; don't show a pre-block address as current
+					// FULL BLOCK: nothing egresses; don't show a pre-block address as current.
+					invalidateIPv6()
 				}
 			}
 			// Zombie-tunnel detection: the interface reports up, but a run of exit
@@ -3128,16 +3174,14 @@ func (o Options) runGuard(ctx context.Context) error {
 	}
 }
 
-// vpnPolicies builds the GUARD and FULL BLOCK policies for the given endpoint
-// set. FULL BLOCK under a tunnel cuts the tunnel too: the dst-IP allowlist is
-// meaningless on encrypted outer packets, so it is omitted.
 // vpnPolicies builds the GUARD (standing) and FULL BLOCK policies for the given
 // tunnel and endpoint sets. The GUARD side is the standing posture: normal
 // ModeGuard when at least one tunnel exists, else a ModeFullBlock endpoints-open
 // shape (physically fail-closed, handshake paths open) so the daemon can run
 // before any VPN is connected without the backend rejecting an empty-iface
-// guard. FULL BLOCK cuts the tunnel too — the dst-IP allowlist is meaningless on
-// encrypted outer packets, so it is omitted.
+// guard. FULL BLOCK cuts the tunnel too, keeping only the endpoint passes and
+// the tunnel-scoped geo-provider pass — there is no destination-IP allowlist to
+// omit any more, that seam is gone (see firewall.Policy).
 func (o Options) vpnPolicies(tunnels []string, endpoints, providers []netip.Addr) (guard, fullBlock firewall.Policy) {
 	in := o.policyInput(tunnels, endpoints, providers)
 	return in.Guard(), in.FullBlock()
@@ -3146,10 +3190,6 @@ func (o Options) vpnPolicies(tunnels []string, endpoints, providers []netip.Addr
 // policyInput gathers the posture-shaping options into the firewall package's
 // shared constructor input, so the run loop and print-rules build postures from
 // one definition (firewall.PolicyInput).
-//
-// Allowlist is deliberately left zero: a VPN posture opens endpoints, not a
-// physical dst-IP allowlist, which is meaningless against encrypted outer
-// packets. The runner's separate Allowlist hook feeds the legacy Block path only.
 //
 // Invalid addresses are dropped by the constructor (they would otherwise render
 // as "invalid IP" and make pf reject the whole ruleset). That drop is silent by

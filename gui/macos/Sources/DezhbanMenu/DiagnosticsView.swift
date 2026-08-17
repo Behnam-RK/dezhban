@@ -50,22 +50,48 @@ struct DiagnosticsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let error = state.doctorError {
-            guided(symbol: "exclamationmark.triangle", title: "Couldn't run diagnostics", message: error)
-        } else if let report = state.doctorReport {
+        // The VPN inventory and the doctor report are fetched independently and
+        // arrive independently, so the List renders as soon as EITHER of them
+        // has something. Gating the whole List on the report kept a
+        // successfully-fetched inventory invisible: on first open, until the
+        // async doctor run returned; after a doctor failure with nothing
+        // retained; and permanently on a host where `doctor --json` cannot run
+        // at all. refreshVPNInventoryIfStale fetched it and nothing showed it.
+        if state.doctorReport != nil || state.vpnInventory != nil {
             List {
-                vpnInventorySection
-                Section {
-                    Label(report.ok ? "No lockout risk found" : "Found something to fix",
-                          systemImage: report.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(report.ok ? .green : .orange)
-                        .font(.headline)
+                if let error = state.doctorError {
+                    Section {
+                        // A retained report OUTRANKS a failed run: AppState
+                        // deliberately keeps the last one so navigating away
+                        // doesn't discard something someone just read. Which
+                        // sentence is true therefore depends on whether there
+                        // is one to show — the banner must not promise a "last
+                        // result" that is not on screen.
+                        Label(state.doctorReport == nil
+                                ? "Couldn't run diagnostics. \(error)"
+                                : "Couldn't re-run diagnostics — showing the last result. \(error)",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
                 }
-                ForEach(report.checks) { check in
-                    checkRow(check)
+                vpnInventorySection
+                if let report = state.doctorReport {
+                    Section {
+                        Label(report.ok ? "No lockout risk found" : "Found something to fix",
+                              systemImage: report.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(report.ok ? .green : .orange)
+                            .font(.headline)
+                    }
+                    ForEach(report.checks) { check in
+                        checkRow(check)
+                    }
                 }
             }
             .listStyle(.inset)
+        } else if let error = state.doctorError {
+            guided(symbol: "exclamationmark.triangle", title: "Couldn't run diagnostics", message: error)
         } else if !state.cliFound {
             guided(symbol: "questionmark.circle", title: "dezhban CLI not found",
                    message: "Install the dezhban command-line tool, then run diagnostics again.")
@@ -82,7 +108,11 @@ struct DiagnosticsView: View {
     private var vpnInventorySection: some View {
         if let inv = state.vpnInventory {
             Section("Your VPNs") {
-                if !inv.hasAnything {
+                // Only when the scan can actually be quoted: an errored or
+                // unsupported scan prints its own row below, and asserting
+                // "found none" above it would answer a question nobody
+                // managed to ask.
+                if !inv.hasAnything && inv.scanConclusive {
                     Text("No VPN apps or tunnels found.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
@@ -97,7 +127,7 @@ struct DiagnosticsView: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 ForEach(inv.candidates ?? []) { cand in
-                    candidateRow(cand, connected: inv.connectedVPN)
+                    candidateRow(cand)
                 }
                 if let derr = inv.discoveryErr, !derr.isEmpty {
                     Label(derr, systemImage: "exclamationmark.triangle")
@@ -109,22 +139,39 @@ struct DiagnosticsView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+                // Shown whether or not anything was found: the app always runs
+                // unprivileged, and the scan it drives sees only this user's
+                // sockets. That makes an empty list no evidence of absence, and
+                // a non-empty one still possibly short — so the caveat belongs
+                // on both, not just under the empty state it also suppresses.
+                if inv.scanPrivileged == false {
+                    Text("Scanned as your user — a VPN whose connection runs as root won't appear here. "
+                        + "Run `sudo dezhban doctor --discover` for the full picture.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }
 
-    private func candidateRow(_ cand: VPNInventory.Candidate, connected: String?) -> some View {
-        var parts: [String] = []
+    /// One discovered VPN transport, named and with the server address it
+    /// connects to.
+    ///
+    /// A candidate that is also the connected service is deliberately NOT
+    /// suppressed here even though the "— connected now" row already names it:
+    /// the two rows carry different facts, and this is the only one that says
+    /// *where* the tunnel goes. It used to take a `connected` parameter for a
+    /// suppression rule that was never written — the parameter went unread and
+    /// the comment described logic that wasn't there.
+    private func candidateRow(_ cand: VPNInventory.Candidate) -> some View {
+        var detail: String?
         if let server = cand.server, !server.isEmpty {
-            parts.append(cand.port.map { "\(server):\($0)" } ?? server)
+            detail = cand.port.map { "\(server):\($0)" } ?? server
         }
-        let detail = parts.joined(separator: " ")
-        // Already named by the connected row above? Then this row only adds
-        // the server address; keep the name so the pairing is readable.
         return VStack(alignment: .leading, spacing: 2) {
             Label(cand.displayName, systemImage: "app.badge.checkmark")
                 .font(.callout)
-            if !detail.isEmpty {
+            if let detail {
                 Text("server \(detail)")
                     .font(.caption)
                     .foregroundStyle(.secondary)
