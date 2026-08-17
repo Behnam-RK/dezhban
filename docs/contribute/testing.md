@@ -73,10 +73,23 @@ root and no real firewall. `task test:cover` enforces the coverage floors in
       so the tunnel can redial, and LAN devices still answer (with
       `vpn.allowLocalNetwork` on, the default). This is FULL BLOCK — it carries
       **no** destination allowlist; a VPN posture opens the tunnel endpoint.
-- [ ] **`block --force` keeps the geo providers reachable.** `sudo dezhban block
-      --force` → all egress cut except loopback and the resolved geo-API
-      provider IPs, which it pins on the *physical* link before cutting so
-      recovery detection still works with no daemon and no tunnel.
+- [ ] **`block --force` keeps the geo providers reachable, tunnel-scoped.**
+      `sudo dezhban block --force` with a tunnel up → all egress cut except
+      loopback and a `pass out quick on { utunN } to { providers }`; the
+      resolved IPs are pinned before cutting. Confirm there is **no**
+      destination-only pass on the physical link (ADR-0006), and that the VPN
+      endpoint is *not* passed — unlike the daemon's FULL BLOCK, `--force` cuts
+      the handshake too.
+- [ ] **`block --force` honours `vpn.allowGeoProviders: false`.** Same command
+      with the key off → no provider pass at all, and a warning saying recovery
+      detection cannot run until `dezhban unblock`. Also check the no-tunnel
+      case: with no tunnel interface to scope the rule to, the pass is absent
+      and a warning names `unblock`/`panic` as the way out.
+- [ ] **`detect-vpn --json` marks an unprivileged scan partial.** Run it as your
+      user with a VPN connected whose transport runs as root → `scanPrivileged:
+      false`, and the app's Diagnostics pane says the scan saw only your
+      sockets instead of claiming none were found. `sudo dezhban detect-vpn
+      --json` → `scanPrivileged: true` and the candidate appears.
 - [ ] **Status is truthful.** `dezhban status` reports `blocked: true`, with
       accurate country and service fields.
 - [ ] **Block is idempotent.** Re-run `sudo dezhban block` → no duplicate rules.

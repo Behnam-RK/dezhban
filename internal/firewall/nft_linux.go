@@ -34,13 +34,6 @@ func New() (FirewallBackend, error) {
 	return &nftBackend{}, nil
 }
 
-// Block is the `block --force` entry point: a full block whose only
-// exceptions are loopback and the dst-IP allowlist. It is Apply with
-// ModeFullBlock and no tunnel interfaces.
-func (b *nftBackend) Block(a Allowlist) error {
-	return b.Apply(Policy{Mode: ModeFullBlock, Allowlist: a})
-}
-
 // Apply installs the ruleset for p as the `inet dezhban` table. The whole
 // ruleset is loaded atomically in one `nft -f -` transaction that first replaces
 // any existing table, so re-applying never stacks duplicate rules (idempotent)

@@ -127,6 +127,17 @@ struct DiagnosticsView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 }
+                // Shown whether or not anything was found: the app always runs
+                // unprivileged, and the scan it drives sees only this user's
+                // sockets. That makes an empty list no evidence of absence, and
+                // a non-empty one still possibly short — so the caveat belongs
+                // on both, not just under the empty state it also suppresses.
+                if inv.scanPrivileged == false {
+                    Text("Scanned as your user — a VPN whose connection runs as root won't appear here. "
+                        + "Run `sudo dezhban doctor --discover` for the full picture.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
             }
         }
     }

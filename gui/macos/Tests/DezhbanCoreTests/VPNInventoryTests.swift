@@ -51,7 +51,28 @@ struct VPNInventoryTests {
         let clean = try #require(VPNInventory.decode(
             #"{"discoverySupported": true, "candidates": []}"#.data(using: .utf8)!))
         #expect(!clean.hasAnything)
+        // scanPrivileged absent: a CLI older than the field. Left conclusive on
+        // purpose — the app ships with its own CLI, so nil means a hand-mixed
+        // install, and permanently suppressing the empty state for it would be a
+        // visible regression traded against a stale bug.
         #expect(clean.scanConclusive)
+    }
+
+    @Test func anUnprivilegedScanCannotQuoteAnEmptyResult() throws {
+        // `lsof` run as the logged-in user lists only that user's sockets, and
+        // the app is never root — so a VPN whose transport runs as root yields
+        // an empty list indistinguishable from a real absence. It is not an
+        // answer, and the pane must not print one.
+        let partial = try #require(VPNInventory.decode(
+            #"{"discoverySupported": true, "scanPrivileged": false, "candidates": []}"#
+                .data(using: .utf8)!))
+        #expect(!partial.hasAnything)
+        #expect(!partial.scanConclusive)
+
+        let authoritative = try #require(VPNInventory.decode(
+            #"{"discoverySupported": true, "scanPrivileged": true, "candidates": []}"#
+                .data(using: .utf8)!))
+        #expect(authoritative.scanConclusive)
     }
 
     @Test func candidateFallsBackToProcessName() throws {

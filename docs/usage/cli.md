@@ -215,8 +215,14 @@ sudo dezhban panic                                # standalone teardown, no daem
 
 - `run --dry-run` — poll and print the country without touching the firewall.
 - `block --guard` — install the VPN interface guard (see [modes.md](../concepts/modes.md)).
-- `block --force` — unconditional hard block of all egress (loopback + allowlist
-  only), bypassing the VPN guard. The override when detection is wrong.
+- `block --force` — unconditional hard block of all egress (loopback + the
+  geo-provider pass only), bypassing the VPN guard. The override when detection
+  is wrong. The provider pass obeys `vpn.allowGeoProviders` and is scoped to the
+  tunnel interface **and** the provider addresses, exactly as in the daemon's
+  FULL BLOCK ([ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md)) — so with
+  the key off, or with no tunnel interface resolved to scope the rule to,
+  `--force` cuts everything but loopback. It has no lift-and-probe fallback;
+  recover with `unblock` or `panic`.
 - `unblock --force` — accepted for symmetry (`unblock` is already unconditional).
 - `--simulate-country IR` (on `monitor` and `run`) — force the verdict from
   anywhere, without a sanctioned IP.
@@ -244,15 +250,24 @@ text. See [config.md](config.md) for the full field reference and
 
 `detect-vpn --json` is the machine-readable VPN inventory the app's
 Diagnostics pane renders: `{tunnels, connectedVPN, discoverySupported,
-candidates: [{vpn, server, port, process}], discoveryErr, supportedVPNs,
-tunnelPatterns: {prefixes, keywords}}`. `tunnels` is the same interface scan
-the prose prints; `candidates`/`connectedVPN` come from the macOS discovery
-layer (empty elsewhere — `discoverySupported: false` says why);
+scanPrivileged, candidates: [{vpn, server, port, process}], discoveryErr,
+supportedVPNs, tunnelPatterns: {prefixes, keywords}}`. `tunnels` is the same
+interface scan the prose prints; `candidates`/`connectedVPN` come from the
+macOS discovery layer (empty elsewhere — `discoverySupported: false` says why);
 `supportedVPNs` and `tunnelPatterns` name the client-process and
 interface-name patterns detection recognizes, so an *unrecognized* VPN can be
 told apart from a *missing* one. A discovery failure degrades to
 `discoveryErr` plus an empty `candidates` — the tunnel scan is still
 delivered.
+
+`scanPrivileged` says whether the scan could see the whole machine, and has
+three states: **absent** (discovery did not run), **`false`** (partial), and
+**`true`** (authoritative). Discovery shells out to `lsof`, which run as an
+unprivileged user lists only *that user's* sockets — so a VPN whose transport
+runs as root is invisible, and `candidates: []` from such a scan is not
+evidence of absence. The app always runs unprivileged and therefore always sees
+`false`; run `sudo dezhban detect-vpn --json` (or `sudo dezhban doctor
+--discover`) for the authoritative answer.
 
 Beyond the lockout checks, `doctor` answers **will dezhban need me again**:
 whether a reboot brings the guard back (*boot service*, *arm at boot*) and

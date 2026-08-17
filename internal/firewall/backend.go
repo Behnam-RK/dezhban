@@ -147,12 +147,6 @@ type FirewallBackend interface {
 	// Idempotent: re-applying the same or a different policy replaces the rules,
 	// never stacks them.
 	Apply(p Policy) error
-	// Block installs a default-deny-outbound ruleset, passing only the
-	// allowlist (plus loopback). Only outbound is filtered, so return traffic is
-	// unaffected.
-	// Re-blocking must not stack duplicate rules. Equivalent to Apply with
-	// ModeFullBlock and no tunnel interfaces (the `block --force` override).
-	Block(a Allowlist) error
 	// Unblock removes ONLY dezhban's rules and restores prior firewall state.
 	Unblock() error
 	// IsBlocked reports whether dezhban's block is currently installed.

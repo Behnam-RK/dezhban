@@ -63,13 +63,6 @@ type savedState struct {
 	PrevEnabled bool `json:"prevEnabled"`
 }
 
-// Block is the `block --force` entry point: a full block whose only
-// exceptions are loopback and the dst-IP allowlist. It is Apply with
-// ModeFullBlock and no tunnel interfaces.
-func (b *pfBackend) Block(a Allowlist) error {
-	return b.Apply(Policy{Mode: ModeFullBlock, Allowlist: a})
-}
-
 // Apply installs the ruleset for p into the dezhban anchor. The mechanism is
 // identical regardless of mode (validate → snapshot → anchor ref → load → enable);
 // only the rendered ruleset differs, so guard and full-block share one code path

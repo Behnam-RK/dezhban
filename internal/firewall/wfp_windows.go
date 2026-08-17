@@ -81,13 +81,6 @@ type savedState struct {
 	OutboundAction map[string]string `json:"outboundAction"`
 }
 
-// Block is the `block --force` entry point: a full block whose only
-// exceptions are loopback and the dst-IP allowlist. It is Apply with
-// ModeFullBlock and no tunnel interfaces.
-func (b *wfpBackend) Block(a Allowlist) error {
-	return b.Apply(Policy{Mode: ModeFullBlock, Allowlist: a})
-}
-
 // Apply installs the dezhban rule group for p and flips the profiles' outbound
 // default to Block. Re-applying first removes the group, so rules never stack
 // (idempotent). The prior outbound defaults are snapshotted only on the first

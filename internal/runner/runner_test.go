@@ -87,10 +87,6 @@ func (b *fakeBackend) Apply(p firewall.Policy) error {
 	}
 	return b.applyErr
 }
-func (b *fakeBackend) Block(a firewall.Allowlist) error {
-	b.calls = append(b.calls, "block")
-	return b.blockErr
-}
 func (b *fakeBackend) Unblock() error {
 	b.calls = append(b.calls, "unblock")
 	return nil
@@ -377,11 +373,10 @@ type failingGuardBackend struct {
 	cleanups int
 }
 
-func (b *failingGuardBackend) Apply(p firewall.Policy) error    { return errors.New("guard apply failed") }
-func (b *failingGuardBackend) Block(a firewall.Allowlist) error { return nil }
-func (b *failingGuardBackend) Unblock() error                   { return nil }
-func (b *failingGuardBackend) IsBlocked() (bool, error)         { return true, nil }
-func (b *failingGuardBackend) Cleanup() error                   { b.cleanups++; return nil }
+func (b *failingGuardBackend) Apply(p firewall.Policy) error { return errors.New("guard apply failed") }
+func (b *failingGuardBackend) Unblock() error                { return nil }
+func (b *failingGuardBackend) IsBlocked() (bool, error)      { return true, nil }
+func (b *failingGuardBackend) Cleanup() error                { b.cleanups++; return nil }
 
 // --- tunnel watcher ---
 
@@ -403,14 +398,6 @@ func (b *signalBackend) Apply(p firewall.Policy) error {
 		b.record("apply-guard")
 	} else {
 		b.record("apply-fullblock")
-	}
-	return nil
-}
-func (b *signalBackend) Block(a firewall.Allowlist) error {
-	b.record("block")
-	select {
-	case b.blockCh <- struct{}{}:
-	default:
 	}
 	return nil
 }
@@ -1879,10 +1866,9 @@ func (b *firstWindowFailsBackend) Apply(p firewall.Policy) error {
 	}
 	return nil
 }
-func (b *firstWindowFailsBackend) Block(a firewall.Allowlist) error { return nil }
-func (b *firstWindowFailsBackend) Unblock() error                   { return nil }
-func (b *firstWindowFailsBackend) IsBlocked() (bool, error)         { return true, nil }
-func (b *firstWindowFailsBackend) Cleanup() error                   { return nil }
+func (b *firstWindowFailsBackend) Unblock() error           { return nil }
+func (b *firstWindowFailsBackend) IsBlocked() (bool, error) { return true, nil }
+func (b *firstWindowFailsBackend) Cleanup() error           { return nil }
 func (b *firstWindowFailsBackend) seen() []string {
 	b.mu.Lock()
 	defer b.mu.Unlock()

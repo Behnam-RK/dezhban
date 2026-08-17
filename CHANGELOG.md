@@ -85,6 +85,29 @@ current as you land changes.
 
 ### Fixed
 
+- **`block --force` no longer ignores `vpn.allowGeoProviders`.** The key that
+  removes the ruleset's only destination-scoped hole was honoured by the daemon
+  and discarded by the one command that bypasses it, so setting it to `false`
+  and then force-blocking still installed the pass. It also installed the
+  *wrong shape*: a destination-only `pass out quick to { providers }` on the
+  physical link, the half-scoping [ADR-0006](docs/adr/0006-geo-providers-tunnel-scoped.md)
+  forbids because the lookup then succeeds with the tunnel down and reports the
+  ISP's country instead of the exit's. `--force` now builds its posture from the
+  same `PolicyInput` as every other one: tunnel-**and**-destination scoped, and
+  absent entirely when the key is off or no tunnel interface resolved to scope
+  it to. Both cases warn, naming `unblock`/`panic` as the way out — `--force`
+  has no lift-and-probe.
+- **`detect-vpn --json` says when a VPN scan could only see part of the
+  machine.** Discovery shells out to `lsof`, which as an unprivileged user
+  lists only that user's sockets, so a VPN whose transport runs as root
+  produced `candidates: []` with no error — indistinguishable from a root scan
+  that genuinely found nothing, and rendered by the app (which always runs
+  unprivileged) as a confident "No VPN apps or tunnels found." A new
+  `scanPrivileged` field carries the three-way answer — absent for "no scan
+  ran", `false` for partial, `true` for authoritative — and the Diagnostics
+  pane now explains a partial scan instead of claiming a result. A discovery
+  run that could not execute `lsof` at all also stops being reported as an
+  empty inventory.
 - **Turning notifications off now silences everything.** The per-event
   preferences fail open for an event class the app has no checkbox for, so a
   newer daemon state is never silently muted — but that override no longer

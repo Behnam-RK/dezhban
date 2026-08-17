@@ -41,6 +41,17 @@ public struct VPNInventory: Decodable {
     /// Whether endpoint discovery exists on this platform at all — distinct
     /// from discovery finding nothing.
     public let discoverySupported: Bool?
+    /// Whether the discovery scan ran with root visibility. nil when discovery
+    /// did not run at all, so the three answers stay distinct: nil = "no scan",
+    /// false = "partial scan", true = "authoritative scan".
+    ///
+    /// Discovery shells out to `lsof`, which as an unprivileged user lists only
+    /// that user's sockets — and the app runs in the user's context, not the
+    /// daemon's. A VPN whose transport runs as root is invisible to it, so an
+    /// empty candidate list from an unprivileged scan is not evidence of
+    /// absence. A CLI older than this field leaves it nil, which is why the
+    /// unprivileged case must be an explicit `false` rather than the default.
+    public let scanPrivileged: Bool?
     public let candidates: [Candidate]?
     public let discoveryErr: String?
     /// Client-process patterns discovery can attribute a socket to. What lets
@@ -73,10 +84,16 @@ public struct VPNInventory: Decodable {
     }
 
     /// Whether an empty result can be quoted as an answer. A scan that errored
-    /// — or that this platform has no discovery for — found nothing because it
-    /// could not look, and "couldn't scan" is a different claim from "scanned,
-    /// found none". Callers show the error instead of the empty state.
+    /// — or that this platform has no discovery for, or that could only see the
+    /// current user's sockets — found nothing because it could not look, and
+    /// "couldn't scan" is a different claim from "scanned, found none". Callers
+    /// show the explanation instead of the empty state.
+    ///
+    /// `scanPrivileged == false` is deliberately disqualifying rather than
+    /// merely a caveat: the app always runs unprivileged, so this is the common
+    /// case, and a VPN whose transport runs as root produces exactly the empty
+    /// list that would otherwise render as a confident "none found".
     public var scanConclusive: Bool {
-        (discoveryErr ?? "").isEmpty && discoverySupported != false
+        (discoveryErr ?? "").isEmpty && discoverySupported != false && scanPrivileged != false
     }
 }

@@ -5,6 +5,7 @@ package netdetect
 import (
 	"bufio"
 	"context"
+	"errors"
 	"net"
 	"net/netip"
 	"os/exec"
@@ -98,7 +99,11 @@ type socket struct {
 // IP and whose peer is public, via `lsof`. lsof (unlike netstat) reports the owning
 // pid in a machine-readable form, which is the whole point — see DiscoverEndpoints.
 // Run as root (the daemon is) it sees every process's sockets; run as an unprivileged
-// user it sees only that user's, which can only make discovery quieter, never wrong.
+// user it sees only that user's — quieter, never wrong, but also never authoritative:
+// a VPN whose transport runs as root is simply invisible. That distinction cannot be
+// recovered from the result (an unprivileged scan that finds nothing is byte-identical
+// to a root scan that finds nothing), so callers that publish it must say which kind
+// of scan it was — `detect-vpn --json` carries `scanPrivileged` for exactly that.
 func physicalSockets(ctx context.Context, phys map[netip.Addr]bool) ([]socket, error) {
 	// -F pn: machine-readable, pid ("p") then name ("n") per socket. -nP: no DNS or
 	// port-name lookups (fast, and no reverse-DNS traffic from a firewall tool).
@@ -106,6 +111,16 @@ func physicalSockets(ctx context.Context, phys map[netip.Addr]bool) ([]socket, e
 	if err != nil {
 		// lsof exits 1 when it finds nothing; that is not an error for us. Any output
 		// we did get is still parsed below.
+		//
+		// But "could not run lsof at all" is a different answer from "lsof found
+		// nothing", and swallowing it made the two identical: a missing or
+		// non-executable binary, or a cancelled context, returned (nil, nil) — an
+		// empty inventory with an empty discoveryErr, which every consumer is
+		// entitled to read as authoritative. Only an ExitError means lsof ran.
+		var ee *exec.ExitError
+		if len(out) == 0 && !errors.As(err, &ee) {
+			return nil, err
+		}
 		if len(out) == 0 {
 			return nil, nil
 		}
@@ -264,25 +279,6 @@ func physicalIPv4s() (map[netip.Addr]bool, error) {
 		}
 	}
 	return out, nil
-}
-
-// splitHostPort parses macOS netstat's IP.PORT form (e.g. "192.168.88.112.64656"
-// or "*.443"). Returns ok=false for wildcards and unparyable addresses.
-func splitHostPort(s string) (netip.Addr, int, bool) {
-	i := strings.LastIndex(s, ".")
-	if i < 0 {
-		return netip.Addr{}, 0, false
-	}
-	host, portStr := s[:i], s[i+1:]
-	addr, err := netip.ParseAddr(host)
-	if err != nil {
-		return netip.Addr{}, 0, false
-	}
-	port, err := strconv.Atoi(portStr)
-	if err != nil {
-		return netip.Addr{}, 0, false
-	}
-	return addr.Unmap(), port, true
 }
 
 // connectedVPNName returns the name of the first Connected service in

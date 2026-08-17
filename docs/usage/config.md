@@ -52,7 +52,10 @@ A `block --force` pins the resolved provider IPs at block time; the long-running
 `run` loop re-resolves them live, but a one-shot `block --force` does not. A
 provider behind a rotating CDN can later resolve to a different IP than the one
 pinned, breaking recovery until the next `run` refresh — prefer providers with
-stable IPs for hosts that rely on one-shot `block`.
+stable IPs for hosts that rely on one-shot `block`. `--force` honours
+`vpn.allowGeoProviders` and scopes the pass to the tunnel interface the same way
+the daemon does, so with the key off — or with no tunnel interface resolved to
+scope the rule to — it cuts everything but loopback.
 
 ### Keys that apply live, and keys that need a restart
 
