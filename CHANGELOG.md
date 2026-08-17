@@ -12,6 +12,8 @@ current as you land changes.
 
 ## [Unreleased]
 
+## [0.10.1] - 2026-08-17
+
 ### Added
 
 - **A fourth strictness preset, "Focused",** between Strict and Balanced:
@@ -2341,7 +2343,8 @@ current as you land changes.
 - Cross-platform release build matrix (`task build:all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
-[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.10.1...HEAD
+[0.10.1]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.10.1
 [0.10.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.10.0
 [0.9.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.9.0
 [0.8.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.8.0
