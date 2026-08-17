@@ -98,28 +98,6 @@ func TestOutputChainPolicyIsDrop(t *testing.T) {
 	}
 }
 
-func TestRenderNftLegacyFullBlock(t *testing.T) {
-	p := Policy{
-		Mode:         ModeFullBlock,
-		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-	}
-	rs := renderNftRuleset(p)
-
-	wantContains := []string{
-		`oifname "lo" accept`,
-		"ip daddr { 1.1.1.1, 8.8.8.8 } udp dport 53 accept",
-		"ip daddr { 1.1.1.1, 8.8.8.8 } tcp dport 53 accept",
-		"ip daddr { 34.117.59.81 } accept",
-	}
-	for _, w := range wantContains {
-		if !strings.Contains(rs, w) {
-			t.Errorf("ruleset missing %q\n--- got ---\n%s", w, rs)
-		}
-	}
-	assertAtomicReplace(t, rs)
-	assertDefaultDrop(t, rs)
-}
-
 // A zero-valued FULL BLOCK is `block --force`: every optional field empty, so
 // nothing but loopback may egress. It used to carry a destination-IP allowlist
 // here; that pass is gone — see forceBlockPolicy for why no correctly-scoped
@@ -179,6 +157,7 @@ func TestRenderNftGuard(t *testing.T) {
 	if strings.Contains(rs, "dport 53") {
 		t.Errorf("guard ruleset emitted an unrequested DNS rule:\n%s", rs)
 	}
+	assertAtomicReplace(t, rs)
 	assertDefaultDrop(t, rs)
 }
 
@@ -207,6 +186,7 @@ func TestRenderNftVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 	if !strings.Contains(rs, `oifname "lo" accept`) {
 		t.Errorf("loopback must still pass:\n%s", rs)
 	}
+	assertAtomicReplace(t, rs)
 	assertDefaultDrop(t, rs)
 }
 

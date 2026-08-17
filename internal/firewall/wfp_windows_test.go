@@ -28,28 +28,6 @@ func assertDefaultDenyLast(t *testing.T, script string) {
 	}
 }
 
-func TestRenderBlockScriptLegacyFullBlock(t *testing.T) {
-	p := Policy{
-		Mode:         ModeFullBlock,
-		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-	}
-	s := renderBlockScript(p)
-
-	wantContains := []string{
-		"Remove-NetFirewallRule -Group dezhban",
-		"-RemoteAddress 127.0.0.1,::1",
-		"-Protocol UDP -RemotePort 53 -RemoteAddress 1.1.1.1,8.8.8.8",
-		"-Protocol TCP -RemotePort 53 -RemoteAddress 1.1.1.1,8.8.8.8",
-		"-RemoteAddress 34.117.59.81",
-	}
-	for _, w := range wantContains {
-		if !strings.Contains(s, w) {
-			t.Errorf("script missing %q\n--- got ---\n%s", w, s)
-		}
-	}
-	assertDefaultDenyLast(t, s)
-}
-
 // A zero-valued FULL BLOCK is `block --force`: every optional field empty, so
 // only loopback is allowed, then the Block default. It used to carry a
 // destination-IP allowlist here; that pass is gone — see forceBlockPolicy for
@@ -83,6 +61,9 @@ func TestRenderBlockScriptGuard(t *testing.T) {
 	s := renderBlockScript(p)
 
 	wantContains := []string{
+		// Teardown-first keeps re-block idempotent, and -Group dezhban keeps it
+		// surgical: it only ever removes rules this tool created.
+		"Remove-NetFirewallRule -Group dezhban",
 		"-InterfaceAlias 'WireGuard tunnel','utun4'",
 		"-RemoteAddress 203.0.113.5",
 	}
