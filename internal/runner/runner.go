@@ -3174,16 +3174,14 @@ func (o Options) runGuard(ctx context.Context) error {
 	}
 }
 
-// vpnPolicies builds the GUARD and FULL BLOCK policies for the given endpoint
-// set. FULL BLOCK under a tunnel cuts the tunnel too: the dst-IP allowlist is
-// meaningless on encrypted outer packets, so it is omitted.
 // vpnPolicies builds the GUARD (standing) and FULL BLOCK policies for the given
 // tunnel and endpoint sets. The GUARD side is the standing posture: normal
 // ModeGuard when at least one tunnel exists, else a ModeFullBlock endpoints-open
 // shape (physically fail-closed, handshake paths open) so the daemon can run
 // before any VPN is connected without the backend rejecting an empty-iface
-// guard. FULL BLOCK cuts the tunnel too — the dst-IP allowlist is meaningless on
-// encrypted outer packets, so it is omitted.
+// guard. FULL BLOCK cuts the tunnel too, keeping only the endpoint passes and
+// the tunnel-scoped geo-provider pass — there is no destination-IP allowlist to
+// omit any more, that seam is gone (see firewall.Policy).
 func (o Options) vpnPolicies(tunnels []string, endpoints, providers []netip.Addr) (guard, fullBlock firewall.Policy) {
 	in := o.policyInput(tunnels, endpoints, providers)
 	return in.Guard(), in.FullBlock()

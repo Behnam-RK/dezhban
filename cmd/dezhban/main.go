@@ -984,7 +984,6 @@ func forceBlockPolicy() firewall.Policy {
 // manual override can never drift from what the run loop would actually install
 // — in particular, it must NOT carry a physical dst-IP allowlist: a VPN posture
 // opens the tunnel endpoint, never a destination allowlist.
-
 func blockPlan(cfg *config.Config, log *slog.Logger, guard bool) (blockDecision, error) {
 	tunnels := resolveTunnels(cfg, log)
 	if len(tunnels) == 0 {
@@ -1472,11 +1471,6 @@ func defaultTokenPath() string { return filepath.Join(stateDir(), "control.token
 // state.json — readable history for the GUI and unprivileged operators).
 func defaultLogPath() string { return filepath.Join(stateDir(), "logs", "dezhban.log") }
 
-// cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
-// interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
-// NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
-// leaks physical egress), so the endpoint must be entered deliberately from the
-// VPN client's own config. No privilege required.
 // detectVPNJSON is `detect-vpn --json`'s shape: the tunnel-interface scan plus
 // the macOS discovery layer's inventory, so a diagnostic surface (the app's
 // Diagnostics pane) can show which VPNs are detected, which one is connected,
@@ -1524,6 +1518,12 @@ type detectVPNPatterns struct {
 	Keywords []string `json:"keywords"`
 }
 
+// cmdDetectVPN is a read-only setup helper for VPN mode. It prints the tunnel
+// interface(s) it detects so the operator can fill vpn.tunnelInterfaces. It does
+// NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
+// leaks physical egress), so the endpoint must be entered deliberately from the
+// VPN client's own config. No privilege required. `--json` emits detectVPNJSON
+// instead, for a diagnostic surface to render.
 func cmdDetectVPN(args []string) int {
 	fs := flag.NewFlagSet("detect-vpn", flag.ExitOnError)
 	jsonOut := fs.Bool("json", false, "print machine-readable JSON (tunnels, discovery candidates, connected VPN)")

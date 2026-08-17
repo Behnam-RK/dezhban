@@ -918,8 +918,9 @@ struct SettingsView: View {
         refreshPresets()
         // The schema loads BEFORE the field seed, because it decides which
         // optional keys exist on this CLI at all. Seeding an optional key an
-        // old CLI doesn't know would fail its `config get` and short-circuit
-        // the WHOLE seed (ConfigApply.seed stops at the first failure) — the
+        // old CLI doesn't know would fail its `config get` and sink
+        // the WHOLE seed (ConfigApply.seed reports the first failure and
+        // delivers no values at all) — the
         // pane would brick against every older install. Schema-known keys
         // only, or none when there is no schema to ask.
         refreshSchema { loadedSchema in

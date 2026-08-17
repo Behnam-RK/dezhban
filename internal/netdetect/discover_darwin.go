@@ -119,17 +119,25 @@ func physicalSockets(ctx context.Context, phys map[netip.Addr]bool) ([]socket, e
 		// empty inventory with an empty discoveryErr, which every consumer is
 		// entitled to read as authoritative.
 		//
-		// The context is checked FIRST and separately: os/exec reports a
-		// context-killed child as `signal: killed`, i.e. an *ExitError, so an
-		// ExitError test alone reads a timed-out scan as "lsof ran and found
+		// The context is checked FIRST, and BEFORE the output test: os/exec
+		// reports a context-killed child as `signal: killed`, i.e. an *ExitError,
+		// so an ExitError test alone reads a timed-out scan as "lsof ran and found
 		// nothing" — the exact false authority this branch exists to prevent, and
-		// the likely case on a busy host where the 5s budget expires. Only after
-		// that does an ExitError mean lsof genuinely ran and exited non-zero
+		// the likely case on a busy host where the 5s budget expires.
+		//
+		// Partial output does NOT rescue that case, which is why the check cannot
+		// live inside `len(out) == 0`: a killed lsof usually HAS written some of
+		// its socket list, and the caller's remaining work (processPath per pid)
+		// then fails on the same dead context, so every socket is attributed to an
+		// empty executable path and silently dropped by isVPNTransport. That
+		// renders as `candidates: []` with no discoveryErr — indistinguishable
+		// from a complete scan that found nothing.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, fmt.Errorf("lsof: %w", ctxErr)
+		}
+		// Only now does an ExitError mean lsof genuinely ran and exited non-zero
 		// (it exits 1 when it matched nothing).
 		if len(out) == 0 {
-			if ctxErr := ctx.Err(); ctxErr != nil {
-				return nil, fmt.Errorf("lsof: %w", ctxErr)
-			}
 			var ee *exec.ExitError
 			if !errors.As(err, &ee) {
 				return nil, err

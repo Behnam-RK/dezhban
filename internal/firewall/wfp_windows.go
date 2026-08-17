@@ -292,13 +292,14 @@ func (b *wfpBackend) Cleanup() error {
 //   - ModeGuard: allow egress on the tunnel interface(s) and the handshake to
 //     the VPN endpoint(s); the Block default cuts everything else, so a tunnel
 //     drop has no physical leak.
-//   - ModeFullBlock, no VPN context (no tunnel ifaces): allow the dst-IP DNS +
-//     geo-API allowlist — what `block --force` renders.
-//   - ModeFullBlock, VPN (tunnel ifaces present): no tunnel-iface allow, so no
-//     user traffic leaks to a forbidden exit — but keep the endpoint allow so the
-//     encrypted handshake reaches the server and the tunnel can redial.
-//     Identical to ModeGuard minus the tunnel-iface allow. The dst-IP allowlist
-//     is still meaningless under a tunnel.
+//   - ModeFullBlock: no tunnel-iface allow, so no user traffic leaks to a
+//     forbidden exit — but keep the endpoint allow so the encrypted handshake
+//     reaches the server and the tunnel can redial. Identical to ModeGuard minus
+//     the tunnel-iface allow.
+//   - ModeFullBlock with every optional field empty is `block --force`: loopback
+//     and nothing else. There is no destination-IP allowlist any more — see
+//     forceBlockPolicy in cmd/dezhban for why no correctly-scoped pass can
+//     survive that posture's own endpoint cut.
 //
 // The script opens by removing any existing dezhban group, so a re-block
 // replaces rather than stacks (idempotent), and sets the outbound default last.

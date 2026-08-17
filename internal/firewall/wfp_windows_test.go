@@ -62,8 +62,14 @@ func TestRenderBlockScriptForceBlockPassesNothing(t *testing.T) {
 	if strings.Contains(s, "-RemoteAddress \n") || strings.Contains(s, "-RemoteAddress |") {
 		t.Errorf("a rule rendered with no address:\n%s", s)
 	}
-	if strings.Contains(s, "-RemoteAddress ") {
-		t.Errorf("--force emitted a destination-scoped allow:\n%s", s)
+	// Loopback is rendered as `-RemoteAddress 127.0.0.1,::1` and is emitted
+	// unconditionally, so the assertion has to be "exactly one, and it is that
+	// one" — a bare Contains("-RemoteAddress ") can never hold.
+	if !strings.Contains(s, "-RemoteAddress 127.0.0.1,::1") {
+		t.Errorf("--force must still allow loopback:\n%s", s)
+	}
+	if n := strings.Count(s, "-RemoteAddress "); n != 1 {
+		t.Errorf("--force emitted %d destination-scoped allows, want only loopback's:\n%s", n, s)
 	}
 	assertDefaultDenyLast(t, s)
 }
