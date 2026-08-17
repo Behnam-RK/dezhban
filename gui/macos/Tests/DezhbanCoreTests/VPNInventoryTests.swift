@@ -36,6 +36,24 @@ struct VPNInventoryTests {
         #expect(VPNInventory.decode("not json".data(using: .utf8)!) == nil)
     }
 
+    @Test func aScanThatCouldNotLookIsNotAnAnswer() throws {
+        // "couldn't scan" and "scanned, found none" are different claims — the
+        // pane may only print its empty state for the second.
+        let errored = try #require(VPNInventory.decode(
+            #"{"discoveryErr": "lsof: command not found"}"#.data(using: .utf8)!))
+        #expect(!errored.hasAnything)
+        #expect(!errored.scanConclusive)
+
+        let unsupported = try #require(VPNInventory.decode(
+            #"{"discoverySupported": false}"#.data(using: .utf8)!))
+        #expect(!unsupported.scanConclusive)
+
+        let clean = try #require(VPNInventory.decode(
+            #"{"discoverySupported": true, "candidates": []}"#.data(using: .utf8)!))
+        #expect(!clean.hasAnything)
+        #expect(clean.scanConclusive)
+    }
+
     @Test func candidateFallsBackToProcessName() throws {
         let json = """
         {"candidates": [{"server": "203.0.113.9", "port": 51820,

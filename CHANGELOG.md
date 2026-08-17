@@ -83,6 +83,43 @@ current as you land changes.
 - **`detect-vpn`'s recommended-config sample** no longer names the retired
   `vpn.enabled` key.
 
+### Fixed
+
+- **Turning notifications off now silences everything.** The per-event
+  preferences fail open for an event class the app has no checkbox for, so a
+  newer daemon state is never silently muted — but that override no longer
+  beats an explicit all-off from the master toggle. "Off" that still posts is
+  not off.
+- **A duration slider no longer offers values its cap forbids.** A cap at or
+  below the key's default was discarded (a synthetic 8x top used instead), so
+  a strict `vpn.advanced.redialWindowMax` left most of the track staging
+  values the daemon rejects at apply. Caps have no floor by design; the track
+  now ends at the cap wherever it sits, the default stops being landable-on
+  when it sits above one, and a cap leaving no usable span falls back to the
+  text field.
+- **Diagnostics stops claiming "No VPN apps or tunnels found" when it could
+  not look.** A discovery scan that errored, or a platform with no discovery
+  at all, now shows only its own explanation — "couldn't scan" and "scanned,
+  found none" are different answers.
+- **A failed diagnostics run no longer hides the report it kept.** The last
+  result stays on screen with the failure as a banner above it, and the
+  sidebar badge is raised rather than left asserting the pre-failure verdict.
+- **The sidebar diagnostics badge clears itself on recovery,** and is no
+  longer raised by an open switch/redial window — that window classes as a
+  warning by design, and diagnostics run inside it reported the window's own
+  deliberate posture as findings.
+- **Overview no longer labels an IPv6 exit address "Public IPv4".** The
+  country lookup uses whichever family the host picks, so that row is
+  family-agnostic; it is qualified only when the address really is v4, and a
+  v6 reading that matches the observed address is no longer printed twice.
+- **The public-IPv6 observation rejects non-public answers.** Loopback,
+  link-local and unique-local addresses are IPv6 by family, so an intercepting
+  proxy could put one in a field shown as "Public IPv6".
+- **The app stops re-running `detect-vpn` and `doctor` on every pane switch**
+  when the CLI is older than the flag or a scan fails. The staleness gates
+  also required a non-nil result, so a nil — itself a result — left them
+  permanently unlatched, forking a process-scanning subprocess per `.onAppear`.
+
 ## [0.10.0] - 2026-08-16
 
 ### Added

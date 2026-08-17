@@ -71,4 +71,12 @@ public struct VPNInventory: Decodable {
     public var hasAnything: Bool {
         !(tunnels ?? []).isEmpty || !(candidates ?? []).isEmpty || !(connectedVPN ?? "").isEmpty
     }
+
+    /// Whether an empty result can be quoted as an answer. A scan that errored
+    /// — or that this platform has no discovery for — found nothing because it
+    /// could not look, and "couldn't scan" is a different claim from "scanned,
+    /// found none". Callers show the error instead of the empty state.
+    public var scanConclusive: Bool {
+        (discoveryErr ?? "").isEmpty && discoverySupported != false
+    }
 }

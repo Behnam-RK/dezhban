@@ -173,10 +173,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let essential = essentialClass(state, snapshot)
         if let prev = lastEssential, prev != essential {
             NotificationManager.post(rawClass: essential, body: "dezhban — \(help)")
-            // A transition INTO trouble refreshes the doctor report feeding the
-            // sidebar badge. Edge-triggered and staleness-gated (60s), so a
-            // flapping tunnel cannot fork doctor subprocesses per flap.
-            if essential == "warning" || essential == "blocked" {
+            // A transition into trouble refreshes the doctor report feeding the
+            // sidebar badge — and so does the transition back OUT of it, because
+            // nothing else re-runs doctor on recovery and a badge raised by a
+            // condition that has since cleared would keep pointing at findings
+            // nobody can act on for the whole 15-minute staleness window.
+            // Edge-triggered and staleness-gated (60s), so a flapping tunnel
+            // cannot fork doctor subprocesses per flap.
+            //
+            // An open switch/redial window is excluded on purpose: it classes as
+            // "warning" by design (render.go maps it to KeyWarning), so doctor
+            // run mid-window reports the window's own deliberate posture — a
+            // down tunnel, an empty tunnel set — as findings against the user.
+            let trouble = { (c: String) in c == "warning" || c == "blocked" }
+            if snapshot?.posture != "switch-window", trouble(essential) || trouble(prev) {
                 AppState.shared.runDoctorIfStale(maxAge: 60)
             }
         }

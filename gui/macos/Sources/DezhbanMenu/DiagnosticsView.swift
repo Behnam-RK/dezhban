@@ -50,10 +50,22 @@ struct DiagnosticsView: View {
 
     @ViewBuilder
     private var content: some View {
-        if let error = state.doctorError {
-            guided(symbol: "exclamationmark.triangle", title: "Couldn't run diagnostics", message: error)
-        } else if let report = state.doctorReport {
+        // A retained report OUTRANKS a failed run: AppState deliberately keeps
+        // the last report so navigating away doesn't discard something someone
+        // just read, and rendering the error instead of it would throw away
+        // exactly what was kept. The failure shows as a banner above it, and
+        // the sidebar badge is raised by AppState so the two never disagree.
+        if let report = state.doctorReport {
             List {
+                if let error = state.doctorError {
+                    Section {
+                        Label("Couldn't re-run diagnostics — showing the last result. \(error)",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                }
                 vpnInventorySection
                 Section {
                     Label(report.ok ? "No lockout risk found" : "Found something to fix",
@@ -66,6 +78,8 @@ struct DiagnosticsView: View {
                 }
             }
             .listStyle(.inset)
+        } else if let error = state.doctorError {
+            guided(symbol: "exclamationmark.triangle", title: "Couldn't run diagnostics", message: error)
         } else if !state.cliFound {
             guided(symbol: "questionmark.circle", title: "dezhban CLI not found",
                    message: "Install the dezhban command-line tool, then run diagnostics again.")
@@ -82,7 +96,11 @@ struct DiagnosticsView: View {
     private var vpnInventorySection: some View {
         if let inv = state.vpnInventory {
             Section("Your VPNs") {
-                if !inv.hasAnything {
+                // Only when the scan can actually be quoted: an errored or
+                // unsupported scan prints its own row below, and asserting
+                // "found none" above it would answer a question nobody
+                // managed to ask.
+                if !inv.hasAnything && inv.scanConclusive {
                     Text("No VPN apps or tunnels found.")
                         .font(.callout)
                         .foregroundStyle(.secondary)

@@ -98,5 +98,11 @@ func fetchIPv6(ctx context.Context, client *http.Client, url string) (netip.Addr
 	if !ip.Is6() || ip.Is4In6() {
 		return netip.Addr{}, fmt.Errorf("endpoint returned a non-IPv6 address %s", ip)
 	}
+	// Is6 is true for ::1, fe80::/10 and fd00::/8 alike, so the family check
+	// alone would let a captive portal or an intercepting proxy put a loopback,
+	// link-local or ULA address into a field the app labels "Public IPv6".
+	if !ip.IsGlobalUnicast() || ip.IsPrivate() {
+		return netip.Addr{}, fmt.Errorf("endpoint returned a non-public IPv6 address %s", ip)
+	}
 	return ip, nil
 }

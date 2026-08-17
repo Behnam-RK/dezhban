@@ -54,9 +54,20 @@ struct NotificationPrefsTests {
 
     @Test func unknownClassFailsOpen() {
         var prefs = NotificationPrefs.from(storage: nil, legacyEnabled: nil)
-        prefs.setAll(false)
-        // A daemon state this build has no checkbox for must never be muted.
+        prefs.set(.blocked, enabled: false)
+        // A daemon state this build has no checkbox for must never be muted by
+        // a preference pane that doesn't know about it.
         #expect(prefs.shouldNotify(rawClass: "future-thing"))
+        #expect(!prefs.shouldNotify(rawClass: "blocked"))
+    }
+
+    @Test func explicitAllOffSilencesUnknownClassesToo() {
+        var prefs = NotificationPrefs.from(storage: nil, legacyEnabled: nil)
+        prefs.setAll(false)
+        // Failing open covers a MISSING checkbox, not a user who asked for
+        // silence: the master toggle writes every class false, and "off" that
+        // still posts is not off.
+        #expect(!prefs.shouldNotify(rawClass: "future-thing"))
         #expect(!prefs.shouldNotify(rawClass: "blocked"))
     }
 

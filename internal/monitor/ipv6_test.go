@@ -41,8 +41,14 @@ func TestOnceIPv6FallsBackAndParses(t *testing.T) {
 
 func TestOnceIPv6RejectsNonV6Payloads(t *testing.T) {
 	// An endpoint echoing a v4 (or v4-mapped) address must be rejected, not
-	// reported as the host's IPv6 address.
-	for _, payload := range []string{"203.0.113.9", "::ffff:203.0.113.9", "not an ip"} {
+	// reported as the host's IPv6 address — and neither may an address that is
+	// v6 by family but never public: netip's Is6 is true for loopback,
+	// link-local and ULA alike, so an intercepting proxy could otherwise put
+	// any of them in a field the app labels "Public IPv6".
+	for _, payload := range []string{
+		"203.0.113.9", "::ffff:203.0.113.9", "not an ip",
+		"::1", "fe80::1", "fd00::1", "ff02::1",
+	} {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			_, _ = w.Write([]byte(payload))
 		}))
