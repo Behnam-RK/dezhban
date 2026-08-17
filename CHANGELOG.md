@@ -85,6 +85,24 @@ current as you land changes.
 
 ### Fixed
 
+- **Diagnostics shows the VPN inventory even with no doctor report.** The
+  **Your VPNs** section was nested inside the report, so a
+  successfully-fetched inventory stayed invisible until the async `doctor`
+  run returned — and permanently on a host where `doctor --json` cannot run
+  at all. The two are fetched independently and now render independently. A
+  failed run with nothing retained also stops promising a "last result" that
+  is not on screen.
+- **Clicking Run diagnostics repeatedly no longer forks a `detect-vpn` per
+  click.** The forced refresh walks past the staleness gate by design, so the
+  inventory fetch now carries the same in-flight guard the doctor half already
+  had. Without it the *last to finish* — not the last started — decided what
+  the pane showed.
+- **The Overview's "Public IPv6" row repopulates after a redial.** A tunnel
+  drop and a FULL BLOCK both invalidate the observation, but neither
+  rescheduled it, so the 5-minute timer from the last successful lookup kept
+  running and the row stayed blank until it happened to expire — on a host
+  that drops more often than that, permanently. Invalidating now re-arms, with
+  a 30s floor so a flapping tunnel cannot force one lookup per flap.
 - **`block --force` no longer ignores `vpn.allowGeoProviders`.** The key that
   removes the ruleset's only destination-scoped hole was honoured by the daemon
   and discarded by the one command that bypasses it, so setting it to `false`

@@ -94,6 +94,18 @@ const (
 	ipv6LookupBudget = 2 * time.Second
 )
 
+// ipv6RearmFloor is how soon the observation may be retaken after something
+// INVALIDATED it (a tunnel-down edge, or FULL BLOCK). Clearing the value without
+// rescheduling left the 5-minute timer from the last successful lookup running,
+// so the row stayed blank for up to that long after a redial — and on a host
+// that drops more often than the interval, forever.
+//
+// A floor rather than an immediate re-arm because the invalidation edge is
+// exactly the one a flapping tunnel produces repeatedly, and the lookup runs
+// inline in the enforcement goroutine. A var only so the test that pins the
+// re-arm can run in real time; nothing outside this package may set it.
+var ipv6RearmFloor = 30 * time.Second
+
 // publishBuffer sizes the background state-writer queue. It comfortably absorbs
 // a transient slow write at the daemon's event rate (a poll every few tens of
 // seconds); only a sustained write stall fills it and reintroduces back-pressure.
@@ -1054,7 +1066,23 @@ func (o Options) runGuard(ctx context.Context) error {
 		} else {
 			// Cleared, not held: a v6 address that can't be re-confirmed may be
 			// gone, and stale is worse than absent for an observational field.
+			// Left on the full interval on purpose — this attempt consumed its
+			// slot, unlike an external invalidation below.
 			dg.ipv6 = ""
+		}
+	}
+	// invalidateIPv6 drops the observation because something made it untrue —
+	// the tunnel went down, or FULL BLOCK cut egress — and reschedules the
+	// re-observation, which is the half that used to be missing. Clearing alone
+	// left the 5-minute timer from the last SUCCESSFUL lookup running, so the
+	// value was invalidated with nothing arranged to replace it: blank until
+	// that timer happened to expire, and never repopulated at all on a host
+	// that drops more often than the interval. Both invalidation sites go
+	// through here so they cannot drift apart again.
+	invalidateIPv6 := func() {
+		dg.ipv6 = ""
+		if next := time.Now().Add(ipv6RearmFloor); next.Before(ipv6NextAt) {
+			ipv6NextAt = next
 		}
 	}
 	// verifyRepairs counts re-applies since startup. Deliberately cumulative and
@@ -2641,8 +2669,8 @@ func (o Options) runGuard(ctx context.Context) error {
 				resetZombie(true)
 				// The observed public IPv6 died with the tunnel — a redial may
 				// land on a different exit, and showing the old address as
-				// current would be a lie until the next slow re-confirmation.
-				dg.ipv6 = ""
+				// current would be a lie until the next re-confirmation.
+				invalidateIPv6()
 			}
 			if next, changed := reconcileTunnels(tunnels, st.Names, pinned); changed {
 				tunnels = next
@@ -3037,7 +3065,8 @@ func (o Options) runGuard(ctx context.Context) error {
 					markTunnelEverUp(time.Now())
 					maybeLookupIPv6()
 				} else {
-					dg.ipv6 = "" // FULL BLOCK: nothing egresses; don't show a pre-block address as current
+					// FULL BLOCK: nothing egresses; don't show a pre-block address as current.
+					invalidateIPv6()
 				}
 			}
 			// Zombie-tunnel detection: the interface reports up, but a run of exit

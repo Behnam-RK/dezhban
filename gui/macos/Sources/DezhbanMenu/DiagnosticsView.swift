@@ -50,16 +50,26 @@ struct DiagnosticsView: View {
 
     @ViewBuilder
     private var content: some View {
-        // A retained report OUTRANKS a failed run: AppState deliberately keeps
-        // the last report so navigating away doesn't discard something someone
-        // just read, and rendering the error instead of it would throw away
-        // exactly what was kept. The failure shows as a banner above it, and
-        // the sidebar badge is raised by AppState so the two never disagree.
-        if let report = state.doctorReport {
+        // The VPN inventory and the doctor report are fetched independently and
+        // arrive independently, so the List renders as soon as EITHER of them
+        // has something. Gating the whole List on the report kept a
+        // successfully-fetched inventory invisible: on first open, until the
+        // async doctor run returned; after a doctor failure with nothing
+        // retained; and permanently on a host where `doctor --json` cannot run
+        // at all. refreshVPNInventoryIfStale fetched it and nothing showed it.
+        if state.doctorReport != nil || state.vpnInventory != nil {
             List {
                 if let error = state.doctorError {
                     Section {
-                        Label("Couldn't re-run diagnostics — showing the last result. \(error)",
+                        // A retained report OUTRANKS a failed run: AppState
+                        // deliberately keeps the last one so navigating away
+                        // doesn't discard something someone just read. Which
+                        // sentence is true therefore depends on whether there
+                        // is one to show — the banner must not promise a "last
+                        // result" that is not on screen.
+                        Label(state.doctorReport == nil
+                                ? "Couldn't run diagnostics. \(error)"
+                                : "Couldn't re-run diagnostics — showing the last result. \(error)",
                               systemImage: "exclamationmark.triangle.fill")
                             .font(.callout)
                             .foregroundStyle(.orange)
@@ -67,14 +77,16 @@ struct DiagnosticsView: View {
                     }
                 }
                 vpnInventorySection
-                Section {
-                    Label(report.ok ? "No lockout risk found" : "Found something to fix",
-                          systemImage: report.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(report.ok ? .green : .orange)
-                        .font(.headline)
-                }
-                ForEach(report.checks) { check in
-                    checkRow(check)
+                if let report = state.doctorReport {
+                    Section {
+                        Label(report.ok ? "No lockout risk found" : "Found something to fix",
+                              systemImage: report.ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(report.ok ? .green : .orange)
+                            .font(.headline)
+                    }
+                    ForEach(report.checks) { check in
+                        checkRow(check)
+                    }
                 }
             }
             .listStyle(.inset)
@@ -115,7 +127,7 @@ struct DiagnosticsView: View {
                         .foregroundStyle(Color.accentColor)
                 }
                 ForEach(inv.candidates ?? []) { cand in
-                    candidateRow(cand, connected: inv.connectedVPN)
+                    candidateRow(cand)
                 }
                 if let derr = inv.discoveryErr, !derr.isEmpty {
                     Label(derr, systemImage: "exclamationmark.triangle")
@@ -142,18 +154,24 @@ struct DiagnosticsView: View {
         }
     }
 
-    private func candidateRow(_ cand: VPNInventory.Candidate, connected: String?) -> some View {
-        var parts: [String] = []
+    /// One discovered VPN transport, named and with the server address it
+    /// connects to.
+    ///
+    /// A candidate that is also the connected service is deliberately NOT
+    /// suppressed here even though the "— connected now" row already names it:
+    /// the two rows carry different facts, and this is the only one that says
+    /// *where* the tunnel goes. It used to take a `connected` parameter for a
+    /// suppression rule that was never written — the parameter went unread and
+    /// the comment described logic that wasn't there.
+    private func candidateRow(_ cand: VPNInventory.Candidate) -> some View {
+        var detail: String?
         if let server = cand.server, !server.isEmpty {
-            parts.append(cand.port.map { "\(server):\($0)" } ?? server)
+            detail = cand.port.map { "\(server):\($0)" } ?? server
         }
-        let detail = parts.joined(separator: " ")
-        // Already named by the connected row above? Then this row only adds
-        // the server address; keep the name so the pairing is readable.
         return VStack(alignment: .leading, spacing: 2) {
             Label(cand.displayName, systemImage: "app.badge.checkmark")
                 .font(.callout)
-            if !detail.isEmpty {
+            if let detail {
                 Text("server \(detail)")
                     .font(.caption)
                     .foregroundStyle(.secondary)

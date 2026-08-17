@@ -176,6 +176,13 @@ final class AppState: ObservableObject {
     /// rather than guess.
     @Published var vpnInventory: VPNInventory?
     private var vpnInventoryReadAt: Date?
+    /// In-flight guard, the same role `doctorRunning` plays for doctor. The
+    /// staleness gate alone cannot hold the line for a FORCED refresh
+    /// (`maxAge: 0`, what the Run-diagnostics button asks for), so without this
+    /// a person clicking that button repeatedly forks one process-scanning
+    /// `detect-vpn` subprocess per click and the last one to finish — not the
+    /// last one started — decides what the pane shows.
+    private var vpnInventoryRunning = false
 
     /// The strictness line for the Overview ("Balanced", "Custom (closest:
     /// Balanced)"), from `status --json`'s preset fields, falling back to
@@ -346,10 +353,18 @@ final class AppState: ObservableObject {
         // RESULT, and re-testing it here would re-fork the process-scanning
         // subprocess on every `.onAppear` — i.e. every sidebar pane switch.
         if let at = vpnInventoryReadAt, Date().timeIntervalSince(at) < maxAge { return }
+        // A forced refresh (maxAge: 0) walks straight past the staleness gate,
+        // so the in-flight guard is the only thing between the Run-diagnostics
+        // button and one process-scanning subprocess per click.
+        guard !vpnInventoryRunning else { return }
+        vpnInventoryRunning = true
         vpnInventoryReadAt = Date()
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let inv = DezhbanCLI.readVPNInventory()
-            DispatchQueue.main.async { self?.vpnInventory = inv }
+            DispatchQueue.main.async {
+                self?.vpnInventoryRunning = false
+                self?.vpnInventory = inv
+            }
         }
     }
 
