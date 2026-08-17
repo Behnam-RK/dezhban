@@ -20,8 +20,10 @@
 package netdetect
 
 import (
+	"errors"
 	"net"
 	"net/netip"
+	"slices"
 	"strings"
 )
 
@@ -37,6 +39,22 @@ var tunnelPrefixes = []string{
 // tunnelKeywords are substrings found in the friendly interface aliases Windows
 // assigns to VPN adapters (e.g. "WireGuard Tunnel", "OpenVPN TAP-Windows").
 var tunnelKeywords = []string{"wireguard", "openvpn", "tap-windows", "tunnel", "vpn"}
+
+// ErrDiscoverUnsupported is returned by DiscoverEndpoints on platforms without a
+// discovery implementation. Endpoint auto-discovery currently exists only on
+// macOS, where the connected VPN's WAN transport is observable via netstat/scutil.
+// Declared in this cross-platform file so callers can errors.Is against it on
+// every GOOS, including the one where discovery works.
+var ErrDiscoverUnsupported = errors.New("vpn endpoint auto-discovery is only supported on macOS")
+
+// TunnelPatterns returns the interface-name prefixes and friendly-alias
+// keywords that classify an interface as a VPN tunnel — the "recognized by
+// name" surface a diagnostic view shows so a user can tell an unrecognized
+// tunnel from a missing one. Returns copies: the classification lists are
+// load-bearing for the guard and no caller may mutate them.
+func TunnelPatterns() (prefixes, keywords []string) {
+	return slices.Clone(tunnelPrefixes), slices.Clone(tunnelKeywords)
+}
 
 // isTunnelName reports whether an interface name looks like a VPN tunnel by its
 // name alone. Pure and case-insensitive so it is deterministically testable.

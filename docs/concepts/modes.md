@@ -142,6 +142,11 @@ block that can never observe its way out. The tunnel transport survives either
 path, so a genuinely-down tunnel can come back and a later probe see an allowed
 exit.
 
+Setting `vpn.allowGeoProviders: false` removes the pass on purpose and makes
+lift-and-probe the *only* recovery path — a stricter ruleset at rest, bought
+with that periodic full lift on every probe. It does not reduce geo-provider
+traffic. See [ADR-0013](../adr/0013-geo-provider-pass-opt-out.md).
+
 ```
 # GUARD  — pass quick on lo0 all no state
 #          pass out quick on { utun4 } all no state

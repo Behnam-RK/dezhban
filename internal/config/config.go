@@ -57,6 +57,17 @@ type VPN struct {
 	// (2026-07-19 defaults review: redialability beats hiding DNS-query
 	// metadata for this project's users); set false to close the metadata leak.
 	AllowPhysicalDNS bool
+	// AllowGeoProviders keeps the geo-provider pass in the FULL BLOCK ruleset —
+	// the tunnel+destination-scoped hole (docs/adr/0006) that lets the exit
+	// check keep running while everything else is cut, so a block heals itself
+	// the moment the exit country is allowed again. ON by default. Setting it
+	// false removes that pass; recovery then degrades to lift-and-probe, which
+	// BRIEFLY LIFTS THE GUARD on every probe tick to observe the exit — a
+	// bounded leak the pass exists to avoid — and disables accelerated
+	// recovery probing. It does NOT stop geo-provider traffic; it trades a
+	// scoped standing hole for a periodic full lift. See
+	// docs/adr/0013-geo-provider-pass-opt-out.md.
+	AllowGeoProviders bool
 	// AllowLocalNetwork passes traffic to private, link-local and multicast
 	// destinations in every enforcing posture, so printers, NAS, the router's
 	// admin page, AirPlay/Chromecast and local dev servers keep working while
@@ -420,6 +431,7 @@ type fileVPN struct {
 	AutoDetect            *bool         `json:"autoDetect,omitempty"`
 	AutoDiscoverEndpoints *bool         `json:"autoDiscoverEndpoints,omitempty"`
 	AllowPhysicalDNS      *bool         `json:"allowPhysicalDNS,omitempty"`
+	AllowGeoProviders     *bool         `json:"allowGeoProviders,omitempty"`
 	AllowLocalNetwork     *bool         `json:"allowLocalNetwork,omitempty"`
 	AutoArm               *bool         `json:"autoArm,omitempty"`
 	ArmAtBoot             *bool         `json:"armAtBoot,omitempty"`
@@ -493,6 +505,7 @@ func Default() Config {
 			AutoDetect:            true,
 			AutoDiscoverEndpoints: true,
 			AllowPhysicalDNS:      true,
+			AllowGeoProviders:     true,
 			AllowLocalNetwork:     true,
 			AutoArm:               true,
 			ArmAtBoot:             true,
@@ -585,6 +598,7 @@ func apply(cfg *Config, fc fileConfig) error {
 			AutoDetect:            true, // default on; explicit false below
 			AutoDiscoverEndpoints: true, // default on; explicit false below
 			AllowPhysicalDNS:      true, // default on; explicit false below
+			AllowGeoProviders:     true, // default on; explicit false below
 			AllowLocalNetwork:     true, // default on; explicit false below
 			AutoArm:               true, // default on; explicit false below
 			ArmAtBoot:             true, // default on; explicit false below
@@ -597,6 +611,9 @@ func apply(cfg *Config, fc fileConfig) error {
 		}
 		if fc.VPN.AllowPhysicalDNS != nil {
 			v.AllowPhysicalDNS = *fc.VPN.AllowPhysicalDNS
+		}
+		if fc.VPN.AllowGeoProviders != nil {
+			v.AllowGeoProviders = *fc.VPN.AllowGeoProviders
 		}
 		if fc.VPN.AllowLocalNetwork != nil {
 			v.AllowLocalNetwork = *fc.VPN.AllowLocalNetwork
@@ -839,6 +856,7 @@ func toFileConfig(c *Config) fileConfig {
 	autodetect := c.VPN.AutoDetect
 	autoDiscover := c.VPN.AutoDiscoverEndpoints
 	physDNS := c.VPN.AllowPhysicalDNS
+	geoProviders := c.VPN.AllowGeoProviders
 	localNet := c.VPN.AllowLocalNetwork
 	autoArm := c.VPN.AutoArm
 	armAtBoot := c.VPN.ArmAtBoot
@@ -864,6 +882,7 @@ func toFileConfig(c *Config) fileConfig {
 			AutoDetect:            &autodetect,
 			AutoDiscoverEndpoints: &autoDiscover,
 			AllowPhysicalDNS:      &physDNS,
+			AllowGeoProviders:     &geoProviders,
 			AllowLocalNetwork:     &localNet,
 			AutoArm:               &autoArm,
 			ArmAtBoot:             &armAtBoot,

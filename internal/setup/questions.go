@@ -15,7 +15,6 @@ package setup
 
 import (
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/behnam-rk/dezhban/internal/config"
@@ -102,10 +101,6 @@ type Options struct {
 	// Config is what the answers start at, so re-running the wizard edits
 	// rather than clobbers. Nil means the shipped defaults.
 	Config *config.Config
-	// ConfigExisted distinguishes "the user has a config" from "we fell back to
-	// defaults". Only a brand-new macOS config defaults endpoint discovery on:
-	// re-running setup must never silently flip an explicit `false` back.
-	ConfigExisted bool
 	// GOOS is the platform the config is FOR, not necessarily the one asking —
 	// live endpoint discovery is macOS-only.
 	GOOS string
@@ -145,25 +140,18 @@ func Questions(opts Options) []Question {
 	// Stable order, so a re-run does not reshuffle a field nobody touched.
 	sort.Strings(extra)
 
-	// Endpoint discovery is macOS-only and defaults on ONLY for a brand-new
-	// config there, for the reason in Options.ConfigExisted.
-	autoDiscover := cfg.VPN.AutoDiscoverEndpoints
-	if macOS && !opts.ConfigExisted {
-		autoDiscover = true
-	}
-
 	endpointDesc := "Server IP(s)/hostname(s), comma-separated. Optional on macOS (auto-discovered); needed elsewhere."
 	if !macOS {
 		endpointDesc = "Server IP(s)/hostname(s), comma-separated. Required on this platform (no live discovery)."
 	}
 
-	qs := []Question{
-		{
-			ID: "pollInterval", Key: "pollInterval", Kind: KindDuration, Group: 1,
-			Title:       "Poll interval",
-			Description: "How often the exit country is checked, e.g. 30s.",
-			Default:     cfg.PollInterval.String(),
-		},
+	// The wizard asks only what has no safe default: what to block, and how to
+	// find the VPN. Everything it used to also ask (poll interval, log level,
+	// provider quorum, physical DNS, auto-discovery) ships with a sane default,
+	// lives in Settings/`config set`, and — critically — is left UNTOUCHED by a
+	// wizard run, so re-running setup never clobbers a tuned value
+	// (TestAnUnaskedQuestionLeavesItsKeyAlone pins this).
+	return []Question{
 		{
 			ID: "blockedCountries", Key: "blockedCountries", Kind: KindMultiSelect, Group: 1,
 			Title:       "Blocked countries",
@@ -176,18 +164,6 @@ func Questions(opts Options) []Question {
 			Title:       "Other country codes",
 			Description: "Comma-separated ISO codes not listed above (optional).",
 			Default:     strings.Join(extra, ","),
-		},
-		{
-			ID: "logLevel", Key: "logLevel", Kind: KindSelect, Group: 1,
-			Title:   "Log level",
-			Options: []Option{{"Debug", "debug"}, {"Info", "info"}, {"Warn", "warn"}, {"Error", "error"}},
-			Default: cfg.LogLevel,
-		},
-		{
-			ID: "providerQuorum", Key: "providerQuorum", Kind: KindBool, Group: 1,
-			Title:       "Require provider quorum?",
-			Description: "Only act when a majority of the geo providers agree.",
-			Default:     strconv.FormatBool(cfg.ProviderQuorum),
 		},
 		{
 			ID: "configureVPN", Kind: KindBool, Group: 1,
@@ -221,30 +197,7 @@ func Questions(opts Options) []Question {
 			Default:     strings.Join(cfg.VPN.Endpoints, ","),
 			RequiresID:  "configureVPN", RequiresValue: "true",
 		},
-		{
-			ID: "allowPhysicalDNS", Key: "vpn.allowPhysicalDNS", Kind: KindBool, Group: 4,
-			Title: "Allow DNS on the physical link while the tunnel is down?",
-			Description: "Lets a VPN client re-resolve its server hostname to redial. Leaks " +
-				"only DNS-query metadata; your traffic stays blocked. Recommended if any " +
-				"endpoint is a hostname.",
-			Default:    strconv.FormatBool(cfg.VPN.AllowPhysicalDNS),
-			RequiresID: "configureVPN", RequiresValue: "true",
-		},
 	}
-
-	// Live endpoint discovery is macOS-only, so elsewhere the question is not
-	// asked at all rather than asked and ignored.
-	if macOS {
-		qs = append(qs, Question{
-			ID: "autoDiscover", Key: "vpn.autoDiscoverEndpoints", Kind: KindBool, Group: 5,
-			Title: "Auto-discover the VPN server address? (recommended)",
-			Description: "dezhban watches the live tunnel socket to learn the server IP, so " +
-				"you don't pin one that changes. macOS only.",
-			Default:    strconv.FormatBool(autoDiscover),
-			RequiresID: "configureVPN", RequiresValue: "true",
-		})
-	}
-	return qs
 }
 
 // tunnelQuestion is a pick list when tunnels were detected and free text when

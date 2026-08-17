@@ -118,6 +118,13 @@ menubar app uses to grey its icon. It is always present, so its absence means
 you are reading something other than this CLI's output — never "the snapshot is
 fresh".
 
+`preset`/`presetExact` report the strictness preset the config matches
+(`presetExact: true`), or — for a drifted, "Custom" config — the *nearest*
+preset with `presetExact: false`, the same default target `config preset diff`
+picks. `state.ipv6` (when present) is the last observed public IPv6 address
+from a separate best-effort lookup; observational only, never used for country
+decisions, and absent on v4-only hosts or from older daemons.
+
 `state.redial` is present only when an automatic redial window was **refused**
 for the drop currently being carried, and it is how a script tells "the VPN has
 not come back yet" from "dezhban will not let it try again until 3:15PM". It
@@ -235,6 +242,18 @@ app's Diagnostics pane) that needs to render them itself rather than parse
 text. See [config.md](config.md) for the full field reference and
 [troubleshooting.md](troubleshooting.md) for the lockout-recovery runbook.
 
+`detect-vpn --json` is the machine-readable VPN inventory the app's
+Diagnostics pane renders: `{tunnels, connectedVPN, discoverySupported,
+candidates: [{vpn, server, port, process}], discoveryErr, supportedVPNs,
+tunnelPatterns: {prefixes, keywords}}`. `tunnels` is the same interface scan
+the prose prints; `candidates`/`connectedVPN` come from the macOS discovery
+layer (empty elsewhere — `discoverySupported: false` says why);
+`supportedVPNs` and `tunnelPatterns` name the client-process and
+interface-name patterns detection recognizes, so an *unrecognized* VPN can be
+told apart from a *missing* one. A discovery failure degrades to
+`discoveryErr` plus an empty `candidates` — the tunnel scan is still
+delivered.
+
 Beyond the lockout checks, `doctor` answers **will dezhban need me again**:
 whether a reboot brings the guard back (*boot service*, *arm at boot*) and
 whether a VPN drop can redial on its own (*learned endpoints*). Those three are
@@ -292,6 +311,16 @@ succeeds and says so; the new values are read the next time it starts.
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
 
+The wizard asks only what has no safe default: blocked countries (plus a
+free-text field for other codes), whether to configure the VPN now, automatic
+vs. manual detection, and — when configuring — tunnel interfaces (manual mode
+only), self-hosted config files to import, and endpoints. Everything it used
+to also ask (poll interval, log level, provider quorum, physical DNS,
+auto-discovery) ships with a sane default and lives in the app's Settings or
+`config set`; a wizard run leaves those keys untouched, so re-running setup
+never clobbers a tuned value. The one silent defaulting decision it kept: a
+brand-new macOS config gets live endpoint discovery turned on.
+
 `setup --questions` is the exception: it prints what the wizard *would* ask —
 each question, what it writes, its seeded answer, and which earlier answer
 unlocks it — and asks nothing. Read-only, no root, no terminal needed.
@@ -329,7 +358,7 @@ touches — see [config.md](config.md#presets) for exactly what each one sets an
 what it costs you:
 
 ```sh
-dezhban config preset list                  # strict/balanced/relaxed, cost, and which matches now
+dezhban config preset list                  # strict/focused/balanced/relaxed, cost, and which matches now
 dezhban config preset show strict           # one preset's key/value set
 dezhban config preset diff                  # keys that differ from the matched-or-nearest preset
 dezhban config preset diff relaxed          # keys that differ from a specific preset
@@ -582,34 +611,47 @@ Two surfaces, split by urgency:
 
 The main window's sidebar sections:
 
-- **Overview** — live status hero (posture; IP and exit country, named in full
-  as e.g. `Kazakhstan (KZ)`; tunnel, endpoints,
-  every configured VPN profile with the matched one marked, switch-window
-  countdown, enforcement-error banner) plus the daily controls, Pause, and a
-  visually-separated Panic. With profiles configured, "Switching VPN…"
-  becomes a menu so a switch window can target one by name. Degraded states
-  are guided: CLI missing, service not installed, and daemon stopped each
-  render an explanation with the one relevant action inline (Install
-  service… / Guard up).
+- **Overview** — live status hero (posture; public IPv4 — and IPv6 when the
+  daemon has observed one — with the exit country named in full as e.g.
+  `Kazakhstan (KZ)`; the strictness preset; tunnel, the connected VPN app when
+  detection can name it, endpoints (collapsed past three), every configured
+  VPN profile with the matched one marked, switch-window countdown) plus the
+  daily controls, Pause, and a visually-separated Panic. Faults render as
+  banners above the grid — enforcement problems in red, failing exit checks in
+  orange, first line only with the full text behind a disclosure — while an
+  *expected* unknown exit stays a plain row. With profiles configured,
+  "Switching VPN…" becomes a menu so a switch window can target one by name.
+  Degraded states are guided: CLI missing, service not installed, and daemon
+  stopped each render an explanation with the one relevant action inline
+  (Install service… / Guard up).
 - **Settings** — startup ("Start the guard at boot" installs the launchd
   system service so enforcement survives reboots; "Open this app at login" via
   `SMAppService`; **"Open minimized"** — Never / Always / Only at login, an
   app-local preference that decides whether the main window opens when Dezhban
   starts, defaulting to "Only at login", which is what the app always did; the
   Dock icon and the menubar's "Open Dezhban…" open it regardless;
-  essential-event notifications), a **strictness preset
-  picker** (Strict/Balanced/Relaxed, each showing its cost, or "Custom" with
+  **per-event notifications** — a master toggle plus a checkbox per essential
+  event class), a **strictness preset
+  picker** (Strict/Focused/Balanced/Relaxed, each showing its cost, or "Custom" with
   the keys that differ), tunnels/endpoints/autodetection, blocking (blocked
-  countries, poll interval), windows (switch/redial/endpoint grace), timing,
-  all applied through one validated `config set` batch, an **Advanced**
-  disclosure exposing every `vpn.advanced.*` key, **"Use Touch ID for
-  settings changes"** (see below), an explicit **Restart dezhban…**, and the
-  raw config file escape hatch (control socket, geo providers, allowlist are
-  JSON-only).
-- **Diagnostics** — `doctor`'s findings (`--json`), rendered as status rows
-  with fixes inline instead of a text dump; an optional "Find my VPN's
-  server" checkbox runs it with `--discover`. Read-only, same guarantee as
-  running `dezhban doctor` in a terminal.
+  countries, poll interval, the DNS and exit-check passes with their
+  consequences stated inline), windows (switch/redial/endpoint grace) as
+  **sliders** over each key's real range — Off detent only where "0" is a
+  persisted choice, cap from the live config, Custom escape hatch — all
+  applied through one validated `config set` batch, a **Developer**
+  disclosure generated from the schema's advanced flag (every
+  `vpn.advanced.*` key plus hysteresis/providerQuorum/logLevel), **"Use Touch
+  ID for settings changes"** (see below), an explicit **Restart dezhban…**,
+  and the raw config file escape hatch (control socket, geo providers,
+  allowlist are JSON-only).
+- **Diagnostics** — a **Your VPNs** inventory (`detect-vpn --json`: tunnels
+  found, VPN apps detection can attribute, the connected one marked, an
+  unrecognized client flagged) above `doctor`'s findings (`--json`), rendered
+  as status rows with fixes inline instead of a text dump; an optional "Find
+  my VPN's server" checkbox runs it with `--discover`. Read-only, same
+  guarantee as running `dezhban doctor` in a terminal. When the last report
+  found something to look at, the sidebar's Diagnostics row carries a yellow
+  dot until a later run comes back clean.
 - **Logs** — a scoped `log show --last 1h`, a live `log stream` with Stop
   (also opens Console.app), and the transcripts of window-triggered
   panic/install/uninstall/apply/restart runs.

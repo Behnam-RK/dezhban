@@ -440,10 +440,14 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		return runner.Options{}, fmt.Errorf("firewall backend unavailable: %w", err)
 	}
 
-	var mon runner.Monitor = monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	// realMon stays visible past the simulation wrapper: the IPv6 observation
+	// (LookupIPv6 below) is not part of the runner.Monitor interface, and
+	// simulation only fakes the country, never the address path.
+	realMon := monitor.New(providers, cfg.PollInterval, log, cfg.ProviderQuorum)
+	var mon runner.Monitor = realMon
 	if ov.simCountry != "" {
 		log.Warn("SIMULATION: forcing resolved country", "country", ov.simCountry)
-		mon = monitor.NewSimMonitor(mon.(*monitor.Monitor), ov.simCountry)
+		mon = monitor.NewSimMonitor(realMon, ov.simCountry)
 	}
 
 	tunnels := resolveTunnels(cfg, log)
@@ -731,6 +735,21 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		)
 	}()
 
+	// Geo-provider IPs for the tunnel-scoped FULL BLOCK pass. Reuses the same
+	// resolver `block --force` uses; the runner calls it at startup and on each
+	// endpoint-refresh tick, since CDN-fronted providers rotate. With
+	// vpn.allowGeoProviders=false the resolver is nil and the runner degrades to
+	// lift-and-probe (runner.Options.ResolveProviders documents nil) — restart-
+	// required, like everything else wired here at startup.
+	var resolveProviders func(context.Context) []netip.Addr
+	if cfg.VPN.AllowGeoProviders {
+		resolveProviders = func(context.Context) []netip.Addr {
+			return buildProviderAllowlist(cfg, log).Hosts
+		}
+	} else {
+		log.Warn("vpn.allowGeoProviders is off: recovery from FULL BLOCK will briefly lift the guard to observe the exit")
+	}
+
 	return runner.Options{
 		Monitor:           mon,
 		Decider:           decision.New(cfg.BlockedCountries, cfg.Hysteresis),
@@ -746,12 +765,8 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		AllowPhysicalDNS:  cfg.VPN.AllowPhysicalDNS,
 		AllowLocalNetwork: cfg.VPN.AllowLocalNetwork,
 		ResolveEndpoints:  func(ctx context.Context) netdetect.EndpointSet { return epSrc.Resolve(ctx) },
-		// Geo-provider IPs for the tunnel-scoped FULL BLOCK pass. Reuses the same
-		// resolver `block --force` uses; the runner calls it at startup and on
-		// each endpoint-refresh tick, since CDN-fronted providers rotate.
-		ResolveProviders: func(context.Context) []netip.Addr {
-			return buildProviderAllowlist(cfg, log).Hosts
-		},
+		ResolveProviders:  resolveProviders,
+		LookupIPv6:        realMon.OnceIPv6,
 		ResolveEndpointsWith: func(ctx context.Context, tuns []string) netdetect.EndpointSet {
 			return epSrc.ResolveWith(ctx, tuns)
 		},
@@ -1436,8 +1451,42 @@ func defaultLogPath() string { return filepath.Join(stateDir(), "logs", "dezhban
 // NOT print an endpoint: autodetecting the VPN endpoint is unsafe (a wrong guess
 // leaks physical egress), so the endpoint must be entered deliberately from the
 // VPN client's own config. No privilege required.
+// detectVPNJSON is `detect-vpn --json`'s shape: the tunnel-interface scan plus
+// the macOS discovery layer's inventory, so a diagnostic surface (the app's
+// Diagnostics pane) can show which VPNs are detected, which one is connected,
+// and which client patterns discovery can attribute at all. Keys are
+// lowerCamelCase and stable, same convention as state.Snapshot. Discovery
+// failure degrades to an empty candidate list plus discoveryErr — the tunnel
+// scan is the load-bearing half and must still be delivered.
+type detectVPNJSON struct {
+	Tunnels []string `json:"tunnels"`
+	// ConnectedVPN is the friendly name of the connected NetworkExtension VPN
+	// service (macOS scutil); empty when none, unreadable, or off macOS.
+	ConnectedVPN string `json:"connectedVPN,omitempty"`
+	// DiscoverySupported is whether endpoint discovery exists on this platform
+	// at all (macOS only) — distinct from it finding nothing.
+	DiscoverySupported bool              `json:"discoverySupported"`
+	Candidates         []detectVPNCand   `json:"candidates"`
+	DiscoveryErr       string            `json:"discoveryErr,omitempty"`
+	SupportedVPNs      []string          `json:"supportedVPNs,omitempty"`
+	TunnelPatterns     detectVPNPatterns `json:"tunnelPatterns"`
+}
+
+type detectVPNCand struct {
+	VPN     string `json:"vpn,omitempty"`
+	Server  string `json:"server"`
+	Port    int    `json:"port"`
+	Process string `json:"process,omitempty"`
+}
+
+type detectVPNPatterns struct {
+	Prefixes []string `json:"prefixes"`
+	Keywords []string `json:"keywords"`
+}
+
 func cmdDetectVPN(args []string) int {
 	fs := flag.NewFlagSet("detect-vpn", flag.ExitOnError)
+	jsonOut := fs.Bool("json", false, "print machine-readable JSON (tunnels, discovery candidates, connected VPN)")
 	_ = fs.Parse(args)
 
 	tunnels, err := netdetect.TunnelInterfaces()
@@ -1445,6 +1494,47 @@ func cmdDetectVPN(args []string) int {
 		fmt.Fprintln(os.Stderr, "detect-vpn: interface scan failed:", err)
 		return 1
 	}
+
+	if *jsonOut {
+		prefixes, keywords := netdetect.TunnelPatterns()
+		out := detectVPNJSON{
+			Tunnels:        tunnels,
+			Candidates:     []detectVPNCand{}, // [] not null: "scanned, found none" is the message
+			SupportedVPNs:  netdetect.SupportedVPNs(),
+			TunnelPatterns: detectVPNPatterns{Prefixes: prefixes, Keywords: keywords},
+		}
+		if out.Tunnels == nil {
+			out.Tunnels = []string{}
+		}
+		cands, derr := netdetect.DiscoverEndpoints()
+		switch {
+		case errors.Is(derr, netdetect.ErrDiscoverUnsupported):
+			// Not an error: the platform has no discovery, and the tunnel scan
+			// above is still the answer.
+		case derr != nil:
+			out.DiscoverySupported = true
+			out.DiscoveryErr = derr.Error()
+		default:
+			out.DiscoverySupported = true
+			for _, c := range cands {
+				out.Candidates = append(out.Candidates, detectVPNCand{
+					VPN: c.VPN, Server: c.Server.String(), Port: c.Port, Process: c.Process,
+				})
+			}
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		out.ConnectedVPN = netdetect.ConnectedVPNName(ctx)
+		cancel()
+
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "detect-vpn json:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
 	if len(tunnels) == 0 {
 		fmt.Println("no VPN tunnel interfaces detected.")
 		fmt.Println("connect your VPN first, then re-run; or set vpn.tunnelInterfaces manually.")
@@ -1460,7 +1550,6 @@ func cmdDetectVPN(args []string) int {
 	fmt.Println()
 	fmt.Println("recommended config (autoDetect handles interface renumbering across redials):")
 	fmt.Println(`  "vpn": {`)
-	fmt.Println(`    "enabled": true,`)
 	fmt.Println(`    "autoDetect": true,`)
 	fmt.Println(`    "autoDiscoverEndpoints": true`)
 	fmt.Println(`  }`)
@@ -2725,6 +2814,12 @@ func statusJSON(cfg *config.Config) int {
 		// same convention as ControlReachable — since the CLI/daemon still
 		// refuse for real regardless of what this said last.
 		PauseEnabled bool `json:"pauseEnabled"`
+		// Preset is the strictness preset this config matches (PresetExact true),
+		// or the NEAREST one for a drifted config (PresetExact false) — the same
+		// default target `config preset diff` picks, so a Custom config still
+		// reports a strictness anchor instead of an empty string.
+		Preset      string `json:"preset"`
+		PresetExact bool   `json:"presetExact"`
 		// No `vpnEnabled`: with one enforcement model it could only ever be true,
 		// and a constant field invites consumers to branch on nothing. Read
 		// `state.posture` instead — that is where the real distinction lives.
@@ -2739,6 +2834,11 @@ func statusJSON(cfg *config.Config) int {
 		PollInterval:     cfg.PollInterval.String(),
 		BlockedCountries: cfg.BlockedCountries,
 		PauseEnabled:     cfg.VPN.PauseMax > 0,
+	}
+	if name, exact := config.MatchPreset(cfg); exact {
+		out.Preset, out.PresetExact = name, true
+	} else {
+		out.Preset = nearestPreset(cfg).Name
 	}
 	if snap, err := state.Read(statePath); err == nil {
 		out.State = &snap

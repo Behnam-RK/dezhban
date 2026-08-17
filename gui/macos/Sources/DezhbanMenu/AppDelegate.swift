@@ -172,7 +172,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // world was already in when the app opened is noise, not news.
         let essential = essentialClass(state, snapshot)
         if let prev = lastEssential, prev != essential {
-            NotificationManager.post(title: Self.essentialTitles[essential] ?? "Dezhban", body: "dezhban — \(help)")
+            NotificationManager.post(rawClass: essential, body: "dezhban — \(help)")
+            // A transition INTO trouble refreshes the doctor report feeding the
+            // sidebar badge. Edge-triggered and staleness-gated (60s), so a
+            // flapping tunnel cannot fork doctor subprocesses per flap.
+            if essential == "warning" || essential == "blocked" {
+                AppState.shared.runDoctorIfStale(maxAge: 60)
+            }
         }
         lastEssential = essential
     }
@@ -193,19 +199,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return state // on / blocked / warning / paused
     }
 
-    private static let essentialTitles: [String: String] = [
-        "on": "Guard armed",
-        "blocked": "Traffic cut",
-        "warning": "Warning",
-        "paused": "Paused — using your real IP",
-        "standby": "Standby — nothing is being blocked",
-        "stopped": "Guard stopped",
-        // "off" is unreachable from essentialClass today (standby and stopped —
-        // the only sources of the "off" icon state — are classified separately
-        // above); kept for defensive completeness against the map lookup's
-        // `?? "Dezhban"` fallback.
-        "off": "Standby — nothing is being blocked",
-    ]
+    // Notification titles live on DezhbanCore.NotificationPrefs.EventClass —
+    // one string per class, shared with the Settings checkboxes and tested —
+    // rather than a map here. An unknown class falls back to "Dezhban" inside
+    // NotificationManager.post, and fails OPEN (it still notifies).
 
     /// Menubar brand state images, loaded once from the app bundle's Resources
     /// (put there by build-app.sh from gui/artifacts/png) and cached per state. Empty

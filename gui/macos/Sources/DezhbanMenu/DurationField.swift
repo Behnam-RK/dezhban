@@ -1,30 +1,44 @@
 import SwiftUI
 import DezhbanCore
 
-/// A duration setting as a menu of real choices, with **Off** where that is a
-/// real choice and a Custom entry for anything else.
+/// A duration setting as a slider over the key's real range, with an **Off**
+/// detent where that is a real choice and a Custom escape hatch for anything
+/// off the ladder.
 ///
-/// It replaces a bare text field that required knowing Go's duration syntax, and
-/// whose only feedback was a modal after Apply. Every value it offers comes from
-/// the daemon's schema — the key's own default, its live cap, and whether `"0"`
-/// is a persisted opt-out — so nothing here holds an opinion about any
-/// particular setting.
+/// It replaces the earlier menu of derived choices (itself a replacement for a
+/// bare text field that required knowing Go's duration syntax). Every bound and
+/// stop comes from the daemon's schema — the key's own default, its live cap,
+/// and whether `"0"` is a persisted opt-out — so nothing here holds an opinion
+/// about any particular setting. All the arithmetic lives in
+/// DezhbanCore.DurationScale (tested); this view holds none.
+///
+/// Degrade ladder: schema + usable default → slider; schema but no usable
+/// scale → the menu of derived choices; no schema at all → a plain text field.
 struct DurationField: View {
     let key: String
     /// Shown when the schema is unavailable: names the concept, states no value.
     let fallbackLabel: String
     let schema: ConfigSchema?
     /// The pane's staged values, used to resolve this key's cap to whatever the
-    /// operator has actually set — not to the cap's own default.
+    /// operator has actually set — not to the cap's own default. Lowering a cap
+    /// in Developer immediately lowers this slider's top, because the scale is
+    /// rebuilt from these on every render (pure math, free at 1 Hz).
     let values: [String: String]
     @Binding var text: String
     let enabled: Bool
 
-    /// True while the user is typing a value that is not one of the choices.
+    /// True while the user is typing a value by hand.
     @State private var isCustom = false
 
     private var tunable: ConfigTunable? { schema?[key] }
     private var label: String { tunable?.label ?? fallbackLabel }
+
+    private var scale: DurationScale? {
+        guard let tunable else { return nil }
+        return DurationScale(defaultValue: tunable.defaultValue,
+                             cap: schema?.cap(for: key, in: values),
+                             disablable: tunable.disablable)
+    }
 
     private var choices: [DurationChoices.Choice] {
         guard let tunable else { return [] }
@@ -33,29 +47,31 @@ struct DurationField: View {
                                      disablable: tunable.disablable)
     }
 
-    /// The choice the current value corresponds to, or nil when it is custom.
-    private var selected: DurationChoices.Choice? {
-        if DurationChoices.isOff(text) {
-            return choices.first(where: \.isOff)
-        }
-        guard let secs = DurationChoices.seconds(text) else { return nil }
-        return choices.first { DurationChoices.seconds($0.value) == secs }
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack {
                 Text(label)
                 Spacer()
-                if choices.isEmpty {
-                    // No schema, or nothing sensible to derive: fall back to the
-                    // plain field rather than an empty menu.
-                    TextField("", text: $text).frame(width: 160)
-                } else {
+                if let scale {
+                    slider(scale)
+                } else if !choices.isEmpty {
                     menu
+                } else {
+                    // No schema, or nothing sensible to derive: fall back to the
+                    // plain field rather than an empty control.
+                    TextField("", text: $text).frame(width: 160)
                 }
             }
-            if isCustom || (selected == nil && !text.isEmpty) {
+            if scale != nil {
+                HStack {
+                    Spacer()
+                    valueCaption
+                    Button("Custom…") { isCustom = true }
+                        .buttonStyle(.borderless)
+                        .font(.callout)
+                }
+            }
+            if isCustom || (scale == nil && !choices.isEmpty && offLadder) {
                 HStack {
                     Spacer()
                     TextField("e.g. 45s, 2m30s", text: $text)
@@ -72,9 +88,58 @@ struct DurationField: View {
                 Text(consequence)
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .disabled(!enabled)
+    }
+
+    /// The slider: position 0…1, snapped through DurationScale. The setter
+    /// writes the SNAP's value, so the staged value is always something a
+    /// person could have picked; the getter maps whatever the value is (a
+    /// custom one included) to its nearest thumb position without rewriting it.
+    private func slider(_ scale: DurationScale) -> some View {
+        Slider(
+            value: Binding(
+                get: { scale.position(for: text) },
+                set: { pos in
+                    text = scale.snapped(at: pos).value
+                    isCustom = false
+                }
+            ),
+            in: 0...1
+        )
+        .frame(width: 200)
+        .help(tunable?.help ?? "")
+    }
+
+    /// What the slider currently says, beside it in words: "Off", "30 seconds
+    /// (recommended)", or the literal text for a hand-typed value off the
+    /// ladder — never rewritten under the typist.
+    @ViewBuilder
+    private var valueCaption: some View {
+        if let scale {
+            if DurationChoices.isOff(text), scale.hasOff {
+                Text("Off").font(.callout).foregroundStyle(.secondary)
+            } else if let secs = DurationChoices.seconds(text) {
+                let snap = scale.snapped(at: scale.position(for: text))
+                if DurationChoices.seconds(snap.value) == secs {
+                    Text(snap.isDefault ? "\(snap.label)  (recommended)" : snap.label)
+                        .font(.callout).foregroundStyle(.secondary)
+                } else {
+                    Text("Custom: \(text)").font(.callout).foregroundStyle(.secondary)
+                }
+            } else if !text.isEmpty {
+                Text("Custom: \(text)").font(.callout).foregroundStyle(.orange)
+            }
+        }
+    }
+
+    /// Whether the current value is one the menu would offer (menu fallback only).
+    private var offLadder: Bool {
+        if DurationChoices.isOff(text) { return false }
+        guard let secs = DurationChoices.seconds(text) else { return !text.isEmpty }
+        return !choices.contains { DurationChoices.seconds($0.value) == secs }
     }
 
     private var valid: Bool {
@@ -83,7 +148,7 @@ struct DurationField: View {
 
     @ViewBuilder
     private var menu: some View {
-        Menu(selected?.label ?? (text.isEmpty ? "Choose…" : "Custom: \(text)")) {
+        Menu(menuTitle) {
             ForEach(choices) { choice in
                 Button {
                     text = choice.value
@@ -97,6 +162,15 @@ struct DurationField: View {
         }
         .frame(width: 200)
         .help(tunable?.help ?? "")
+    }
+
+    private var menuTitle: String {
+        if DurationChoices.isOff(text), let off = choices.first(where: \.isOff) { return off.label }
+        if let secs = DurationChoices.seconds(text),
+           let match = choices.first(where: { DurationChoices.seconds($0.value) == secs }) {
+            return match.label
+        }
+        return text.isEmpty ? "Choose…" : "Custom: \(text)"
     }
 
     /// What this setting costs, stated where the choice is made rather than in a

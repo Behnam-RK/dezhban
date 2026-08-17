@@ -83,6 +83,20 @@ final class SidebarViewController: NSViewController {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] section in self?.select(section) }
             .store(in: &cancellables)
+        // The Diagnostics attention dot. removeDuplicates() is load-bearing:
+        // the flag is recomputed with every doctor run, and without it every
+        // run would reload the row whether anything changed or not. One row,
+        // never reloadData() — a full reload disturbs the selection highlight.
+        AppState.shared.$diagnosticsAttention
+            .removeDuplicates()
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in
+                guard let self,
+                      let row = SidebarSection.allCases.firstIndex(of: .diagnostics) else { return }
+                self.tableView.reloadData(forRowIndexes: IndexSet(integer: row),
+                                          columnIndexes: IndexSet(integer: 0))
+            }
+            .store(in: &cancellables)
     }
 
     private func select(_ section: SidebarSection?) {
@@ -105,11 +119,17 @@ extension SidebarViewController: NSTableViewDelegate {
     func tableView(_ tableView: NSTableView,
                    viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let section = SidebarSection.allCases[row]
-        let cell = (tableView.makeView(withIdentifier: Self.cellID, owner: self) as? NSTableCellView)
+        let cell = (tableView.makeView(withIdentifier: Self.cellID, owner: self) as? SidebarCell)
             ?? Self.makeCell()
         cell.imageView?.image = NSImage(systemSymbolName: section.systemImage,
                                         accessibilityDescription: nil)
         cell.textField?.stringValue = section.label
+        // The yellow "check me" dot: only ever on the Diagnostics row, only
+        // while the last doctor report has a warn/fail (DoctorAttention, fed
+        // through AppState so this cell needs no logic of its own).
+        let needsAttention = section == .diagnostics && AppState.shared.diagnosticsAttention
+        cell.badge.isHidden = !needsAttention
+        cell.setAccessibilityLabel(needsAttention ? "\(section.label) — needs attention" : section.label)
         return cell
     }
 
@@ -122,8 +142,8 @@ extension SidebarViewController: NSTableViewDelegate {
         isSyncingSelection = false
     }
 
-    private static func makeCell() -> NSTableCellView {
-        let cell = NSTableCellView()
+    private static func makeCell() -> SidebarCell {
+        let cell = SidebarCell()
         cell.identifier = cellID
 
         let icon = NSImageView()
@@ -142,14 +162,33 @@ extension SidebarViewController: NSTableViewDelegate {
         cell.addSubview(label)
         cell.textField = label
 
+        // The attention dot: an 8pt filled circle after the label, hidden by
+        // default. systemYellow in both appearances — it is a "check me", not
+        // an error state (those live inside the pane, colored per finding).
+        let badge = cell.badge
+        badge.translatesAutoresizingMaskIntoConstraints = false
+        badge.image = NSImage(systemSymbolName: "circle.fill", accessibilityDescription: "needs attention")
+        badge.contentTintColor = .systemYellow
+        badge.isHidden = true
+        cell.addSubview(badge)
+
         NSLayoutConstraint.activate([
             icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor),
             icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             icon.widthAnchor.constraint(equalToConstant: 18),
             label.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 6),
-            label.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor),
+            label.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -6),
             label.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            badge.trailingAnchor.constraint(equalTo: cell.trailingAnchor, constant: -2),
+            badge.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            badge.widthAnchor.constraint(equalToConstant: 8),
+            badge.heightAnchor.constraint(equalToConstant: 8),
         ])
         return cell
     }
+}
+
+/// NSTableCellView with the third subview the stock class has no slot for.
+final class SidebarCell: NSTableCellView {
+    let badge = NSImageView()
 }

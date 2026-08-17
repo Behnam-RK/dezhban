@@ -72,6 +72,45 @@ func TestStrictPresetDisablesAllThreeWindowsAndSurvivesNormalize(t *testing.T) {
 	}
 }
 
+func TestFocusedPresetKeepsOnlyTheRedialWindow(t *testing.T) {
+	t.Parallel()
+	base := Default()
+	focused, ok := PresetByName("focused")
+	if !ok {
+		t.Fatal("no \"focused\" preset")
+	}
+	cfg, err := focused.apply(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	Normalize(&cfg)
+
+	if cfg.VPN.SwitchWindow != Disabled {
+		t.Errorf("SwitchWindow = %v, want Disabled", cfg.VPN.SwitchWindow)
+	}
+	if cfg.VPN.PauseMax != Disabled {
+		t.Errorf("PauseMax = %v, want Disabled", cfg.VPN.PauseMax)
+	}
+	if cfg.VPN.RedialWindow != 15*time.Second {
+		t.Errorf("RedialWindow = %v, want 15s — the one window Focused keeps", cfg.VPN.RedialWindow)
+	}
+}
+
+// TestFocusedSitsBetweenStrictAndBalanced pins Presets() order, which both
+// MatchPreset (first exact match wins) and nearestPreset (ties favour the
+// earlier, stricter preset) depend on.
+func TestFocusedSitsBetweenStrictAndBalanced(t *testing.T) {
+	t.Parallel()
+	var names []string
+	for _, p := range Presets() {
+		names = append(names, p.Name)
+	}
+	want := "strict,focused,balanced,relaxed"
+	if got := strings.Join(names, ","); got != want {
+		t.Errorf("Presets() order = %s, want %s", got, want)
+	}
+}
+
 // TestBalancedPresetMatchesDefault pins that the shipped defaults and the
 // middle preset can never silently disagree.
 func TestBalancedPresetMatchesDefault(t *testing.T) {

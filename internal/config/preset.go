@@ -46,9 +46,9 @@ var presetKeys = []string{
 	"vpn.allowLocalNetwork", "vpn.allowPhysicalDNS", "vpn.armAtBoot",
 }
 
-// Presets returns the three shipped presets, in Strict → Balanced → Relaxed
-// order (increasing relaxation). Balanced is exactly config.Default() after
-// Normalize — pinned by TestBalancedPresetMatchesDefault — so the middle
+// Presets returns the four shipped presets, in Strict → Focused → Balanced →
+// Relaxed order (increasing relaxation). Balanced is exactly config.Default()
+// after Normalize — pinned by TestBalancedPresetMatchesDefault — so that
 // preset and the shipped defaults can never silently disagree.
 func Presets() []Preset {
 	return []Preset{
@@ -67,6 +67,27 @@ func Presets() []Preset {
 				"pollInterval":          "10s",
 				"hysteresis":            "1",
 				"vpn.allowLocalNetwork": "false",
+				"vpn.allowPhysicalDNS":  "false",
+				"vpn.armAtBoot":         "true",
+			},
+		},
+		{
+			Name:    "focused",
+			Summary: "Redial-only: the automatic redial window stays, manual switch and pause are disabled, exit checks fastest.",
+			Cost: "Connecting a brand-new VPN needs its server in vpn.endpoints ahead of " +
+				"time — only the automatic 15s redial window can relax the guard, and only " +
+				"for a drop of the VPN you already use. Pausing to use your real IP is " +
+				"unavailable. A VPN endpoint given as a hostname can't re-resolve its server " +
+				"while the tunnel is down (allowPhysicalDNS off). Faster polling means more " +
+				"geo-provider requests. Local devices stay reachable, which also lets them " +
+				"reach you on an untrusted network.",
+			Values: map[string]string{
+				"vpn.switchWindow":      "0",
+				"vpn.redialWindow":      "15s",
+				"vpn.pauseMax":          "0",
+				"pollInterval":          "10s",
+				"hysteresis":            "1",
+				"vpn.allowLocalNetwork": "true",
 				"vpn.allowPhysicalDNS":  "false",
 				"vpn.armAtBoot":         "true",
 			},
@@ -243,8 +264,8 @@ func PresetConflicts(c *Config, p Preset) []string {
 }
 
 // MatchPreset reports which preset c currently matches exactly (checked in
-// Presets() order — Strict, Balanced, Relaxed), or ("", false) for a config
-// that has drifted from all three ("Custom").
+// Presets() order — Strict, Focused, Balanced, Relaxed), or ("", false) for a
+// config that has drifted from all four ("Custom").
 func MatchPreset(c *Config) (name string, exact bool) {
 	for _, p := range Presets() {
 		if len(PresetDrift(c, p)) == 0 {

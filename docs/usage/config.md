@@ -203,6 +203,7 @@ and installs no rules at all.
 | `vpn.armAtBoot` | bool | `true` | Arm the guard directly at startup even when no tunnel interface is present yet — instead of waiting in `autoArm`'s standby — **provided** a tunnel has been observed up at least once on this host and an endpoint is known. Closes the boot race where this daemon starts before the VPN client brings its interface up: without it, every such boot opens the network until the VPN connects. A fresh install, or a host whose VPN has never connected, still starts in STANDBY regardless — this cannot turn a misconfiguration into a lockout. See [ADR-0008](../adr/0008-arm-at-boot.md). |
 | `vpn.autoDiscoverEndpoints` | bool | `true` | Continuously learn the live VPN server IP from the active socket (**macOS only**; ignored elsewhere, where hostnames/IPs are used — a global default-true still emits a startup warning there since the setting does nothing). Lets a rotating-pool VPN (NordVPN/ProtonVPN/…) run with no hand-typed endpoint. **On by default** (2026-07-22 defaults review); set `false` explicitly to require hand-typed endpoints/hostnames. |
 | `vpn.allowPhysicalDNS` | bool | `true` | Open plain DNS (port 53) egress on the **physical** link in GUARD and VPN FULL BLOCK, so a VPN client can re-resolve its server hostname and redial while the tunnel is down. **On by default** (2026-07 defaults review: redialability wins for this project's users); set `false` to close the residual leak — DNS-query metadata (which resolver you query, and that you're redialing) on the physical path. Your actual traffic stays blocked either way. |
+| `vpn.allowGeoProviders` | bool | `true` | Keep the geo-provider pass in the FULL BLOCK ruleset — the tunnel-**and**-destination-scoped hole ([ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md)) that lets the exit check keep running while everything else is cut, so a block lifts itself the moment the exit country is allowed again. Set `false` to remove that pass. **This does not stop geo-provider traffic** — with the pass gone, recovery degrades to lift-and-probe, which *briefly lifts the guard* on every probe tick to observe the exit (a bounded leak the pass exists to avoid) and disables accelerated recovery probing. It trades one scoped standing hole for a periodic full lift; most users should leave it on. Restart required. See [ADR-0013](../adr/0013-geo-provider-pass-opt-out.md). |
 | `vpn.allowLocalNetwork` | bool | `true` | Keep **local** destinations reachable while the guard is armed: printers, NAS, the router's admin page, AirPlay/Chromecast, local dev servers, SSH to another machine on the desk. Without it, arming the guard makes every one of them unreachable with no way to get them back. **Destination-scoped** (RFC1918 + CGNAT + link-local + IPv6 ULA + multicast — see [modes.md](../concepts/modes.md#local-network-access)), never interface-scoped, so it cannot become an internet path: packets to public addresses stay blocked whatever the next hop is. Costs nothing against the threat model — this traffic never leaves the building, so it cannot expose your country to a foreign service. **The one real cost:** on an untrusted network (café, hotel) it lets you reach, and be reached by, the other devices there. Set `false` to close that. |
 | `vpn.autoArm` | bool | `true` | Start PASSIVE (posture `standby`, nothing enforced) when no tunnel interface is present, and arm the guard automatically the moment a VPN connects (endpoints are re-checked at arm time; arming is held while none are known). Never disarms on tunnel loss — a drop is exactly the leak the kill switch exists for; an explicit `unblock` with the tunnel down returns to standby. **On by default** (2026-07 defaults review: a guard armed with no VPN is a mystery blackout for new users); set `false` for the stricter armed-from-startup posture. |
 | `vpn.endpointRefresh` | duration | `1m` | How often hostnames are re-resolved and live discovery re-run. Local work only (DNS + a socket scan), so the fast cadence costs nothing against geo-API quotas and promotes roamed-to servers to learned within ~3 minutes. |
@@ -370,16 +371,16 @@ profiles — the same carve-out `config reset --all` uses, which is what keeps
 `vpn.profiles` (VPN identities) cleanly distinct from presets (strictness
 strategies).
 
-| Key | Strict | Balanced (shipped default) | Relaxed |
-|---|---|---|---|
-| `vpn.switchWindow` | `0` (disabled) | `5s` | `30s` |
-| `vpn.redialWindow` | `0` (disabled) | `30s` | `2m` |
-| `vpn.pauseMax` | `0` (disabled) | `30m` | `2h` |
-| `pollInterval` | `10s` | `15s` | `30s` |
-| `hysteresis` | `1` | `2` | `3` |
-| `vpn.allowLocalNetwork` | `false` | `true` | `true` |
-| `vpn.allowPhysicalDNS` | `false` | `true` | `true` |
-| `vpn.armAtBoot` | `true` | `true` | `false` |
+| Key | Strict | Focused | Balanced (shipped default) | Relaxed |
+|---|---|---|---|---|
+| `vpn.switchWindow` | `0` (disabled) | `0` (disabled) | `5s` | `30s` |
+| `vpn.redialWindow` | `0` (disabled) | `15s` | `30s` | `2m` |
+| `vpn.pauseMax` | `0` (disabled) | `0` (disabled) | `30m` | `2h` |
+| `pollInterval` | `10s` | `10s` | `15s` | `30s` |
+| `hysteresis` | `1` | `1` | `2` | `3` |
+| `vpn.allowLocalNetwork` | `false` | `true` | `true` | `true` |
+| `vpn.allowPhysicalDNS` | `false` | `false` | `true` | `true` |
+| `vpn.armAtBoot` | `true` | `true` | `true` | `false` |
 
 Each preset states its cost in plain words, never a bare "safe"/"strict" label
 (see [glossary.md](../concepts/glossary.md)'s "Words we do not use"):
@@ -390,6 +391,14 @@ Each preset states its cost in plain words, never a bare "safe"/"strict" label
   real IP is unavailable; a VPN endpoint given as a hostname can't re-resolve
   while the tunnel is down (`allowPhysicalDNS` off); faster polling means more
   geo-provider requests.
+- **Focused** — redial-only: the automatic redial window stays, everything an
+  operator could open by hand is off, exit checks fastest. Cost: connecting a
+  brand-new VPN needs its server in `vpn.endpoints` ahead of time — only a drop
+  of the VPN you already use gets a (15s) window; pausing is unavailable; a
+  hostname endpoint can't re-resolve while the tunnel is down
+  (`allowPhysicalDNS` off); faster polling means more geo-provider requests;
+  local devices stay reachable, which also lets them reach you on an untrusted
+  network.
 - **Balanced** — the shipped defaults. Cost: a brief, bounded exposure window
   whenever the VPN redials or a new one connects; local devices stay reachable,
   which also lets them reach you on an untrusted network.

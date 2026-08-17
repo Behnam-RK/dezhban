@@ -3,23 +3,26 @@
 package netdetect
 
 import (
-	"errors"
+	"context"
 	"net/netip"
 )
 
-// ErrDiscoverUnsupported is returned by DiscoverEndpoints on platforms without a
-// discovery implementation. Endpoint auto-discovery currently exists only on
-// macOS, where the connected VPN's WAN transport is observable via netstat/scutil.
-var ErrDiscoverUnsupported = errors.New("vpn endpoint auto-discovery is only supported on macOS")
-
 // Candidate mirrors the darwin type so callers compile on every platform.
 type Candidate struct {
-	VPN    string
-	Server netip.Addr
-	Port   int
+	VPN     string
+	Server  netip.Addr
+	Port    int
+	Process string
 }
 
 // DiscoverEndpoints is unsupported off macOS.
 func DiscoverEndpoints() ([]Candidate, error) {
 	return nil, ErrDiscoverUnsupported
 }
+
+// SupportedVPNs mirrors the darwin export: no discovery, no attributable
+// client patterns.
+func SupportedVPNs() []string { return nil }
+
+// ConnectedVPNName mirrors the darwin export; there is no scutil to ask.
+func ConnectedVPNName(context.Context) string { return "" }

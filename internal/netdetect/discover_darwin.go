@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/netip"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -175,20 +176,42 @@ func isVPNTransport(exe string) bool {
 	if strings.Contains(l, "networkextension") || strings.Contains(l, ".appex") {
 		return true
 	}
-	for _, k := range []string{
-		"vpn",       // openvpn, nordvpnd, ProtonVPN, expressvpn, …
-		"wireguard", // wireguard-go, wg-quick
-		"tailscaled",
-		"mullvad",
-		"lightway",
-		"xray", "v2ray", "sing-box", "hysteria", "shadowsocks", "clash",
-		"tunnelblick",
-	} {
+	for _, k := range vpnTransportKeywords {
 		if strings.Contains(l, k) {
 			return true
 		}
 	}
 	return false
+}
+
+// vpnTransportKeywords are the executable-path substrings isVPNTransport
+// accepts, shared with SupportedVPNs so the diagnostic view and the allowlist
+// cannot drift. Growing this list grows the kill switch's attack surface —
+// read isVPNTransport's doc before touching it.
+var vpnTransportKeywords = []string{
+	"vpn",       // openvpn, nordvpnd, ProtonVPN, expressvpn, …
+	"wireguard", // wireguard-go, wg-quick
+	"tailscaled",
+	"mullvad",
+	"lightway",
+	"xray", "v2ray", "sing-box", "hysteria", "shadowsocks", "clash",
+	"tunnelblick",
+}
+
+// SupportedVPNs returns the client-process patterns endpoint discovery can
+// attribute a socket to — the named allowlist behind isVPNTransport, plus the
+// NetworkExtension bundle rule most commercial macOS VPNs ship under. Display
+// only; a client missing here still works with vpn.endpoints set by hand.
+func SupportedVPNs() []string {
+	return append([]string{"networkextension", ".appex"}, slices.Clone(vpnTransportKeywords)...)
+}
+
+// ConnectedVPNName reports the friendly name of the first Connected service in
+// `scutil --nc list` ("" when none, or when the answer is unreadable) — the
+// closest macOS gets to "which VPN app is active right now". NetworkExtension
+// VPNs only; a WireGuard tunnel brought up by wg-quick has no service to list.
+func ConnectedVPNName(ctx context.Context) string {
+	return connectedVPNName(ctx)
 }
 
 // splitLsofAddr parses lsof's "IP:PORT" form.

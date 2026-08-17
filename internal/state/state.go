@@ -43,9 +43,16 @@ type Snapshot struct {
 	// the one choke point every snapshot passes through, including the
 	// terminal publishStopped one). Empty from a daemon older than this field
 	// — consumers must treat "" as unknown, never as a version.
-	Version     string `json:"version,omitempty"`
-	Blocked     bool   `json:"blocked"`      // egress currently cut
-	IP          string `json:"ip,omitempty"` // last observed public IP
+	Version string `json:"version,omitempty"`
+	Blocked bool   `json:"blocked"`      // egress currently cut
+	IP      string `json:"ip,omitempty"` // last observed public IP
+	// IPv6 is the last observed public IPv6 address, from a separate best-effort
+	// lookup while the guard is healthy. Observational only: it never feeds
+	// country decisions and is cleared whenever it can't be re-confirmed, so a
+	// stale address is never shown as current. Empty on v4-only hosts and from
+	// daemons older than this field. Additive — `ip` is a stable key and stays
+	// exactly what it was.
+	IPv6        string `json:"ipv6,omitempty"`
 	CountryCode string `json:"countryCode,omitempty"`
 	// CountryName is CountryCode's English short name ("Kazakhstan"), resolved
 	// by internal/country so the CLI, the menubar and the window cannot

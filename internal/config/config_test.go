@@ -700,6 +700,50 @@ func TestArmAtBootDefaultTrueAndRoundTrips(t *testing.T) {
 	}
 }
 
+func TestAllowGeoProvidersRoundTrips(t *testing.T) {
+	t.Parallel()
+	if !Default().VPN.AllowGeoProviders {
+		t.Error("Default().VPN.AllowGeoProviders = false, want true")
+	}
+
+	path := filepath.Join(t.TempDir(), "cfg.json")
+	body := `{"vpn": {"tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"]}}`
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.VPN.AllowGeoProviders {
+		t.Error("AllowGeoProviders = false with the key absent, want true (default)")
+	}
+
+	path2 := filepath.Join(t.TempDir(), "cfg2.json")
+	body2 := `{"vpn": {"tunnelInterfaces": ["utun4"], "endpoints": ["1.2.3.4"], "allowGeoProviders": false}}`
+	if err := os.WriteFile(path2, []byte(body2), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg2, err := Load(path2)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg2.VPN.AllowGeoProviders {
+		t.Error("AllowGeoProviders = true with an explicit false in the file, want false")
+	}
+	out := filepath.Join(t.TempDir(), "out.json")
+	if err := Save(out, cfg2); err != nil {
+		t.Fatalf("Save: %v", err)
+	}
+	cfg3, err := Load(out)
+	if err != nil {
+		t.Fatalf("Load(saved): %v", err)
+	}
+	if cfg3.VPN.AllowGeoProviders {
+		t.Error("AllowGeoProviders = true after round-trip, want the explicit false to survive")
+	}
+}
+
 // An absent endpointGrace now normalizes to the effective 15m default so
 // observers (GUI, config show) see the real value instead of 0.
 func TestEndpointGraceDefaultVisible(t *testing.T) {

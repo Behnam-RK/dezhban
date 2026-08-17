@@ -190,8 +190,15 @@ func TestTunableMetadataIsComplete(t *testing.T) {
 		if strings.Contains(tun.Label, tun.Key) {
 			t.Errorf("%s: Label %q restates the config key", tun.Key, tun.Label)
 		}
-		if wantAdvanced := strings.HasPrefix(tun.Key, "vpn.advanced."); tun.Advanced != wantAdvanced {
-			t.Errorf("%s: Advanced=%v, want %v (it is set by the key prefix)",
+		// Advanced is the power-user tier: the vpn.advanced.* block by prefix,
+		// plus the named top-level keys the setup wizard stopped asking about.
+		// The exception list is pinned here so a key cannot drift into (or out
+		// of) the app's Developer section by accident.
+		advancedExceptions := map[string]bool{
+			"hysteresis": true, "providerQuorum": true, "logLevel": true,
+		}
+		if wantAdvanced := strings.HasPrefix(tun.Key, "vpn.advanced.") || advancedExceptions[tun.Key]; tun.Advanced != wantAdvanced {
+			t.Errorf("%s: Advanced=%v, want %v (vpn.advanced.* by prefix, plus the pinned exceptions)",
 				tun.Key, tun.Advanced, wantAdvanced)
 		}
 	}

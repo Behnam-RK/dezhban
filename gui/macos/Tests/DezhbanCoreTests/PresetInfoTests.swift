@@ -68,4 +68,37 @@ struct PresetInfoTests {
     @Test func corruptDataFailsToDecode() {
         #expect(PresetDiff.decode("not json".data(using: .utf8)!) == nil)
     }
+
+    /// Nothing in core may assume three presets: the daemon grew a fourth
+    /// ("focused"), and count-agnostic decoding is what let it arrive without
+    /// a Swift change. Pinned so a future refactor can't re-hardcode three.
+    @Test func decodesFourPresetsWithFocusedMatched() throws {
+        let json = """
+        [
+          {"name": "strict",   "summary": "s", "cost": "c", "matched": false},
+          {"name": "focused",  "summary": "s", "cost": "c", "matched": true},
+          {"name": "balanced", "summary": "s", "cost": "c", "matched": false},
+          {"name": "relaxed",  "summary": "s", "cost": "c", "matched": false}
+        ]
+        """.data(using: .utf8)!
+        let list = try #require(PresetSummary.decodeList(json))
+        #expect(list.count == 4)
+        #expect(list.filter { $0.matched == true }.map(\.name) == ["focused"])
+    }
+
+    @Test func decodesFourPresetsNoneMatchedWithConflicts() throws {
+        let json = """
+        [
+          {"name": "strict",   "summary": "s", "cost": "c", "matched": false},
+          {"name": "focused",  "summary": "s", "cost": "c", "matched": false,
+           "conflicts": ["focused sets vpn.redialWindow 15s, above your vpn.advanced.redialWindowMax 10s"]},
+          {"name": "balanced", "summary": "s", "cost": "c", "matched": false},
+          {"name": "relaxed",  "summary": "s", "cost": "c", "matched": false}
+        ]
+        """.data(using: .utf8)!
+        let list = try #require(PresetSummary.decodeList(json))
+        #expect(list.count == 4)
+        #expect(list.allSatisfy { $0.matched != true })
+        #expect(!list[1].isAppliable)
+    }
 }

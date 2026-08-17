@@ -115,8 +115,8 @@ func TestConfigPresetListJSONReportsMatch(t *testing.T) {
 	if err := json.Unmarshal([]byte(out), &got); err != nil {
 		t.Fatalf("unmarshal: %v\noutput:\n%s", err, out)
 	}
-	if len(got) != 3 {
-		t.Fatalf("got %d presets, want 3", len(got))
+	if len(got) != 4 {
+		t.Fatalf("got %d presets, want 4", len(got))
 	}
 	var matchedCount int
 	for _, p := range got {

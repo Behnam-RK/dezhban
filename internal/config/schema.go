@@ -74,8 +74,12 @@ type Tunable struct {
 	// "Off" choice would silently discard the user's decision.
 	Disablable bool `json:"disablable"`
 
-	// Advanced marks the `vpn.advanced.*` knobs, which surfaces put behind a
-	// disclosure with the "touch only if you know why" warning.
+	// Advanced marks the power-user tier: every `vpn.advanced.*` knob, plus the
+	// handful of top-level keys the setup wizard stopped asking about
+	// (hysteresis, providerQuorum, logLevel). Surfaces put these behind a
+	// disclosure with the "touch only if you know why" warning — the app's
+	// Developer section is generated from exactly this flag, so a key is
+	// reachable there by being marked here, never by a hand-kept Swift list.
 	Advanced bool `json:"advanced"`
 
 	// Help is one line explaining what the key does and what it costs.
@@ -130,6 +134,7 @@ var tunables = []Tunable{
 		Label:     "Agreeing readings before a flip",
 		Kind:      KindInt,
 		Unit:      "readings",
+		Advanced:  true,
 		Help:      "How many consecutive agreeing readings it takes to change posture. Higher is slower to react but harder to fool with one bad lookup.",
 		DocAnchor: anchorFields,
 	},
@@ -144,6 +149,7 @@ var tunables = []Tunable{
 		Key:       "providerQuorum",
 		Label:     "Require two services to agree",
 		Kind:      KindBool,
+		Advanced:  true,
 		Help:      "Confirms each reading against a second service before it counts. Safer against one wrong answer; twice the lookups.",
 		DocAnchor: anchorFields,
 	},
@@ -151,6 +157,7 @@ var tunables = []Tunable{
 		Key:       "logLevel",
 		Label:     "Log level",
 		Kind:      KindString,
+		Advanced:  true,
 		Help:      "How much dezhban writes to its log: debug, info, warn, or error.",
 		DocAnchor: anchorFields,
 	},
@@ -206,9 +213,16 @@ var tunables = []Tunable{
 	},
 	{
 		Key:       "vpn.allowPhysicalDNS",
-		Label:     "Allow DNS on the physical link",
+		Label:     "Keep DNS working while the tunnel is down",
 		Kind:      KindBool,
-		Help:      "Lets name lookups use your ISP's resolver while the tunnel is down. Convenient, but your ISP sees what you look up.",
+		Help:      "Lets name lookups use your ISP's resolver while the tunnel is down, including during a full block. Convenient, but your ISP sees what you look up.",
+		DocAnchor: anchorVPN,
+	},
+	{
+		Key:       "vpn.allowGeoProviders",
+		Label:     "Keep exit checks running when blocked",
+		Kind:      KindBool,
+		Help:      "During a full block, exit-country checks stay reachable through the tunnel only, so the block lifts itself when your exit is allowed again. Off does not stop those checks — recovery instead briefly lifts the guard to look, which exposes more, not less.",
 		DocAnchor: anchorVPN,
 	},
 	{

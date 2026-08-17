@@ -47,8 +47,7 @@ func cmdSetup(args []string) int {
 
 	detected, _ := netdetect.TunnelInterfaces()
 	qs := setup.Questions(setup.Options{
-		Config: cfg, ConfigExisted: configExisted,
-		GOOS: runtime.GOOS, DetectedTunnels: detected,
+		Config: cfg, GOOS: runtime.GOOS, DetectedTunnels: detected,
 	})
 
 	// --questions is read-only and needs no terminal: it is how another surface
@@ -100,7 +99,10 @@ func cmdSetup(args []string) int {
 		}
 	}
 
-	setup.Apply(cfg, answers.Input(strconv.Itoa(cfg.Hysteresis), profiles))
+	in := answers.Input(strconv.Itoa(cfg.Hysteresis), profiles)
+	in.MacOS = runtime.GOOS == "darwin"
+	in.ConfigExisted = configExisted
+	setup.Apply(cfg, in)
 
 	config.Normalize(cfg)
 	if err := cfg.Validate(); err != nil {

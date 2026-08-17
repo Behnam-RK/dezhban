@@ -48,6 +48,7 @@ func KeyValues(c *Config) map[string]string {
 		"vpn.autoDetect":            strconv.FormatBool(v.AutoDetect),
 		"vpn.autoDiscoverEndpoints": strconv.FormatBool(v.AutoDiscoverEndpoints),
 		"vpn.allowPhysicalDNS":      strconv.FormatBool(v.AllowPhysicalDNS),
+		"vpn.allowGeoProviders":     strconv.FormatBool(v.AllowGeoProviders),
 		"vpn.allowLocalNetwork":     strconv.FormatBool(v.AllowLocalNetwork),
 		"vpn.autoArm":               strconv.FormatBool(v.AutoArm),
 		"vpn.armAtBoot":             strconv.FormatBool(v.ArmAtBoot),
@@ -121,6 +122,7 @@ var restartReasons = map[string]string{
 	"vpn.endpoints":             "endpoint resolution is wired up at startup",
 	"vpn.autoDiscoverEndpoints": "endpoint resolution is wired up at startup",
 	"vpn.tunnelInterfaces":      "the pinned tunnel set is resolved at startup",
+	"vpn.allowGeoProviders":     "the geo-provider resolver is wired into the run loop at startup",
 
 	"vpn.advanced.commandFreshness":      "the command-file poller is wired up at startup",
 	"vpn.advanced.tunnelPruneAfter":      "tunnel pruning is wired up at startup",

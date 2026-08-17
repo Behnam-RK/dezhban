@@ -12,6 +12,77 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A fourth strictness preset, "Focused",** between Strict and Balanced:
+  redial-only. The automatic redial window stays (15s) so a drop of the VPN
+  you already use heals itself, while manual switch and pause are disabled,
+  exit checks run at the fast cadence, and the local network stays reachable.
+  `config preset list/show/diff/apply focused` and the app's preset picker
+  offer it like the other three.
+- **`vpn.allowGeoProviders`** (bool, default `true`, restart required): set
+  `false` to remove the tunnel+destination-scoped geo-provider pass from the
+  FULL BLOCK ruleset ([ADR-0013](docs/adr/0013-geo-provider-pass-opt-out.md)).
+  Fair warning, stated everywhere the key appears: this does **not** stop
+  geo-provider traffic — recovery then degrades to lift-and-probe, which
+  briefly lifts the guard on every probe tick and disables accelerated
+  recovery probing. It trades a scoped standing hole for a periodic full lift.
+- **`status --json` reports strictness**: new `preset`/`presetExact` fields —
+  the matched preset, or the nearest one (marked inexact) for a Custom config.
+  The top-level field set is now pinned by a test.
+- **Public IPv6 in the snapshot**: new optional `state.ipv6` field, from a
+  best-effort lookup over a v6-forced path while the guard is healthy — never
+  during FULL BLOCK, never used for country decisions, cleared whenever it
+  can't be re-confirmed. `ip` is unchanged.
+- **`detect-vpn --json`**: machine-readable VPN inventory — tunnel interfaces,
+  macOS discovery candidates (`{vpn, server, port, process}`), the connected
+  NetworkExtension VPN's name, and the client/interface patterns detection
+  recognizes, so an unrecognized VPN can be told apart from a missing one.
+- **macOS app: per-event notifications.** The single "Notify on essential
+  events" toggle grows a per-event disclosure — one checkbox per essential
+  class (guard armed / traffic cut / warning / paused / standby / stopped).
+  The old single setting migrates (off means all off) and survives a
+  downgrade; an event class a future daemon adds that this build has no
+  checkbox for still notifies rather than being silently muted.
+- **macOS app: Overview shows more, and shows trouble better.** Public IPv4
+  and (when observed) IPv6, the strictness preset, the connected VPN app, and
+  endpoints collapsed past three entries. Faults are now banners above the
+  grid — enforcement problems in red (previously not shown in this pane at
+  all), failing exit checks in orange, first line only with the full text
+  behind "Show more" — while an expected unknown exit stays a plain row.
+- **macOS app: Diagnostics gains a "Your VPNs" inventory** (from
+  `detect-vpn --json`) — tunnels found, VPN apps detection can attribute, the
+  connected one marked, unrecognized clients flagged — and the sidebar's
+  Diagnostics row carries a **yellow attention dot** whenever the last doctor
+  report found something to look at (refreshed on window open and when the
+  posture turns to warning/blocked, never on the 1-second timer).
+
+### Changed
+
+- **macOS app: Settings redesigned for non-power-users.** Durations are
+  sliders over each key's real range (Off detent only where `"0"` is a
+  persisted choice, top bound by the live cap, snap to human steps, a Custom
+  field for anything else) instead of raw Go-duration text fields; integer
+  keys get steppers. `vpn.allowPhysicalDNS` and the new `vpn.allowGeoProviders`
+  appear as toggles whose consequences are stated visibly under the control,
+  not in a hover tooltip. The hand-listed "Advanced" disclosure is now a
+  **Developer** section generated from the daemon's schema (`advanced` keys:
+  every `vpn.advanced.*` plus hysteresis, providerQuorum, logLevel), so a new
+  advanced key appears in the app by existing. Against an older CLI the pane
+  degrades: no geo toggle, menu/text fallbacks for sliders, the old Advanced
+  list.
+
+- **The setup wizard asks only what has no safe default**: blocked countries,
+  whether to configure the VPN now, automatic vs. manual detection, and the
+  VPN details themselves. The poll-interval, log-level, provider-quorum,
+  physical-DNS and auto-discovery questions are gone from both the CLI wizard
+  and the app's first-run sheet; those keys keep their defaults, live in
+  Settings/`config set`, and are left untouched by a wizard run — re-running
+  setup can no longer clobber them. A brand-new macOS config still gets live
+  endpoint discovery turned on.
+- **`detect-vpn`'s recommended-config sample** no longer names the retired
+  `vpn.enabled` key.
+
 ## [0.10.0] - 2026-08-16
 
 ### Added

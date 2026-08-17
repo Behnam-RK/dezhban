@@ -18,7 +18,7 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
 
     @State private var loginEnabled = false
-    @State private var notifyEnabled = true
+    @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
 
@@ -111,6 +111,19 @@ struct SettingsView: View {
                     schemaField("blockedCountries", "Blocked countries (comma-separated)",
                                 text: $fields.blockedCountries)
                     durationField("pollInterval", "Exit country check interval", text: $fields.pollInterval)
+                    // Visible captions, not hover help: these two decide what a
+                    // FULL BLOCK still lets out, and a consequence nobody hovers
+                    // over is a consequence nobody chose. Copy comes from the
+                    // schema (the daemon owns behavioral claims).
+                    schemaToggleWithCaption("vpn.allowPhysicalDNS", "Keep DNS working while the tunnel is down",
+                                            isOn: $fields.allowPhysicalDNS)
+                    if schema?["vpn.allowGeoProviders"] != nil {
+                        // Rendered only when this CLI knows the key: a toggle
+                        // that writes a key the daemon rejects can't "degrade
+                        // to a plainer control" — omission is the honest degrade.
+                        schemaToggleWithCaption("vpn.allowGeoProviders", "Keep exit checks running when blocked",
+                                                isOn: $fields.allowGeoProviders)
+                    }
                 } header: {
                     sectionHeader("What gets blocked",
                                   "If your VPN surfaces in one of these countries, everything is cut "
@@ -166,7 +179,16 @@ struct SettingsView: View {
                     Toggle("Notify on essential events", isOn: notifyBinding)
                         .help("macOS notifications for the transitions that matter: guard armed, traffic "
                             + "cut, warnings (enforcement error / window open), standby, stopped. "
-                            + "Nothing else.")
+                            + "Nothing else. Pick individual events below.")
+                    DisclosureGroup("Which events") {
+                        ForEach(NotificationPrefs.EventClass.allCases, id: \.rawValue) { eventClass in
+                            Toggle(eventClass.label, isOn: eventClassBinding(eventClass))
+                                .toggleStyle(.checkbox)
+                        }
+                        Text(notifyPrefs.summary)
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
                     Toggle("Check for updates automatically", isOn: checkUpdatesBinding)
                         .help("Checks GitHub for a newer release at launch and every ~24h — never from the "
                             + "background service, only here, in this app, on this schedule. Turn off to stop this "
@@ -334,7 +356,10 @@ struct SettingsView: View {
     /// config is Custom.
     private var presetPicker: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 8) {
+            // ActionRow (trailingCount 0: nothing pinned), not an HStack: four
+            // preset buttons overflow a narrow pane, and wrapping beats
+            // truncating a choice out of sight.
+            ActionRow(trailingCount: 0) {
                 ForEach(presets) { p in
                     Button {
                         confirmAndApplyPreset(p)
@@ -434,10 +459,13 @@ struct SettingsView: View {
     /// It is only re-read on open rather than watched: the schema is a property
     /// of the installed binary, so the one thing that can change it — an upgrade
     /// — also relaunches the app.
-    private func refreshSchema() {
+    private func refreshSchema(then completion: @escaping (ConfigSchema?) -> Void = { _ in }) {
         DispatchQueue.global(qos: .userInitiated).async {
             let loaded = DezhbanCLI.readSchema()
-            DispatchQueue.main.async { schema = loaded }
+            DispatchQueue.main.async {
+                schema = loaded
+                completion(loaded)
+            }
         }
     }
 
@@ -470,45 +498,118 @@ struct SettingsView: View {
         .padding(.bottom, 2)
     }
 
-    /// The Advanced disclosure, kept out of `body` deliberately: every row here
-    /// is a `durationField`/`schemaField` call the type-checker has to solve, and
-    /// inlining the lot pushed `body` past the solver's budget — the compiler
-    /// said so by name. A separate property is the cheap fix, and it means adding
-    /// the next tunable costs a line rather than a build failure.
+    /// The Developer disclosure — the power-user tier, generated from the
+    /// schema's `advanced` flag rather than a hand-kept row list, so a key
+    /// reaches this section by being marked advanced in internal/config and
+    /// nowhere else. Kept out of `body` deliberately: every row is a call the
+    /// type-checker has to solve, and inlining the lot pushed `body` past the
+    /// solver's budget — the compiler said so by name.
+    ///
+    /// With no schema (an older CLI) it falls back to the previous hand-listed
+    /// vpn.advanced.* rows: hardcoded LABELS for keys every CLI has, never
+    /// hardcoded values — the same degrade rule as everywhere else.
     @ViewBuilder private var advancedGroup: some View {
-        DisclosureGroup("Advanced") {
+        DisclosureGroup("Developer") {
             Text("Touch only if you know why. These override recommended defaults. The caps "
                 + "and budgets below bound how much exposure the settings above can ever "
                 + "cause — lowering one narrows the choices they offer.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            durationField("vpn.advanced.switchWindowMax", "Switch window cap", text: $fields.advSwitchWindowMax)
-            durationField("vpn.advanced.redialWindowMax", "Redial window cap", text: $fields.advRedialWindowMax)
-            durationField("vpn.advanced.redialMinUptime", "Redial backoff threshold", text: $fields.advRedialMinUptime)
-            durationField("vpn.advanced.redialBudget", "Redial budget", text: $fields.advRedialBudget)
-            durationField("vpn.advanced.redialBudgetWindow", "Redial budget period",
-                          text: $fields.advRedialBudgetWindow)
-            durationField("vpn.advanced.commandFreshness", "Command freshness", text: $fields.advCommandFreshness)
-            durationField("vpn.advanced.windowDiscoveryInterval", "Window discovery interval",
-                          text: $fields.advWindowDiscoveryInterval)
-            durationField("vpn.advanced.tunnelPruneAfter", "Tunnel prune delay", text: $fields.advTunnelPruneAfter)
-            durationField("vpn.advanced.learnedEndpointTTL", "Learned address lifetime",
-                          text: $fields.advLearnedEndpointTTL)
-            schemaField("vpn.advanced.learnedMaxPerProfile", "Learned addresses per profile",
-                        text: $fields.advLearnedMaxPerProfile)
-            schemaField("vpn.advanced.promoteAfterRefreshes", "Sightings before an address is learned",
-                        text: $fields.advPromoteAfterRefreshes)
-            schemaField("vpn.advanced.endpointWarnThreshold", "Address-bloat warning threshold",
-                        text: $fields.advEndpointWarnThreshold)
-            schemaField("vpn.advanced.windowProtocols", "Window protocols (comma-sep)",
-                        text: $fields.advWindowProtocols)
-            schemaField("vpn.advanced.windowPorts", "Window ports (comma-sep)",
-                        text: $fields.advWindowPorts)
-            durationField("vpn.advanced.verifyInterval", "Enforcement verification interval",
-                          text: $fields.advVerifyInterval)
-            schemaToggle("vpn.advanced.livenessRedial", "Redial on a hung tunnel",
-                         isOn: $fields.advLivenessRedial)
+            if let schema {
+                // Schema order — the daemon's presentation order. Keys the pane
+                // has no storage for (e.g. `providers`, deliberately unexposed)
+                // are skipped by the same rule everywhere: no storage, no row.
+                ForEach(schema.tunables.filter { $0.advanced && fields.stagedKeys.contains($0.key) }) { tunable in
+                    developerRow(tunable)
+                }
+            } else {
+                legacyAdvancedRows
+            }
         }
+    }
+
+    /// One schema-driven Developer row, picked by kind: durations get the
+    /// slider control, bools a toggle, ints a stepper, everything else text.
+    /// Bindings are key-based views onto SettingsFields' dictionary — the named
+    /// accessors stay for the curated sections above, where a binding's
+    /// spelling is part of the section's readability.
+    @ViewBuilder
+    private func developerRow(_ tunable: ConfigTunable) -> some View {
+        switch tunable.kind {
+        case "duration":
+            durationField(tunable.key, tunable.label, text: fieldBinding(tunable.key))
+        case "bool":
+            schemaToggle(tunable.key, tunable.label, isOn: boolBinding(tunable.key))
+        case "int":
+            intField(tunable, text: fieldBinding(tunable.key))
+        default:
+            schemaField(tunable.key, tunable.label, text: fieldBinding(tunable.key))
+        }
+    }
+
+    private func fieldBinding(_ key: String) -> Binding<String> {
+        Binding(get: { fields.value(for: key) }, set: { fields.setValue($0, for: key) })
+    }
+
+    private func boolBinding(_ key: String) -> Binding<Bool> {
+        Binding(get: { fields.value(for: key) == "true" },
+                set: { fields.setValue(String($0), for: key) })
+    }
+
+    /// An integer key as a text field with a stepper: the field still displays
+    /// (and round-trips) a nonnumeric seeded value rather than eating it, the
+    /// stepper edits what parses. No hardcoded ranges — the schema carries
+    /// none, and the daemon remains the validator.
+    private func intField(_ tunable: ConfigTunable, text: Binding<String>) -> some View {
+        HStack(spacing: 6) {
+            TextField(tunable.label, text: text)
+                .disabled(!canApply)
+                .help(tunable.help)
+            Stepper(tunable.unit ?? "") {
+                if let n = Int(text.wrappedValue.trimmingCharacters(in: .whitespaces)) {
+                    text.wrappedValue = String(n + 1)
+                }
+            } onDecrement: {
+                if let n = Int(text.wrappedValue.trimmingCharacters(in: .whitespaces)), n > 0 {
+                    text.wrappedValue = String(n - 1)
+                }
+            }
+            .disabled(!canApply)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            docLink(tunable.key)
+        }
+    }
+
+    /// The pre-schema hand list (labels only), kept verbatim as the no-schema
+    /// fallback for older CLIs.
+    @ViewBuilder private var legacyAdvancedRows: some View {
+        durationField("vpn.advanced.switchWindowMax", "Switch window cap", text: $fields.advSwitchWindowMax)
+        durationField("vpn.advanced.redialWindowMax", "Redial window cap", text: $fields.advRedialWindowMax)
+        durationField("vpn.advanced.redialMinUptime", "Redial backoff threshold", text: $fields.advRedialMinUptime)
+        durationField("vpn.advanced.redialBudget", "Redial budget", text: $fields.advRedialBudget)
+        durationField("vpn.advanced.redialBudgetWindow", "Redial budget period",
+                      text: $fields.advRedialBudgetWindow)
+        durationField("vpn.advanced.commandFreshness", "Command freshness", text: $fields.advCommandFreshness)
+        durationField("vpn.advanced.windowDiscoveryInterval", "Window discovery interval",
+                      text: $fields.advWindowDiscoveryInterval)
+        durationField("vpn.advanced.tunnelPruneAfter", "Tunnel prune delay", text: $fields.advTunnelPruneAfter)
+        durationField("vpn.advanced.learnedEndpointTTL", "Learned address lifetime",
+                      text: $fields.advLearnedEndpointTTL)
+        schemaField("vpn.advanced.learnedMaxPerProfile", "Learned addresses per profile",
+                    text: $fields.advLearnedMaxPerProfile)
+        schemaField("vpn.advanced.promoteAfterRefreshes", "Sightings before an address is learned",
+                    text: $fields.advPromoteAfterRefreshes)
+        schemaField("vpn.advanced.endpointWarnThreshold", "Address-bloat warning threshold",
+                    text: $fields.advEndpointWarnThreshold)
+        schemaField("vpn.advanced.windowProtocols", "Window protocols (comma-sep)",
+                    text: $fields.advWindowProtocols)
+        schemaField("vpn.advanced.windowPorts", "Window ports (comma-sep)",
+                    text: $fields.advWindowPorts)
+        durationField("vpn.advanced.verifyInterval", "Enforcement verification interval",
+                      text: $fields.advVerifyInterval)
+        schemaToggle("vpn.advanced.livenessRedial", "Redial on a hung tunnel",
+                     isOn: $fields.advLivenessRedial)
     }
 
     /// A duration setting as a menu of real choices rather than a text field
@@ -552,6 +653,27 @@ struct SettingsView: View {
                 toggle
             }
             docLink(key)
+        }
+    }
+
+    /// schemaToggle with the schema's Help rendered as a VISIBLE caption under
+    /// the control instead of hover-only — for the consequence-bearing toggles,
+    /// where the trade must be read before it is made. The Swift fallback label
+    /// names the concept and makes no behavioral claim; the claim is the
+    /// daemon's (schema Help), and with no schema there is simply no caption.
+    @ViewBuilder
+    private func schemaToggleWithCaption(_ key: String, _ fallback: String, isOn: Binding<Bool>) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(spacing: 6) {
+                Toggle(schema?[key]?.label ?? fallback, isOn: isOn).disabled(!canApply)
+                docLink(key)
+            }
+            if let help = helpText(key) {
+                Text(help)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 
@@ -731,13 +853,31 @@ struct SettingsView: View {
             })
     }
 
+    /// The master toggle: off zeroes every class, on restores every class —
+    /// all-or-nothing on purpose. The per-class checkboxes in the disclosure
+    /// are where partial selections are made, so the common "mute everything"
+    /// stays one click.
     private var notifyBinding: Binding<Bool> {
         Binding(
-            get: { notifyEnabled },
+            get: { notifyPrefs.anyEnabled },
             set: { on in
-                NotificationManager.isEnabled = on
-                notifyEnabled = NotificationManager.isEnabled
+                var prefs = notifyPrefs
+                prefs.setAll(on)
+                NotificationManager.prefs = prefs
+                notifyPrefs = NotificationManager.prefs
                 status = on ? "Notifications on for essential events." : "Notifications off."
+            })
+    }
+
+    private func eventClassBinding(_ eventClass: NotificationPrefs.EventClass) -> Binding<Bool> {
+        Binding(
+            get: { notifyPrefs.isEnabled(eventClass) },
+            set: { on in
+                var prefs = notifyPrefs
+                prefs.set(eventClass, enabled: on)
+                NotificationManager.prefs = prefs
+                notifyPrefs = NotificationManager.prefs
+                status = notifyPrefs.summary
             })
     }
 
@@ -770,30 +910,38 @@ struct SettingsView: View {
         status = "Loading…"
         canApply = false
         loginEnabled = LoginItem.isEnabled
-        notifyEnabled = NotificationManager.isEnabled
+        notifyPrefs = NotificationManager.prefs
         checkUpdatesEnabled = UpdateChecker.isEnabled
         launchVisibility = LaunchPreference.current
         fields = SettingsFields()
         state.refreshServiceState()
         refreshPresets()
-        refreshSchema()
-        // `path` is the same resolution ConfigApply.seed already did for the
-        // `config get` calls — reusing it here means configPath never needs its
-        // own second background resolve, so there's nothing to race.
-        ConfigApply.seed(keys: SettingsFields.keys) { path, values, error in
-            configPath = path
-            if let error = error {
-                status = error
-                return
+        // The schema loads BEFORE the field seed, because it decides which
+        // optional keys exist on this CLI at all. Seeding an optional key an
+        // old CLI doesn't know would fail its `config get` and short-circuit
+        // the WHOLE seed (ConfigApply.seed stops at the first failure) — the
+        // pane would brick against every older install. Schema-known keys
+        // only, or none when there is no schema to ask.
+        refreshSchema { loadedSchema in
+            let extraKeys = SettingsFields.optionalKeys.filter { loadedSchema?[$0] != nil }
+            // `path` is the same resolution ConfigApply.seed already did for the
+            // `config get` calls — reusing it here means configPath never needs its
+            // own second background resolve, so there's nothing to race.
+            ConfigApply.seed(keys: SettingsFields.keys + extraKeys) { path, values, error in
+                configPath = path
+                if let error = error {
+                    status = error
+                    return
+                }
+                guard let v = values else { return }
+                fields = SettingsFields(seeded: v, extraKeys: extraKeys)
+                // Recorded AFTER the fields are populated, so `currentValues` and the
+                // seeded snapshot are the same thing at this instant and the pane
+                // starts out clean.
+                seededValues = fields.currentValues
+                status = "Seeded from \(path)"
+                canApply = true
             }
-            guard let v = values else { return }
-            fields = SettingsFields(seeded: v)
-            // Recorded AFTER the fields are populated, so `currentValues` and the
-            // seeded snapshot are the same thing at this instant and the pane
-            // starts out clean.
-            seededValues = fields.currentValues
-            status = "Seeded from \(path)"
-            canApply = true
         }
     }
 
