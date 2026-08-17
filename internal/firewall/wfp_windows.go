@@ -346,29 +346,18 @@ func renderBlockScript(p Policy) string {
 		emitAllowPhysicalDNSRules(rule, p)
 		emitLocalNetworkRules(rule, p)
 	default: // ModeFullBlock
-		if isVPNPolicy(p) {
-			// VPN full block (including the zero-tunnel standing posture): no
-			// tunnel-iface allow, so no user traffic leaks to a forbidden exit — but
-			// keep the endpoint allow so the encrypted handshake reaches the server
-			// and the tunnel can redial (a cut endpoint would livelock recovery).
-			if ep := psAddrList(p.VPNEndpoints); ep != "" {
-				rule("endpoint", "-RemoteAddress "+ep)
-			}
-			emitTunnelProviderRules(rule, p)
-			emitAllowPhysicalDNSRules(rule, p)
-		} else {
-			// `block --force` (no VPN context): dst-IP allowlist.
-			if dns := psAddrList(p.Allowlist.DNS); dns != "" {
-				rule("dns-udp", "-Protocol UDP -RemotePort 53 -RemoteAddress "+dns)
-				rule("dns-tcp", "-Protocol TCP -RemotePort 53 -RemoteAddress "+dns)
-			}
-			if hosts := psAddrList(p.Allowlist.Hosts); hosts != "" {
-				rule("hosts", "-RemoteAddress "+hosts)
-			}
+		// No tunnel-iface allow, so no user traffic leaks to a forbidden exit —
+		// but keep the endpoint allow so the encrypted handshake reaches the
+		// server and the tunnel can redial (a cut endpoint would livelock
+		// recovery). Every field below is optional, and `block --force` sets
+		// none of them, which is what makes it loopback-only.
+		if ep := psAddrList(p.VPNEndpoints); ep != "" {
+			rule("endpoint", "-RemoteAddress "+ep)
 		}
-		// Outside the isVPNPolicy split on purpose — see the same hoist in
-		// pf_darwin.go. AllowLocalNetwork belongs to the posture, not to which
-		// FULL BLOCK shape rendered it.
+		emitTunnelProviderRules(rule, p)
+		emitAllowPhysicalDNSRules(rule, p)
+		// AllowLocalNetwork belongs to the posture — see the same note in
+		// pf_darwin.go.
 		emitLocalNetworkRules(rule, p)
 	}
 

@@ -290,40 +290,24 @@ func renderRuleset(p Policy) string {
 			b.WriteString(localNetworkRule())
 		}
 	default: // ModeFullBlock
-		if isVPNPolicy(p) {
-			// VPN full block (including the zero-tunnel standing posture): no
-			// tunnel-iface pass, so no user traffic leaks to a forbidden exit — but
-			// keep the endpoint pass so the encrypted handshake reaches the server
-			// and the tunnel can redial (a cut endpoint would livelock recovery).
-			if len(p.VPNEndpoints) > 0 {
-				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
-			}
-			// Tunnel-scoped geo-provider pass: lets the exit-country lookup run
-			// through the tunnel WITHOUT lifting the guard, which is what the
-			// recovery probe used to do for ~8s on every tick.
-			b.WriteString(tunnelProviderRules(p))
-			if p.AllowPhysicalDNS {
-				b.WriteString(allowPhysicalDNSRule)
-			}
-		} else {
-			// `block --force` (no VPN context): dst-IP allowlist.
-			if len(p.Allowlist.DNS) > 0 {
-				fmt.Fprintf(&b, "pass out quick proto { udp tcp } to { %s } port 53 no state\n", joinAddrs(p.Allowlist.DNS))
-			}
-			if len(p.Allowlist.Hosts) > 0 {
-				fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.Allowlist.Hosts))
-			}
+		// No tunnel-iface pass, so no user traffic leaks to a forbidden exit — but
+		// keep the endpoint pass so the encrypted handshake reaches the server
+		// and the tunnel can redial (a cut endpoint would livelock recovery).
+		// Every field below is optional, and `block --force` sets none of them,
+		// which is what makes it loopback-only.
+		if len(p.VPNEndpoints) > 0 {
+			fmt.Fprintf(&b, "pass out quick to { %s } no state\n", joinAddrs(p.VPNEndpoints))
 		}
-		// Outside the isVPNPolicy split on purpose. AllowLocalNetwork is a
-		// property of the POSTURE, not of which FULL BLOCK shape rendered it:
-		// ADR-0005 keeps the LAN reachable in FULL BLOCK deliberately, so a
-		// blocked exit country does not also take out the printer. Nested inside
-		// the VPN branch it was silently dropped whenever isVPNPolicy was false
-		// — a policy with no tunnels, no endpoints and allowPhysicalDNS off,
-		// which is reachable via the daemon's `relaxed` start path and rendered
-		// by `print-rules --mode fullblock`. `block --force` is unaffected: it
-		// never sets AllowLocalNetwork, so it still cuts everything but loopback
-		// and the geo providers.
+		// Tunnel-scoped geo-provider pass: lets the exit-country lookup run
+		// through the tunnel WITHOUT lifting the guard, which is what the
+		// recovery probe used to do for ~8s on every tick.
+		b.WriteString(tunnelProviderRules(p))
+		if p.AllowPhysicalDNS {
+			b.WriteString(allowPhysicalDNSRule)
+		}
+		// AllowLocalNetwork is a property of the POSTURE: ADR-0005 keeps the LAN
+		// reachable in FULL BLOCK deliberately, so a blocked exit country does
+		// not also take out the printer. `block --force` never sets it.
 		if p.AllowLocalNetwork {
 			b.WriteString(localNetworkRule())
 		}

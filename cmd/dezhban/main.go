@@ -744,7 +744,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 	var resolveProviders func(context.Context) []netip.Addr
 	if cfg.VPN.AllowGeoProviders {
 		resolveProviders = func(context.Context) []netip.Addr {
-			return buildProviderAllowlist(cfg, log).Hosts
+			return resolveProviderAddrs(cfg, log)
 		}
 	} else {
 		log.Warn("vpn.allowGeoProviders is off: recovery from FULL BLOCK will briefly lift the guard to observe the exit")
@@ -944,56 +944,46 @@ type blockDecision struct {
 	Endpoints []netip.Addr
 }
 
-// blockPlan builds the VPN-mode firewall policy `block`/`block --guard` would
-// apply — the pure decision pulled out of cmdBlock's default branch (`--force`
-// stays a manual override built directly in cmdBlock; it has no VPN state to
-// resolve) so it can be tested without root or a firewall backend. Built
-// through the same firewall.PolicyInput constructor the daemon and
-// print-rules use, so this manual override can never drift from what the run
-// loop would actually install — in particular, it must NOT carry a physical
-// dst-IP allowlist: a VPN posture opens the tunnel endpoint, never a
-// destination allowlist.
-// forceBlockPolicy builds `block --force`'s posture: cut ALL egress regardless
-// of the guard's own state, the escape hatch for when detection is wrong or the
-// operator wants an unconditional hard block. `unblock`/`panic` reverse it. It
-// returns the resolved tunnel set alongside the policy so the caller can log
-// what the pass was scoped to.
+// forceBlockPolicy builds `block --force`'s posture: cut ALL egress except
+// loopback, regardless of the guard's own state. The escape hatch for when
+// detection is wrong or the operator wants an unconditional hard block.
+// `unblock`/`panic` reverse it, and they are the ONLY way back — there is no
+// automatic recovery from this posture and nothing is passed to enable one.
 //
-// Two things this must get right, both of which it used to get wrong by
-// bypassing PolicyInput and calling the backend's dst-IP `Block` instead:
+// It carries nothing: no tunnel interfaces, no endpoints, no physical DNS, no
+// LAN pass, and no geo-provider pass. That is the whole point of the flag, and
+// each omission was reached by elimination rather than chosen:
 //
-//   - It obeys vpn.allowGeoProviders. Accepting a security key and silently
-//     discarding it is the worst bug this tool can have, and --force ignored the
-//     one key that turns off the ruleset's only destination-scoped hole.
+//   - The geo-provider pass used to be here as a destination-scoped
+//     `pass out quick to { providers }` on the PHYSICAL link, justified as
+//     "recovery detection can still reach them once egress is cut". It was the
+//     half-scoping ADR-0006 forbids, and it also ignored vpn.allowGeoProviders
+//     entirely — the one key that turns the ruleset's only destination-scoped
+//     hole off.
 //
-//   - The pass is scoped to the tunnel interface AND the provider addresses, per
-//     ADR-0006. `Block` rendered the destination-only half — a pass on the
-//     PHYSICAL link — which is precisely what that ADR forbids: the lookup then
-//     succeeds with the tunnel down and reports the ISP's country rather than
-//     the exit's.
+//   - Re-scoping it the ADR-0006 way (tunnel AND destination) does not work
+//     HERE, and that is the reason there is no pass at all rather than a
+//     correctly-scoped one. A tunnel-scoped rule needs a live tunnel, and this
+//     posture deliberately drops the endpoint the tunnel handshakes to — so the
+//     tunnel dies and the rule can never match. A pass that cannot carry a
+//     packet is worse than no pass: it makes the ruleset, the log line and the
+//     docs all claim a recovery path that does not exist.
 //
-// Endpoints, physical DNS and the LAN pass are deliberately absent: unlike the
-// daemon's FULL BLOCK, --force is meant to cut the handshake too.
-//
-// Resolution happens here, before the caller blocks, while DNS still works.
-func forceBlockPolicy(cfg *config.Config, log *slog.Logger) (firewall.Policy, []string) {
-	var providers []netip.Addr
-	if cfg.VPN.AllowGeoProviders {
-		providers = buildProviderAllowlist(cfg, log).Hosts
-	} else {
-		log.Warn("vpn.allowGeoProviders is off: forcing a block with no geo-provider pass — recovery detection cannot run until `dezhban unblock`")
-	}
-	tunnels := resolveTunnels(cfg, log)
-	// An interface-scoped rule needs an interface. With none resolved the pass
-	// cannot be rendered at all, and ADR-0006 forbids falling back to the
-	// destination-only form — so the block is total. Say so: --force has no
-	// lift-and-probe, and the operator's way out is `unblock`/`panic`.
-	if len(providers) > 0 && len(tunnels) == 0 {
-		log.Warn("no tunnel interfaces resolved: the geo-provider pass cannot be scoped to one, so this block cuts everything but loopback — recover with `dezhban unblock` or `dezhban panic`")
-	}
-	in := firewall.PolicyInput{Tunnels: tunnels, ProviderAddrs: providers}
-	return in.FullBlock(), tunnels
+// So --force is total, says so, and vpn.allowGeoProviders is simply not one of
+// its inputs. An operator who wants the guard's own FULL BLOCK — endpoints open,
+// tunnel-scoped provider pass, automatic recovery — wants plain `block`, which
+// is what that renders.
+func forceBlockPolicy() firewall.Policy {
+	return firewall.PolicyInput{}.FullBlock()
 }
+
+// blockPlan builds the VPN-mode firewall policy `block`/`block --guard` would
+// apply — the pure decision pulled out of cmdBlock's default branch — so it can
+// be tested without root or a firewall backend. Built through the same
+// firewall.PolicyInput constructor the daemon and print-rules use, so this
+// manual override can never drift from what the run loop would actually install
+// — in particular, it must NOT carry a physical dst-IP allowlist: a VPN posture
+// opens the tunnel endpoint, never a destination allowlist.
 
 func blockPlan(cfg *config.Config, log *slog.Logger, guard bool) (blockDecision, error) {
 	tunnels := resolveTunnels(cfg, log)
@@ -1056,13 +1046,11 @@ func cmdBlock(args []string) int {
 
 	switch {
 	case *force:
-		pol, tunnels := forceBlockPolicy(cfg, log)
-		if err := fw.Apply(pol); err != nil {
+		if err := fw.Apply(forceBlockPolicy()); err != nil {
 			log.Error("forced block failed", "err", err)
 			return 1
 		}
-		log.Info("network force-blocked (all egress cut except loopback + the tunnel-scoped geo providers)",
-			"providers_allowed", len(pol.ProviderAddrs), "tunnels", len(tunnels))
+		log.Info("network force-blocked: all egress cut except loopback — no geo-provider pass, no automatic recovery; restore with `dezhban unblock` or `dezhban panic`")
 	default:
 		// `--guard` installs the always-on interface guard (tunnel stays open,
 		// physical egress locked to the endpoint); a plain `block` is a full block
@@ -1167,31 +1155,33 @@ func resolveEndpointsOnce(cfg *config.Config, log *slog.Logger, tunnels []string
 	return src.Resolve(ctx).Addrs
 }
 
-// buildProviderAllowlist resolves the configured geo-API providers to IPs, for
-// the two callers that need a concrete set: the daemon's provider resolver and
-// `block --force`. Both gate the call on vpn.allowGeoProviders — the pass this
-// feeds is the one destination-scoped hole in the ruleset, so the key that
-// turns it off has to be honoured everywhere it is built, not just in the run
-// loop. This used to also fold in a user-configured
+// resolveProviderAddrs resolves the configured geo-API providers to IPs for the
+// daemon's provider resolver — its one caller, which gates the call on
+// vpn.allowGeoProviders. `block --force` used to call it too; it no longer
+// passes anything at all (see forceBlockPolicy), so the key is honoured
+// everywhere the pass is built simply because there is only one such place.
+//
+// It returns a plain address list, not a firewall.Allowlist: the only consumer
+// of the result is Policy.ProviderAddrs, the DNS half was never populated, and
+// an Allowlist-shaped return invited a caller to hand it to the (now
+// producerless) dst-IP allowlist instead. This used to also fold in a user-configured
 // destination allowlist (vpn.allowlist.dns/hosts); that key is retired
 // (docs/adr/0001) because it belonged to the country-blocklist model, where
 // the firewall was open at rest and needed an explicit list of exceptions.
-// `--force` is a manual, temporary override, not a standing posture, so it has
-// no equivalent need for user-supplied destinations.
-func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allowlist {
-	var al firewall.Allowlist
+func resolveProviderAddrs(cfg *config.Config, log *slog.Logger) []netip.Addr {
+	var hosts []netip.Addr
 	seen := make(map[netip.Addr]bool)
 	add := func(a netip.Addr) {
 		a = a.Unmap()
 		if a.IsValid() && !seen[a] {
 			seen[a] = true
-			al.Hosts = append(al.Hosts, a)
+			hosts = append(hosts, a)
 		}
 	}
 	for _, raw := range cfg.Providers {
 		u, err := url.Parse(raw)
 		if err != nil || u.Hostname() == "" {
-			log.Warn("cannot parse provider url for allowlist", "url", raw)
+			log.Warn("cannot parse provider url", "url", raw)
 			continue
 		}
 		// Bound the lookup: this runs synchronously in the run loop's Block path,
@@ -1200,7 +1190,7 @@ func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allow
 		ips, err := net.DefaultResolver.LookupIPAddr(ctx, u.Hostname())
 		cancel()
 		if err != nil {
-			log.Warn("cannot resolve provider for allowlist", "host", u.Hostname(), "err", err)
+			log.Warn("cannot resolve provider", "host", u.Hostname(), "err", err)
 			continue
 		}
 		for _, ip := range ips {
@@ -1209,17 +1199,13 @@ func buildProviderAllowlist(cfg *config.Config, log *slog.Logger) firewall.Allow
 			}
 		}
 	}
-	// The allowlist pins IPs at block time. If nothing resolved, recovery
-	// detection can never reach a geo-API once egress is cut — the block would
-	// become permanent. Warn loudly rather than silently lock the operator out.
-	// NOTE: `block --force` resolves this once, at block time, so a provider
-	// that rotates CDN IPs mid-block becomes unreachable until the next block.
-	// (The guard postures don't use this allowlist at all — they pass endpoints,
-	// and refresh geo providers while healthy.)
-	if len(al.Hosts) == 0 {
-		log.Warn("no geo-API egress IPs in allowlist — recovery detection cannot work while blocked")
+	// If nothing resolved there is no tunnel-scoped provider pass to install, so
+	// a FULL BLOCK cannot observe its own exit and recovery degrades to
+	// lift-and-probe. Warn rather than let that happen silently.
+	if len(hosts) == 0 {
+		log.Warn("no geo-API egress IPs resolved — recovery from FULL BLOCK will fall back to lifting the guard to observe the exit")
 	}
-	return al
+	return hosts
 }
 
 func cmdUnblock(args []string) int {
@@ -1789,10 +1775,7 @@ func cmdMonitor(args []string) int {
 // cannot drift from what the daemon would actually install.
 func policyForMode(cfg *config.Config, log *slog.Logger, mode string) (firewall.Policy, error) {
 	tunnels := resolveTunnels(cfg, log)
-	// Every posture here is a VPN posture, so Policy.Allowlist stays empty — a
-	// posture opens endpoints, not a physical dst-IP allowlist (that field is
-	// live only for `block --force`, which builds its Policy directly). Input
-	// construction is deferred into a closure because resolving endpoints does
+	// Input construction is deferred into a closure because resolving endpoints does
 	// DNS: the error branches below must not pay for network work (and log
 	// resolution failures) for a ruleset that will never render.
 	vpnInput := func() firewall.PolicyInput {

@@ -215,14 +215,19 @@ sudo dezhban panic                                # standalone teardown, no daem
 
 - `run --dry-run` — poll and print the country without touching the firewall.
 - `block --guard` — install the VPN interface guard (see [modes.md](../concepts/modes.md)).
-- `block --force` — unconditional hard block of all egress (loopback + the
-  geo-provider pass only), bypassing the VPN guard. The override when detection
-  is wrong. The provider pass obeys `vpn.allowGeoProviders` and is scoped to the
-  tunnel interface **and** the provider addresses, exactly as in the daemon's
-  FULL BLOCK ([ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md)) — so with
-  the key off, or with no tunnel interface resolved to scope the rule to,
-  `--force` cuts everything but loopback. It has no lift-and-probe fallback;
-  recover with `unblock` or `panic`.
+- `block --force` — unconditional hard block: **loopback and nothing else**,
+  bypassing the VPN guard. The override when detection is wrong. It passes no
+  VPN endpoint (so the tunnel drops), no DNS, no LAN, and no geo-provider
+  addresses, which means there is **no automatic recovery** — `unblock` or
+  `panic` are the only way back. `vpn.allowGeoProviders` is not one of its
+  inputs.
+  It used to keep a destination-scoped provider pass on the physical link "so
+  recovery detection still works". That was the half-scoping
+  [ADR-0006](../adr/0006-geo-providers-tunnel-scoped.md) forbids, and scoping it
+  correctly is impossible here: a tunnel-scoped rule needs a live tunnel, and
+  this posture cuts the endpoint the tunnel handshakes to. If you want endpoints
+  open, a working tunnel-scoped provider pass and automatic recovery, use plain
+  `block` — that is the daemon's FULL BLOCK shape.
 - `unblock --force` — accepted for symmetry (`unblock` is already unconditional).
 - `--simulate-country IR` (on `monitor` and `run`) — force the verdict from
   anywhere, without a sanctioned IP.

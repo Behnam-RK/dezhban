@@ -88,10 +88,27 @@ const windowRevertRetry = 2 * time.Second
 // The public-IPv6 observation (Options.LookupIPv6) is fixed-cadence and
 // hard-bounded rather than configurable: it feeds no decision, so it earns no
 // key, and it runs inline in the run-loop goroutine, so its budget has to be
-// small enough that a hung lookup cannot meaningfully stall window expiry.
+// bounded hard.
+//
+// It cannot stall WINDOW expiry, which is the bound that would matter most: the
+// observation only runs after a confirmed ALLOWED reading in healthy GUARD, and
+// the geo tick skips that path entirely while a window is open (or in standby, or
+// under a manual block). What a hung lookup can delay is reacting to a tunnel
+// EDGE that arrives mid-lookup — by at most the budget below, and in the
+// fail-closed direction: the guard stays on, only the redial window's opening
+// waits. That is why the budget can be sized to fit monitor's fallback rather
+// than shaved to the smallest possible number.
 const (
-	ipv6Interval     = 5 * time.Minute
-	ipv6LookupBudget = 2 * time.Second
+	ipv6Interval = 5 * time.Minute
+	// ipv6LookupBudget must leave room for BOTH of monitor's sequential
+	// endpoints, each of which gets its own 2s ipv6LookupTimeout derived from
+	// this context. At 2s the parent budget was exactly one endpoint's timeout,
+	// so a first endpoint that HUNG spent the whole budget and the fallback
+	// failed instantly with an already-cancelled context — the documented
+	// fallback never fired for the one failure mode it exists for. 5s fits two
+	// attempts with a margin, and a slow-but-working first endpoint still
+	// succeeds inside its own timeout rather than being cut short.
+	ipv6LookupBudget = 5 * time.Second
 )
 
 // ipv6RearmFloor is how soon the observation may be retaken after something
@@ -3175,10 +3192,6 @@ func (o Options) vpnPolicies(tunnels []string, endpoints, providers []netip.Addr
 // policyInput gathers the posture-shaping options into the firewall package's
 // shared constructor input, so the run loop and print-rules build postures from
 // one definition (firewall.PolicyInput).
-//
-// Allowlist is deliberately left zero: a VPN posture opens endpoints, not a
-// physical dst-IP allowlist, which is meaningless against encrypted outer
-// packets. The runner's separate Allowlist hook feeds the legacy Block path only.
 //
 // Invalid addresses are dropped by the constructor (they would otherwise render
 // as "invalid IP" and make pf reject the whole ruleset). That drop is silent by

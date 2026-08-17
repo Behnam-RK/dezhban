@@ -32,8 +32,8 @@ type Monitor struct {
 	// quorum requires a strict majority of providers to agree on the country
 	// before a reading is trusted; otherwise the first successful provider wins.
 	quorum bool
-	// v6client/v6endpoints back OnceIPv6 (ipv6.go). Zero values mean "use the
-	// built-in tcp6 client and fixed endpoint list"; only tests override them.
+	// v6client/v6endpoints back OnceIPv6 (ipv6.go). New sets v6client; a nil
+	// v6endpoints means "the fixed endpoint list". Only tests override them.
 	v6client    *http.Client
 	v6endpoints []string
 }
@@ -48,8 +48,13 @@ func New(providers []GeoProvider, interval time.Duration, log *slog.Logger, quor
 		interval:      interval,
 		lookupTimeout: defaultLookupTimeout,
 		client:        &http.Client{Timeout: defaultClientTimeout},
-		log:           log,
-		quorum:        quorum,
+		// Built here, not lazily on first OnceIPv6: Poll hands the Monitor to a
+		// background goroutine, so every field a method touches must be set
+		// before that happens. A method that assigns to its receiver is the one
+		// shape that cannot stay safe as callers multiply.
+		v6client: newIPv6Client(),
+		log:      log,
+		quorum:   quorum,
 	}
 }
 

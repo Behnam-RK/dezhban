@@ -173,7 +173,15 @@ struct OverviewView: View {
         // wrong label on a correct value, and when it is the very address the
         // v6 probe observed, a second row would repeat it.
         let geoIsV6 = s.ip?.contains(":") == true
-        let ipv6 = (observed == s.ip) ? nil : observed
+        // Suppressed by FAMILY, not by string equality. The two are independent
+        // observers — the geo provider reports the address it saw the request
+        // arrive from, the probe reports the one the host sends from — and with
+        // privacy extensions those legitimately differ. Deduping on equality
+        // alone therefore left the grid showing two IPv6 addresses, the first
+        // labelled "Public IP" and the second "Public IPv6", which reads as a
+        // contradiction rather than as two readings. One family, one row, and
+        // the geo row is the one the country verdict is tied to.
+        let ipv6 = geoIsV6 ? nil : observed
         return Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
             if let ip = s.ip, !ip.isEmpty {
                 // An em dash, not a parenthetical: `countryLabel` already ends

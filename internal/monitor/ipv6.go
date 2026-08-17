@@ -49,8 +49,12 @@ func newIPv6Client() *http.Client {
 // when every endpoint fails — routine on v4-only hosts, and callers treat it as
 // "no v6 to show", never as a fault worth surfacing.
 func (m *Monitor) OnceIPv6(ctx context.Context) (netip.Addr, error) {
-	if m.v6client == nil {
-		m.v6client = newIPv6Client()
+	// Read-only on the receiver, like every other Monitor method: New builds the
+	// client (a zero-value Monitor from a test that skipped New falls back here
+	// without mutating anything shared).
+	client := m.v6client
+	if client == nil {
+		client = newIPv6Client()
 	}
 	endpoints := m.v6endpoints
 	if len(endpoints) == 0 {
@@ -59,7 +63,7 @@ func (m *Monitor) OnceIPv6(ctx context.Context) (netip.Addr, error) {
 	var errs []error
 	for _, url := range endpoints {
 		pctx, cancel := context.WithTimeout(ctx, ipv6LookupTimeout)
-		ip, err := fetchIPv6(pctx, m.v6client, url)
+		ip, err := fetchIPv6(pctx, client, url)
 		cancel()
 		if err != nil {
 			m.log.Debug("ipv6 lookup failed", "endpoint", url, "err", err)

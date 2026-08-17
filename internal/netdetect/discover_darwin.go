@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"net/netip"
 	"os/exec"
@@ -116,12 +117,23 @@ func physicalSockets(ctx context.Context, phys map[netip.Addr]bool) ([]socket, e
 		// nothing", and swallowing it made the two identical: a missing or
 		// non-executable binary, or a cancelled context, returned (nil, nil) — an
 		// empty inventory with an empty discoveryErr, which every consumer is
-		// entitled to read as authoritative. Only an ExitError means lsof ran.
-		var ee *exec.ExitError
-		if len(out) == 0 && !errors.As(err, &ee) {
-			return nil, err
-		}
+		// entitled to read as authoritative.
+		//
+		// The context is checked FIRST and separately: os/exec reports a
+		// context-killed child as `signal: killed`, i.e. an *ExitError, so an
+		// ExitError test alone reads a timed-out scan as "lsof ran and found
+		// nothing" — the exact false authority this branch exists to prevent, and
+		// the likely case on a busy host where the 5s budget expires. Only after
+		// that does an ExitError mean lsof genuinely ran and exited non-zero
+		// (it exits 1 when it matched nothing).
 		if len(out) == 0 {
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, fmt.Errorf("lsof: %w", ctxErr)
+			}
+			var ee *exec.ExitError
+			if !errors.As(err, &ee) {
+				return nil, err
+			}
 			return nil, nil
 		}
 	}

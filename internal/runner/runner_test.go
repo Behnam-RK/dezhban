@@ -61,13 +61,12 @@ func (f *fakeMonitor) Once(context.Context) (monitor.Reading, error) {
 	return r.Reading, r.Err
 }
 
-// fakeBackend records the sequence of calls made against it. blockErr/applyErr, when
-// set, make the corresponding action fail (the call is still recorded) so tests can
-// exercise enforcement-failure paths.
+// fakeBackend records the sequence of calls made against it. applyErr, when set,
+// makes Apply fail (the call is still recorded) so tests can exercise
+// enforcement-failure paths.
 type fakeBackend struct {
 	calls    []string
 	policies []firewall.Policy
-	blockErr error
 	applyErr error
 	// isBlockedFn drives enforcement verification. nil answers "the rules are
 	// present" — the healthy reply — so every test that does not care about
@@ -238,9 +237,6 @@ func TestVPNGuardFullBlockAndProbeRecovery(t *testing.T) {
 	if len(fb.TunnelIfaces) == 0 {
 		t.Error("VPN full block must carry tunnel ifaces")
 	}
-	if len(fb.Allowlist.DNS) != 0 || len(fb.Allowlist.Hosts) != 0 {
-		t.Error("VPN full block must not carry a dst-IP allowlist")
-	}
 }
 
 // A single allowed probe must not lift a hysteresis>1 block: recovery requires
@@ -381,11 +377,10 @@ func (b *failingGuardBackend) Cleanup() error                { b.cleanups++; ret
 // --- tunnel watcher ---
 
 // signalBackend is concurrency-safe (the watcher runs in its own goroutine) and
-// signals on blockCh whenever Block is called, so a test can synchronize on it.
+// records every call, so a test can assert on the sequence after the fact.
 type signalBackend struct {
-	mu      sync.Mutex
-	calls   []string
-	blockCh chan struct{}
+	mu    sync.Mutex
+	calls []string
 }
 
 func (b *signalBackend) record(s string) {

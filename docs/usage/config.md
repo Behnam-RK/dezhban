@@ -48,14 +48,12 @@ command set.
 | `vpn` | object | — | VPN interface-guard config — see below. |
 | `control` | object | enabled | Control socket — the reason routine ops don't ask for a password. See below. |
 
-A `block --force` pins the resolved provider IPs at block time; the long-running
-`run` loop re-resolves them live, but a one-shot `block --force` does not. A
-provider behind a rotating CDN can later resolve to a different IP than the one
-pinned, breaking recovery until the next `run` refresh — prefer providers with
-stable IPs for hosts that rely on one-shot `block`. `--force` honours
-`vpn.allowGeoProviders` and scopes the pass to the tunnel interface the same way
-the daemon does, so with the key off — or with no tunnel interface resolved to
-scope the rule to — it cuts everything but loopback.
+`providers` are resolved to IPs by the `run` loop, which refreshes them while the
+guard is healthy so FULL BLOCK begins with a fresh set for its tunnel-scoped pass
+(`vpn.allowGeoProviders`, below). `block --force` does not resolve them at all:
+it passes loopback and nothing else, so there is no provider pass to keep
+reachable and no automatic recovery to protect — see
+[cli.md](cli.md#key-flags).
 
 ### Keys that apply live, and keys that need a restart
 

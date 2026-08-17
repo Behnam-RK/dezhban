@@ -103,18 +103,34 @@ current as you land changes.
   running and the row stayed blank until it happened to expire — on a host
   that drops more often than that, permanently. Invalidating now re-arms, with
   a 30s floor so a flapping tunnel cannot force one lookup per flap.
-- **`block --force` no longer ignores `vpn.allowGeoProviders`.** The key that
-  removes the ruleset's only destination-scoped hole was honoured by the daemon
-  and discarded by the one command that bypasses it, so setting it to `false`
-  and then force-blocking still installed the pass. It also installed the
-  *wrong shape*: a destination-only `pass out quick to { providers }` on the
-  physical link, the half-scoping [ADR-0006](docs/adr/0006-geo-providers-tunnel-scoped.md)
-  forbids because the lookup then succeeds with the tunnel down and reports the
-  ISP's country instead of the exit's. `--force` now builds its posture from the
-  same `PolicyInput` as every other one: tunnel-**and**-destination scoped, and
-  absent entirely when the key is off or no tunnel interface resolved to scope
-  it to. Both cases warn, naming `unblock`/`panic` as the way out — `--force`
-  has no lift-and-probe.
+- **`block --force` is now honestly total: loopback and nothing else.** It used
+  to install a destination-only `pass out quick to { providers }` on the
+  *physical* link, justified as keeping recovery detection reachable. That is
+  the half-scoping [ADR-0006](docs/adr/0006-geo-providers-tunnel-scoped.md)
+  forbids — the lookup succeeds with the tunnel down and reports the ISP's
+  country, not the exit's — and it ignored `vpn.allowGeoProviders`, the one key
+  that turns that hole off. Scoping it correctly is impossible in this posture:
+  a tunnel-scoped rule needs a live tunnel, and `--force` cuts the endpoint the
+  tunnel handshakes to, so the rule could never match. Rather than ship a pass
+  that cannot carry a packet, `--force` now passes nothing, says so in its log
+  line, and leaves `unblock`/`panic` as the only way back. For endpoints open, a
+  working tunnel-scoped provider pass and automatic recovery, use plain `block`.
+- **The public-IPv6 fallback endpoint can actually be reached.** The run loop's
+  budget for the whole observation was 2s — exactly one endpoint's own timeout —
+  so a first endpoint that *hung* consumed all of it and the second failed
+  instantly against an already-cancelled context. The budget is now 5s, enough
+  for both attempts. It cannot delay a switch window (the observation never runs
+  while one is open); the only cost is up to 5s before a mid-lookup tunnel edge
+  is acted on, in the fail-closed direction.
+- **A `detect-vpn` scan killed by its own timeout no longer reports "found
+  none".** `os/exec` surfaces a context-killed child as an `*ExitError`, the
+  same shape `lsof` uses to say "matched nothing", so the 5s discovery budget
+  expiring on a busy host produced an authoritative-looking empty inventory.
+- **The Overview shows one row per address family.** The IPv6 de-duplication
+  compared strings, so when the geo provider and the v6 probe reported
+  *different* v6 addresses — privacy extensions, or simply two observers — the
+  grid showed both, the first labelled "Public IP" and the second "Public
+  IPv6".
 - **`detect-vpn --json` says when a VPN scan could only see part of the
   machine.** Discovery shells out to `lsof`, which as an unprivileged user
   lists only that user's sockets, so a VPN whose transport runs as root
@@ -160,6 +176,17 @@ current as you land changes.
   when the CLI is older than the flag or a scan fails. The staleness gates
   also required a non-nil result, so a nil — itself a result — left them
   permanently unlatched, forking a process-scanning subprocess per `.onAppear`.
+
+### Removed
+
+- **The destination-IP allowlist is gone from the firewall layer.**
+  `firewall.Allowlist`, `Policy.Allowlist`, `PolicyInput.Allowlist` and the
+  per-backend rules that rendered them had no producer left once
+  `block --force` stopped installing one. With it goes the `isVPNPolicy` split
+  in all three backends: every posture is now a VPN posture, so there is
+  nothing left to tell apart. `vpn.allowlist` in the config file is unrelated
+  and unchanged — still a retired key, still parsed and reported rather than
+  acted on.
 
 ## [0.10.0] - 2026-08-16
 

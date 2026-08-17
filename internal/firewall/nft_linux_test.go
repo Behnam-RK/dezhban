@@ -100,11 +100,8 @@ func TestOutputChainPolicyIsDrop(t *testing.T) {
 
 func TestRenderNftLegacyFullBlock(t *testing.T) {
 	p := Policy{
-		Mode: ModeFullBlock,
-		Allowlist: Allowlist{
-			DNS:   []netip.Addr{mustAddr(t, "1.1.1.1"), mustAddr(t, "8.8.8.8")},
-			Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")},
-		},
+		Mode:         ModeFullBlock,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
 	}
 	rs := renderNftRuleset(p)
 
@@ -123,33 +120,40 @@ func TestRenderNftLegacyFullBlock(t *testing.T) {
 	assertDefaultDrop(t, rs)
 }
 
-func TestRenderNftEmptyAllowlist(t *testing.T) {
+// A zero-valued FULL BLOCK is `block --force`: every optional field empty, so
+// nothing but loopback may egress. It used to carry a destination-IP allowlist
+// here; that pass is gone — see forceBlockPolicy for why no correctly-scoped
+// replacement is possible in this posture.
+func TestRenderNftForceBlockPassesNothing(t *testing.T) {
 	rs := renderNftRuleset(Policy{Mode: ModeFullBlock})
 	if strings.Contains(rs, "{  }") || strings.Contains(rs, "{ }") {
-		t.Errorf("empty allowlist produced an invalid empty set:\n%s", rs)
+		t.Errorf("an empty set rendered as a rule:\n%s", rs)
 	}
-	// Only loopback should be accepted with no DNS/hosts.
 	for line := range strings.SplitSeq(rs, "\n") {
 		if strings.Contains(line, "daddr") {
-			t.Errorf("empty allowlist should emit no daddr accept rules: %q", line)
+			t.Errorf("--force emitted a daddr accept rule: %q", line)
+		}
+		if strings.Contains(line, "dport 53") {
+			t.Errorf("--force emitted a DNS rule: %q", line)
 		}
 	}
 	assertDefaultDrop(t, rs)
 }
 
+// nft matches destinations per family (`ip daddr` vs `ip6 daddr`), so a mixed
+// address list must render as two rules, never one merged set that silently
+// matches nothing.
 func TestRenderNftV6Split(t *testing.T) {
 	p := Policy{
-		Mode: ModeFullBlock,
-		Allowlist: Allowlist{
-			DNS: []netip.Addr{mustAddr(t, "1.1.1.1"), mustAddr(t, "2606:4700:4700::1111")},
-		},
+		Mode:         ModeFullBlock,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "1.1.1.1"), mustAddr(t, "2606:4700:4700::1111")},
 	}
 	rs := renderNftRuleset(p)
-	if !strings.Contains(rs, "ip daddr { 1.1.1.1 } udp dport 53 accept") {
-		t.Errorf("v4 DNS rule missing or merged with v6:\n%s", rs)
+	if !strings.Contains(rs, "ip daddr { 1.1.1.1 } accept") {
+		t.Errorf("v4 endpoint rule missing or merged with v6:\n%s", rs)
 	}
-	if !strings.Contains(rs, "ip6 daddr { 2606:4700:4700::1111 } udp dport 53 accept") {
-		t.Errorf("v6 DNS rule missing or merged with v4:\n%s", rs)
+	if !strings.Contains(rs, "ip6 daddr { 2606:4700:4700::1111 } accept") {
+		t.Errorf("v6 endpoint rule missing or merged with v4:\n%s", rs)
 	}
 }
 
@@ -158,8 +162,6 @@ func TestRenderNftGuard(t *testing.T) {
 		Mode:         ModeGuard,
 		TunnelIfaces: []string{"utun4", "wg0"},
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		// Allowlist present but must be ignored in guard mode.
-		Allowlist: Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
 	}
 	rs := renderNftRuleset(p)
 
@@ -173,9 +175,9 @@ func TestRenderNftGuard(t *testing.T) {
 			t.Errorf("guard ruleset missing %q\n--- got ---\n%s", w, rs)
 		}
 	}
-	// The dst-IP allowlist must NOT leak into guard rules.
-	if strings.Contains(rs, "dport 53") || strings.Contains(rs, "1.1.1.1") {
-		t.Errorf("guard ruleset must not emit the dst-IP allowlist:\n%s", rs)
+	// No DNS rule: AllowPhysicalDNS is off here, and nothing else may emit one.
+	if strings.Contains(rs, "dport 53") {
+		t.Errorf("guard ruleset emitted an unrequested DNS rule:\n%s", rs)
 	}
 	assertDefaultDrop(t, rs)
 }
@@ -185,7 +187,6 @@ func TestRenderNftVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 		Mode:         ModeFullBlock,
 		TunnelIfaces: []string{"utun4"},
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		Allowlist:    Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
 	}
 	rs := renderNftRuleset(p)
 
@@ -282,13 +283,9 @@ func TestRenderNftZeroTunnelStandingPosture(t *testing.T) {
 	rs := renderNftRuleset(Policy{
 		Mode:         ModeFullBlock,
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		Allowlist:    Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
 	})
 	if !strings.Contains(rs, "203.0.113.5") {
 		t.Errorf("zero-tunnel standing posture must keep endpoints:\n%s", rs)
-	}
-	if strings.Contains(rs, "1.1.1.1") {
-		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", rs)
 	}
 }
 
@@ -334,25 +331,19 @@ func TestRenderNftLocalNetwork(t *testing.T) {
 	}
 }
 
-// The LAN pass must not depend on isVPNPolicy — see the pf twin of this test in
+// The LAN pass must survive a FULL BLOCK with no tunnels — see the pf twin in
 // pf_darwin_test.go for the full rationale. Nested inside the VPN branch,
 // allowLocalNetwork was silently discarded for a FULL BLOCK with no tunnels, no
 // endpoints and allowPhysicalDNS off.
 func TestRenderNftLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
 	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
-	if isVPNPolicy(p) {
-		t.Fatal("precondition: this policy must take the non-VPN branch")
-	}
 	rs := renderNftRuleset(p)
 	if !strings.Contains(rs, "10.0.0.0/8") {
 		t.Errorf("LAN pass dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", rs)
 	}
 
 	// `block --force` must be unaffected.
-	forced := renderNftRuleset(Policy{
-		Mode:      ModeFullBlock,
-		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
-	})
+	forced := renderNftRuleset(Policy{Mode: ModeFullBlock})
 	if strings.Contains(forced, "10.0.0.0/8") {
 		t.Errorf("block --force must not gain a LAN pass:\n%s", forced)
 	}

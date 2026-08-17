@@ -30,11 +30,8 @@ func assertDefaultDenyLast(t *testing.T, script string) {
 
 func TestRenderBlockScriptLegacyFullBlock(t *testing.T) {
 	p := Policy{
-		Mode: ModeFullBlock,
-		Allowlist: Allowlist{
-			DNS:   []netip.Addr{mustAddr(t, "1.1.1.1"), mustAddr(t, "8.8.8.8")},
-			Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")},
-		},
+		Mode:         ModeFullBlock,
+		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
 	}
 	s := renderBlockScript(p)
 
@@ -53,14 +50,20 @@ func TestRenderBlockScriptLegacyFullBlock(t *testing.T) {
 	assertDefaultDenyLast(t, s)
 }
 
-func TestRenderBlockScriptEmptyAllowlist(t *testing.T) {
+// A zero-valued FULL BLOCK is `block --force`: every optional field empty, so
+// only loopback is allowed, then the Block default. It used to carry a
+// destination-IP allowlist here; that pass is gone — see forceBlockPolicy for
+// why no correctly-scoped replacement is possible in this posture.
+func TestRenderBlockScriptForceBlockPassesNothing(t *testing.T) {
 	s := renderBlockScript(Policy{Mode: ModeFullBlock})
-	// No DNS/hosts → only loopback allow, then the Block default.
 	if strings.Contains(s, "RemotePort 53") {
-		t.Errorf("empty allowlist should emit no DNS rule:\n%s", s)
+		t.Errorf("--force emitted a DNS rule:\n%s", s)
 	}
 	if strings.Contains(s, "-RemoteAddress \n") || strings.Contains(s, "-RemoteAddress |") {
-		t.Errorf("empty allowlist produced a rule with no address:\n%s", s)
+		t.Errorf("a rule rendered with no address:\n%s", s)
+	}
+	if strings.Contains(s, "-RemoteAddress ") {
+		t.Errorf("--force emitted a destination-scoped allow:\n%s", s)
 	}
 	assertDefaultDenyLast(t, s)
 }
@@ -70,7 +73,6 @@ func TestRenderBlockScriptGuard(t *testing.T) {
 		Mode:         ModeGuard,
 		TunnelIfaces: []string{"WireGuard tunnel", "utun4"},
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		Allowlist:    Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
 	}
 	s := renderBlockScript(p)
 
@@ -83,9 +85,9 @@ func TestRenderBlockScriptGuard(t *testing.T) {
 			t.Errorf("guard script missing %q\n--- got ---\n%s", w, s)
 		}
 	}
-	// The dst-IP allowlist must NOT leak into guard rules.
-	if strings.Contains(s, "RemotePort 53") || strings.Contains(s, "1.1.1.1") {
-		t.Errorf("guard script must not emit the dst-IP allowlist:\n%s", s)
+	// No DNS rule: AllowPhysicalDNS is off here, and nothing else may emit one.
+	if strings.Contains(s, "RemotePort 53") {
+		t.Errorf("guard script emitted an unrequested DNS rule:\n%s", s)
 	}
 	assertDefaultDenyLast(t, s)
 }
@@ -95,7 +97,6 @@ func TestRenderBlockScriptVPNFullBlockCutsTunnelKeepsEndpoints(t *testing.T) {
 		Mode:         ModeFullBlock,
 		TunnelIfaces: []string{"utun4"},
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		Allowlist:    Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
 	}
 	s := renderBlockScript(p)
 
@@ -287,13 +288,9 @@ func TestRenderBlockScriptZeroTunnelStandingPosture(t *testing.T) {
 	s := renderBlockScript(Policy{
 		Mode:         ModeFullBlock,
 		VPNEndpoints: []netip.Addr{mustAddr(t, "203.0.113.5")},
-		Allowlist:    Allowlist{DNS: []netip.Addr{mustAddr(t, "1.1.1.1")}},
 	})
 	if !strings.Contains(s, "203.0.113.5") {
 		t.Errorf("zero-tunnel standing posture must keep endpoints:\n%s", s)
-	}
-	if strings.Contains(s, "1.1.1.1") {
-		t.Errorf("zero-tunnel standing posture must not emit the legacy allowlist:\n%s", s)
 	}
 }
 
@@ -326,25 +323,19 @@ func TestRenderBlockScriptLocalNetwork(t *testing.T) {
 	}
 }
 
-// The LAN allow must not depend on isVPNPolicy — see the pf twin of this test in
+// The LAN allow must survive a FULL BLOCK with no tunnels — see the pf twin in
 // pf_darwin_test.go for the full rationale. Nested inside the VPN branch,
 // allowLocalNetwork was silently discarded for a FULL BLOCK with no tunnels, no
 // endpoints and allowPhysicalDNS off.
 func TestRenderBlockScriptLocalNetworkSurvivesNonVPNFullBlock(t *testing.T) {
 	p := PolicyInput{AllowLocalNetwork: true}.FullBlock()
-	if isVPNPolicy(p) {
-		t.Fatal("precondition: this policy must take the non-VPN branch")
-	}
 	script := renderBlockScript(p)
 	if !strings.Contains(script, "10.0.0.0/8") {
 		t.Errorf("LAN allow dropped in non-VPN full block despite allowLocalNetwork=true:\n%s", script)
 	}
 
 	// `block --force` must be unaffected.
-	forced := renderBlockScript(Policy{
-		Mode:      ModeFullBlock,
-		Allowlist: Allowlist{Hosts: []netip.Addr{mustAddr(t, "34.117.59.81")}},
-	})
+	forced := renderBlockScript(Policy{Mode: ModeFullBlock})
 	if strings.Contains(forced, "10.0.0.0/8") {
 		t.Errorf("block --force must not gain a LAN allow:\n%s", forced)
 	}

@@ -33,10 +33,6 @@ func TestPolicyInputUnmapsV4InV6(t *testing.T) {
 	in := PolicyInput{
 		Tunnels:   []string{"utun4"},
 		Endpoints: []netip.Addr{mapped},
-		Allowlist: Allowlist{
-			DNS:   []netip.Addr{mustCanonAddr(t, "::ffff:1.1.1.1")},
-			Hosts: []netip.Addr{mustCanonAddr(t, "::ffff:9.9.9.9")},
-		},
 	}
 
 	for name, pol := range map[string]Policy{
@@ -51,11 +47,6 @@ func TestPolicyInputUnmapsV4InV6(t *testing.T) {
 				}
 				if got := a.String(); got != "203.0.113.9" {
 					t.Errorf("endpoint rendered as %q, want %q", got, "203.0.113.9")
-				}
-			}
-			for _, a := range append(pol.Allowlist.DNS, pol.Allowlist.Hosts...) {
-				if !a.Is4() {
-					t.Errorf("allowlist entry %s is not canonical IPv4", a)
 				}
 			}
 		})

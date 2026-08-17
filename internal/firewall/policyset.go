@@ -42,19 +42,6 @@ type PolicyInput struct {
 	// passing all outbound.
 	WindowProtos []string
 	WindowPorts  []int
-	// Allowlist is a dst-IP allowlist. A VPN posture opens endpoints rather than
-	// a physical allowlist, so every current caller leaves this empty: the run
-	// loop never sets it, and print-rules no longer does either now that
-	// `--mode legacy` is gone.
-	//
-	// The field is kept rather than deleted because Policy.Allowlist is still
-	// live — `dezhban block --force` builds a Policy directly with a resolved
-	// geo-provider allowlist so recovery detection survives a manual hard block.
-	// Keeping the seam here means that if --force is ever routed through
-	// PolicyInput (which would be an improvement — it is the last posture that
-	// bypasses the single constructor), it inherits canonAddrs' v4-in-v6
-	// normalisation instead of re-learning that lesson.
-	Allowlist Allowlist
 }
 
 // canonAddrs returns addrs with every IPv4-in-IPv6 address unmapped, dropping
@@ -94,11 +81,6 @@ func canonAddrs(addrs []netip.Addr) []netip.Addr {
 	return out
 }
 
-// canonAllowlist applies canonAddrs to both halves of an Allowlist.
-func canonAllowlist(a Allowlist) Allowlist {
-	return Allowlist{DNS: canonAddrs(a.DNS), Hosts: canonAddrs(a.Hosts)}
-}
-
 // CountInvalid reports how many of addrs canonAddrs would silently drop.
 //
 // Dropping is the right behaviour at the seam — the zero netip.Addr stringifies
@@ -122,12 +104,11 @@ func CountInvalid(addrs []netip.Addr) int {
 // handshake still reaches the server and the tunnel can redial. Cutting the
 // endpoint too would livelock recovery.
 //
-// The dst-IP allowlist is meaningless against a tunnel's encrypted outer packets,
-// which is why the run loop never sets it here.
+// A zero PolicyInput yields `block --force`: every optional field empty, so the
+// ruleset is loopback plus a default deny.
 func (in PolicyInput) FullBlock() Policy {
 	return Policy{
 		Mode:         ModeFullBlock,
-		Allowlist:    canonAllowlist(in.Allowlist),
 		TunnelIfaces: in.Tunnels,
 		// Carried even though FULL BLOCK installs no tunnel pass: the geo-provider
 		// rule below is scoped to the tunnel, and a config that names only a
@@ -160,7 +141,6 @@ func (in PolicyInput) Guard() Policy {
 	}
 	return Policy{
 		Mode:              ModeGuard,
-		Allowlist:         canonAllowlist(in.Allowlist),
 		TunnelIfaces:      in.Tunnels,
 		TunnelGroups:      in.TunnelGroups,
 		VPNEndpoints:      canonAddrs(in.Endpoints),
@@ -173,8 +153,8 @@ func (in PolicyInput) Guard() Policy {
 // complete. Unrestricted by default (all outbound), which is why the daemon —
 // never this constructor — is responsible for bounding it in time.
 //
-// No Allowlist and no AllowPhysicalDNS: an unrestricted window already passes
-// everything, and the restricted form renders its own DNS pass unconditionally.
+// No AllowPhysicalDNS: an unrestricted window already passes everything, and the
+// restricted form renders its own DNS pass unconditionally.
 func (in PolicyInput) SwitchWindow() Policy {
 	return Policy{
 		Mode:         ModeSwitchWindow,
