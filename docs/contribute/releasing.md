@@ -26,10 +26,19 @@ publish   tag the tested commit, sign SHA256SUMS, publish the release
 ```
 
 Nothing touches the repository until every artifact has been built and the
-installer has been proven to install and uninstall cleanly. **A failed release
+installer has been proven to install and uninstall cleanly. **A failed build
 leaves no tag behind** — just re-dispatch. (The old order tagged first, so a
 failed build stranded a tag that the workflow's own "tag already exists" guard
 then refused to retry.)
+
+A failure *inside* `publish` is the one case that can leave a tag, because
+tagging is the step before publishing — v0.10.1 hit a GitHub 503 on
+`gh release create` after the tag had been pushed. Re-run the `publish` job:
+the tag step reuses a tag that already points at the pinned commit, so the
+retry picks up where it stopped, and it still refuses a tag pointing anywhere
+else. A *fresh* dispatch is the wrong tool there — `resolve` sees the tag and
+stops, by design, so if you want a clean run instead of a re-run, delete the
+stranded tag first (`git push --delete origin vX.Y.Z`).
 
 `publish` also re-checks that `main` still points at the commit `prepare` pinned.
 If something merged mid-release, it stops rather than tag a tree that was never

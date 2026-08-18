@@ -11,7 +11,9 @@ name: Release
 # installer has been proven to install and uninstall cleanly. A failed build
 # therefore leaves NO tag behind, and re-dispatching is free. (The previous order
 # tagged first, so a failed build stranded a tag that the workflow's own "tag
-# already exists" guard then refused to retry.)
+# already exists" guard then refused to retry.) A failure inside `publish` itself
+# can still leave a tag, since tagging precedes publishing — that is why the tag
+# step reuses a tag already pointing at the pinned commit; see it for the detail.
 #
 # The workflow NEVER writes to main. A final release's CHANGELOG roll happens
 # LOCALLY before you dispatch — `task release` runs `scripts/release.sh roll`,
@@ -451,6 +453,17 @@ jobs:
       # The tag lands on prepare.sha — the exact tree that was built and tested —
       # for BOTH kinds. Tags aren't branch-ruled, so tagging and pushing the tag
       # directly is fine even though the workflow never pushes to main itself.
+      #
+      # Reusing an existing tag is deliberate, and it is the ONLY loosening here:
+      # `publish` can fail AFTER this step (a GitHub 503 on `gh release create`
+      # did exactly that on v0.10.1), which stranded a tag with no release behind
+      # it. `git tag -a` refuses to overwrite, so that tag then blocked every
+      # retry — re-running this job died right here, and a fresh dispatch died
+      # even earlier in `resolve`'s "tag already exists" guard. The tag is a
+      # pointer to prepare.sha and nothing else, so a tag that ALREADY points
+      # there is not a conflict to resolve, it is this step's own work already
+      # done. A tag pointing anywhere else still fails loudly: that means a
+      # version was really re-used, which is what the guard is for.
       - name: Tag the release commit
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
@@ -459,6 +472,22 @@ jobs:
           set -eu
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          # Read the tag from ORIGIN, not the local checkout: origin is what the
+          # release is published against, and a fetch resolves an annotated tag
+          # to its commit without having to peel `ls-remote` output by hand.
+          if git fetch -q --no-tags origin "refs/tags/$TAG:refs/dezhban-tag-check" 2>/dev/null; then
+            existing="$(git rev-parse "refs/dezhban-tag-check^{commit}")"
+            git update-ref -d refs/dezhban-tag-check
+            if [ "$existing" != "$SHA" ]; then
+              echo "error: tag $TAG already exists on origin at $existing, not the pinned $SHA." >&2
+              echo "       That version has already shipped from a different tree. Pick a new version." >&2
+              exit 1
+            fi
+            echo "tag $TAG already points at $SHA — reusing it (retrying a publish that failed after tagging)."
+            exit 0
+          fi
+
           git tag -a "$TAG" -m "$TAG" "$SHA"
           git push origin "$TAG"
 
