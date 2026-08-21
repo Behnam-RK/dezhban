@@ -10,6 +10,7 @@ import DezhbanCore
 struct DiagnosticsView: View {
     @EnvironmentObject var state: AppState
     @State private var discover = false
+    @State private var exporting = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -24,6 +25,7 @@ struct DiagnosticsView: View {
             state.runDoctorIfStale(maxAge: 15 * 60)
             state.refreshVPNInventoryIfStale()
             state.refreshAppliedRules()
+            state.refreshProblems()
         }
     }
 
@@ -34,6 +36,10 @@ struct DiagnosticsView: View {
             Toggle("Find my VPN's server", isOn: $discover)
                 .toggleStyle(.checkbox)
                 .help("macOS-only best-effort hunt for the connected VPN's real server IP (`--discover`).")
+            Button("Export…") { exportReport() }
+                .disabled(exporting || !state.cliFound)
+                .help("Save everything on this pane — plus your config, dezhban's state and its recent log — "
+                    + "to one zip you can attach to a bug report. Nothing is sent anywhere.")
             Spacer()
             if state.doctorRunning {
                 ProgressView().controlSize(.small)
@@ -48,6 +54,7 @@ struct DiagnosticsView: View {
         state.runDoctor(discover: discover)
         state.refreshVPNInventoryIfStale(maxAge: 0)
         state.refreshAppliedRules()
+        state.refreshProblems()
     }
 
     @ViewBuilder
@@ -78,6 +85,7 @@ struct DiagnosticsView: View {
                             .textSelection(.enabled)
                     }
                 }
+                problemsSection
                 vpnInventorySection
                 firewallRulesSection
                 if let report = state.doctorReport {
@@ -100,6 +108,108 @@ struct DiagnosticsView: View {
                    message: "Install the dezhban command-line tool, then run diagnostics again.")
         } else {
             guided(symbol: "stethoscope", title: "No results yet", message: "Run diagnostics to see tunnels, endpoints, and lockout risks.")
+        }
+    }
+
+    // MARK: - problems
+
+    /// Recent warn-and-worse records from dezhban's own log.
+    ///
+    /// The three states are deliberately distinct. Nothing found is the GOOD
+    /// answer and says so; not-yet-asked shows nothing; could-not-ask explains
+    /// itself. Collapsing "no problems" into "no data" would make a healthy host
+    /// look like a broken reader, and the reverse would be worse.
+    @ViewBuilder
+    private var problemsSection: some View {
+        if let problems = state.problems {
+            Section("Recent problems") {
+                if problems.isEmpty {
+                    Label("Nothing logged as a warning or an error.", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.callout)
+                } else {
+                    ForEach(problems.reversed()) { problemRow($0) }
+                }
+            }
+        } else if state.cliFound {
+            Section("Recent problems") {
+                Label("Couldn't read dezhban's log. A CLI older than `dezhban logs` can't be asked.",
+                      systemImage: "questionmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// One record. The message is what a person reads; the attrs are the
+    /// evidence, in the order dezhban wrote them — that order reads as a
+    /// sentence, which is why they are carried as ordered pairs rather than a
+    /// dictionary all the way from Go.
+    private func problemRow(_ r: LogRecord) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: r.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(r.isError ? .red : .orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(r.msg)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !r.detail.isEmpty {
+                    Text(r.detail)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            if let t = r.time {
+                Text(Self.stamp.string(from: t))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    // MARK: - export
+
+    /// Writes the bundle where the user chooses, then reveals it in Finder.
+    ///
+    /// Redacted by default. The checkbox is the deliberate opt-out, and its
+    /// label says what the unredacted bundle contains rather than describing the
+    /// mechanism — someone about to paste this into a public issue needs to read
+    /// the consequence, not the feature.
+    private func exportReport() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Save Here"
+        panel.message = "Where should the diagnostic bundle go?"
+
+        let includeNetwork = NSButton(checkboxWithTitle: "Include my real VPN server addresses and exit IP",
+                                      target: nil, action: nil)
+        includeNetwork.state = .off
+        includeNetwork.toolTip = "Leave this off to get a bundle that is safe to attach to a public issue: "
+            + "addresses and hostnames are replaced with stable placeholders, so it is still diagnosable."
+        panel.accessoryView = includeNetwork
+        panel.isAccessoryViewDisclosed = true
+
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        exporting = true
+        let full = includeNetwork.state == .on
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = DezhbanCLI.writeReport(to: dir, includeNetwork: full)
+            DispatchQueue.main.async {
+                exporting = false
+                switch result {
+                case .wrote(let url):
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                case .failed(let message):
+                    state.showInLogs(title: "dezhban — export diagnostics", text: message)
+                }
+            }
         }
     }
 

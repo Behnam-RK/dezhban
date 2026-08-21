@@ -40,7 +40,7 @@ func cmdCompletion(args []string) int {
 
 // completionCommands is the subcommand list the scripts offer. Kept next to the
 // scripts so it is obvious to update when a command is added.
-const completionCommands = "run block unblock status validate monitor print-rules doctor panic install uninstall start stop restart detect-vpn switch pause resume hold vpn setup config token completion upgrade version help"
+const completionCommands = "run block unblock status validate monitor print-rules logs report doctor panic install uninstall start stop restart detect-vpn switch pause resume hold vpn setup config token completion upgrade version help"
 
 const bashCompletion = `# dezhban bash completion
 _dezhban() {

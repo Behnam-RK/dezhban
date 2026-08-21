@@ -301,6 +301,46 @@ enum DezhbanCLI {
         return r.out
     }
 
+    /// Reads recent problem records from dezhban's own log, via
+    /// `logs --level warn --json`. Unprivileged: the log is 0644 by design, so
+    /// history is readable without root.
+    ///
+    /// nil is "could not ask" (no CLI, or one too old for the subcommand); an
+    /// empty array is "asked, and there were none" — which is the good answer.
+    /// The pane must show those differently, so they must not collapse here.
+    static func readProblems(limit: Int = 100) -> [LogRecord]? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["logs", "--level", "warn", "--limit", String(limit), "--json"])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return LogRecord.decodeList(data)
+    }
+
+    /// Writes a diagnostic bundle into `directory` and returns its path.
+    ///
+    /// Redacted unless `includeNetwork`. Unprivileged, and nothing leaves the
+    /// machine — `report` writes one local file and stops there. What the CLI
+    /// prints on stdout is the path it wrote.
+    static func writeReport(to directory: URL, includeNetwork: Bool) -> ReportResult {
+        guard let bin = binaryPath() else {
+            return .failed("dezhban CLI not found in a trusted install location")
+        }
+        var args = ["report", "--out", directory.path, "--config", resolvedConfigPath()]
+        if includeNetwork { args.append("--include-network") }
+        let r = exec(bin, args)
+        let printed = r.out.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard r.status == 0, !printed.isEmpty else {
+            let text = [r.out, r.err].filter { !$0.isEmpty }.joined(separator: "\n")
+            return .failed(text.isEmpty ? "`dezhban report` produced no output." : text)
+        }
+        return .wrote(URL(fileURLWithPath: printed))
+    }
+
+    /// Where `writeReport` put the bundle, or why it could not.
+    enum ReportResult {
+        case wrote(URL)
+        case failed(String)
+    }
+
     /// Reads all three presets and which (if any) matches the current config,
     /// via `config preset list --json`.
     static func readPresets() -> [PresetSummary]? {
