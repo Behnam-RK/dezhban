@@ -5,7 +5,7 @@
 **macOS or Linux:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh -o ~/dezhban-install.sh && sudo bash ~/dezhban-install.sh
 ```
 
 **Windows** (elevated PowerShell):
@@ -14,27 +14,109 @@ curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/inst
 irm https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.ps1 | iex
 ```
 
-Either installs the CLI, the menubar app on macOS, and registers the
-background service — **without starting it**. Finish with:
+Left to their defaults, all of these install the CLI, the menubar app on macOS,
+and register the background service — **without starting it**. Run
+`install.sh` from a file at a terminal on a machine that does **not** yet have
+dezhban and you can decline the app or the service, or cancel outright; the
+section below says what it asks. The Windows script never prompts.
+
+### Why download it instead of piping it
+
+Because run from a file at a terminal, the installer **asks**. Piped, it is
+defined not to.
+
+That distinction is a policy, not a technical limit. Every prompt in
+`scripts/install.sh` reads `/dev/tty` directly, and `/dev/tty` is there either
+way — so a piped run *could* stop and ask. It does not, because the script gates
+the terminal test on stdin — `[ -t 0 ]`, alongside a readable `/dev/tty` and
+`DEZHBAN_ASSUME_YES` not being set to `1` (below). Stdin is your terminal when you run
+the file and a pipe when you pipe it, and it is the only stream that tells the
+two apart. Testing stdout would not work: `curl | sudo bash` still has your terminal
+on stdout, so the pipe would go interactive — the one thing every comment and
+doc here promises it does not. A piped install therefore behaves identically on
+your laptop and in CI, which is the point.
+
+Run from a file at a real terminal, here is what it asks. On a **fresh
+machine**, a menu: install with today's defaults, choose components, or cancel.
+Choosing components asks whether to install the menubar app (macOS only) and
+whether to register the service — the command-line tool is always installed, so
+it is not one of the questions. Then, on fresh installs only, it offers to run
+`dezhban setup` there and then, so you finish with a configured guard rather
+than a set of instructions.
+
+On a machine that **already has dezhban**, a different menu: upgrade (or
+reinstall, whichever the version comparison calls for), uninstall, or cancel.
+Uninstall asks "keep your config?" and then makes you type `uninstall` before
+anything is removed. The setup wizard is deliberately not offered on this path —
+you configured this machine once already.
+
+Downloading first also lets you read the script before running it as root,
+which is the right habit for anything that installs a kill switch. The command
+above chains both steps, so to read it first, run only the `curl` half, check
+it exited 0, read the file, and then run the `sudo bash` half. Your reading is
+what replaces the `&&` there — it is the same check, done by eye.
+
+Run each of those as a separate command rather than pasting them together. A
+prompt reads from your terminal, so anything pasted after a line that prompts —
+`sudo` asking for your password, the installer's own menu, a pager — is eaten as
+the answer to that prompt rather than run as a command.
+
+Delete `~/dezhban-install.sh` when you are done, whichever way you installed.
+[Re-running the installer](#what-each-installer-does-precisely) is how you
+upgrade, and a `sudo bash ~/dezhban-install.sh` typed from memory would run the
+copy you downloaded months ago.
+
+Download into your home directory, and chain the two commands with `&&`. A
+failed download can leave a stale **or half-written** file behind — `curl -o`
+truncates the target and writes what it received, and a truncated script still
+runs as far as it parses — so a bare second command would run that. And `/tmp`
+is world-writable under a predictable name, so what is there might be a file
+another account put there. It would run as root.
+
+**Unattended** is still one line, and still supported:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
+```
+
+`DEZHBAN_ASSUME_YES=1` forces that same no-prompt behaviour even at a real
+terminal, for a script that wants the defaults deliberately. Set it **inside**
+the sudo command — `sudo`'s default `env_reset` drops variables set in front of
+it, so the obvious spelling is silently inert:
+
+```sh
+sudo DEZHBAN_ASSUME_YES=1 bash ~/dezhban-install.sh   # works
+DEZHBAN_ASSUME_YES=1 sudo bash ~/dezhban-install.sh   # ignored
+```
+
+`VERSION=X.Y.Z` pins an exact release and needs the same placement:
+
+```sh
+sudo VERSION=0.13.0 bash ~/dezhban-install.sh
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo VERSION=0.13.0 bash
+```
+
+### Finishing by hand
+
+If you skipped the wizard (or used the unattended form):
 
 ```sh
 sudo dezhban setup     # choose your settings
 sudo dezhban start     # arm it
 ```
 
-Piped like that, `scripts/install.sh` never prompts — stdin is the script
-text itself, so there's nowhere to read a question from, and it takes exactly
-the defaults above. Save it to a file and run it directly at a real terminal
-(`sudo bash install.sh`, not piped) and it asks a few questions instead: which
-components to install on a fresh machine, and — on a machine that already has
-dezhban — upgrade, reinstall, or **uninstall**, with a typed confirmation
-before anything is removed. `DEZHBAN_ASSUME_YES=1` forces the non-interactive
-defaults even at a real terminal.
+If you also declined the service at the component prompt, register it first —
+this is what the installer itself prints in that case:
+
+```sh
+sudo dezhban install   # register the service (skipped above)
+sudo dezhban start     # then arm the kill switch
+```
 
 Everything below is why this is the recommended path, what else exists, and
 how to verify what you downloaded.
 
-## Why curl-pipe-bash, and why it's not a hack
+## Why `curl`, and why it's not a hack
 
 macOS's Gatekeeper blocks a double-clicked, unsigned `.pkg` or `.app` because
 the file carries a `com.apple.quarantine` extended attribute — set by
@@ -68,7 +150,7 @@ it — the kill switch would simply never come up.
 ### Why isn't there a signed `.pkg` instead?
 
 There is no Apple Developer certificate ($99/yr; a hobby project with no
-revenue), and curl-pipe-bash already solves the friction that signing would
+revenue), and the `install.sh` path already solves the friction that signing would
 for free. What dezhban does instead: **checksums, always**, plus an
 **ed25519 signature** over every release. Full story, why the install
 scripts check the checksum but not the signature, and how to add real Apple
@@ -112,8 +194,8 @@ run `sudo dezhban restart` yourself, once the posture clears. Either way,
 `/etc/dezhban/` (your config) and `/var/db/dezhban/` (learned endpoints,
 state) are never touched.
 
-**Uninstalling.** At a real terminal, an existing install offers "Uninstall"
-in its menu — shows exactly what will be removed, asks whether to keep your
+**Uninstalling.** Run from a file at a real terminal, an existing install
+offers "Uninstall" in its menu — shows exactly what will be removed, asks whether to keep your
 config (default: yes), and requires typing `uninstall` to confirm. Or run it
 directly any time: `sudo sh /usr/local/share/dezhban/uninstall.sh` (add
 `KEEP_CONFIG=1` to keep `/etc/dezhban`). It always runs `panic` first — removes

@@ -51,17 +51,48 @@ rough edges.
 ## Install (macOS)
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh -o ~/dezhban-install.sh && sudo bash ~/dezhban-install.sh
+```
+
+Download first, run from the file, on purpose — that way the installer can ask.
+On a **fresh machine** at a real terminal it offers a menu: install with today's
+defaults, choose components (the menubar app, and whether to register the
+service), or cancel — and then whether to run the setup wizard. Re-run it on a
+machine that already has dezhban and the menu is upgrade (or reinstall, if you
+are on that version already), uninstall, or cancel instead. Piped into `bash` it takes the defaults silently. Not because a pipe
+makes asking impossible — the prompts read your terminal directly — but because
+a piped install is *defined* to be unattended here, so a provisioner or a CI job
+gets the same answers every time.
+
+The `&&` and the home directory both matter. A failed download can leave a
+stale *or half-written* file behind — a truncated script still runs as far as
+it parses — so the two commands are chained rather than pasted as two lines.
+And `/tmp` is world-writable under a name anyone can guess, so a file there
+might not even be yours. As root.
+
+Want to read it before running it as root, which is the right habit for a kill
+switch? Run only the `curl` half, check it exited 0, read the file, then run the
+`sudo bash` half — your reading is what replaces the `&&` there. Delete
+`~/dezhban-install.sh` afterwards either way, so a later run from muscle memory
+can't pick up a stale copy. [More on all of
+this](docs/usage/install.md#why-download-it-instead-of-piping-it).
+
+For an unattended install (a provisioner, CI, a second machine you have already
+decided about), the one-liner still works and takes today's defaults with no
+prompt:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
 ```
 
-Then open **Dezhban** from Applications (or Spotlight). That's the only
-terminal step, ever — not because the app can't be double-clicked, but because
-there's no Apple Developer certificate to sign it with yet, so Gatekeeper would
-otherwise block it. `curl` genuinely doesn't trip that check (it's documented
-Apple behavior, not a workaround), so this line installs the app with **zero
-Gatekeeper friction** and asks for your password exactly once. Details, the
-`.pkg` alternative, and Linux/Windows installers:
-[docs/usage/install.md](docs/usage/install.md).
+Then open **Dezhban** from Applications (or Spotlight). Whichever form you
+used, that is all the terminal work there is — not because the app can't be
+double-clicked, but because there's no Apple Developer certificate to sign it
+with yet, so Gatekeeper would otherwise block it. `curl` genuinely doesn't
+trip that check (it's documented Apple behavior, not a workaround), so either
+form installs the app with **zero Gatekeeper friction** and asks for your
+password exactly once. Details, the `.pkg` alternative, and Linux/Windows
+installers: [docs/usage/install.md](docs/usage/install.md).
 
 ## Using the app
 
