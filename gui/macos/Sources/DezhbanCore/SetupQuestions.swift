@@ -141,14 +141,20 @@ public struct SetupAnswers {
 
     /// The `key=value` pairs one batched `config set` should write.
     ///
-    /// Three rules are not derivable from a question's `key` alone, and they
+    /// Two rules are not derivable from a question's `key` alone, and they
     /// mirror Go's `setup.Apply` exactly:
     ///  - the free-text country codes fold into `blockedCountries`;
-    ///  - answering "no" to the VPN branch writes none of its keys, so a VPN
-    ///    somebody already configured is left alone;
     ///  - choosing automatic detection CLEARS pinned interfaces rather than
     ///    skipping the key, because a leftover pin is what makes autodetect not
     ///    happen.
+    ///
+    /// The third rule is `shouldAsk` itself, and it is load-bearing now that
+    /// there is no "configure your VPN now?" question to skip the branch: a key
+    /// whose question was never shown must not be written. On macOS the
+    /// endpoint question is gated behind "not automatic", so a re-run that
+    /// leaves automatic detection on produces no `vpn.endpoints=` pair at all —
+    /// which is what keeps it from blanking a configured server. Go's `Apply`
+    /// achieves the same with a nil `Input.Endpoints`.
     public func configPairs(for questions: [SetupQuestion]) -> [String] {
         var pairs: [String] = []
         for q in questions where shouldAsk(q) && !q.key.isEmpty {
@@ -162,14 +168,15 @@ public struct SetupAnswers {
                 pairs.append("\(q.key)=\(self[q.id])")
             }
         }
-        if bool("configureVPN") && bool("autoMode") {
+        if bool("autoMode") {
             pairs.append("vpn.tunnelInterfaces=")
         }
         return pairs
     }
 
     /// The VPN config files to import, which are not a config key at all — they
-    /// become profiles through `dezhban vpn import`.
+    /// become profiles through `dezhban vpn import`. Empty under automatic
+    /// detection, where the question is not asked.
     public var profileFiles: [String] { list("profileFiles") }
 }
 

@@ -15,9 +15,9 @@ func TestApplyAutoMode(t *testing.T) {
 	cfg := config.Default()
 	Apply(&cfg, Input{
 		Hysteresis:   "3",
-		ConfigureVPN: true, AutoMode: true,
+		AutoMode:     true,
 		Tunnels:      []string{"utun9"}, // must be ignored in auto mode
-		Endpoints:    []string{"vpn.example.com"},
+		Endpoints:    eps("vpn.example.com"),
 		Profiles:     []config.Profile{{Name: "home", Endpoints: []string{"203.0.113.7"}}},
 		AutoDiscover: boolPtr(true),
 	})
@@ -93,26 +93,33 @@ func TestAnUnaskedQuestionLeavesItsKeyAlone(t *testing.T) {
 func TestApplyAdvancedPin(t *testing.T) {
 	cfg := config.Default()
 	Apply(&cfg, Input{
-		Hysteresis:   "3",
-		ConfigureVPN: true, AutoMode: false,
-		Tunnels:   []string{"utun4"},
-		Endpoints: []string{"203.0.113.7"},
+		Hysteresis: "3",
+		AutoMode:   false,
+		Tunnels:    []string{"utun4"},
+		Endpoints:  eps("203.0.113.7"),
 	})
 	if len(cfg.VPN.TunnelInterfaces) != 1 || cfg.VPN.TunnelInterfaces[0] != "utun4" {
 		t.Errorf("advanced mode should pin utun4, got %v", cfg.VPN.TunnelInterfaces)
 	}
 }
 
-// Answering "no" to "configure your VPN now?" must leave a VPN somebody already
-// set up completely alone — the wizard is also how people change their
-// blocked-country list.
-func TestDecliningTheVPNBranchTouchesNoVPNKey(t *testing.T) {
+// An UNASKED endpoint question must leave a configured server alone.
+//
+// This replaced the "configure your VPN now?" question as the thing standing
+// between a re-run and someone's working config. On macOS the endpoint question
+// is gated behind "not automatic", so a user who re-runs setup to change their
+// blocked-country list — and leaves automatic detection on, as recommended —
+// reaches Apply with no endpoint answer at all. Writing that as an empty list
+// would delete their server.
+func TestAnUnaskedEndpointListTouchesNoEndpoint(t *testing.T) {
 	cfg := config.Default()
 	cfg.VPN.TunnelInterfaces = []string{"utun4"}
 	cfg.VPN.Endpoints = []string{"203.0.113.7"}
 	cfg.VPN.AllowPhysicalDNS = true
 
-	Apply(&cfg, Input{Countries: []string{"IR", "SY"}, ConfigureVPN: false})
+	// Endpoints nil is what Input produces when the question was never shown.
+	Apply(&cfg, Input{Countries: []string{"IR", "SY"}, AutoMode: false,
+		Tunnels: []string{"utun4"}})
 
 	if !reflect.DeepEqual(cfg.VPN.TunnelInterfaces, []string{"utun4"}) {
 		t.Errorf("tunnels changed: %v", cfg.VPN.TunnelInterfaces)
@@ -139,13 +146,13 @@ func TestImportedProfilesAddToTheSavedOnes(t *testing.T) {
 	}
 
 	// A run that imported nothing keeps both.
-	Apply(&cfg, Input{ConfigureVPN: true, AutoMode: true})
+	Apply(&cfg, Input{AutoMode: true})
 	if len(cfg.VPN.Profiles) != 2 {
 		t.Fatalf("a run importing nothing must keep saved profiles, got %+v", cfg.VPN.Profiles)
 	}
 
 	// A run that re-imports one replaces that one and keeps the other.
-	Apply(&cfg, Input{ConfigureVPN: true, AutoMode: true,
+	Apply(&cfg, Input{AutoMode: true,
 		Profiles: []config.Profile{{Name: "work", Endpoints: []string{"192.0.2.5"}}}})
 	if len(cfg.VPN.Profiles) != 2 {
 		t.Fatalf("re-importing a profile must not drop the others, got %+v", cfg.VPN.Profiles)
@@ -194,21 +201,21 @@ func TestQuestionsSeedFromTheConfig(t *testing.T) {
 func TestAutoDiscoverDefaultsOnlyForANewMacConfig(t *testing.T) {
 	fresh := config.Default()
 	fresh.VPN.AutoDiscoverEndpoints = false // Default() has it on; force the observable flip
-	Apply(&fresh, Input{ConfigureVPN: true, AutoMode: true, MacOS: true, ConfigExisted: false})
+	Apply(&fresh, Input{AutoMode: true, MacOS: true, ConfigExisted: false})
 	if !fresh.VPN.AutoDiscoverEndpoints {
 		t.Error("a brand-new macOS config should get discovery on")
 	}
 
 	existing := config.Default()
 	existing.VPN.AutoDiscoverEndpoints = false
-	Apply(&existing, Input{ConfigureVPN: true, AutoMode: true, MacOS: true, ConfigExisted: true})
+	Apply(&existing, Input{AutoMode: true, MacOS: true, ConfigExisted: true})
 	if existing.VPN.AutoDiscoverEndpoints {
 		t.Error("an existing config's explicit false must be preserved")
 	}
 
 	linux := config.Default()
 	linux.VPN.AutoDiscoverEndpoints = false
-	Apply(&linux, Input{ConfigureVPN: true, AutoMode: true, MacOS: false, ConfigExisted: false})
+	Apply(&linux, Input{AutoMode: true, MacOS: false, ConfigExisted: false})
 	if linux.VPN.AutoDiscoverEndpoints {
 		t.Error("discovery is macOS-only; a new Linux config must not have it defaulted on")
 	}
@@ -217,7 +224,7 @@ func TestAutoDiscoverDefaultsOnlyForANewMacConfig(t *testing.T) {
 	answered := config.Default()
 	answered.VPN.AutoDiscoverEndpoints = true
 	off := false
-	Apply(&answered, Input{ConfigureVPN: true, AutoMode: true, MacOS: true, ConfigExisted: false, AutoDiscover: &off})
+	Apply(&answered, Input{AutoMode: true, MacOS: true, ConfigExisted: false, AutoDiscover: &off})
 	if answered.VPN.AutoDiscoverEndpoints {
 		t.Error("an explicit false answer must win over the new-config default")
 	}
@@ -248,31 +255,106 @@ func TestTunnelQuestionFollowsDetection(t *testing.T) {
 
 // --- gating ---
 
-func TestGatingHidesTheWholeVPNBranch(t *testing.T) {
+// Automatic detection is the one gate left, and everything manual hangs off it.
+func TestAutomaticDetectionGatesEveryManualField(t *testing.T) {
 	qs := Questions(Options{GOOS: "darwin"})
 	a := NewAnswers(qs)
-	a.Set("configureVPN", "false")
 
-	for _, q := range qs {
-		if q.RequiresID == "configureVPN" && a.ShouldAsk(q) {
-			t.Errorf("%s should not be asked when the VPN branch was declined", q.ID)
-		}
-	}
-
-	a.Set("configureVPN", "true")
 	a.Set("autoMode", "true")
 	for _, q := range qs {
-		if q.ID == "tunnels" && a.ShouldAsk(q) {
-			t.Error("automatic detection must not ask which interface to pin")
+		if q.RequiresID == "autoMode" && a.ShouldAsk(q) {
+			t.Errorf("%s should not be asked under automatic detection", q.ID)
 		}
 	}
+	for _, id := range []string{"tunnels", "endpoints", "profileFiles"} {
+		if !gatedOnAutoMode(qs, id) {
+			t.Errorf("%s is not gated on autoMode; on macOS it must be", id)
+		}
+	}
+
 	a.Set("autoMode", "false")
-	for _, q := range qs {
-		if q.ID == "tunnels" && !a.ShouldAsk(q) {
-			t.Error("declining automatic detection must ask which interface to pin")
+	for _, id := range []string{"tunnels", "endpoints", "profileFiles"} {
+		if !asked(qs, a, id) {
+			t.Errorf("declining automatic detection must ask %s", id)
 		}
 	}
 }
+
+// Off macOS there is no live discovery, so the endpoint is required whichever
+// detection mode is chosen. Gating it would let a Linux host finish the wizard
+// with a config that cannot enforce.
+func TestEndpointsAreUngatedWhereThereIsNoDiscovery(t *testing.T) {
+	qs := Questions(Options{GOOS: "linux"})
+	a := NewAnswers(qs)
+	a.Set("autoMode", "true")
+	if !asked(qs, a, "endpoints") {
+		t.Error("endpoints must be asked under automatic detection off macOS")
+	}
+	if gatedOnAutoMode(qs, "endpoints") {
+		t.Error("endpoints is gated on autoMode off macOS")
+	}
+}
+
+// Two steps, which is the whole shape of the wizard: what to block, then how to
+// find the VPN. A third group would mean a third screen in the app.
+func TestTheWizardIsTwoGroups(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		groups := map[int]bool{}
+		for _, q := range Questions(Options{GOOS: goos}) {
+			groups[q.Group] = true
+		}
+		if len(groups) != 2 || !groups[1] || !groups[2] {
+			t.Errorf("%s: groups = %v, want exactly {1, 2}", goos, groups)
+		}
+	}
+}
+
+// The guard that replaced "configure your VPN now?". Without it, a re-run on a
+// config with pinned interfaces would default to automatic detection, and
+// clicking straight through would silently unpin them — Apply clears
+// TunnelInterfaces under AutoMode on purpose.
+func TestAutoModeSeedsFalseWhenInterfacesArePinned(t *testing.T) {
+	pinned := config.Default()
+	pinned.VPN.TunnelInterfaces = []string{"utun4"}
+	if got := defaultOf(Questions(Options{Config: &pinned, GOOS: "darwin"}), "autoMode"); got != "false" {
+		t.Errorf("autoMode default with pinned interfaces = %q, want \"false\"", got)
+	}
+
+	fresh := config.Default()
+	fresh.VPN.TunnelInterfaces = nil
+	if got := defaultOf(Questions(Options{Config: &fresh, GOOS: "darwin"}), "autoMode"); got != "true" {
+		t.Errorf("autoMode default with no pinned interfaces = %q, want \"true\"", got)
+	}
+}
+
+func gatedOnAutoMode(qs []Question, id string) bool {
+	for _, q := range qs {
+		if q.ID == id {
+			return q.RequiresID == "autoMode" && q.RequiresValue == "false"
+		}
+	}
+	return false
+}
+
+func asked(qs []Question, a *Answers, id string) bool {
+	for _, q := range qs {
+		if q.ID == id {
+			return a.ShouldAsk(q)
+		}
+	}
+	return false
+}
+
+func defaultOf(qs []Question, id string) string {
+	for _, q := range qs {
+		if q.ID == id {
+			return q.Default
+		}
+	}
+	return ""
+}
+
+func eps(v ...string) *[]string { return &v }
 
 // Walking the wizard and pressing Enter on every question must land on the
 // config you started with. Anything else means a default is stated in one place
@@ -289,10 +371,9 @@ func TestAnsweringNothingChangesNothing(t *testing.T) {
 
 	qs := Questions(Options{Config: &cfg, GOOS: "darwin", DetectedTunnels: []string{"utun4"}})
 	a := NewAnswers(qs)
-	// The one answer with no config to seed it: the VPN branch is offered, and
-	// its own sub-answers are seeded, so accepting them must be a no-op too.
-	a.Set("configureVPN", "true")
-	a.Set("autoMode", "false")
+	// Nothing is Set here on purpose. autoMode seeds itself to false from the
+	// pinned interfaces above, which is exactly the guard being tested: pressing
+	// Enter through the whole wizard must not unpin them.
 
 	after := cfg
 	// Hysteresis has no question; the wizard carries the current value through,
