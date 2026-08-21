@@ -137,42 +137,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// already owning the session. Opening the window is the whole reason it
     /// bothered to tell us — it is standing in for the launch the user performed.
     @objc private func openWindowRequested() {
-        // `.lost` is the one stand-down: the backstop claimed the file first and is
-        // opening the window.
+        // The claim goes off the main thread, like the backstop's: it is a stat and
+        // an unlink, and on a network or relocated home — the case `uninstall.sh`
+        // reads NFSHomeDirectory to accommodate — that blocks the run loop on the
+        // one path that is supposed to feel instant.
         //
-        // Everything else acts. `.absent` covers both "the file write failed" and
-        // the microsecond between the duplicate writing the file and posting this
-        // — refusing it would turn a hand-off into the silent no-op the whole
-        // mechanism exists to prevent. `.stale` is actionable *here* though not in
-        // the backstop: freshness guards against inheriting a dead predecessor's
-        // file, and a notification arriving is itself proof somebody is alive and
-        // asking right now, even if this process was wedged for longer than the
-        // freshness window. Both of those can therefore double up with a backstop
-        // tick, which is what `openForHandoff`'s debounce is for.
-        switch sessionHandoff?.claim() ?? .absent {
-        case .fresh:
-            // Definitively ours: some duplicate wrote this and nobody else took
-            // it. Always acted on, never debounced.
-            openForHandoff(definite: true)
-        case .absent, .stale:
-            // Ambiguous: no file to point at, so nothing here proves a duplicate of
-            // this app wrote it. Accepted only while the launch-time backstop is
-            // still armed, which is the whole reason to accept them at all — the
-            // duplicate writes the file and *then* posts, so a backstop tick landing
-            // between those two calls leaves the notification with nothing to find,
-            // and refusing it would make a real hand-off a silent no-op.
-            //
-            // Outside that window a file is required, because
-            // `DistributedNotificationCenter` is a system-wide bus with no sender
-            // authentication and both the name and the object are derivable. Without
-            // this bound, any process running as this user could call
-            // `MainWindow.open()` — which activates the app — once per debounce
-            // interval, forever, reopening a window the moment it was closed. The
-            // debounce is a rate limit, not a gate.
-            guard handoffTimer != nil else { break }
-            openForHandoff(definite: false)
-        case .lost:
-            break
+        // Whether the fileless fallback is allowed has to be read here though,
+        // since it is main-thread state.
+        let backstopArmed = handoffTimer != nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            switch sessionHandoff?.claim() ?? .absent {
+            case .fresh:
+                // A file, taken by us. The session owner discards whatever it finds
+                // when it takes the lock, so a file seen afterwards was written by a
+                // live duplicate however long ago — which is what makes a slow
+                // launch work rather than being thrown away for being slow.
+                DispatchQueue.main.async { self?.openForHandoff(definite: true) }
+            case .absent:
+                // No file to point at, so nothing here proves a duplicate of this
+                // app wrote it. Accepted only while the launch-time backstop is
+                // armed, which is the only window in which it can legitimately
+                // happen: the duplicate writes the file and *then* posts, so a
+                // backstop tick landing between those two calls leaves this with
+                // nothing to find.
+                //
+                // Outside that window a file is required, because
+                // `DistributedNotificationCenter` is a system-wide bus with no
+                // sender authentication and both the name and the object are
+                // derivable. Unbounded, any process running as this user could call
+                // `MainWindow.open()` — which activates the app — once per debounce
+                // interval forever, reopening a window the moment it was closed.
+                guard backstopArmed else { return }
+                DispatchQueue.main.async { self?.openForHandoff(definite: false) }
+            case .lost:
+                // The backstop got there first and is opening the window.
+                break
+            }
         }
     }
 
@@ -233,10 +233,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func checkHandoffRequest() {
         guard let handoff = sessionHandoff else { return }
         DispatchQueue.global(qos: .utility).async { [weak self] in
-            // Only `.fresh` here. `.lost` means the notification handler claimed it
-            // and is already opening the window; `.stale` means the file outlived
-            // whoever wrote it, and unlike a notification arrival there is nothing
-            // to prove anyone is still asking; `.absent` is the ordinary case of
+            // Only `.fresh`. `.lost` means the notification handler claimed it and
+            // is already opening the window; `.absent` is the ordinary case of
             // there being no request at all, which is what almost every tick sees.
             guard handoff.claim() == .fresh else { return }
             DispatchQueue.main.async { self?.openForHandoff(definite: true) }

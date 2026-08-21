@@ -188,7 +188,16 @@ enum LoginItem {
     /// launches nothing, and reporting it as ON contradicted the migration's own
     /// reading of that exact state ("their 'off' is the answer") and showed a
     /// switch that was on while nothing started the app.
-    static var isEnabled: Bool { registered(service) || legacyEnabled }
+    static var isEnabled: Bool {
+        // On the mutation queue, so a read can never observe a change half-applied.
+        // `disable()` retracts the legacy item and then the agent; a read landing
+        // between those two saw the agent still registered and reported ON, and if
+        // its main-queue hop was enqueued after the mutation's own completion it
+        // overwrote the correct answer with that one — the switch reading ON with
+        // nothing starting the app at login, which is the failure the revision
+        // stamp in SettingsView was added for and could not close on its own.
+        queue.sync { registered(service) || legacyEnabled }
+    }
 
     /// Sets login-at-launch to `enabled` and reports what actually happened.
     ///

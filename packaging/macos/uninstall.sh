@@ -71,29 +71,38 @@ if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
 fi
 if [ -n "$CONSOLE_UID" ]; then
 	echo "unregistering the login agent for $CONSOLE_USER ..."
-	if [ -x "$APP/Contents/MacOS/DezhbanMenu" ]; then
+	if [ ! -x "$APP/Contents/MacOS/DezhbanMenu" ]; then
+		# Only the app can call SMAppService.unregister(), so with the bundle already
+		# gone — dragged to the Trash before running this — the registration cannot
+		# be retracted by anything here, or ever again. Saying nothing would report a
+		# clean uninstall over exactly the orphan this errand exists to remove.
+		LOGIN_ITEM_STUCK=no-app
+	# The marker directory is created by this script, mode 700, owned by root. The
+	# obvious "${TMPDIR:-/tmp}/name.$$" is a predictable path in a world-writable
+	# directory, and under `sudo sh` TMPDIR is often unset — so an unprivileged
+	# local user could pre-plant a symlink there and have the `echo` below write
+	# through it AS ROOT. The sticky bit stops them deleting our file; it does not
+	# stop them creating one first, and `rm -f` would only unlink their symlink and
+	# leave the window open to try again.
+	elif ! errand_dir=$(mktemp -d "${TMPDIR:-/tmp}/dezhban-uninstall.XXXXXX"); then
+		# A real skip. Announcing one and falling through anyway left errand_done as
+		# "/done" — on the sealed read-only system volume, so the marker could never
+		# be written, the poll burned its full 15s, the reason was overwritten with
+		# "timeout", and the kill -9 below murdered a retraction that had very likely
+		# just succeeded.
+		echo "note: could not create a private temp directory; skipping the login-item retraction" >&2
+		LOGIN_ITEM_STUCK=refused
+	else
 		# Bounded. The errand talks to launchd over XPC, and this runs before
 		# `rm -rf "$APP"` — an uninstaller that hangs here, silently (output is
 		# discarded), leaves the machine mid-removal with no message on screen.
 		#
-		# Completion is signalled by a file rather than by watching the child:
-		# an exited-but-unreaped child is a zombie, which `kill -0` still reports
-		# as alive, so polling the pid would wait out the whole timeout on a
-		# perfectly successful run. And no `( sleep N; kill ) &` watchdog — that
-		# leaks its `sleep` past the end of the script and, if it ever fires late,
-		# aims a `kill -9` at a pid the system may have recycled.
-		# In a directory this script creates, mode 700, owned by root. The obvious
-		# "${TMPDIR:-/tmp}/name.$$" is a predictable path in a world-writable
-		# directory, and under `sudo sh` TMPDIR is often unset — so an unprivileged
-		# local user could pre-plant a symlink there and have the `echo` below write
-		# through it AS ROOT. The sticky bit stops them deleting our file; it does
-		# not stop them creating one first, and `rm -f` would only unlink their
-		# symlink and leave the window open to try again.
-		errand_dir=$(mktemp -d "${TMPDIR:-/tmp}/dezhban-uninstall.XXXXXX") || errand_dir=""
-		if [ -z "$errand_dir" ]; then
-			echo "note: could not create a private temp directory; skipping the login-item retraction" >&2
-			LOGIN_ITEM_STUCK=refused
-		fi
+		# Completion is signalled by a file rather than by watching the child: an
+		# exited-but-unreaped child is a zombie, which `kill -0` still reports as
+		# alive, so polling the pid would wait out the whole timeout on a perfectly
+		# successful run. And no `( sleep N; kill ) &` watchdog — that leaks its
+		# `sleep` past the end of the script and, if it ever fires late, aims a
+		# `kill -9` at a pid the system may have recycled.
 		errand_done="$errand_dir/done"
 		(
 			if launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
@@ -111,36 +120,27 @@ if [ -n "$CONSOLE_UID" ]; then
 		done
 		if [ ! -f "$errand_done" ]; then
 			echo "note: retracting the login item did not finish in 15s; continuing" >&2
-			# Reported, not just survived. On this path there is no marker, so the
-			# "failed" test below is false and the script would print a clean
+			# Reported, not just survived. On this path no marker is ever written, so
+			# the "failed" test below reads false and the script would print a clean
 			# "files deleted" while the registration was still on file — the silent
-			# orphan that test exists to prevent, on the one path the timeout is
-			# here for.
+			# orphan that test exists to prevent, on the one path the timeout is for.
 			LOGIN_ITEM_STUCK=timeout
 			# The subshell AND what it started. Killing only the subshell leaves the
-			# DezhbanMenu it launched running, and the very next statement deletes
-			# the bundle out from under it — the thing the `pkill` above exists to
-			# avoid, reintroduced on the one path this timeout is here for.
+			# DezhbanMenu it launched running, and the very next statement deletes the
+			# bundle out from under it — the thing the `pkill` above exists to avoid,
+			# reintroduced on the one path this timeout is here for.
 			kill -9 "$errand" >/dev/null 2>&1 || true
 			pkill -x DezhbanMenu >/dev/null 2>&1 || true
-		fi
-		# The status matters. The app only logs a refused unregister, and this
-		# script discards its output — so without checking, a login item macOS
-		# would not retract stayed behind, pointing at a bundle deleted two lines
-		# later and unreachable from then on, while the closing message claimed
-		# everything was removed.
-		if [ "$(cat "$errand_done" 2>/dev/null)" = "failed" ]; then
+		elif [ "$(cat "$errand_done" 2>/dev/null)" = "failed" ]; then
+			# The status matters. The app only logs a refused unregister, and this
+			# script discards its output — so without checking, a login item macOS
+			# would not retract stayed behind, pointing at a bundle deleted moments
+			# later and unreachable from then on, while the closing message claimed
+			# everything was removed.
 			LOGIN_ITEM_STUCK=refused
 		fi
 		rm -rf "$errand_dir"
 		wait "$errand" >/dev/null 2>&1 || true
-	else
-		# Only the app can call SMAppService.unregister(), so with the bundle
-		# already gone — dragged to the Trash before running this — the
-		# registration cannot be retracted by anything here, or ever again. Saying
-		# nothing would report a clean uninstall over exactly the orphan this
-		# errand exists to remove.
-		LOGIN_ITEM_STUCK=no-app
 	fi
 	launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
 	# The app's own per-user directory: the instance lock the GUI takes at startup

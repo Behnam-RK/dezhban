@@ -23,38 +23,12 @@ struct HandoffRequestTests {
     }
 
     /// Nothing waiting means nothing to do, which is the ordinary case every time
-    /// the backstop looks.
+    /// the backstop looks. Distinct from `.lost`, which means somebody else is
+    /// already acting on one.
     @Test func noRequestIsNotARequest() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         #expect(HandoffRequest(url: dir.appendingPathComponent("b.handoff")).claim() == .absent)
-    }
-
-    /// A request outlives its click only briefly. If the incumbent died before
-    /// claiming one, the next app to start must not inherit it and open a window
-    /// nobody asked for.
-    @Test func aStaleRequestIsDiscardedNotObeyed() throws {
-        let dir = try tempDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let request = HandoffRequest(url: dir.appendingPathComponent("c.handoff"))
-
-        request.post()
-        let later = Date().addingTimeInterval(HandoffRequest.freshness + 5)
-        #expect(request.claim(now: later) == .stale)
-        // Taken anyway, so a file that will never be acted on stops being looked at.
-        #expect(!FileManager.default.fileExists(atPath: request.url.path))
-    }
-
-    /// A clock that moved backwards must not turn an old request into an
-    /// impossibly fresh one.
-    @Test func aRequestFromTheFutureIsNotFresh() throws {
-        let dir = try tempDir()
-        defer { try? FileManager.default.removeItem(at: dir) }
-        let request = HandoffRequest(url: dir.appendingPathComponent("d.handoff"))
-
-        request.post()
-        let earlier = Date().addingTimeInterval(-3600)
-        #expect(request.claim(now: earlier) == .stale)
     }
 
     /// `discard()` is what a process that has just taken the lock calls: whatever

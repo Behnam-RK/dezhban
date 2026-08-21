@@ -184,13 +184,19 @@ with an argument, the pre-`SMAppService` pattern.
   was closed. Requiring a file outside the launch window costs nothing real (the
   file is written before the post, so only the microsecond gap between the two
   needs the exemption) and removes the channel. The debounce is a rate limit, not a
-  gate.
+  gate. Both consumers do their claim off the main thread, since it is a stat and an
+  unlink and a network or relocated home would otherwise block the run loop on the
+  one path meant to feel instant.
 
-  Requests carry
-  their own freshness: one the incumbent never got to must not be inherited by the
-  *next* app to start and turned into a window nobody asked for, so a stale file is
-  discarded rather than obeyed, and a process that has just taken the lock discards
-  whatever it finds as belonging to a predecessor.
+  A request the incumbent never got to must not be inherited by the *next* app to
+  start and turned into a window nobody asked for. That is handled by the session
+  owner discarding whatever it finds at the moment it takes the lock — exactly,
+  where the first design guessed with a 30-second age cutoff. The cutoff only added
+  a way to be wrong, and it was: a cold login where the incumbent takes longer than
+  that to finish starting is precisely the impatient-double-click case this
+  mechanism is written around, and the cutoff threw that request away. So a claimed
+  file is honoured however old it is, because by construction it was written after
+  this process took the lock.
 - **macOS has a second way to start the app at login, and it carries no marker.**
   "Reopen windows when logging back in" relaunches whatever was running at
   logout, through LaunchServices, with no arguments. `SMAppService.mainApp` was

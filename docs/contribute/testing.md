@@ -810,7 +810,11 @@ task gui:build && open dist/Dezhban.app
       double-click the app in `/Applications` as early as you can, while it is
       still starting from the login agent. The window must open — within about
       half a second if the notification missed it, from the bounded backstop that
-      runs for the first few seconds. It must open **once**: no second activation
+      runs for the first few seconds. This must hold on a *slow* login too: the
+      request is honoured however long the incumbent took to finish starting,
+      because the file can only have been written after it took the lock. This must hold on a *slow* login too: the
+      request is honoured however long the incumbent took to finish starting,
+      because the file can only have been written after it took the lock. It must open **once**: no second activation
       a moment later, and a window you close right after must stay closed. Then
       confirm no `.handoff` file is left in `~/Library/Application
       Support/com.behnam-rk.dezhban.app/`.

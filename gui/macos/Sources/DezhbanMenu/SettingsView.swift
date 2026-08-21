@@ -29,6 +29,14 @@ struct SettingsView: View {
     /// the stale read writes `true`. The switch then reads ON with nothing starting
     /// the app at login until the next activation.
     @State private var loginRevision = 0
+    /// True while a login-item change is in flight.
+    ///
+    /// The revision alone was not enough: `seed()` captures the current revision
+    /// without bumping it, so a status read *started after* a click shares that
+    /// click's revision and passes the equality check. This is the other half —
+    /// while a mutation is outstanding, no read may write the switch, whichever
+    /// order the two happen to complete in.
+    @State private var loginPending = false
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -812,6 +820,7 @@ struct SettingsView: View {
                 // be holding the main thread while it happens.
                 loginRevision += 1
                 let revision = loginRevision
+                loginPending = true
                 loginEnabled = wanted
                 status = wanted ? "Registering the login item…" : "Removing the login item…"
                 DispatchQueue.global(qos: .userInitiated).async {
@@ -819,6 +828,7 @@ struct SettingsView: View {
                     DispatchQueue.main.async {
                         // A newer click supersedes this one's result.
                         guard revision == loginRevision else { return }
+                        loginPending = false
                         loginEnabled = outcome.isOn
                         status = outcome.message
                     }
@@ -956,7 +966,7 @@ struct SettingsView: View {
         DispatchQueue.global(qos: .userInitiated).async {
             let enabled = LoginItem.isEnabled
             DispatchQueue.main.async {
-                guard revision == loginRevision else { return }
+                guard revision == loginRevision, !loginPending else { return }
                 loginEnabled = enabled
             }
         }

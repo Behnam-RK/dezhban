@@ -24,15 +24,6 @@ import Foundation
 /// window — a second `NSApp.activate` half a second after the first, or a window
 /// reopening right after the user closed it.
 public struct HandoffRequest {
-    /// How long a request stays meaningful.
-    ///
-    /// A request is a live "the user just did something", not a queued command. If
-    /// the incumbent died before consuming one, the *next* app to start must not
-    /// inherit it and pop a window nobody asked for, so an old file is discarded
-    /// rather than obeyed. Generous enough to cover a slow launch, short enough
-    /// that it cannot outlive the click that caused it.
-    public static let freshness: TimeInterval = 30
-
     public let url: URL
 
     public init(url: URL) {
@@ -52,11 +43,19 @@ public struct HandoffRequest {
     }
 
     /// The result of trying to take a request.
+    ///
+    /// There is deliberately no "too old to act on" case. An age cutoff was the
+    /// first design, to keep a request its intended reader never got from being
+    /// inherited by the *next* app to start and turned into a window nobody asked
+    /// for — but `discard()` at lock acquisition already does that, exactly rather
+    /// than by guessing, so the cutoff only added a way to be wrong. And it was: a
+    /// cold login where the incumbent takes longer than the cutoff to finish
+    /// starting is precisely the "user impatient with a slow start" case this whole
+    /// mechanism is written around, and the cutoff threw that request away.
     public enum Claim: Equatable {
-        /// Taken, and recent enough to act on.
+        /// Taken. Because the session owner discards whatever it finds when it takes
+        /// the lock, a request seen after that was written by a live duplicate.
         case fresh
-        /// Taken, but too old to act on — see `freshness`.
-        case stale
         /// There was nothing to take.
         case absent
         /// There was a request, and somebody else took it first. Whoever did is
@@ -66,8 +65,12 @@ public struct HandoffRequest {
 
     /// Removes any request without acting on it.
     ///
-    /// Called by a process that has just *taken* the lock: anything on disk at
-    /// that moment predates its ownership and was meant for a predecessor.
+    /// Called by a process that has just *taken* the lock: anything on disk at that
+    /// moment predates its ownership and was meant for a predecessor. This is what
+    /// makes an age cutoff unnecessary — and it is exact where a cutoff was a guess.
+    /// The residual window is the microseconds between taking the lock and this
+    /// call, in which a duplicate could post a request that then gets discarded;
+    /// orders of magnitude narrower than the launches a 30-second cutoff threw away.
     public func discard() {
         try? FileManager.default.removeItem(at: url)
     }
@@ -80,28 +83,21 @@ public struct HandoffRequest {
     /// checking — the first shape of this — let a background check and the
     /// notification handler both conclude they had it.
     ///
-    /// A stale request is still taken, so a file that will never be acted on stops
-    /// being re-examined.
     /// `interleaved` exists so the `.lost` branch can be tested at all. It is the
     /// one outcome that only occurs when two claimers overlap, and it is also the
     /// one that matters — it is what stops both of them acting — so asserting it
     /// in a comment rather than a test would be asserting the whole point.
-    public func claim(now: Date = Date(), interleaved: () -> Void = {}) -> Claim {
-        let attributes = try? FileManager.default.attributesOfItem(atPath: url.path)
-        guard let attributes else { return .absent }
+    public func claim(interleaved: () -> Void = {}) -> Claim {
+        guard FileManager.default.fileExists(atPath: url.path) else { return .absent }
         interleaved()
         do {
             try FileManager.default.removeItem(at: url)
         } catch {
-            // Gone between the stat and the remove: somebody else claimed it. (A
+            // Gone between the check and the remove: somebody else claimed it. (A
             // genuine permissions failure lands here too, and standing down is the
             // safe reading of it — a window that does not open, never two.)
             return .lost
         }
-        guard let written = attributes[.modificationDate] as? Date else { return .stale }
-        let age = now.timeIntervalSince(written)
-        // A negative age means a clock change put the file in the future rather
-        // than that it is impossibly fresh; treat it the same as too old.
-        return age >= 0 && age <= Self.freshness ? .fresh : .stale
+        return .fresh
     }
 }
