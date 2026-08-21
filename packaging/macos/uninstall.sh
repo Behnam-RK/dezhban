@@ -22,7 +22,7 @@ PLIST=/Library/LaunchDaemons/dezhban.plist
 SHARE_DIR=/usr/local/share/dezhban
 LOGIN_AGENT=com.behnam-rk.dezhban.app.login
 APP_BUNDLE_ID=com.behnam-rk.dezhban.app
-LOGIN_ITEM_STUCK=0
+LOGIN_ITEM_STUCK=none
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "error: run as root — sudo sh $0" >&2
@@ -82,8 +82,19 @@ if [ -n "$CONSOLE_UID" ]; then
 		# perfectly successful run. And no `( sleep N; kill ) &` watchdog — that
 		# leaks its `sleep` past the end of the script and, if it ever fires late,
 		# aims a `kill -9` at a pid the system may have recycled.
-		errand_done="${TMPDIR:-/tmp}/dezhban-uninstall-errand.$$"
-		rm -f "$errand_done"
+		# In a directory this script creates, mode 700, owned by root. The obvious
+		# "${TMPDIR:-/tmp}/name.$$" is a predictable path in a world-writable
+		# directory, and under `sudo sh` TMPDIR is often unset — so an unprivileged
+		# local user could pre-plant a symlink there and have the `echo` below write
+		# through it AS ROOT. The sticky bit stops them deleting our file; it does
+		# not stop them creating one first, and `rm -f` would only unlink their
+		# symlink and leave the window open to try again.
+		errand_dir=$(mktemp -d "${TMPDIR:-/tmp}/dezhban-uninstall.XXXXXX") || errand_dir=""
+		if [ -z "$errand_dir" ]; then
+			echo "note: could not create a private temp directory; skipping the login-item retraction" >&2
+			LOGIN_ITEM_STUCK=refused
+		fi
+		errand_done="$errand_dir/done"
 		(
 			if launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
 				"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1; then
@@ -100,6 +111,12 @@ if [ -n "$CONSOLE_UID" ]; then
 		done
 		if [ ! -f "$errand_done" ]; then
 			echo "note: retracting the login item did not finish in 15s; continuing" >&2
+			# Reported, not just survived. On this path there is no marker, so the
+			# "failed" test below is false and the script would print a clean
+			# "files deleted" while the registration was still on file — the silent
+			# orphan that test exists to prevent, on the one path the timeout is
+			# here for.
+			LOGIN_ITEM_STUCK=timeout
 			# The subshell AND what it started. Killing only the subshell leaves the
 			# DezhbanMenu it launched running, and the very next statement deletes
 			# the bundle out from under it — the thing the `pkill` above exists to
@@ -113,10 +130,17 @@ if [ -n "$CONSOLE_UID" ]; then
 		# later and unreachable from then on, while the closing message claimed
 		# everything was removed.
 		if [ "$(cat "$errand_done" 2>/dev/null)" = "failed" ]; then
-			LOGIN_ITEM_STUCK=1
+			LOGIN_ITEM_STUCK=refused
 		fi
-		rm -f "$errand_done"
+		rm -rf "$errand_dir"
 		wait "$errand" >/dev/null 2>&1 || true
+	else
+		# Only the app can call SMAppService.unregister(), so with the bundle
+		# already gone — dragged to the Trash before running this — the
+		# registration cannot be retracted by anything here, or ever again. Saying
+		# nothing would report a clean uninstall over exactly the orphan this
+		# errand exists to remove.
+		LOGIN_ITEM_STUCK=no-app
 	fi
 	launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
 	# The app's own per-user directory: the instance lock the GUI takes at startup
@@ -170,12 +194,21 @@ rm -rf "$SHARE_DIR"
 
 echo
 echo "dezhban uninstalled — rules removed, service unregistered, files deleted."
-if [ "$LOGIN_ITEM_STUCK" = "1" ]; then
+case "$LOGIN_ITEM_STUCK" in
+none) ;;
+*)
 	echo
-	echo "warning: macOS would not retract the login item. Nothing will start"
-	echo "         Dezhban (the app is gone), but the entry remains — remove"
-	echo "         \"Dezhban\" under System Settings > General > Login Items."
-fi
+	case "$LOGIN_ITEM_STUCK" in
+	refused) echo "warning: macOS would not retract the login item." ;;
+	timeout) echo "warning: retracting the login item did not finish in time." ;;
+	no-app) echo "warning: the app bundle was already gone, so its login item could not" ;
+		echo "         be retracted — only the app itself can do that." ;;
+	esac
+	echo "         Nothing will start Dezhban (the app is gone), but the entry"
+	echo "         remains — remove \"Dezhban\" under System Settings >"
+	echo "         General > Login Items."
+	;;
+esac
 echo
 echo "If any OTHER account on this Mac ran the app, its login agent is still"
 echo "registered there — root cannot reach another user's launchd session. Nothing"

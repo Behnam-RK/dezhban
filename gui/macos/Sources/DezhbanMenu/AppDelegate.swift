@@ -155,8 +155,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // it. Always acted on, never debounced.
             openForHandoff(definite: true)
         case .absent, .stale:
-            // Ambiguous, and these are the two that can double up with a backstop
-            // tick, so they are the ones the debounce is for.
+            // Ambiguous: no file to point at, so nothing here proves a duplicate of
+            // this app wrote it. Accepted only while the launch-time backstop is
+            // still armed, which is the whole reason to accept them at all — the
+            // duplicate writes the file and *then* posts, so a backstop tick landing
+            // between those two calls leaves the notification with nothing to find,
+            // and refusing it would make a real hand-off a silent no-op.
+            //
+            // Outside that window a file is required, because
+            // `DistributedNotificationCenter` is a system-wide bus with no sender
+            // authentication and both the name and the object are derivable. Without
+            // this bound, any process running as this user could call
+            // `MainWindow.open()` — which activates the app — once per debounce
+            // interval, forever, reopening a window the moment it was closed. The
+            // debounce is a rate limit, not a gate.
+            guard handoffTimer != nil else { break }
             openForHandoff(definite: false)
         case .lost:
             break

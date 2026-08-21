@@ -176,6 +176,16 @@ with an argument, the pre-`SMAppService` pattern.
   and both must be answered. Debouncing on elapsed time alone swallowed the second,
   which is the silent no-op again, arrived at from the other direction.
 
+  And accepting an ambiguous notification is bounded to the launch window, because
+  `DistributedNotificationCenter` is a system-wide bus with no sender
+  authentication and both the name and the object are derivable. Unbounded, any
+  process running as this user could call `MainWindow.open()` — which activates the
+  app — once per debounce interval indefinitely, reopening a window the moment it
+  was closed. Requiring a file outside the launch window costs nothing real (the
+  file is written before the post, so only the microsecond gap between the two
+  needs the exemption) and removes the channel. The debounce is a rate limit, not a
+  gate.
+
   Requests carry
   their own freshness: one the incumbent never got to must not be inherited by the
   *next* app to start and turned into a window nobody asked for, so a stale file is

@@ -54,7 +54,9 @@ current as you land changes.
   rather than ON when the item you see is one you had already switched off in
   System Settings. Uninstalling clears Dezhban's saved app preferences too —
   leaving them behind meant a later install silently skipped the login-item
-  migration.
+  migration. If macOS refuses to retract the login item — or the app bundle was
+  already in the Trash, so nothing can — the uninstaller now says so instead of
+  reporting a clean removal.
 
 ## [0.11.0] - 2026-08-21
 

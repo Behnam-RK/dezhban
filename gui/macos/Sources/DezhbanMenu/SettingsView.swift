@@ -18,6 +18,17 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
 
     @State private var loginEnabled = false
+    /// Bumped by every login-item click, so an asynchronous status read that was
+    /// already in flight cannot land afterwards and overwrite the result.
+    ///
+    /// Both readers of `LoginItem` are off the main thread now, and `seed()` runs
+    /// on every `didBecomeActiveNotification` — which macOS delivers *during* a
+    /// login-item change, since it surfaces System Settings or an approval prompt.
+    /// So the ordering was really available: click off, `seed()` starts a read that
+    /// still sees the registration, the click's own completion writes `false`, then
+    /// the stale read writes `true`. The switch then reads ON with nothing starting
+    /// the app at login until the next activation.
+    @State private var loginRevision = 0
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -799,11 +810,15 @@ struct SettingsView: View {
                 // on the disable path launchd may terminate the app partway
                 // through (ADR-0014's known risk), which is one more reason not to
                 // be holding the main thread while it happens.
+                loginRevision += 1
+                let revision = loginRevision
                 loginEnabled = wanted
                 status = wanted ? "Registering the login item…" : "Removing the login item…"
                 DispatchQueue.global(qos: .userInitiated).async {
                     let outcome = LoginItem.set(enabled: wanted)
                     DispatchQueue.main.async {
+                        // A newer click supersedes this one's result.
+                        guard revision == loginRevision else { return }
                         loginEnabled = outcome.isOn
                         status = outcome.message
                     }
@@ -934,10 +949,16 @@ struct SettingsView: View {
         canApply = false
         // Off-main for the same reason `set(enabled:)` is: this is two blocking
         // SMAppService status reads over XPC (it was one before the agent), and
-        // opening the Settings pane should not hitch on them.
+        // opening the Settings pane should not hitch on them. Stamped with the
+        // click revision so a read started before a click cannot land after it —
+        // see `loginRevision`.
+        let revision = loginRevision
         DispatchQueue.global(qos: .userInitiated).async {
             let enabled = LoginItem.isEnabled
-            DispatchQueue.main.async { loginEnabled = enabled }
+            DispatchQueue.main.async {
+                guard revision == loginRevision else { return }
+                loginEnabled = enabled
+            }
         }
         notifyPrefs = NotificationManager.prefs
         checkUpdatesEnabled = UpdateChecker.isEnabled

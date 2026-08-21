@@ -855,6 +855,11 @@ task gui:build && open dist/Dezhban.app
       `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
       doing its job — this is the switch a user reaches for to stop the app
       starting at login, and it is useless if nobody can tell what it governs).
+- [ ] **Uninstall over an already-trashed app says so.** Drag
+      `/Applications/Dezhban.app` to the Trash, then run the uninstaller. It must
+      finish *and* print the warning naming System Settings — only the app can
+      retract its own registration, so with the bundle gone the entry cannot be
+      removed by anything and reporting a clean uninstall would hide it.
 - [ ] **Uninstall retracts the registration, not just the running job.** With
       login-at-launch on, run `sudo sh /usr/local/share/dezhban/uninstall.sh`,
       then confirm `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login`
