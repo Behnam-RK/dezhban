@@ -2,6 +2,13 @@
 
 > Persian *dežbān* (دژبان) — "gatekeeper / garrison guard."
 
+> **Dezhban is dedicated, humbly, to the civilians killed in Iran since
+> December 2025** — shot, executed, or tortured to death by the state for
+> protesting, while that same state cut the country off from the internet so
+> the world could not watch.
+>
+> [2025–2026 Iran massacres][iran]
+
 ![dezhban — system-wide network kill switch](gui/artifacts/png/banner-1280x640.png)
 
 **dezhban makes sure your traffic can only leave this machine through your VPN.**
@@ -134,4 +141,13 @@ using it, the mental model, and contributing.
 
 ## License
 
-[MIT](LICENSE) © 2026 Behnam RK
+[Hippocratic License 3.0 (Core) with the Dezhban named-entity restriction](LICENSE)
+© 2026 Behnam RK.
+
+This is **not** an OSI-approved open source license, and it is not MIT. Part A
+of `LICENSE` withholds any grant from the IRGC, the Ministry of Intelligence,
+FARAJA, and anyone who took part in or materially supported the killing of
+protesters in Iran. Part B is the Hippocratic License 3.0 (Core), verbatim,
+which requires derivative works to carry the same license.
+
+[iran]: https://en.wikipedia.org/wiki/2025%E2%80%932026_Iran_massacres

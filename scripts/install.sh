@@ -500,16 +500,61 @@ fi
 # The uninstaller comes from the SAME tag being installed — same guarantee the
 # .pkg gives (it bakes in whichever uninstall.sh existed when that tag was
 # built), just fetched instead of embedded in a payload.
-step "fetching the uninstaller"
+step "fetching the uninstaller and the license"
 SHARE_DIR=/usr/local/share/dezhban
 mkdir -p "$SHARE_DIR"
 uninstall_src="packaging/macos/uninstall.sh"
 [ "$goos" = linux ] && uninstall_src="packaging/linux/uninstall.sh"
-if curl -fsSL -o "$SHARE_DIR/uninstall.sh" "https://raw.githubusercontent.com/$REPO/$tag/$uninstall_src"; then
-	chmod +x "$SHARE_DIR/uninstall.sh"
-else
+# Both fetches below are STAGED: downloaded to a sibling `.part` file and renamed
+# into place only on success. Two reasons, and neither is optional on a
+# reinstall/upgrade, where $SHARE_DIR already holds a good copy of both files:
+#
+#   - `-f` suppresses the body only on an HTTP error. curl streams to disk, so a
+#     connection dropped or --max-time tripped mid-body leaves a TRUNCATED file,
+#     which is worse than none — it reads as the real thing while silently
+#     missing clauses (LICENSE) or teardown steps (uninstall.sh).
+#   - Writing straight to $SHARE_DIR destroys the previous, valid copy the
+#     moment curl opens the output file, so a transient DNS blip during an
+#     upgrade would leave the host with NEITHER the old file nor a new one.
+#     Staging leaves the existing copy untouched when the fetch fails.
+#
+# Both are also bounded: curl has no default max-time, and on the upgrade path
+# `dezhban start` has already re-armed the guard several steps above, so a host
+# whose tunnel has not come back black-holes these requests — unbounded, the
+# script simply stops printing and looks hung.
+#
+# Explicit modes, not the ambient umask: every other install path stages these
+# with `install -m`, and a root umask of 077 would otherwise hand the user a
+# LICENSE they cannot read.
+# The staging file is a SIBLING in $SHARE_DIR, not one under $tmp: same
+# filesystem, so the final step is a rename() and a reader never sees a
+# half-written file. $tmp is /tmp or /var/folders, which usually is not.
+fetch_to_share() {
+	# $1 = raw.githubusercontent path, $2 = basename under $SHARE_DIR, $3 = mode
+	if curl -fsSL --connect-timeout 10 --max-time 30 \
+		-o "$SHARE_DIR/$2.part" "https://raw.githubusercontent.com/$REPO/$tag/$1"; then
+		chmod "$3" "$SHARE_DIR/$2.part"
+		mv -f "$SHARE_DIR/$2.part" "$SHARE_DIR/$2"
+		return 0
+	fi
+	rm -f "$SHARE_DIR/$2.part"
+	return 1
+}
+
+if ! fetch_to_share "$uninstall_src" uninstall.sh 0755; then
 	echo "warning: could not fetch the uninstaller — install itself succeeded. Retry later with:" >&2
-	echo "  curl -fsSL -o $SHARE_DIR/uninstall.sh https://raw.githubusercontent.com/$REPO/$tag/$uninstall_src" >&2
+	echo "  curl -fsSL -o $SHARE_DIR/uninstall.sh https://raw.githubusercontent.com/$REPO/$tag/$uninstall_src && chmod +x $SHARE_DIR/uninstall.sh" >&2
+fi
+
+# Hippocratic 3.0 Core section 5.1 requires that everyone who receives the
+# Software also receives the License; 7.2 ends the grant if that is not cured
+# within 30 days of notice. Fetched from the SAME tag as the binary, for the
+# same reason the uninstaller is. Non-fatal: a machine with the binary and no
+# LICENSE is a fixable notice problem, not a reason to fail an install that
+# already put a kill switch on the host.
+if ! fetch_to_share LICENSE LICENSE 0644; then
+	echo "warning: could not fetch the license — install itself succeeded. Retry later with:" >&2
+	echo "  curl -fsSL -o $SHARE_DIR/LICENSE https://raw.githubusercontent.com/$REPO/$tag/LICENSE && chmod 0644 $SHARE_DIR/LICENSE" >&2
 fi
 
 echo

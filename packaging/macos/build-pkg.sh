@@ -9,6 +9,7 @@
 # Payload:
 #   /usr/local/bin/dezhban                       universal CLI (arm64 + x86_64)
 #   /usr/local/share/dezhban/uninstall.sh        the uninstaller (no native pkg one)
+#   /usr/local/share/dezhban/LICENSE             required by the license itself
 #   /Applications/Dezhban.app                    menubar app (universal)
 #   postinstall: registers the LaunchDaemon, but does NOT start enforcement.
 #
@@ -63,6 +64,13 @@ lipo -create -output "$STAGE/usr/local/bin/dezhban" "$CLI_ARM" "$CLI_X86"
 chmod 0755 "$STAGE/usr/local/bin/dezhban"
 
 install -m 0755 "$HERE/uninstall.sh" "$STAGE/usr/local/share/dezhban/uninstall.sh"
+
+# Hippocratic 3.0 Core section 5.1 requires that everyone who receives the
+# Software also receives the License, and 7.2 ends the grant if that is not
+# cured within 30 days of notice. This package shipped only the binary while it
+# was MIT; that was already wrong and is now enforceable. $SHARE_DIR is removed
+# wholesale by uninstall.sh, so this needs no separate teardown.
+install -m 0644 "$REPO_ROOT/LICENSE" "$STAGE/usr/local/share/dezhban/LICENSE"
 
 SIGN_ARGS=()
 if [[ -n "${INSTALLER_SIGN_IDENTITY:-}" ]]; then

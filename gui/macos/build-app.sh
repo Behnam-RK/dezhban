@@ -62,6 +62,16 @@ cp "$HERE/Info.plist" "$APP/Contents/Info.plist"
 # never pointed at a path a local process could swap out from under it.
 install -m 0755 "$HERE/askpass.sh" "$APP/Contents/Resources/askpass.sh"
 
+# The license travels INSIDE the bundle, not beside it. Dezhban.app is published
+# as a standalone release asset (Dezhban-macos.app.zip), and `ditto -xk` unpacks
+# that archive straight into /Applications — so anything added at the archive's
+# top level would land as /Applications/LICENSE, and anything left out of the
+# bundle would mean that download hands somebody the Software with no License at
+# all. Hippocratic 3.0 Core section 5.1 requires the opposite, and 7.2 ends the
+# grant if it is not cured within 30 days of notice. Staged here, before the
+# ad-hoc codesign below, so the seal covers it.
+install -m 0644 "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
+
 # Documentation, rendered from the repo's own markdown into the bundle. Shipping
 # it means the help pane works with every byte of egress cut — which is exactly
 # when someone needs it — and that the docs always match the version they

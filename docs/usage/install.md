@@ -93,7 +93,14 @@ checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
    and `.deb`/`.rpm` paths too.
 5. Fetches the matching uninstaller (`packaging/macos/uninstall.sh` or
    `packaging/linux/uninstall.sh`, from the **same tag** just installed) to
-   `/usr/local/share/dezhban/uninstall.sh`.
+   `/usr/local/share/dezhban/uninstall.sh`, and the `LICENSE` from that same
+   tag to `/usr/local/share/dezhban/LICENSE` — the license requires that
+   anyone who receives the software receives it too. Both are downloaded to a
+   temporary file and moved into place only once complete, so a fetch that fails
+   or times out is a warning rather than a failed install *and* never replaces a
+   good copy from an earlier install with a truncated one — or with nothing.
+   `install.ps1` fetches no uninstaller (Windows has none) but does fetch the
+   `LICENSE`, to `%ProgramFiles%\dezhban\LICENSE`, beside `dezhban.exe`.
 
 Re-running either script upgrades or reinstalls: it replaces the binary, and
 if a service was already running, stops it first and restarts it after — but
@@ -142,7 +149,12 @@ Declares an `nftables` dependency (the Linux backend shells out to `nft`).
 Registers the service on install (`postinstall.sh`, same never-auto-start
 rule) and tears down rules + unregisters on removal (`preremove.sh` — it has
 to run *before* the package manager deletes the binary, or there's nothing
-left to call `panic`/`stop`/`uninstall` on).
+left to call `panic`/`stop`/`uninstall` on). The `LICENSE` lands at
+`/usr/share/doc/dezhban/LICENSE` — the per-package documentation directory both
+`dpkg` and `rpm` own, so the package manager removes it again on uninstall. The
+`.pkg` and `install.sh` put it in `/usr/local/share/dezhban/` instead, and the
+menubar app carries its own copy at
+`Dezhban.app/Contents/Resources/LICENSE`.
 
 ### Bare binaries
 
