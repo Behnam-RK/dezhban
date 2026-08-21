@@ -12,6 +12,18 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Remove Dezhban…** — the complete uninstall, from the app. It
+  removes what only your own login session can reach (the Touch ID key in the
+  login keychain, the "open at login" registration, this app's preferences and
+  saved window state), then opens Terminal running the root uninstaller and
+  quits — so you watch the firewall-rule teardown happen instead of trusting a
+  dialog that is about to be deleted. "Keep my dezhban configuration in
+  /etc/dezhban" maps to the uninstaller's existing `KEEP_CONFIG=1`. Other user
+  accounts are deliberately untouched
+  ([ADR-0015](docs/adr/0015-complete-purge-semantics.md)).
+
 ### Changed
 
 - **Contextual help lands on the key you asked about.** The **?** beside a
@@ -34,6 +46,15 @@ current as you land changes.
 
 ### Fixed
 
+- **The setup wizard appears again after a reinstall.** `uninstall.sh` removed
+  only root-owned state, so the app's `dezhban.firstRunCompleted` preference
+  outlived every uninstall — a machine with an empty `/etc/dezhban` and no VPN
+  still answered "the wizard has been completed", and stayed silent. The
+  uninstaller now clears the invoking user's preference domains (including the
+  dead `com.dezhban.DezhbanMenu` one from a superseded bundle identifier), and
+  the app's own Remove Dezhban… clears everything else this account holds. If
+  you are hitting this today, Settings → Run Setup Again… is the route that
+  needs no uninstall at all.
 - **"Open minimized" now actually decides whether the window opens.** The app
   used to infer a login launch from `NSApplication.launchIsDefaultUserInfoKey`,
   which reported wrong in both directions — the window appeared at login with

@@ -997,6 +997,36 @@ task gui:build && open dist/Dezhban.app
 - [ ] **Staleness.** Kill the daemon → the icon goes gray after the 90 s staleness
       window, and Overview switches to the guided "Stopped" state.
 
+### Remove Dezhban (complete purge)
+
+Destructive and one-way — run these on a machine you are willing to reinstall
+on. See [ADR-0015](../adr/0015-complete-purge-semantics.md).
+
+- [ ] **Cancel is the default.** Settings → Remove Dezhban…, press Return: the
+      sheet dismisses with nothing removed. The guard is still enforcing.
+- [ ] **The per-user half actually goes.** Enroll Touch ID and enable "open at
+      login" first, then remove. After the app quits:
+      `defaults read com.behnam-rk.dezhban.app` fails with "domain does not
+      exist"; `security find-generic-password -s sh.dezhban.menu` reports
+      `SecKeychainSearchCopyNext: The specified item could not be found`;
+      Dezhban no longer appears in System Settings › General › Login Items.
+- [ ] **The teardown is visible.** Terminal opens, `sudo` prompts, and the
+      transcript shows `panic` removing the rules BEFORE anything is deleted.
+      Confirm the network works throughout — a half-removed kill switch that
+      leaves a block-all rule loaded is the one outcome this must never produce.
+- [ ] **KEEP_CONFIG.** With the checkbox ticked, `/etc/dezhban/dezhban.json`
+      survives; without it, `/etc/dezhban` is gone.
+- [ ] **Reinstall looks fresh.** Reinstall, launch the app: the first-run wizard
+      opens. This is the bug the purge exists to fix.
+- [ ] **Terminal unavailable degrades honestly.** Rename
+      `/usr/local/share/dezhban/uninstall.sh` and remove: the app reports that
+      dezhban is still installed and still enforcing, prints the command, and
+      does **not** quit.
+- [ ] **The script's own per-user pass.** On a second account, run
+      `sudo sh /usr/local/share/dezhban/uninstall.sh` directly: that account's
+      preference domains are deleted, and the output names the keychain item and
+      login item it did not touch. A third account's settings are untouched.
+
 ### Actions
 
 - [ ] **The action row explains itself before the click.** Titles are short

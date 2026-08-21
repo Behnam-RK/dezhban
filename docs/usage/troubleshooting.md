@@ -510,3 +510,59 @@ dezhban validate --config <config>     # prints the precise validation error
 ```
 
 See [config.md](config.md) for every field and its constraints.
+
+## I reinstalled, but the setup wizard never appears
+
+The app offers the first-run wizard only when it has never been completed on
+this account *and* dezhban knows no VPN server. The first half is a flag in the
+app's own preferences, and it used to outlive every uninstall — so a machine
+with an empty `/etc/dezhban` could still answer "already done" and stay silent.
+
+Check both halves:
+
+```sh
+defaults read com.behnam-rk.dezhban.app dezhban.firstRunCompleted   # 1 means "already done"
+dezhban config show                                                 # look at vpn.endpoints / profiles
+```
+
+Two ways out. **Settings → Run Setup Again…** walks the same questions with your
+current settings filled in — that is the intended route, and it does not require
+uninstalling anything. Or clear the flag:
+
+```sh
+defaults delete com.behnam-rk.dezhban.app dezhban.firstRunCompleted
+```
+
+A Mac that ran an early build may also still carry a `com.dezhban.DezhbanMenu`
+preference domain from a superseded bundle identifier. It is inert, and
+**Settings → Remove Dezhban…** clears it.
+
+## Removing dezhban completely
+
+**Settings → Remove Dezhban…** in the app is the complete route. It removes what
+only your own login session can reach — the Touch ID key in your login keychain,
+the "open at login" registration, and this app's preferences — then opens
+Terminal running the root uninstaller and quits, so you watch the firewall-rule
+teardown happen rather than trusting a dialog that is about to be deleted. Tick
+"Keep my dezhban configuration in /etc/dezhban" to keep your config.
+
+Without the app, the root half alone is:
+
+```sh
+sudo sh /usr/local/share/dezhban/uninstall.sh                 # everything
+sudo KEEP_CONFIG=1 sh /usr/local/share/dezhban/uninstall.sh   # keep /etc/dezhban
+```
+
+It removes every firewall rule first (`panic`), so it can never leave you cut
+off. It also clears the invoking user's app preferences, but it cannot reach the
+keychain or the login item — it prints these:
+
+```sh
+security delete-generic-password -s sh.dezhban.menu
+```
+
+and untick Dezhban in **System Settings › General › Login Items**. Other user
+accounts keep their own app settings either way, and notification permission is
+removed in **System Settings › Notifications**. See
+[ADR-0015](../adr/0015-complete-purge-semantics.md) for why the work is split
+this way.

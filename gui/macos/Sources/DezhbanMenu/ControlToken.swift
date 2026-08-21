@@ -451,6 +451,22 @@ enum ControlToken {
     /// docs/adr/0012-app-checked-biometrics-on-unsigned-builds.md, which records
     /// the measurements and names "modernising this back to `SecItemDelete`" as
     /// the regression to watch for.
+    /// Removes every keychain item this app owns: the token and the capability
+    /// probe. Reports whether anything was actually there.
+    ///
+    /// Lives here rather than in `Purge` because the account names are private
+    /// to this type, and deliberately so — the probe account exists precisely so
+    /// a probe can never collide with a real token, and a second place naming it
+    /// would be a second place to get that wrong. Uses `remove`, never
+    /// `SecItemDelete`, for the ACL reason documented on it.
+    @discardableResult
+    static func purge() -> Bool {
+        let hadToken = remove(account: account)
+        let hadProbe = remove(account: probeAccount)
+        clearOrphaned()
+        return hadToken || hadProbe
+    }
+
     @discardableResult
     static func remove(account: String = ControlToken.account) -> Bool {
         // Look the item up with the modern API — `kSecReturnRef` hands back a
