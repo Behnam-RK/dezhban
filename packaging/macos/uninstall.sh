@@ -51,16 +51,29 @@ pkill -x DezhbanMenu >/dev/null 2>&1 || true
 # The login item is a per-user launchd agent (SMAppService.agent), NOT a
 # LaunchServices entry: deleting the bundle does not retract it. Left registered it
 # fails to load at every subsequent login and lingers in System Settings → General
-# → Login Items as an orphan the user has to hunt down. Booting it out needs that
-# user's own GUI session, so root can only reach the console user — other accounts
-# get the one command they need, printed at the end.
+# → Login Items as an orphan the user has to hunt down.
+#
+# Only SMAppService.unregister() actually retracts the registration, and only the
+# app can call it — `launchctl bootout` unloads the job for THIS boot and leaves
+# the record that recreates it at the next login, pointing at a plist inside the
+# bundle we are about to delete. So the app is run one last time, as the console
+# user inside their GUI session, purely to retract itself. bootout follows as a
+# belt-and-braces unload of the job it just retracted.
+#
+# All of it needs the user's own launchd session, so root can only reach the
+# console user; other accounts get the one command they need, printed at the end.
 CONSOLE_USER=$(stat -f %Su /dev/console 2>/dev/null || echo "")
+CONSOLE_UID=""
 if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
 	CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")
-	if [ -n "$CONSOLE_UID" ]; then
-		echo "unregistering the login agent for $CONSOLE_USER ..."
-		launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
+fi
+if [ -n "$CONSOLE_UID" ]; then
+	echo "unregistering the login agent for $CONSOLE_USER ..."
+	if [ -x "$APP/Contents/MacOS/DezhbanMenu" ]; then
+		launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+			"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1 || true
 	fi
+	launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
 fi
 
 rm -rf "$APP"
@@ -92,6 +105,6 @@ echo
 echo "dezhban uninstalled — rules removed, service unregistered, files deleted."
 echo
 echo "If any OTHER account on this Mac ran the app, its login agent is still"
-echo "registered there — root cannot reach another user's launchd session. From"
-echo "that account, once:"
-echo "    launchctl bootout gui/\$(id -u)/$LOGIN_AGENT"
+echo "registered there — root cannot reach another user's launchd session. Nothing"
+echo "will start Dezhban (the bundle is gone), but the entry lingers under System"
+echo "Settings → General → Login Items until that user removes it there."

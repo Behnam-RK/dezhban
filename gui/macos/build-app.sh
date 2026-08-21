@@ -111,6 +111,17 @@ if [[ "$agent_marker" -ne 1 ]]; then
 	echo "build-app.sh: LoginAgent.plist ProgramArguments no longer pass --background — a login launch would be indistinguishable from a user launch" >&2
 	exit 1
 fi
+# 3. The label must be spelled the same in the three places that must agree:
+#    the plist, LoginItem.plistName (what SMAppService.agent is given), and
+#    uninstall.sh (what retracts it). Renaming it consistently in the plist AND
+#    here would otherwise satisfy check 1 while SMAppService named a file that
+#    does not exist — reported only as the .notFound status nobody reads.
+for consumer in "$HERE/Sources/DezhbanMenu/LoginItem.swift" "$REPO_ROOT/packaging/macos/uninstall.sh"; do
+	if ! grep -q "$AGENT_LABEL" "$consumer"; then
+		echo "build-app.sh: $consumer does not mention '$AGENT_LABEL' — the label, LoginItem.plistName and the uninstaller have drifted apart, and login-at-launch would fail silently" >&2
+		exit 1
+	fi
+done
 
 # Documentation, rendered from the repo's own markdown into the bundle. Shipping
 # it means the help pane works with every byte of egress cut — which is exactly

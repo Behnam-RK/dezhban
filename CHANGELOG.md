@@ -25,15 +25,19 @@ current as you land changes.
   consulting the setting at all. Existing installs are migrated once, on first
   launch; if you had login-at-launch switched off, it stays off.
 
-  Two consequences of the mechanism, handled in the same change. A launchd agent
-  starts the moment it is registered and — unlike the LaunchServices login item
-  it replaces — does not check whether the app is already running, so turning
-  "Open this app at login" on used to be able to leave you with two menubar
-  icons; a duplicate copy now exits at startup. And a launchd registration does
-  not disappear with the app bundle the way a login item did, so `uninstall.sh`
-  retracts it rather than leaving an entry that fails to load at every
-  subsequent login. The Login Items entry also reads "Dezhban" now instead of a
-  raw job label.
+  Three consequences of the mechanism, handled in the same change. A launchd
+  agent starts the moment it is registered and — unlike the LaunchServices login
+  item it replaces — does not check whether the app is already running, so
+  turning "Open this app at login" on could leave you with two menubar icons; a
+  duplicate copy now exits at startup, and if you started it yourself it brings
+  the running copy forward with its window open rather than appearing to do
+  nothing. A launchd registration also does not disappear with the app bundle
+  the way a login item did, so `uninstall.sh` now has the app retract it before
+  deleting anything, instead of leaving an entry that fails to load at every
+  subsequent login; the Login Items entry reads "Dezhban" now instead of a raw
+  job label. And the login toggle says what actually happened — including when
+  macOS is holding the registration for your approval, and when it refuses to
+  remove the old login item and only you can clear it in System Settings.
 
 ## [0.11.0] - 2026-08-21
 

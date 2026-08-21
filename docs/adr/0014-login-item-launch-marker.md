@@ -104,17 +104,42 @@ with an argument, the pre-`SMAppService` pattern.
   `--background`, so under the default `bootOnly` it opens no window and there
   is no way to tell the two icons apart. `RunAtLoad` has to stay true or the
   login launch never happens, so the duplicate is caught at startup instead:
-  `yieldToRunningInstance()` in `main.swift` exits before the delegate installs
-  anything. The comparison is a total order over (launch date, pid) rather than
-  a "does anyone else exist" test, because two copies that each saw the other
-  and each stood down would leave the Mac with no app at all — see
-  `SingleInstance`.
-- **Uninstalling has to retract the registration.** A LaunchServices login item
-  disappears with its bundle; a per-user launchd agent does not. Left behind it
-  fails to load at every subsequent login and lingers in System Settings as an
-  orphan job. `packaging/macos/uninstall.sh` boots it out for the console user
-  and prints the one command other accounts need, since root cannot reach
-  another user's launchd session.
+  `acquireSessionOwnership()` in `main.swift` takes an exclusive `flock` before
+  `NSApplication` exists, and a process that cannot get it exits.
+
+  A lock rather than "which copy launched first", which is what this was first
+  written as and which cannot work. Only a *newly started* process ever
+  evaluates the question — the copy already serving the menubar never
+  re-evaluates anything — so any rule under which the newcomer might decide it
+  wins leaves both running, and any rule under which an undatable process yields
+  can retire both and leave the Mac with no app at all.
+  `NSRunningApplication.launchDate` is documented as optional, so both failures
+  were reachable. The kernel has neither problem: exactly one open file
+  description holds the lock, and it is released when that process dies however
+  it dies, so a crashed predecessor cannot lock its successor out. The lock is
+  keyed on the bundle's **path**, not its identifier, because
+  `dist/Dezhban.app` run against an installed `/Applications/Dezhban.app` is the
+  documented GUI dev loop and those two are not duplicates of each other.
+
+  A launch the *user* performed must never become a silent no-op, so the copy
+  that loses the lock focuses the winner and posts a distributed notification
+  asking it to open its window — the incumbent may be a `--background` login
+  launch with no window to be handed over to. A notification rather than
+  re-opening the bundle through `NSWorkspace`: asking LaunchServices to open the
+  app we are in the middle of quitting could spawn yet another copy, which would
+  find the lock held and ask again.
+- **Uninstalling has to retract the registration, and only the app can.** A
+  LaunchServices login item disappears with its bundle; a per-user launchd agent
+  does not. `launchctl bootout` is not the answer either — it unloads the job for
+  the current boot and leaves the record that recreates it at the next login,
+  pointing at a plist inside a bundle that has been deleted, which is exactly the
+  orphan being avoided. `SMAppService.unregister()` is the only real retraction
+  and it can only be called by the app, so `DezhbanMenu` takes a
+  `--unregister-login-item` errand flag — handled before the instance lock, since
+  it is not a second copy competing for the session — and
+  `packaging/macos/uninstall.sh` runs it as the console user inside their GUI
+  session before deleting the bundle. Root cannot reach another account's launchd
+  session, so other users' entries are named in the closing message instead.
 
 ### Risks
 
@@ -139,10 +164,21 @@ with an argument, the pre-`SMAppService` pattern.
   unregistered. Registering it anyway would mean two launches at login, the
   agent with `--background` and the legacy item without, and whichever won the
   race would decide whether the window appeared: worse than the behaviour it
-  replaces. Instead `LoginItem.isEnabled` reports the legacy registration too,
-  so the Settings toggle tells the truth about whether anything starts the app
-  at login, and switching it off retracts *both* — a user who toggles off and on
-  lands on a clean agent.
+  replaces. `LoginItem.isEnabled` reports the legacy registration too, so the
+  Settings toggle tells the truth about whether anything starts the app at
+  login, and switching it off retracts *both*.
+
+  If macOS keeps refusing to retract it, the app has no way out on its own, and
+  it must not pretend otherwise: "toggle it off and on again" was the first
+  advice here and it was unreachable, because `toggle()` branches on `isEnabled`,
+  which the stuck legacy item holds true — so every attempt took the *off* branch
+  and could never reach `register()`. `LoginItem.toggle()` therefore returns an
+  `Outcome` rather than a `Bool`, and the `legacyStuck` case tells the user the
+  one thing that does work: remove "Dezhban" under System Settings → General →
+  Login Items. Once they do, the toggle registers a clean agent. The same
+  `Outcome` carries `awaitingApproval`, because `register()` reports "the user
+  must approve this in System Settings" as a *status* rather than an error, and a
+  switch that snaps back with no explanation is indistinguishable from a bug.
 - **The marker could be passed by something other than the agent**, making a
   user launch look like a login launch. The only consequence is a window that
   does not open, and the Dock icon and "Open Dezhban…" both open it

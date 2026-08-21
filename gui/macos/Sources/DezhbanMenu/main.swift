@@ -52,7 +52,25 @@ func makeMainMenu() -> NSMenu {
     return main
 }
 
-/// Quits at once if another copy of this bundle already owns the session.
+/// Retracts every login registration and exits, without starting the app.
+///
+/// The uninstaller needs this. A LaunchServices login item disappeared with its
+/// bundle; the launchd agent that replaced it does not — and `launchctl bootout`
+/// only unloads the job for this boot, leaving the registration that created it
+/// to reload at the next login against a plist inside a bundle that has been
+/// deleted. Only `SMAppService.unregister()` actually retracts it, and only the
+/// app can call it, so `packaging/macos/uninstall.sh` runs the binary this way
+/// (as the console user, in their GUI session) before deleting anything.
+///
+/// Handled before the instance lock, deliberately: this is not a second copy of
+/// the app competing for the session, it is a one-shot errand, and it must work
+/// while the app is running — which is exactly when the uninstaller finds it.
+func retractLoginRegistrationsAndExit() {
+    LoginItem.retractAll()
+    exit(0)
+}
+
+/// Exits if another copy of this install already owns the session.
 ///
 /// The login item is a launchd agent now, and `register()` on a `RunAtLoad` job
 /// `exec`s the binary immediately — from the Settings toggle and from the
@@ -60,37 +78,75 @@ func makeMainMenu() -> NSMenu {
 /// LaunchServices, so nothing else dedupes it. Without this the user gets two
 /// menubar items, and the duplicate carries `--background`, so under the default
 /// "Only at login" it opens no window and there is no way to tell which icon is
-/// which. See `SingleInstance` and docs/adr/0014-login-item-launch-marker.md.
+/// which. See `InstanceLock` and docs/adr/0014-login-item-launch-marker.md.
 ///
-/// Only the loser exits — `SingleInstance.shouldYield` is a total order, so a
-/// simultaneous pair cannot both stand down and leave the Mac with no app.
-func yieldToRunningInstance() {
-    // No bundle identifier means a bare `swift run` binary, which LaunchServices
-    // does not track: nothing to compare against, and no agent to have spawned us.
-    guard let id = Bundle.main.bundleIdentifier else { return }
-    let mePID = ProcessInfo.processInfo.processIdentifier
-    let running = NSRunningApplication.runningApplications(withBundleIdentifier: id)
-    let others = running
-        .filter { $0.processIdentifier != mePID }
-        .map { InstanceIdentity(pid: $0.processIdentifier, launchedAt: $0.launchDate) }
-    guard !others.isEmpty else { return }
-    let own = InstanceIdentity(
-        pid: mePID,
-        launchedAt: NSRunningApplication.current.launchDate)
-    guard SingleInstance.shouldYield(own: own, others: others) else { return }
-    NSLog("DezhbanMenu: another instance is already running (pid \(others.map(\.pid))); exiting")
-    exit(0)
+/// Returns the lock on success. The caller must keep it alive for the lifetime of
+/// the process — the lock IS the open file descriptor.
+func acquireSessionOwnership() -> InstanceLock? {
+    // No bundle identifier means a bare `swift run` binary: no agent could have
+    // spawned it, and nothing to scope a lock to.
+    guard let id = Bundle.main.bundleIdentifier,
+          let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+    else { return nil }
+
+    let lock = InstanceLock.forBundle(
+        path: Bundle.main.bundleURL.path, identifier: id, cachesDirectory: caches)
+    switch lock.acquire() {
+    case .acquired:
+        return lock
+    case .unavailable(let why):
+        // Never refuse to start over this. A duplicate icon is a smaller failure
+        // than an app that will not launch because a cache directory is broken.
+        NSLog("DezhbanMenu: instance lock unavailable, starting anyway: \(why)")
+        return lock
+    case .heldByAnother:
+        // A background launch loses silently — that copy was never going to show
+        // the user anything. A launch the user performed must not be a no-op, so
+        // hand them over to the instance that owns the session: focus it, and ask
+        // it to open its window, which it may not currently have (the incumbent
+        // may be a --background login launch under the default "Only at login").
+        if !LaunchVisibility.isBackgroundLaunch(arguments: CommandLine.arguments) {
+            let mePID = ProcessInfo.processInfo.processIdentifier
+            let incumbent = NSRunningApplication
+                .runningApplications(withBundleIdentifier: id)
+                .first {
+                    $0.processIdentifier != mePID && !$0.isTerminated
+                        && $0.bundleURL?.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+                }
+            incumbent?.activate()
+            // A notification rather than re-opening the bundle through
+            // NSWorkspace: asking LaunchServices to open the app we are in the
+            // middle of quitting could spawn yet another copy, which would find
+            // the lock held and ask again.
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name(AppDelegate.openWindowNotification),
+                object: id, userInfo: nil, deliverImmediately: true)
+        }
+        NSLog("DezhbanMenu: another copy of this install owns the session; exiting")
+        exit(0)
+    }
 }
+
+// Both of these run before NSApplication exists: the errand mode never becomes
+// an app at all, and a duplicate must exit before it can put a tile in the Dock.
+if CommandLine.arguments.contains("--unregister-login-item") {
+    retractLoginRegistrationsAndExit()
+}
+// Held for the lifetime of the process — the lock is the open file descriptor,
+// so letting this go out of scope would release the session to the next starter.
+let sessionLock = acquireSessionOwnership()
 
 // Regular app (not an LSUIElement agent): the Dock tile doubles as a state
 // display — AppDelegate swaps NSApp.applicationIconImage to match the
 // enforcement posture, and that needs a Dock icon to exist. The bundled
 // Info.plist sets LSUIElement=false for the same reason.
 let app = NSApplication.shared
-// Before the delegate installs a menubar item or a timer: see above.
-yieldToRunningInstance()
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.regular)
 app.mainMenu = makeMainMenu()
 app.run()
+
+// Referenced so the lock cannot be optimised away as unused; `app.run()` never
+// returns, so this line is only ever reached conceptually.
+_ = sessionLock

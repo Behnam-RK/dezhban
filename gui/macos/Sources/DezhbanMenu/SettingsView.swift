@@ -781,10 +781,13 @@ struct SettingsView: View {
         Binding(
             get: { loginEnabled },
             set: { _ in
-                loginEnabled = LoginItem.toggle()
-                status = loginEnabled
-                    ? "App will open at login."
-                    : "App will not open at login."
+                // The outcome, not a bool: macOS can accept the registration and
+                // still hold it for the user's approval, and there is one path
+                // where only they can clear the old login item. A switch that
+                // snaps back with no explanation reads as a bug.
+                let outcome = LoginItem.toggle()
+                loginEnabled = outcome.isOn
+                status = outcome.message
             })
     }
 

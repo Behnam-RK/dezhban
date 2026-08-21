@@ -782,18 +782,35 @@ task gui:build && open dist/Dezhban.app
       app up, switch Settings → "Open this app at login" **off then on**. The
       agent's `RunAtLoad` execs a second copy the moment it registers, and
       launchd does not dedupe the way LaunchServices did, so this is the check
-      that `yieldToRunningInstance()` works: exactly **one** menubar item and
-      one Dock tile afterwards, and `pgrep -x DezhbanMenu | wc -l` is 1. Repeat
+      that the instance lock works: exactly **one** menubar item and one Dock
+      tile afterwards, and `pgrep -x DezhbanMenu | wc -l` is 1. Repeat
       immediately after an upgrade that runs the migration.
-- [ ] **The login item is attributable and retractable.** System Settings →
-      General → Login Items shows the entry as **Dezhban**, not as
+- [ ] **A user launch that loses the lock is not a silent no-op.** With the app
+      running from a `--background` login launch (so it has no window), launch it
+      again from Finder. The second copy must exit *and* the first must come
+      forward with its window open — that is the distributed notification in
+      `acquireSessionOwnership()`. Doing nothing at all here is a worse bug than
+      the duplicate icon this check's predecessor covers.
+- [ ] **The dev build is not deduped against the installed one.** With
+      `/Applications/Dezhban.app` running, `task gui:build && open
+      dist/Dezhban.app`. Both must run — the lock is keyed on the bundle path
+      precisely so every other manual check on this list tests the build you just
+      made rather than silently testing the installed copy.
+- [ ] **The login item is attributable.** System Settings → General → Login
+      Items shows the entry as **Dezhban**, not as
       `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
       doing its job — this is the switch a user reaches for to stop the app
       starting at login, and it is useless if nobody can tell what it governs).
-      Then run `sudo sh /usr/local/share/dezhban/uninstall.sh` and confirm
-      `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` fails and the
-      Login Items entry is gone — a per-user launchd agent does **not** go away
-      with its bundle the way a LaunchServices login item did.
+- [ ] **Uninstall retracts the registration, not just the running job.** With
+      login-at-launch on, run `sudo sh /usr/local/share/dezhban/uninstall.sh`,
+      then confirm `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login`
+      fails **and** the System Settings → General → Login Items entry is gone,
+      **and** that it is still gone after a reboot. A per-user launchd agent does
+      not go away with its bundle the way a LaunchServices login item did, and
+      `launchctl bootout` alone only unloads it for the current boot — the
+      reboot is what distinguishes a real retraction (the
+      `--unregister-login-item` errand the script runs as the console user) from
+      an unload that comes back.
 - [ ] **The login agent registers from an ad-hoc-signed build.** Only reachable
       on a real install: `build-app.sh` signs with `codesign -s -`, and
       `SMAppService.agent` registration goes through launchd's validation of the

@@ -32,6 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// a thing to hammer GitHub with. See UpdateChecker's doc comment.
     private static let updateCheckInterval: TimeInterval = 24 * 60 * 60
 
+    /// Posted by a duplicate copy of the app as it exits, when the user started
+    /// it themselves (see `acquireSessionOwnership` in main.swift). Without it a
+    /// user-initiated launch that loses the instance lock would do visibly
+    /// nothing at all — and the copy that owns the session may be a
+    /// `--background` login launch with no window to be handed over to.
+    static let openWindowNotification = "com.behnam-rk.dezhban.app.openWindow"
+
     func applicationDidFinishLaunching(_: Notification) {
         NotificationManager.requestAuthorizationIfNeeded()
         // Resolve the config path once, off the main thread, before any pane asks for
@@ -76,6 +83,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if LaunchPreference.current.opensWindow(backgroundLaunch: backgroundLaunch) {
             MainWindow.shared.open()
         }
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(openWindowRequested),
+            name: NSNotification.Name(Self.openWindowNotification), object: nil)
         AppState.shared.refreshServiceState()
         AppState.shared.checkForUpdates()
         AppState.shared.offerFirstRunIfNeeded()
@@ -85,6 +95,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         updateTimer = Timer.scheduledTimer(withTimeInterval: Self.updateCheckInterval, repeats: true) { _ in
             AppState.shared.checkForUpdates()
         }
+    }
+
+    /// A second copy of the app was started by the user and found this one
+    /// already owning the session. Opening the window is the whole reason it
+    /// bothered to tell us — it is standing in for the launch the user performed.
+    @objc private func openWindowRequested() {
+        MainWindow.shared.open()
     }
 
     /// Clicking the Dock icon (re)opens the main window — the standard macOS
