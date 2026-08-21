@@ -20,6 +20,7 @@ CONFIG_DIR=/etc/dezhban
 STATE_DIR=/var/db/dezhban
 PLIST=/Library/LaunchDaemons/dezhban.plist
 SHARE_DIR=/usr/local/share/dezhban
+LOGIN_AGENT=com.behnam-rk.dezhban.app.login
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "error: run as root — sudo sh $0" >&2
@@ -46,6 +47,22 @@ echo "removing the menubar app ..."
 # bundle out from under a live process.
 osascript -e 'tell application "Dezhban" to quit' >/dev/null 2>&1 || true
 pkill -x DezhbanMenu >/dev/null 2>&1 || true
+
+# The login item is a per-user launchd agent (SMAppService.agent), NOT a
+# LaunchServices entry: deleting the bundle does not retract it. Left registered it
+# fails to load at every subsequent login and lingers in System Settings → General
+# → Login Items as an orphan the user has to hunt down. Booting it out needs that
+# user's own GUI session, so root can only reach the console user — other accounts
+# get the one command they need, printed at the end.
+CONSOLE_USER=$(stat -f %Su /dev/console 2>/dev/null || echo "")
+if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
+	CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")
+	if [ -n "$CONSOLE_UID" ]; then
+		echo "unregistering the login agent for $CONSOLE_USER ..."
+		launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
+	fi
+fi
+
 rm -rf "$APP"
 
 # The daemon's own directory: state.json, learned.json, the command file and the
@@ -73,3 +90,8 @@ rm -rf "$SHARE_DIR"
 
 echo
 echo "dezhban uninstalled — rules removed, service unregistered, files deleted."
+echo
+echo "If any OTHER account on this Mac ran the app, its login agent is still"
+echo "registered there — root cannot reach another user's launchd session. From"
+echo "that account, once:"
+echo "    launchctl bootout gui/\$(id -u)/$LOGIN_AGENT"

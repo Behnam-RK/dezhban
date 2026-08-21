@@ -1,4 +1,5 @@
 import AppKit
+import DezhbanCore
 
 /// A minimal programmatic main menu. Without one, the SwiftUI main window's
 /// text fields have no Edit menu (no ⌘C/⌘V/⌘X/⌘A) and ⌘W/⌘Q do nothing while
@@ -51,11 +52,43 @@ func makeMainMenu() -> NSMenu {
     return main
 }
 
+/// Quits at once if another copy of this bundle already owns the session.
+///
+/// The login item is a launchd agent now, and `register()` on a `RunAtLoad` job
+/// `exec`s the binary immediately — from the Settings toggle and from the
+/// migration, both of which run while the app is up. launchd does not go through
+/// LaunchServices, so nothing else dedupes it. Without this the user gets two
+/// menubar items, and the duplicate carries `--background`, so under the default
+/// "Only at login" it opens no window and there is no way to tell which icon is
+/// which. See `SingleInstance` and docs/adr/0014-login-item-launch-marker.md.
+///
+/// Only the loser exits — `SingleInstance.shouldYield` is a total order, so a
+/// simultaneous pair cannot both stand down and leave the Mac with no app.
+func yieldToRunningInstance() {
+    // No bundle identifier means a bare `swift run` binary, which LaunchServices
+    // does not track: nothing to compare against, and no agent to have spawned us.
+    guard let id = Bundle.main.bundleIdentifier else { return }
+    let mePID = ProcessInfo.processInfo.processIdentifier
+    let running = NSRunningApplication.runningApplications(withBundleIdentifier: id)
+    let others = running
+        .filter { $0.processIdentifier != mePID }
+        .map { InstanceIdentity(pid: $0.processIdentifier, launchedAt: $0.launchDate) }
+    guard !others.isEmpty else { return }
+    let own = InstanceIdentity(
+        pid: mePID,
+        launchedAt: NSRunningApplication.current.launchDate)
+    guard SingleInstance.shouldYield(own: own, others: others) else { return }
+    NSLog("DezhbanMenu: another instance is already running (pid \(others.map(\.pid))); exiting")
+    exit(0)
+}
+
 // Regular app (not an LSUIElement agent): the Dock tile doubles as a state
 // display — AppDelegate swaps NSApp.applicationIconImage to match the
 // enforcement posture, and that needs a Dock icon to exist. The bundled
 // Info.plist sets LSUIElement=false for the same reason.
 let app = NSApplication.shared
+// Before the delegate installs a menubar item or a timer: see above.
+yieldToRunningInstance()
 let delegate = AppDelegate()
 app.delegate = delegate
 app.setActivationPolicy(.regular)

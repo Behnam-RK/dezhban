@@ -29,5 +29,13 @@
 	<false/>
 	<key>LimitLoadToSessionType</key>
 	<string>Aqua</string>
+	<!-- Ties the job to the app in System Settings → General → Login Items, so
+	     the entry the user reaches for to stop us starting at login reads
+	     "Dezhban" rather than the raw label. Apple's SMAppService guidance; the
+	     switch is useless if nobody can tell what it governs. -->
+	<key>AssociatedBundleIdentifiers</key>
+	<array>
+		<string>com.behnam-rk.dezhban.app</string>
+	</array>
 </dict>
 </plist>

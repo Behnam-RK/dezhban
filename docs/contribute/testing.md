@@ -778,6 +778,31 @@ task gui:build && open dist/Dezhban.app
       "Close windows when quitting an application" *unchecked* in System
       Settings → Desktop & Dock, quit and relaunch in a mode that should open no
       window — it must stay closed.
+- [ ] **Registering the login item does not leave two apps running.** With the
+      app up, switch Settings → "Open this app at login" **off then on**. The
+      agent's `RunAtLoad` execs a second copy the moment it registers, and
+      launchd does not dedupe the way LaunchServices did, so this is the check
+      that `yieldToRunningInstance()` works: exactly **one** menubar item and
+      one Dock tile afterwards, and `pgrep -x DezhbanMenu | wc -l` is 1. Repeat
+      immediately after an upgrade that runs the migration.
+- [ ] **The login item is attributable and retractable.** System Settings →
+      General → Login Items shows the entry as **Dezhban**, not as
+      `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
+      doing its job — this is the switch a user reaches for to stop the app
+      starting at login, and it is useless if nobody can tell what it governs).
+      Then run `sudo sh /usr/local/share/dezhban/uninstall.sh` and confirm
+      `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` fails and the
+      Login Items entry is gone — a per-user launchd agent does **not** go away
+      with its bundle the way a LaunchServices login item did.
+- [ ] **The login agent registers from an ad-hoc-signed build.** Only reachable
+      on a real install: `build-app.sh` signs with `codesign -s -`, and
+      `SMAppService.agent` registration goes through launchd's validation of the
+      bundle, which `SMAppService.mainApp` never needed. If ad-hoc does not
+      satisfy it, login-at-launch fails as a silent `.notFound`/`.requiresApproval`
+      status rather than a crash — so check
+      `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` on a build
+      installed the way users get it (`.pkg` or the app zip), not on
+      `dist/Dezhban.app` run in place.
 - [ ] **Posture tracking.** Drive the daemon with `--simulate-country IR` / `US`
       and confirm the menu bar icon *and* the Dock tile flip red/teal and the
       window's Overview updates within ~1 s.

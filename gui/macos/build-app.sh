@@ -78,11 +78,37 @@ install -m 0644 "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 # bundle assembled without it registers nothing and the app silently stops
 # starting at login, so its absence is a build failure rather than a note.
 # See docs/adr/0014-login-item-launch-marker.md.
+AGENT_LABEL="com.behnam-rk.dezhban.app.login"
+AGENT_PLIST="$APP/Contents/Library/LaunchAgents/$AGENT_LABEL.plist"
 mkdir -p "$APP/Contents/Library/LaunchAgents"
-install -m 0644 "$HERE/LoginAgent.plist" \
-	"$APP/Contents/Library/LaunchAgents/com.behnam-rk.dezhban.app.login.plist"
-if [[ ! -f "$APP/Contents/Library/LaunchAgents/com.behnam-rk.dezhban.app.login.plist" ]]; then
-	echo "build-app.sh: the login LaunchAgent did not land in the bundle — the app would not start at login" >&2
+install -m 0644 "$HERE/LoginAgent.plist" "$AGENT_PLIST"
+
+# The two facts that make the feature work, asserted rather than commented.
+# `install` under `set -e` already aborts if the file does not land, so its
+# existence needs no test — but deleting --background from LoginAgent.plist, or
+# renaming its Label, passes go test, swift test and this build while silently
+# restoring the original bug (or killing login-at-launch outright, reported only
+# as an SMAppService status nobody reads).
+#
+# 1. Label must equal the filename SMAppService.agent(plistName:) is given
+#    (LoginItem.plistName) — launchd rejects a mismatch.
+plist_label="$(plutil -extract Label raw -o - "$AGENT_PLIST")"
+if [[ "$plist_label" != "$AGENT_LABEL" ]]; then
+	echo "build-app.sh: LoginAgent.plist Label is '$plist_label', but it is installed as '$AGENT_LABEL.plist' — launchd would reject the job and the app would not start at login" >&2
+	exit 1
+fi
+# 2. ProgramArguments must still carry the launch marker LaunchVisibility keys on
+#    (LaunchVisibility.backgroundArgument), or every login looks like a user
+#    launch and "Open minimized" silently stops working.
+agent_argc="$(plutil -extract ProgramArguments raw -o - "$AGENT_PLIST")"
+agent_marker=0
+for ((i = 0; i < agent_argc; i++)); do
+	if [[ "$(plutil -extract "ProgramArguments.$i" raw -o - "$AGENT_PLIST")" == "--background" ]]; then
+		agent_marker=1
+	fi
+done
+if [[ "$agent_marker" -ne 1 ]]; then
+	echo "build-app.sh: LoginAgent.plist ProgramArguments no longer pass --background — a login launch would be indistinguishable from a user launch" >&2
 	exit 1
 fi
 

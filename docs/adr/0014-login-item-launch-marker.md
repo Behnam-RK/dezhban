@@ -86,22 +86,63 @@ with an argument, the pre-`SMAppService` pattern.
 
 ### Negative
 
-- The bundle now has a mandatory `Contents/Library/LaunchAgents` payload.
-  `build-app.sh` fails the build if it is missing, because a bundle without it
-  registers nothing and the app silently stops starting at login.
-- The plist's `Label`, its filename, and `LoginItem.plistName` must agree.
-  launchd rejects a mismatch and `SMAppService` reports it only as a status, so
-  the failure is quiet by nature; the plist comments say so at both ends.
+- The bundle now has a mandatory `Contents/Library/LaunchAgents` payload, and
+  `build-app.sh` asserts two things about it that no test can reach: that the
+  plist's `Label` equals the filename it is installed under (launchd rejects a
+  mismatch, and `SMAppService` reports that only as a status nobody reads), and
+  that `ProgramArguments` still carry `--background`. Deleting the marker or
+  renaming the label would otherwise pass `go test`, `swift test` and the build
+  while silently restoring the original bug.
+- **Registering the agent starts a second copy of the app.** This is the real
+  cost of leaving `SMAppService.mainApp`. `mainApp` is a LaunchServices login
+  item, and LaunchServices refuses to launch a bundle that is already running;
+  an agent with `RunAtLoad` is not that — launchd `exec`s
+  `Contents/MacOS/DezhbanMenu` directly and dedupes nothing. Both callers of
+  `register()` run while the app is up (the Settings toggle, and the migration
+  below), so each would leave two menubar items, two Dock tiles, two 1-second
+  state-file timers and two update checkers — the duplicate carrying
+  `--background`, so under the default `bootOnly` it opens no window and there
+  is no way to tell the two icons apart. `RunAtLoad` has to stay true or the
+  login launch never happens, so the duplicate is caught at startup instead:
+  `yieldToRunningInstance()` in `main.swift` exits before the delegate installs
+  anything. The comparison is a total order over (launch date, pid) rather than
+  a "does anyone else exist" test, because two copies that each saw the other
+  and each stood down would leave the Mac with no app at all — see
+  `SingleInstance`.
+- **Uninstalling has to retract the registration.** A LaunchServices login item
+  disappears with its bundle; a per-user launchd agent does not. Left behind it
+  fails to load at every subsequent login and lingers in System Settings as an
+  orphan job. `packaging/macos/uninstall.sh` boots it out for the console user
+  and prints the one command other accounts need, since root cannot reach
+  another user's launchd session.
 
 ### Risks
 
 - **A user who had login-at-launch enabled loses it on upgrade.**
   `migrateFromMainAppRegistration()` unregisters `mainApp` and registers the
   agent, gated on the old registration having been enabled — so an upgrade never
-  switches the login item *on* for someone who had it off. If the unregister
-  fails, the register still runs: a duplicate entry in System Settings is
-  cosmetic, whereas skipping it would leave a login launch that never sets
-  `--background`, which is the bug being fixed.
+  switches the login item *on* for someone who had it off.
+
+  The attempt is recorded in a persisted flag
+  (`dezhban.loginItemMigratedToAgent`) and therefore happens at most once per
+  account, whether or not it worked. Inferring "already migrated" from a live
+  `mainApp.status` read instead — the first shape of this code — was only
+  truthful when the unregister had succeeded, and it can fail for real: a login
+  item added by hand in System Settings was never registered through
+  `SMAppService`, and unregister is also known to fail after the bundle moves.
+  The migration then re-ran on every launch and re-registered the agent after
+  the user had switched login-at-launch off in Settings, leaving it on with no
+  way to turn it off from the UI.
+
+  When the legacy item survives the attempt — checked by reading its status
+  after, not by trusting the call not to throw — the agent is deliberately left
+  unregistered. Registering it anyway would mean two launches at login, the
+  agent with `--background` and the legacy item without, and whichever won the
+  race would decide whether the window appeared: worse than the behaviour it
+  replaces. Instead `LoginItem.isEnabled` reports the legacy registration too,
+  so the Settings toggle tells the truth about whether anything starts the app
+  at login, and switching it off retracts *both* — a user who toggles off and on
+  lands on a clean agent.
 - **The marker could be passed by something other than the agent**, making a
   user launch look like a login launch. The only consequence is a window that
   does not open, and the Dock icon and "Open Dezhban…" both open it

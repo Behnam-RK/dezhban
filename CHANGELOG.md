@@ -22,8 +22,18 @@ current as you land changes.
   reads the launch kind instead of guessing it
   ([ADR-0014](docs/adr/0014-login-item-launch-marker.md)). The main window also
   opted out of AppKit state restoration, which could reopen it at launch without
-  consulting the setting at all. Existing installs are migrated on first launch;
-  if you had login-at-launch switched off, it stays off.
+  consulting the setting at all. Existing installs are migrated once, on first
+  launch; if you had login-at-launch switched off, it stays off.
+
+  Two consequences of the mechanism, handled in the same change. A launchd agent
+  starts the moment it is registered and — unlike the LaunchServices login item
+  it replaces — does not check whether the app is already running, so turning
+  "Open this app at login" on used to be able to leave you with two menubar
+  icons; a duplicate copy now exits at startup. And a launchd registration does
+  not disappear with the app bundle the way a login item did, so `uninstall.sh`
+  retracts it rather than leaving an entry that fails to load at every
+  subsequent login. The Login Items entry also reads "Dezhban" now instead of a
+  raw job label.
 
 ## [0.11.0] - 2026-08-21
 
