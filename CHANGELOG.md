@@ -12,6 +12,19 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Open minimized" now actually decides whether the window opens.** The app
+  used to infer a login launch from `NSApplication.launchIsDefaultUserInfoKey`,
+  which reported wrong in both directions — the window appeared at login with
+  the setting on, and stayed hidden on a manual launch. The login item is now a
+  LaunchAgent shipped inside the bundle that passes `--background`, so the app
+  reads the launch kind instead of guessing it
+  ([ADR-0014](docs/adr/0014-login-item-launch-marker.md)). The main window also
+  opted out of AppKit state restoration, which could reopen it at launch without
+  consulting the setting at all. Existing installs are migrated on first launch;
+  if you had login-at-launch switched off, it stays off.
+
 ## [0.11.0] - 2026-08-21
 
 ### Added

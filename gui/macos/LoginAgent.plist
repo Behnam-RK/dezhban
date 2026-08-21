@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Label MUST equal this file's name without ".plist" — that is the string
+	     SMAppService.agent(plistName:) is given, and launchd rejects a mismatch.
+	     See LoginItem.swift and docs/adr/0014-login-item-launch-marker.md. -->
+	<key>Label</key>
+	<string>com.behnam-rk.dezhban.app.login</string>
+	<!-- BundleProgram is resolved relative to the .app, so the agent always
+	     launches the copy of Dezhban it shipped inside — never a stale absolute
+	     path left behind by a move or an upgrade. -->
+	<key>BundleProgram</key>
+	<string>Contents/MacOS/DezhbanMenu</string>
+	<!-- The whole point of this file. A login launch carries --background;
+	     nothing else does, so CommandLine.arguments is ground truth for
+	     LaunchVisibility instead of the launchIsDefaultUserInfoKey heuristic
+	     that read wrong in both directions. -->
+	<key>ProgramArguments</key>
+	<array>
+		<string>Contents/MacOS/DezhbanMenu</string>
+		<string>--background</string>
+	</array>
+	<key>RunAtLoad</key>
+	<true/>
+	<!-- Not a daemon: it runs once at login and is done. A crash must not be
+	     answered by relaunching a window the user asked to stay hidden. -->
+	<key>KeepAlive</key>
+	<false/>
+	<key>LimitLoadToSessionType</key>
+	<string>Aqua</string>
+</dict>
+</plist>

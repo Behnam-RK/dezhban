@@ -32,7 +32,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// a thing to hammer GitHub with. See UpdateChecker's doc comment.
     private static let updateCheckInterval: TimeInterval = 24 * 60 * 60
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    func applicationDidFinishLaunching(_: Notification) {
         NotificationManager.requestAuthorizationIfNeeded()
         // Resolve the config path once, off the main thread, before any pane asks for
         // it — every later read is then a memoized lookup rather than a shell-out on
@@ -55,21 +55,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         watchdog.start()
         refresh()
+        // Move any pre-agent install onto the login LaunchAgent before anything
+        // reads the launch marker, so the NEXT login is already correct.
+        LoginItem.migrateFromMainAppRegistration()
         // Launching the app shows the app: reaching the main window only through
         // the menubar dropdown made opening it a two-step discovery problem, and
         // the menubar item stays available either way.
         //
-        // Except when the launch wasn't the user's doing. AppKit clears this flag
-        // for launches it performed on their behalf rather than at their request —
-        // a login item, a state restoration, opening a file — and a window
-        // appearing unbidden at every boot is exactly the noise a menubar app
-        // should not make. A missing flag reads as an ordinary launch, so the
-        // window still opens if AppKit ever stops reporting this.
-        let deliberateLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool) ?? true
+        // Except when the launch wasn't the user's doing. The login LaunchAgent
+        // passes --background and nothing else does, so this is an explicit
+        // marker rather than an inference. It replaces
+        // `NSApplication.launchIsDefaultUserInfoKey`, which was the sole input
+        // here and read wrong in both directions — the window appeared at login
+        // and failed to appear on a manual launch. See
+        // docs/adr/0014-login-item-launch-marker.md.
+        let backgroundLaunch = LaunchVisibility.isBackgroundLaunch(arguments: CommandLine.arguments)
         // The Settings "Open minimized" choice decides what to do with that.
-        // Its default, .bootOnly, is exactly the behaviour described above, so
-        // anyone who never touches the setting sees no change.
-        if LaunchPreference.current.opensWindow(deliberateLaunch: deliberateLaunch) {
+        // Its default, .bootOnly, is the long-standing behaviour — quiet at
+        // login, visible when you start it yourself.
+        if LaunchPreference.current.opensWindow(backgroundLaunch: backgroundLaunch) {
             MainWindow.shared.open()
         }
         AppState.shared.refreshServiceState()

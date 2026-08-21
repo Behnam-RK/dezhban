@@ -72,6 +72,20 @@ install -m 0755 "$HERE/askpass.sh" "$APP/Contents/Resources/askpass.sh"
 # ad-hoc codesign below, so the seal covers it.
 install -m 0644 "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 
+# Login-item LaunchAgent. SMAppService.agent(plistName:) reads it from exactly
+# this directory, and it is the only thing that tells a login launch apart from
+# a user launch: it passes --background, which LaunchVisibility keys on. A
+# bundle assembled without it registers nothing and the app silently stops
+# starting at login, so its absence is a build failure rather than a note.
+# See docs/adr/0014-login-item-launch-marker.md.
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+install -m 0644 "$HERE/LoginAgent.plist" \
+	"$APP/Contents/Library/LaunchAgents/com.behnam-rk.dezhban.app.login.plist"
+if [[ ! -f "$APP/Contents/Library/LaunchAgents/com.behnam-rk.dezhban.app.login.plist" ]]; then
+	echo "build-app.sh: the login LaunchAgent did not land in the bundle — the app would not start at login" >&2
+	exit 1
+fi
+
 # Documentation, rendered from the repo's own markdown into the bundle. Shipping
 # it means the help pane works with every byte of egress cut — which is exactly
 # when someone needs it — and that the docs always match the version they

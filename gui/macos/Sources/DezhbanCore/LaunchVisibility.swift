@@ -42,21 +42,38 @@ public enum LaunchVisibility: String, CaseIterable, Identifiable, Sendable {
 
     /// Whether to open the main window for this launch.
     ///
-    /// `deliberateLaunch` is AppKit's `launchIsDefaultUserInfoKey`: false when
-    /// the launch was performed on the user's behalf (a login item, state
-    /// restoration, opening a file) rather than at their request. A missing
-    /// flag reads as an ordinary launch, so the window still opens if AppKit
-    /// ever stops reporting it — the caller supplies that default.
+    /// `backgroundLaunch` is true when macOS started the app at login rather
+    /// than the user starting it. It is read from `--background` in
+    /// `CommandLine.arguments`, which only the login LaunchAgent passes (see
+    /// `LoginItem` and docs/adr/0014-login-item-launch-marker.md) — an explicit
+    /// marker, not a heuristic. The predecessor asked AppKit's
+    /// `launchIsDefaultUserInfoKey` and got the answer wrong in both
+    /// directions: the window appeared at login and failed to appear on a
+    /// manual launch.
+    ///
+    /// The absent argument therefore reads as a user launch, which is the safe
+    /// default: the worst case is a window the user did not ask for, never a
+    /// window they cannot reach.
     ///
     /// Note this governs the LAUNCH only. The Dock icon and the menubar's
     /// "Open Dezhban…" open the window regardless, in every mode — a
     /// preference about startup noise must never become a way to lose access
     /// to the window.
-    public func opensWindow(deliberateLaunch: Bool) -> Bool {
+    public func opensWindow(backgroundLaunch: Bool) -> Bool {
         switch self {
         case .never: return true
         case .always: return false
-        case .bootOnly: return deliberateLaunch
+        case .bootOnly: return !backgroundLaunch
         }
+    }
+
+    /// The launch marker the login LaunchAgent passes. Public so the app and
+    /// its tests name the same string, and so a rename cannot drift away from
+    /// `LoginAgent.plist`.
+    public static let backgroundArgument = "--background"
+
+    /// Reads the marker out of a process argument list.
+    public static func isBackgroundLaunch(arguments: [String]) -> Bool {
+        arguments.contains(backgroundArgument)
     }
 }

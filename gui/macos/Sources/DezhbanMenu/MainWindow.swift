@@ -68,6 +68,12 @@ final class MainWindow: NSObject, NSWindowDelegate {
             styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered, defer: false)
         win.isReleasedWhenClosed = false
+        // AppKit state restoration would otherwise reopen this window at launch
+        // on its own, entirely outside the "Open minimized" check in
+        // AppDelegate — which is half of why that setting appeared not to work.
+        // Frame and sidebar position still persist; those go through
+        // setFrameAutosaveName and the split view's autosave, not restoration.
+        win.isRestorable = false
         win.delegate = self
         // 820 wide, not 640: the Help pane's inner HSplitView needs 620pt of
         // detail (200 sidebar + 420 page) and could not fit at the old minimum

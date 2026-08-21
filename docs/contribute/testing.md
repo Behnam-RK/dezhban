@@ -757,8 +757,27 @@ task gui:build && open dist/Dezhban.app
       still works with the daemon stopped and with the main window unable to
       open.
 - [ ] **Window opening.** "Open Dezhban…" and a Dock-icon click both open/focus
-      the main window; a fresh app launch opens **no** window (menubar + Dock
-      only); closing the window (⌘W) leaves the app and icon running.
+      the main window; closing the window (⌘W) leaves the app and icon running.
+      Both work in **every** "Open minimized" mode — the preference governs the
+      launch only and must never make the window unreachable.
+- [ ] **"Open minimized" honours the setting**
+      ([ADR-0014](../adr/0014-login-item-launch-marker.md)). With "Open this app
+      at login" on, for each mode: **Only at login** (the default) → log out and
+      back in, **no** window; then launch from Finder, window opens.
+      **Always** → no window either way. **Never** → window both ways. The
+      marker is what makes this work, so also confirm the login launch carries
+      it: `ps -o args= -p "$(pgrep -x DezhbanMenu)"` ends in `--background`
+      after a login launch and does not after a Finder launch.
+- [ ] **Login-item migration is one-way and never opts you in.** On an install
+      that predates the agent: with login-at-launch **on**, launch once, then
+      confirm `SMAppService.mainApp` is no longer registered while the agent is
+      (`launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` succeeds) and
+      the Settings toggle still reads on. Repeat with login-at-launch **off**:
+      it must still be off, and the agent must not be registered.
+- [ ] **State restoration cannot reopen the window.** With the window open and
+      "Close windows when quitting an application" *unchecked* in System
+      Settings → Desktop & Dock, quit and relaunch in a mode that should open no
+      window — it must stay closed.
 - [ ] **Posture tracking.** Drive the daemon with `--simulate-country IR` / `US`
       and confirm the menu bar icon *and* the Dock tile flip red/teal and the
       window's Overview updates within ~1 s.
