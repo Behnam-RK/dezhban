@@ -129,9 +129,16 @@ with an argument, the pre-`SMAppService` pattern.
   A launch the *user* performed must never become a silent no-op, so the copy
   that loses the lock focuses the winner and — when this launch would have opened
   a window at all — posts a distributed notification asking it to open its own,
-  since the incumbent may be a `--background` login launch with none. Gated on
-  the preference, because "Open minimized: Always" has to mean always: otherwise
-  a second launch of the same app becomes the one way to make a window appear.
+  since the incumbent may be a `--background` login launch with none.
+
+  Not gated on "Open minimized". It was, on the reasoning that "Always" has to mean
+  always — but the preference governs the *launch*, and a user-initiated launch of
+  an already-running app is not one: once the incumbent has finished starting,
+  LaunchServices turns the same double-click into a reopen, which
+  `applicationShouldHandleReopen` answers unconditionally in every mode, by design.
+  So the gate bought no consistency — it gave one gesture opposite answers
+  depending on whether the incumbent had finished starting — and cost the single
+  launch with no other route to a window.
   Scoped by posting the bundle **path** as the notification object, since the
   name derives from the bundle id and two installs may legitimately run side by
   side. And a notification rather than re-opening the bundle through

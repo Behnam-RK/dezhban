@@ -851,8 +851,14 @@ struct SettingsView: View {
                     // seconds later, so it is only written if nothing else has
                     // claimed it since — otherwise a login result overwrites, say,
                     // "Installing service…" while that install is still running.
-                    if status == inProgress { status = outcome.message }
-                    loginStatusHoldUntil = Date().addingTimeInterval(10)
+                    // The hold exists to protect a message that is on screen, so
+                    // it is only taken when one was actually written. Setting it
+                    // unconditionally suppressed seed()'s status updates for ten
+                    // seconds to defend a line that had been declined.
+                    if status == inProgress {
+                        status = outcome.message
+                        loginStatusHoldUntil = Date().addingTimeInterval(10)
+                    }
                 }
             })
     }

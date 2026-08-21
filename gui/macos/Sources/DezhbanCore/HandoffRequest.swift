@@ -36,10 +36,22 @@ public struct HandoffRequest {
         HandoffRequest(url: lock.deletingPathExtension().appendingPathExtension("handoff"))
     }
 
-    /// Records a request. Best effort: it is the notification's backstop, and a
-    /// failure to write it must never stop the losing process from exiting.
-    public func post() {
-        try? Data().write(to: url, options: .atomic)
+    /// Records a request, reporting whether it landed.
+    ///
+    /// Still best effort — a failure must never stop the losing process from
+    /// exiting — but not silent. If this fails while the incumbent is between
+    /// taking the lock and installing its observer, which is the exact gap the file
+    /// exists to cover, then neither signal arrives and the user's launch is the
+    /// silent no-op the mechanism was written to prevent. The caller cannot repair
+    /// that, but it can say so.
+    @discardableResult
+    public func post() -> Result<Void, Error> {
+        do {
+            try Data().write(to: url, options: .atomic)
+            return .success(())
+        } catch {
+            return .failure(error)
+        }
     }
 
     /// The result of trying to take a request.
@@ -61,6 +73,16 @@ public struct HandoffRequest {
         /// There was a request, and somebody else took it first. Whoever did is
         /// acting on it, so this caller must not.
         case lost
+        /// There was a request and it could not be removed for a reason other than
+        /// somebody else having taken it — an unwritable directory, most likely.
+        ///
+        /// Its own case because folding it into `.lost` made a *permanent* failure
+        /// indistinguishable from a benign race: every claimer forever reported
+        /// "somebody else has this", every one stood down, `discard()` could not
+        /// clear it either, and the hand-off mechanism was dead for every future
+        /// launch with nothing said. Callers still stand down — acting on a file
+        /// that cannot be removed would repeat on every check — but they log it.
+        case blocked(String)
     }
 
     /// Removes any request without acting on it.
@@ -92,11 +114,18 @@ public struct HandoffRequest {
         interleaved()
         do {
             try FileManager.default.removeItem(at: url)
-        } catch {
-            // Gone between the check and the remove: somebody else claimed it. (A
-            // genuine permissions failure lands here too, and standing down is the
-            // safe reading of it — a window that does not open, never two.)
-            return .lost
+        } catch let error as NSError {
+            // Gone between the check and the remove is the benign case: somebody
+            // else claimed it and is acting on it. Anything else is a real failure
+            // and must not wear the same face — see `Claim.blocked`.
+            if error.domain == NSCocoaErrorDomain, error.code == NSFileNoSuchFileError {
+                return .lost
+            }
+            if let posix = error.underlyingErrors.first as NSError?,
+               posix.domain == NSPOSIXErrorDomain, posix.code == Int(ENOENT) {
+                return .lost
+            }
+            return .blocked(error.localizedDescription)
         }
         return .fresh
     }

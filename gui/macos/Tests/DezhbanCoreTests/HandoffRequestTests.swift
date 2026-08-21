@@ -61,6 +61,25 @@ struct HandoffRequestTests {
         #expect(claim == .lost)
     }
 
+    /// A request that cannot be removed must not look like one somebody else took.
+    /// Folded together, a permanent failure made every claimer stand down forever
+    /// and killed the mechanism silently.
+    @Test func anUnremovableRequestIsBlockedNotLost() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let request = HandoffRequest(url: dir.appendingPathComponent("h.handoff"))
+        request.post()
+
+        // Read-only parent: the file is visible but cannot be unlinked.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir.path) }
+
+        guard case .blocked = request.claim() else {
+            Issue.record("expected .blocked for an unremovable request")
+            return
+        }
+    }
+
     /// Scoped per install, like the lock it sits beside — two installs may
     /// legitimately run side by side.
     @Test func theRequestSitsBesideItsOwnLock() {

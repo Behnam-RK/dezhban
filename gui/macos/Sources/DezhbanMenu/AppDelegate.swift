@@ -172,6 +172,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .lost:
                 // The backstop got there first and is opening the window.
                 break
+            case .blocked(let why):
+                // Not a race — the request cannot be removed, so acting on it would
+                // repeat on every check. Logged because this is permanent: the
+                // hand-off is dead for every future launch until it is fixed.
+                NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
             }
         }
     }
@@ -236,7 +241,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Only `.fresh`. `.lost` means the notification handler claimed it and
             // is already opening the window; `.absent` is the ordinary case of
             // there being no request at all, which is what almost every tick sees.
-            guard handoff.claim() == .fresh else { return }
+            switch handoff.claim() {
+            case .fresh:
+                break
+            case .blocked(let why):
+                NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
+                return
+            case .absent, .lost:
+                return
+            }
             DispatchQueue.main.async { self?.openForHandoff(definite: true) }
         }
     }

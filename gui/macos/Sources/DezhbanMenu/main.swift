@@ -114,7 +114,11 @@ func acquireSessionOwnership() -> InstanceLock? {
         // Never refuse to start over this. A duplicate icon is a smaller failure
         // than an app that will not launch because a support directory is broken.
         NSLog("DezhbanMenu: instance lock unavailable, starting anyway: \(why)")
-        sessionHandoff?.discard()
+        // No discard here. `discard()` is for a process that has just *taken* the
+        // lock, on the grounds that anything on disk was meant for a predecessor —
+        // and this process took nothing. A transient open() failure in a third
+        // launch would otherwise delete a request the real session owner was about
+        // to claim, losing that user's double-click.
         return lock
     case .heldByAnother:
         // A background launch loses silently — that copy was never going to show
@@ -131,11 +135,19 @@ func acquireSessionOwnership() -> InstanceLock? {
                 }
             incumbent?.activate()
             // Ask it to open its window — which it may not currently have, since
-            // the incumbent may be a --background login launch — but only when
-            // this launch would have opened one itself. "Open minimized: Always"
-            // means always: a second launch of the same app must not become the
-            // one way to make a window appear, or the setting means one thing on
-            // the first launch and the opposite on the second.
+            // the incumbent may be a --background login launch.
+            //
+            // NOT gated on "Open minimized". It was, on the reasoning that
+            // "Always" has to mean always — but the preference governs the
+            // *launch*, and a user-initiated launch of an already-running app is
+            // not one: once the incumbent has finished starting, LaunchServices
+            // turns the same double-click into a reopen, and
+            // `applicationShouldHandleReopen` opens the window unconditionally in
+            // every mode, by design ("the Dock icon and Open Dezhban… open the
+            // window regardless"). So gating here bought no consistency at all —
+            // it gave the same gesture opposite answers depending on whether the
+            // incumbent happened to have finished starting yet — and cost the one
+            // launch that had no other route to a window.
             //
             // A notification rather than re-opening the bundle through
             // NSWorkspace: asking LaunchServices to open the app we are in the
@@ -147,19 +159,18 @@ func acquireSessionOwnership() -> InstanceLock? {
             // dist/Dezhban.app run beside an installed copy — an unscoped
             // notification would have a duplicate launch of one install open the
             // other install's window.
-            if LaunchPreference.current.opensWindow(backgroundLaunch: false) {
-                // The file first, then the notification. The notification is the
-                // fast path but is never queued, and the incumbent may still be
-                // starting up with no observer installed — the file is the one
-                // that waits, and the incumbent's launch-time backstop finds it.
-                // Whichever of the two gets there claims it, so the window opens
-                // once (see HandoffRequest).
-                sessionHandoff?.post()
-                DistributedNotificationCenter.default().postNotificationName(
-                    NSNotification.Name(AppDelegate.openWindowNotification),
-                    object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path,
-                    userInfo: nil, deliverImmediately: true)
+            // The file first, then the notification. The notification is the fast
+            // path but is never queued, and the incumbent may still be starting up
+            // with no observer installed — the file is the one that waits, and the
+            // incumbent's launch-time backstop finds it. Whichever of the two gets
+            // there claims it, so the window opens once (see HandoffRequest).
+            if case .failure(let error) = sessionHandoff?.post() ?? .success(()) {
+                NSLog("DezhbanMenu: could not record the hand-off request: \(error)")
             }
+            DistributedNotificationCenter.default().postNotificationName(
+                NSNotification.Name(AppDelegate.openWindowNotification),
+                object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path,
+                userInfo: nil, deliverImmediately: true)
         }
         NSLog("DezhbanMenu: another copy of this install owns the session; exiting")
         exit(0)
