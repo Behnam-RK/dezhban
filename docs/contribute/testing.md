@@ -785,14 +785,15 @@ task gui:build && open dist/Dezhban.app
       that the instance lock works: exactly **one** menubar item and one Dock
       tile afterwards, and `pgrep -x DezhbanMenu | wc -l` is 1. Repeat
       immediately after an upgrade that runs the migration.
-- [ ] **A user launch that loses the lock is not a silent no-op.** With the app
-      running from a `--background` login launch (so it has no window), launch it
-      again from Finder. The second copy must exit *and* the first must come
-      forward with its window open — that is the distributed notification in
-      `acquireSessionOwnership()`. Doing nothing at all here is a worse bug than
-      the duplicate icon this check's predecessor covers. Then set "Open
-      minimized" to **Always** and repeat: the first copy must come forward with
-      **no** window, because always means always.
+- [ ] **Launching a fully-started app again just reopens its window.** With the
+      app already running from a `--background` login launch, launch it from
+      Finder. LaunchServices will not start a second copy of a running bundle, so
+      this never reaches the instance lock — it is
+      `applicationShouldHandleReopen`, which opens the window in **every** "Open
+      minimized" mode, on purpose: the preference governs the launch, and must
+      never make the window unreachable. Do not expect "Always" to suppress it
+      here; the hand-off path is exercised by the startup-race check below, which
+      is the only way to reach it.
 - [ ] **The first logout after upgrading may open the window once — and only
       once.** Expected, not a regression:
       [ADR-0014](../adr/0014-login-item-launch-marker.md) records why
@@ -808,10 +809,15 @@ task gui:build && open dist/Dezhban.app
       login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
       it, LaunchServices relaunches the app with no arguments and races the agent
       for the lock.
-- [ ] **Two hand-offs in quick succession both open the window.** The debounce
-      must not swallow real work: with the app running from a `--background` login
-      launch, double-click it (window opens), ⌘W to close, and double-click again
-      within a second or two. The window must open **both** times.
+- [ ] **Two hand-offs in quick succession both open the window.** Only reachable
+      while the incumbent is still starting — once it is up, LaunchServices reopens
+      rather than launching a duplicate, so there is no hand-off to debounce. Log
+      out and back in, then double-click the app twice in quick succession as early
+      as you can, closing the window (⌘W) in between. Both must open. Best-effort
+      by nature: the deterministic coverage is
+      `HandoffRequestTests.anOverlappingClaimerIsToldItLost` and the `definite`
+      split in `openForHandoff`, which is what stops the debounce swallowing a real
+      second request.
 - [ ] **A hand-off that arrives before the app is observing still works.** The
       race the `HandoffRequest` file exists for: log out and back in and
       double-click the app in `/Applications` as early as you can, while it is
@@ -819,10 +825,9 @@ task gui:build && open dist/Dezhban.app
       half a second if the notification missed it, from the bounded backstop that
       runs for the first few seconds. This must hold on a *slow* login too: the
       request is honoured however long the incumbent took to finish starting,
-      because the file can only have been written after it took the lock. This must hold on a *slow* login too: the
-      request is honoured however long the incumbent took to finish starting,
-      because the file can only have been written after it took the lock. It must open **once**: no second activation
-      a moment later, and a window you close right after must stay closed. Then
+      because the file can only have been written after it took the lock. It must
+      open **once**: no second activation a moment later, and a window you close
+      right after must stay closed. Then
       confirm no `.handoff` file is left in `~/Library/Application
       Support/com.behnam-rk.dezhban.app/`.
 - [ ] **A copy run from outside /Applications does not migrate the login item.**

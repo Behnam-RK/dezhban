@@ -269,6 +269,14 @@ with an argument, the pre-`SMAppService` pattern.
   Settings toggle tells the truth about whether anything starts the app at
   login, and switching it off retracts *both*.
 
+  `enable()` refuses while *any* legacy registration survives, not merely an
+  enabled one. Guarding on enablement looked like a way to keep the advice below
+  from being a dead end — a `.requiresApproval` item launches nothing, so it cannot
+  be half of "two launches at login" — but `AssociatedBundleIdentifiers` makes one
+  "Dezhban" row in Login Items govern both registrations, so approving that row arms
+  both. The dead end is real and is stated rather than engineered around: a defect
+  this branch exists to remove cannot be traded for a better error message.
+
   If macOS keeps refusing to retract it, the app has no way out on its own, and
   it must not pretend otherwise: "toggle it off and on again" was the first
   advice here and it was unreachable. The control was a `toggle()` that derived

@@ -106,9 +106,9 @@ enum LoginItem {
                 return "macOS is holding this for your approval — enable Dezhban in "
                     + "System Settings → General → Login Items."
             case .legacyStuck:
-                return "macOS would not remove the old login item, so Dezhban will still open "
-                    + "at login. Remove \"Dezhban\" under System Settings → General → Login "
-                    + "Items, then switch this on again to use the new one."
+                return "An old login-item registration is still on file and macOS will not "
+                    + "remove it, so switching this on could start Dezhban twice at login. "
+                    + "Logging out and back in usually clears it."
             case .agentStuck:
                 return "macOS would not remove the login item, so Dezhban will still open at "
                     + "login. Remove \"Dezhban\" under System Settings → General → Login Items."
@@ -237,16 +237,25 @@ enum LoginItem {
         // `disable()` and the migration both refuse it; this refused nothing, and
         // the stuck-migration path led straight here: switch reads ON, user clicks
         // it off, clicks it on again, and both are registered.
-        // Retract any legacy registration, but refuse only if one is still
-        // *enabled*. The justification for refusing is "two launches at login,
-        // one with the marker and one without" — and a `.requiresApproval` legacy
-        // item launches nothing, so refusing on mere presence was stricter than
-        // its own reason. It also made `Outcome.legacyStuck`'s advice a dead end:
-        // removing the item under System Settings leaves `mainApp` at
-        // `.requiresApproval`, so "then switch this on again" hit the same refusal
-        // and the agent could never be registered.
+        // Retract any legacy registration, and refuse while one survives at all —
+        // not merely while one is *enabled*.
+        //
+        // Guarding on enablement was an attempt to keep `.legacyStuck`'s advice
+        // from being a dead end, on the reasoning that a `.requiresApproval` legacy
+        // item launches nothing so cannot be half of "two launches at login". But
+        // `AssociatedBundleIdentifiers` makes ONE "Dezhban" row in Login Items
+        // govern both registrations, so approving that row arms both — and then the
+        // agent and the legacy item both start the app, one with the marker and one
+        // without, racing the instance lock to decide whether the window opens.
+        // That is the defect this whole branch exists to remove, so it cannot be
+        // traded for a better error message.
+        //
+        // The dead end is real and is now stated honestly instead of being
+        // engineered around: if macOS will not retract the old registration,
+        // nothing the app can do will make enabling this safe. See
+        // `Outcome.legacyStuck`.
         retractLegacy()
-        if legacyEnabled { return .legacyStuck }
+        if registered(.mainApp) { return .legacyStuck }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
         do {
             try service.register()
@@ -259,7 +268,17 @@ enum LoginItem {
             // starting at login. `kSMErrorAlreadyRegistered` is the obvious way in —
             // the switch stale-OFF, the user clicks it on, and the register throws
             // precisely because it is already registered.
-            return registered(service) ? .agentStuck : .failed(error.localizedDescription)
+            //
+            // And the outcome comes from the status, not from the fact that a throw
+            // happened. Mapping every throw-with-a-registration to `.agentStuck`
+            // told a user who had just asked to turn login-at-launch ON to go and
+            // remove the login item — the opposite of what they wanted, in the case
+            // the comment above names as the main way here.
+            switch service.status {
+            case .enabled: return .enabled
+            case .requiresApproval: return .awaitingApproval
+            default: return .failed(error.localizedDescription)
+            }
         }
         // Checked, not assumed: `register()` returns without throwing when macOS
         // is going to make the user approve it, and the switch snapping back with
@@ -444,6 +463,16 @@ enum LoginItem {
 
     private static func markMigrated() {
         UserDefaults.standard.set(true, forKey: migratedKey)
+        // Flushed, because `legacyRetractedKey` is. Those two flags are read
+        // together and one outliving the other inverts the decision they encode:
+        // this runs seconds into a login, and if the session ended before cfprefsd
+        // wrote it, a legacy item retracted for a user who had login-at-launch OFF
+        // left `legacyRetractedKey` durable and `migratedKey` gone — so the next
+        // launch fell through to `register()` and turned it back on, which ADR-0014
+        // says must never happen. The mirror loss strands the account with nothing
+        // starting the app at login. `disable()` already flushes before the call
+        // that can end the process; this path has the same obligation.
+        UserDefaults.standard.synchronize()
     }
 
     /// Whether this bundle lives somewhere it is going to stay.

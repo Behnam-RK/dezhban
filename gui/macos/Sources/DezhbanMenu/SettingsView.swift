@@ -37,6 +37,16 @@ struct SettingsView: View {
     /// while a mutation is outstanding, no read may write the switch, whichever
     /// order the two happen to complete in.
     @State private var loginPending = false
+    /// Until when `seed()` must leave the status line alone.
+    ///
+    /// `seed()` runs on every `didBecomeActiveNotification`, and macOS delivers one
+    /// *during* a login-item change because it surfaces System Settings or an
+    /// approval prompt. So the user came back from that prompt and `seed()` promptly
+    /// overwrote the line with "Loading…" and then "Seeded from …" — swallowing the
+    /// `awaitingApproval` and `legacyStuck` guidance, which is the entire reason
+    /// `Outcome` carries a message. `loginPending` already protects `loginEnabled`
+    /// from this same race; the status line needed its own.
+    @State private var loginStatusHoldUntil: Date?
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -796,6 +806,11 @@ struct SettingsView: View {
         }
     }
 
+    /// Whether a login-item message is still owed the user's attention.
+    private var holdingLoginStatus: Bool {
+        loginPending || (loginStatusHoldUntil.map { $0 > Date() } ?? false)
+    }
+
     private var loginBinding: Binding<Bool> {
         Binding(
             get: { loginEnabled },
@@ -837,6 +852,7 @@ struct SettingsView: View {
                     // claimed it since — otherwise a login result overwrites, say,
                     // "Installing service…" while that install is still running.
                     if status == inProgress { status = outcome.message }
+                    loginStatusHoldUntil = Date().addingTimeInterval(10)
                 }
             })
     }
@@ -960,7 +976,7 @@ struct SettingsView: View {
         // stale `true` is also what keeps the control enabled.
         tokenEnrolled = ControlToken.isStored
         refreshTokenCapability()
-        status = "Loading…"
+        if !holdingLoginStatus { status = "Loading…" }
         canApply = false
         // Off-main for the same reason `set(enabled:)` is: this is two blocking
         // SMAppService status reads over XPC (it was one before the agent), and
@@ -1005,7 +1021,7 @@ struct SettingsView: View {
                 // seeded snapshot are the same thing at this instant and the pane
                 // starts out clean.
                 seededValues = fields.currentValues
-                status = "Seeded from \(path)"
+                if !holdingLoginStatus { status = "Seeded from \(path)" }
                 canApply = true
             }
         }
