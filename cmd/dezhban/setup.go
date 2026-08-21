@@ -66,19 +66,37 @@ func cmdSetup(args []string) int {
 	// Asked a screenful at a time, in Group order, so a gate can be evaluated
 	// against answers already given — which is exactly what makes the VPN
 	// branch a branch.
+	//
+	// Within a group, in waves. A huh form binds every field before any of them
+	// is answered, so a question gated on another question in the SAME group
+	// would be decided by that question's seeded default rather than by what
+	// the user just typed. The macOS app has no such problem — it re-evaluates
+	// gates as answers change and shows the whole step at once, which is what
+	// makes step 2 a single screen there — so rather than splitting the shared
+	// question set to suit one renderer, this one asks the ungated questions,
+	// re-evaluates, and asks whatever that opened up.
 	for _, group := range groupsOf(qs) {
-		var fields []huh.Field
-		for _, q := range qs {
-			if q.Group != group || !answers.ShouldAsk(q) {
-				continue
+		asked := map[string]bool{}
+		for {
+			var fields []huh.Field
+			for _, q := range qs {
+				if q.Group != group || asked[q.ID] || !answers.ShouldAsk(q) {
+					continue
+				}
+				// Defer anything still waiting on an unanswered question in
+				// this same group; the next wave picks it up.
+				if q.Gated() && !asked[q.RequiresID] && gateIsInGroup(qs, q, group) {
+					continue
+				}
+				asked[q.ID] = true
+				fields = append(fields, field(q, answers))
 			}
-			fields = append(fields, field(q, answers))
-		}
-		if len(fields) == 0 {
-			continue
-		}
-		if err := runForm(huh.NewForm(huh.NewGroup(fields...))); err != nil {
-			return formExit(err)
+			if len(fields) == 0 {
+				break
+			}
+			if err := runForm(huh.NewForm(huh.NewGroup(fields...))); err != nil {
+				return formExit(err)
+			}
 		}
 	}
 
@@ -86,7 +104,7 @@ func cmdSetup(args []string) int {
 	// reported but doesn't abort the wizard). Reading files is the caller's job,
 	// not internal/setup's.
 	var profiles []config.Profile
-	if answers.Bool("configureVPN") {
+	{
 		for _, f := range setup.SplitList(answers.Text("profileFiles")) {
 			eps, format, ierr := vpnimport.Extract(f)
 			if ierr != nil {
@@ -112,7 +130,7 @@ func cmdSetup(args []string) int {
 	}
 
 	// --- lockout guard: warn if an endpoint sits inside a tunnel subnet ---
-	if answers.Bool("configureVPN") {
+	{
 		if warn := setup.EndpointLockoutWarning(cfg); warn != "" {
 			var proceed bool
 			fmt.Fprintln(os.Stderr, warn)
@@ -176,9 +194,7 @@ func cmdSetup(args []string) int {
 	} else {
 		fmt.Println("later, enable it with: sudo dezhban install && sudo dezhban start")
 	}
-	if answers.Bool("configureVPN") {
-		fmt.Println("to connect a brand-new VPN whose server isn't known yet: dezhban switch, then connect it.")
-	}
+	fmt.Println("to connect a brand-new VPN whose server isn't known yet: dezhban switch, then connect it.")
 	return 0
 }
 
@@ -303,4 +319,17 @@ func isInteractive() bool {
 // /dev/null — that distinction matters for deciding whether sudo can prompt).
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(f.Fd())
+}
+
+// gateIsInGroup reports whether the question q depends on lives in the same
+// group — the case the wave loop above has to defer, because a huh form cannot
+// react to an answer given inside itself. A gate pointing at an EARLIER group is
+// already decided by the time this group runs and needs no deferral.
+func gateIsInGroup(qs []setup.Question, q setup.Question, group int) bool {
+	for _, other := range qs {
+		if other.ID == q.RequiresID {
+			return other.Group == group
+		}
+	}
+	return false
 }

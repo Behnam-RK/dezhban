@@ -331,15 +331,39 @@ succeeds and says so; the new values are read the next time it starts.
 validation, and ruleset preview as `detect-vpn`/`validate`/`print-rules`. Writes to
 the system path need root (hence `sudo`); a permission error prints a `sudo` hint.
 
-The wizard asks only what has no safe default: blocked countries (plus a
-free-text field for other codes), whether to configure the VPN now, automatic
-vs. manual detection, and — when configuring — tunnel interfaces (manual mode
-only), self-hosted config files to import, and endpoints. Everything it used
-to also ask (poll interval, log level, provider quorum, physical DNS,
-auto-discovery) ships with a sane default and lives in the app's Settings or
-`config set`; a wizard run leaves those keys untouched, so re-running setup
-never clobbers a tuned value. The one silent defaulting decision it kept: a
-brand-new macOS config gets live endpoint discovery turned on.
+The wizard is **two steps**, and asks only what has no safe default:
+
+1. **Blocked countries** — a checklist of the common ones, plus a free-text
+   field for any other ISO codes.
+2. **Automatic VPN detection?** — on by default. Leave it on and dezhban finds
+   the tunnel and, on macOS, learns the server address itself. Untick it and the
+   manual fields appear: tunnel interfaces, self-hosted config files to import,
+   and endpoints.
+
+Everything it used to also ask (poll interval, log level, provider quorum,
+physical DNS, auto-discovery) ships with a sane default and lives in the app's
+Settings or `config set`; a wizard run leaves those keys untouched, so
+re-running setup never clobbers a tuned value. **A question that is not asked
+writes no key** — so leaving automatic detection on does not blank the endpoints
+of someone who set them by hand. The exception is off macOS, where there is no
+live discovery: the endpoint question is asked whichever detection mode you
+pick, because without it the config cannot enforce.
+
+Two consequences of there being no "configure your VPN now?" question, which
+this wizard used to open with. A run always writes the VPN keys, so the
+automatic-detection answer is **seeded from your config**: a config with pinned
+`vpn.tunnelInterfaces` starts on manual, and pressing Enter through the wizard
+preserves the pins rather than clearing them. And choosing automatic detection
+deliberately clears those pins, because a leftover pin is precisely what stops
+autodetection from happening.
+
+The one silent defaulting decision it kept: a brand-new macOS config gets live
+endpoint discovery turned on.
+
+In a terminal, step 2 is shown as two consecutive prompts rather than one
+screen — the form library binds every field before any is answered, so a
+question that appears only when you untick another has to come after it. The
+macOS app re-evaluates as you type and shows step 2 as a single screen.
 
 `setup --questions` is the exception: it prints what the wizard *would* ask —
 each question, what it writes, its seeded answer, and which earlier answer
