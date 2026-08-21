@@ -93,7 +93,10 @@ checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
    and `.deb`/`.rpm` paths too.
 5. Fetches the matching uninstaller (`packaging/macos/uninstall.sh` or
    `packaging/linux/uninstall.sh`, from the **same tag** just installed) to
-   `/usr/local/share/dezhban/uninstall.sh`.
+   `/usr/local/share/dezhban/uninstall.sh`, and the `LICENSE` from that same
+   tag to `/usr/local/share/dezhban/LICENSE` — the license requires that
+   anyone who receives the software receives it too. Either fetch failing is a
+   warning, not a failed install.
 
 Re-running either script upgrades or reinstalls: it replaces the binary, and
 if a service was already running, stops it first and restarts it after — but
@@ -142,7 +145,9 @@ Declares an `nftables` dependency (the Linux backend shells out to `nft`).
 Registers the service on install (`postinstall.sh`, same never-auto-start
 rule) and tears down rules + unregisters on removal (`preremove.sh` — it has
 to run *before* the package manager deletes the binary, or there's nothing
-left to call `panic`/`stop`/`uninstall` on).
+left to call `panic`/`stop`/`uninstall` on). The `LICENSE` lands at
+`/usr/share/doc/dezhban/LICENSE`, where both packaging families look for it —
+the `.pkg` and `install.sh` put it in `/usr/local/share/dezhban/` instead.
 
 ### Bare binaries
 

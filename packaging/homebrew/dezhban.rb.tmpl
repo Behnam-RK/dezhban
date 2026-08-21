@@ -43,6 +43,12 @@ class Dezhban < Formula
 
   def install
     bin.install "dezhban"
+    # The tarball carries LICENSE and README.md, but Homebrew only installs
+    # what a formula names — without this, `brew install` would hand the user
+    # the binary and nothing else. Hippocratic 3.0 Core section 5.1 requires
+    # that everyone who receives the Software also receives the License, and
+    # 7.2 ends the grant if that is not cured within 30 days of notice.
+    doc.install "LICENSE", "README.md"
   end
 
   def caveats

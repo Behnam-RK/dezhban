@@ -20,11 +20,12 @@ current as you land changes.
   so the world could not watch. It appears at the top of the README and in the
   macOS app's **About** pane, as its own section below Updates.
   ([2025–2026 Iran massacres](https://en.wikipedia.org/wiki/2025%E2%80%932026_Iran_massacres))
-- The `.deb`, `.rpm`, `.pkg`, and `curl | sudo bash` installs now ship the
-  `LICENSE` file — at `/usr/share/doc/dezhban/LICENSE` on Linux packages and
-  `/usr/local/share/dezhban/LICENSE` otherwise. Only the tarball carried it
-  before, which did not satisfy MIT's notice clause either and is now a
-  cure-or-terminate condition under the new license.
+- Every install path now ships the `LICENSE` file — `/usr/share/doc/dezhban/`
+  on the `.deb`/`.rpm`, `/usr/local/share/dezhban/` for the `.pkg` and
+  `curl | sudo bash`, the install directory on Windows, and `share/doc/dezhban`
+  under the Homebrew prefix. Only the tarball carried it before, which did not
+  satisfy MIT's notice clause either and is now a cure-or-terminate condition
+  under the new license.
 
 ### Changed
 

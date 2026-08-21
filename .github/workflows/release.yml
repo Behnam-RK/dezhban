@@ -306,6 +306,10 @@ jobs:
 
           test -f /Library/LaunchDaemons/dezhban.plist || { echo "LaunchDaemon not registered" >&2; exit 1; }
           test -x /usr/local/share/dezhban/uninstall.sh || { echo "uninstaller not installed" >&2; exit 1; }
+          # Shipping the LICENSE is a condition of the license itself (Part B
+          # section 5.1, cure-or-terminate under 7.2), so it is an assertion,
+          # not a nicety: a payload change that drops it must fail the release.
+          test -s /usr/local/share/dezhban/LICENSE || { echo "LICENSE not installed by the .pkg" >&2; exit 1; }
 
           # The installed binary must report the version we are releasing.
           got="$(/usr/local/bin/dezhban version | awk '{print $2}')"
