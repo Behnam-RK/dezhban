@@ -1005,6 +1005,84 @@ task gui:build && open dist/Dezhban.app
 - [ ] **Staleness.** Kill the daemon → the icon goes gray after the 90 s staleness
       window, and Overview switches to the guided "Stopped" state.
 
+### Remove Dezhban (complete purge)
+
+Destructive and one-way — run these on a machine you are willing to reinstall
+on. See [ADR-0015](../adr/0015-complete-purge-semantics.md).
+
+- [ ] **No key removes it.** Settings → Remove Dezhban…, press Return: nothing
+      happens — there is deliberately no default button. Press Escape: the alert
+      dismisses with nothing removed, and the guard is still enforcing.
+- [ ] **The per-user half actually goes.** Enroll Touch ID and enable "open at
+      login" first, then remove. After the app quits:
+      `defaults read com.behnam-rk.dezhban.app` fails with "domain does not
+      exist"; `security find-generic-password -s sh.dezhban.menu` reports
+      `SecKeychainSearchCopyNext: The specified item could not be found` — one
+      run is enough, and it proves both items are gone, because `find` returns
+      the first match under the service and there is none; Dezhban no longer appears
+      in System Settings › General › Login Items. The last of those is retracted
+      by the script's `--unregister-login-item` errand, not by the app — the app
+      must NOT call `unregister` before the Terminal hand-off, because launchd
+      can kill it for that call in a login-started session.
+- [ ] **The dialog reads correctly.** No runs of stray spaces mid-sentence (a
+      soft-wrapped Swift multiline literal keeps its indentation), and the
+      notification sentence says you must turn it off yourself — the purge cannot.
+- [ ] **A login item switched off in System Settings still goes.** Enable "open
+      at login", untick Dezhban in System Settings › General › Login Items
+      (status becomes `.requiresApproval`, still a live registration), then
+      remove with the uninstaller renamed away **and** dezhban taken down properly
+      first (`sudo dezhban panic && sudo dezhban stop && sudo dezhban uninstall`,
+      then remove the CLI) — the app retracts the login item only when nothing
+      root-owned is left, so leaving either artefact in place correctly takes the
+      still-installed branch and retracts nothing, and deleting the plist by hand
+      instead leaves the job loaded and the rules enforcing where no filesystem
+      check can see them. The Login Items row is gone afterwards, not left
+      pointing at a deleted bundle.
+- [ ] **The teardown is visible.** Terminal opens, `sudo` prompts, and the
+      transcript shows `panic` removing the rules BEFORE anything is deleted.
+      Confirm the network works throughout — a half-removed kill switch that
+      leaves a block-all rule loaded is the one outcome this must never produce.
+- [ ] **KEEP_CONFIG.** With the checkbox ticked, `/etc/dezhban/dezhban.json`
+      survives; without it, `/etc/dezhban` is gone.
+- [ ] **Reinstall looks fresh.** Reinstall, launch the app: the first-run wizard
+      opens. This is the bug the purge exists to fix.
+- [ ] **A missing uninstaller on a live install does not claim dezhban is gone.**
+      Rename `/usr/local/share/dezhban/uninstall.sh` — the state a `curl | sh`
+      install leaves when the uninstaller fetch fails, and the state a machine
+      bootstrapped by `scripts/install-local.sh` is in from the start — then
+      remove. The app must say dezhban is **still installed
+      and still enforcing**, must **not** offer to let you delete Dezhban.app,
+      must **not** retract the login item (the app is the only status surface
+      left for a running guard), and must **not** quit. Confirm afterwards that
+      the rules are still loaded and `dezhban status` still answers.
+- [ ] **A missing uninstaller with nothing else installed reports the truth.**
+      From the state above, run `sudo dezhban panic && sudo dezhban stop && sudo
+      dezhban uninstall` FIRST — deleting the plist by hand leaves the job loaded
+      and the rules enforcing, which no filesystem check can see, so a tester who
+      skips this manufactures the exact "says gone, still enforcing" state the
+      branch above exists to prevent and records it as a pass. Then remove the
+      CLI, relaunch, and remove: now the app says the root half is already gone,
+      does **not** print a command naming a file it just failed to find, retracts
+      the login item as the alert is dismissed, sweeps this account's session lock
+      and preference domains a second time, and quits.
+- [ ] **Terminal refusing degrades honestly.** Deny Dezhban under System
+      Settings › Privacy & Security › Automation, then remove with the
+      uninstaller in place: the app says the keychain key and settings are gone
+      but dezhban is **still installed and still enforcing**, prints the exact
+      `sudo` command, names the Automation setting, and does **not** quit.
+- [ ] **CLI missing does not disable the button.** `sudo rm /usr/local/bin/dezhban`,
+      relaunch, open Settings: Remove Dezhban… is still enabled. It is the only
+      way left to clear this account's keychain item.
+- [ ] **The script's own per-user pass.** From a second account over SSH, run
+      `sudo sh /usr/local/share/dezhban/uninstall.sh` directly: both of that
+      account's preference domains are deleted (check
+      `defaults read com.dezhban.DezhbanMenu` too — the legacy domain is the one
+      that used to survive), and the output names the keychain item and the login
+      item it did not touch. A third account's *settings* are untouched — though
+      its session lock and saved window state are swept, which is the line
+      [ADR-0015](../adr/0015-complete-purge-semantics.md) draws and the glossary
+      states.
+
 ### Actions
 
 - [ ] **The action row explains itself before the click.** Titles are short

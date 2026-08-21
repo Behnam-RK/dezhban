@@ -1,4 +1,5 @@
 import AppKit
+import DezhbanCore
 
 /// Action plumbing shared by the menubar menu and the main window, so both
 /// surfaces run identical semantics — one place owns the escalation rules.
@@ -96,6 +97,54 @@ enum AppActions {
 
     static var uninstallCommands: [[String]] {
         [["panic"], ["stop"], ["uninstall"]]
+    }
+
+    /// Why the root uninstaller did not start. The cases need different things
+    /// said to the user, and a single `false` said none of them.
+    enum UninstallerLaunch {
+        /// Terminal took the command; the teardown is visible in its window.
+        case started
+        /// No uninstaller at `UninstallDecision.uninstallerPath`. Whether that
+        /// means dezhban is gone or merely that the script was never fetched is
+        /// `UninstallDecision.situation`'s call, not this function's.
+        case scriptMissing
+        /// Terminal exists but refused the Apple event. Almost always macOS
+        /// Automation permission (System Settings › Privacy & Security ›
+        /// Automation), which the user grants once and retries.
+        case terminalRefused
+    }
+
+    /// Opens Terminal.app running the root uninstaller.
+    ///
+    /// Terminal rather than an in-app privileged sequence, because the script
+    /// quits this app and deletes its bundle partway through — see
+    /// `SettingsView.uninstallEverything`. The user types their password into
+    /// `sudo` in a window they own, and watches the `panic` teardown land.
+    ///
+    /// Sending `do script` to Terminal is a cross-app Apple event, so the bundle
+    /// must carry `NSAppleEventsUsageDescription` or macOS denies it outright
+    /// (`errAEEventNotPermitted`, -1743) without ever offering the user a
+    /// prompt. Info.plist has the key for exactly this call, and build-app.sh
+    /// fails the build without it; removing it would turn this function into one
+    /// that can only ever return `.terminalRefused`.
+    static func openUninstallerInTerminal(keepConfig: Bool) -> UninstallerLaunch {
+        guard FileManager.default.fileExists(atPath: UninstallDecision.uninstallerPath) else {
+            return .scriptMissing
+        }
+        let script = """
+            tell application "Terminal"
+                activate
+                do script "\(UninstallDecision.command(keepConfig: keepConfig))"
+            end tell
+            """
+        guard let apple = NSAppleScript(source: script) else { return .terminalRefused }
+        var err: NSDictionary?
+        apple.executeAndReturnError(&err)
+        if let err = err {
+            NSLog("DezhbanMenu: could not start the uninstaller in Terminal: %@", err)
+            return .terminalRefused
+        }
+        return .started
     }
 
     /// download then apply, under ONE admin prompt — same reasoning as

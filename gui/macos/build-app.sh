@@ -156,6 +156,112 @@ if ! grep -qxF "APP_BUNDLE_ID=$bundle_id" "$REPO_ROOT/packaging/macos/uninstall.
 	echo "build-app.sh: uninstall.sh does not set APP_BUNDLE_ID to '$bundle_id' — it would leave the per-user preferences behind, and a later reinstall would skip the login-item migration" >&2
 	exit 1
 fi
+# 6. The complete purge (ADR-0015) spans Swift, shell and Go, and four strings have
+#    to agree across those seams or a leftover survives silently — the failure mode
+#    the purge exists to end, since nothing at runtime can notice a domain it never
+#    names, a script it never finds, or a keychain item it never matches.
+#
+#    The superseded preference domain first. The app clears it, and uninstall.sh
+#    clears it again for accounts the app never ran in; spelt differently, whichever
+#    side is wrong quietly stops clearing anything, and the domain that made a
+#    reinstall look configured survives exactly as before.
+legacy_id="$(sed -n 's/^    static let legacyBundleID = "\(.*\)"$/\1/p' \
+	"$HERE/Sources/DezhbanMenu/Purge.swift")"
+if [[ -z "$legacy_id" ]]; then
+	echo "build-app.sh: Purge.swift no longer declares legacyBundleID as a plain string literal — the check that keeps it in step with uninstall.sh cannot read it" >&2
+	exit 1
+fi
+if ! grep -qxF "LEGACY_APP_BUNDLE_ID=$legacy_id" "$REPO_ROOT/packaging/macos/uninstall.sh"; then
+	echo "build-app.sh: uninstall.sh does not set LEGACY_APP_BUNDLE_ID to '$legacy_id' — the superseded preference domain would survive an uninstall, and a reinstall would read state from it" >&2
+	exit 1
+fi
+#    Then the uninstaller's own path. AppActions hands this to Terminal verbatim;
+#    if the packaging installs it elsewhere, the app reports "already removed" on a
+#    machine that is still fully installed and still enforcing.
+uninstaller_path="$(sed -n 's/^    public static let uninstallerPath = "\(.*\)"$/\1/p' \
+	"$HERE/Sources/DezhbanCore/UninstallDecision.swift")"
+if [[ -z "$uninstaller_path" ]]; then
+	echo "build-app.sh: UninstallDecision.swift no longer declares uninstallerPath as a plain string literal — the check that keeps it in step with the packaging cannot read it" >&2
+	exit 1
+fi
+#    Anchored on the lines that DO the install, never on a bare occurrence of the
+#    path: build-pkg.sh's header comment carries the same literal, so a plain
+#    substring search stayed green while line 66 installed somewhere else
+#    entirely — a pin that passes wrongly being worse than no pin. install.sh
+#    assembles the path from SHARE_DIR, so that half is pinned to the directory,
+#    on every assignment of it rather than only the last.
+uninstaller_dir="${uninstaller_path%/*}"
+pkg_installs="$(grep -c "^install -m 0755 \"\$HERE/uninstall.sh\" \"\$STAGE$uninstaller_path\"$" \
+	"$REPO_ROOT/packaging/macos/build-pkg.sh" || true)"
+share_decl='^[[:space:]]*\(readonly \|export \)\{0,1\}SHARE_DIR='
+share_dirs="$(grep -c "$share_decl$uninstaller_dir\$" "$REPO_ROOT/scripts/install.sh" || true)"
+all_share_dirs="$(grep -c "$share_decl" "$REPO_ROOT/scripts/install.sh" || true)"
+if [[ "$pkg_installs" -lt 1 || "$share_dirs" -lt 1 || "$share_dirs" != "$all_share_dirs" ]]; then
+	echo "build-app.sh: '$uninstaller_path' is not where build-pkg.sh and scripts/install.sh put uninstall.sh — Remove Dezhban… would report the root half already gone on a fully installed Mac" >&2
+	exit 1
+fi
+#    Then the keychain service name. uninstall.sh and the troubleshooting page both
+#    print a `security delete-generic-password -s <service>` loop for the one item
+#    root can never remove; spelt differently, that loop matches nothing and exits
+#    immediately, reporting a job done that was not even attempted. Both are checked,
+#    because a stale instruction in the page a locked-out user reads offline is no
+#    better than a stale one in the script.
+kc_service="$(sed -n 's/^    private static let service = "\(.*\)"$/\1/p' \
+	"$HERE/Sources/DezhbanMenu/ControlToken.swift")"
+if [[ -z "$kc_service" ]]; then
+	echo "build-app.sh: ControlToken.swift no longer declares service as a plain string literal — the check that keeps it in step with uninstall.sh cannot read it" >&2
+	exit 1
+fi
+#    The WHOLE loop, not its prefix. The loop is the point: two items live under
+#    this service, and `delete-generic-password` removes one per run — so a
+#    "simplification" to a single invocation would leave the capability probe
+#    behind while a prefix match reported agreement.
+#    Read from ControlToken's own `manualPurgeCommand` rather than written out
+#    here, because that is a THIRD copy of the same loop and a literal in this
+#    file would leave it the one nothing pins — the app would tell a user to run
+#    something the script and the docs had both stopped agreeing with.
+kc_tmpl='"while security delete-generic-password -s \(service) >/dev/null 2>&1; do :; done"'
+if ! grep -qF "$kc_tmpl" "$HERE/Sources/DezhbanMenu/ControlToken.swift"; then
+	echo "build-app.sh: ControlToken.manualPurgeCommand is no longer the 'while security delete-generic-password -s <service> …; do :; done' loop the script and the docs print — one of the three copies has drifted" >&2
+	exit 1
+fi
+kc_loop="while security delete-generic-password -s $kc_service >/dev/null 2>&1; do :; done"
+for consumer in packaging/macos/uninstall.sh docs/usage/troubleshooting.md; do
+	if ! grep -qF "$kc_loop" "$REPO_ROOT/$consumer"; then
+		echo "build-app.sh: $consumer does not carry the '$kc_loop' command — the one keychain item root cannot remove would be left with no way to clear it, or with one that clears only half of it" >&2
+		exit 1
+	fi
+done
+#    Finally the daemon's launchd plist. The app reads it to answer "is anything
+#    root-owned still here?", and that answer decides whether Remove Dezhban… tells
+#    the user dezhban is gone. Go derives the same path from svc.Name; if that ever
+#    moves, a Mac whose CLI is gone but whose daemon is loaded and enforcing would
+#    be told the service was already removed — the outcome the branch reading this
+#    constant exists to prevent.
+daemon_plist="$(sed -n 's/^    public static let daemonPlistPath = "\(.*\)"$/\1/p' \
+	"$HERE/Sources/DezhbanCore/UninstallDecision.swift")"
+svc_name="$(sed -n 's/^	Name  *= "\(.*\)"$/\1/p' "$REPO_ROOT/internal/svc/program.go")"
+if [[ -z "$daemon_plist" || -z "$svc_name" ]]; then
+	echo "build-app.sh: could not read UninstallDecision.daemonPlistPath or svc.Name as plain string literals — the check that keeps them in step cannot run" >&2
+	exit 1
+fi
+if [[ "$daemon_plist" != "/Library/LaunchDaemons/$svc_name.plist" ]]; then
+	echo "build-app.sh: UninstallDecision.daemonPlistPath is '$daemon_plist' but the service installs /Library/LaunchDaemons/$svc_name.plist — Remove Dezhban… would report an enforcing install as already removed" >&2
+	exit 1
+fi
+
+#    And the Automation usage string. `tell application "Terminal"` is a cross-app
+#    Apple event; without this key macOS denies it with errAEEventNotPermitted and
+#    never offers the user a prompt, so Remove Dezhban… could only ever report its
+#    own failure — while advising the user to grant an Automation permission the
+#    system will never ask them for. Asserted rather than commented, like the rest.
+#    Non-empty, not merely present: `plutil -extract` succeeds on an empty string,
+#    and an empty usage string is what the user would be shown as the reason.
+ae_usage="$(plutil -extract NSAppleEventsUsageDescription raw -o - "$APP/Contents/Info.plist" 2>/dev/null || true)"
+if [[ -z "${ae_usage// /}" ]]; then
+	echo "build-app.sh: Info.plist has no non-empty NSAppleEventsUsageDescription — macOS would deny the Apple event that hands the uninstaller to Terminal, with no prompt the user could ever approve" >&2
+	exit 1
+fi
 
 # Documentation, rendered from the repo's own markdown into the bundle. Shipping
 # it means the help pane works with every byte of egress cut — which is exactly

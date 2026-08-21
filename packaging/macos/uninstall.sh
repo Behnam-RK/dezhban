@@ -22,6 +22,22 @@ PLIST=/Library/LaunchDaemons/dezhban.plist
 SHARE_DIR=/usr/local/share/dezhban
 LOGIN_AGENT=com.behnam-rk.dezhban.app.login
 APP_BUNDLE_ID=com.behnam-rk.dezhban.app
+# The preference domain from a superseded bundle identifier. Still on disk on any
+# Mac that ran an early build, and inert — but a purge that leaves it behind is
+# not a purge, and it is the pair of domains ADR-0015 is about.
+LEGACY_APP_BUNDLE_ID=com.dezhban.DezhbanMenu
+# Whether each per-user path ran the preference-domain deletion, and for WHOM.
+# Two flags, not one: the closing warnings ask two different questions — did the
+# console user's preferences get cleared, and did the invoking user's — and a
+# single flag answered both with whichever ran. Bob SSHing in to uninstall while
+# Alice is at the console then silently suppressed the warning about ALICE's
+# surviving preferences, which is the leftover this whole change is about.
+#
+# Deliberately "ran", not "succeeded": every `defaults delete` here is `|| true`,
+# and deleting a domain that does not exist also exits non-zero, so success is
+# not something this script can observe. Whether the pass happened at all is.
+CONSOLE_PREFS_RAN=0
+INVOKER_PREFS_RAN=0
 LOGIN_ITEM_STUCK=none
 # Separate from LOGIN_ITEM_STUCK, which holds one value: the two conditions are
 # independent and both have to be reportable at once.
@@ -315,7 +331,13 @@ if [ -n "$CONSOLE_UID" ]; then
 	#
 	# CONSOLE_HOME is resolved up top, where the bundle search needs it too.
 	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
-		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
+		# Both domains, and both directories. This branch exists because a
+		# network or relocated home is not under /Users, so the sweep below
+		# never sees it.
+		for id in "$APP_BUNDLE_ID" "$LEGACY_APP_BUNDLE_ID"; do
+			rm -rf "$CONSOLE_HOME/Library/Application Support/$id"
+			rm -rf "$CONSOLE_HOME/Library/Saved Application State/$id.savedState"
+		done
 	else
 		# Its own flag. Sharing LOGIN_ITEM_STUCK meant that whenever an earlier step
 		# had already recorded timeout/refused/not-attempted, an unresolvable home
@@ -329,8 +351,19 @@ if [ -n "$CONSOLE_UID" ]; then
 	# migrated — silently restoring the "Open minimized" bug the agent exists to
 	# fix. Written by the user's own cfprefsd, so it is deleted through defaults as
 	# that user rather than by unlinking the plist under them.
-	launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
-		defaults delete "$APP_BUNDLE_ID" >/dev/null 2>&1 || true
+	#
+	# Both domains: the legacy one carries the same migration flag, and clearing
+	# only the current one left a reinstall reading state from a bundle identifier
+	# nothing has used for versions.
+	#
+	# ONE `launchctl asuser`, not one per domain. Each is an unbounded XPC hop into
+	# a session that may be tearing down (the errand above is wrapped in a 15s
+	# timeout for exactly that reason), and this file's rule is not to multiply
+	# them — so the two deletes ride the same invocation.
+	launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" sh -c \
+		'defaults delete "$1" >/dev/null 2>&1; defaults delete "$2" >/dev/null 2>&1' \
+		sh "$APP_BUNDLE_ID" "$LEGACY_APP_BUNDLE_ID" >/dev/null 2>&1 || true
+	CONSOLE_PREFS_RAN=1
 else
 	# No non-root console user: run at the login window, or over ssh on a Mac
 	# nobody is logged into. Every step above needs that user's own launchd
@@ -361,8 +394,19 @@ fi
 # behind — under a closing message that says everything was removed. Root can reach
 # these; the preferences and the login item cannot be, and are named in the warning.
 for home in /Users/*; do
-	[ -d "$home/Library/Application Support/$APP_BUNDLE_ID" ] || continue
-	rm -rf "$home/Library/Application Support/$APP_BUNDLE_ID"
+	# Guarded on the home itself rather than on each path below: the loop now
+	# removes three things, and an unmatched glob leaves `$home` as the literal
+	# "/Users/*", which is not a directory.
+	[ -d "$home" ] || continue
+	# Saved window state alongside the support directory, and both preference
+	# domains for each. Not because the app's own deletion loses a race — its
+	# window opts out of AppKit restoration, so nothing rewrites this — but
+	# because the app only ever speaks for the account running it, and root is
+	# the only thing that can reach these for an account nobody is logged into.
+	for id in "$APP_BUNDLE_ID" "$LEGACY_APP_BUNDLE_ID"; do
+		rm -rf "$home/Library/Application Support/$id"
+		rm -rf "$home/Library/Saved Application State/$id.savedState"
+	done
 done
 
 echo "removing daemon state at $STATE_DIR ..."
@@ -373,6 +417,74 @@ if [ "${KEEP_CONFIG:-0}" = "1" ]; then
 else
 	echo "removing config at $CONFIG_DIR ..."
 	rm -rf "$CONFIG_DIR"
+fi
+
+# Per-user preferences for an invoking user the console-user block above did not
+# already cover — someone who sudo'd from ssh, or from a second account.
+#
+# This is the half a root script cannot properly reach, and the half whose
+# survival used to make a reinstall look like an already-configured machine to
+# the app's first-run wizard: the preference domain outlived every uninstall, so
+# `dezhban.firstRunCompleted` stayed set while /etc/dezhban was empty.
+#
+# Only $SUDO_USER, never a loop over /Users: this script speaks for the person
+# running it. Other accounts are named in the closing summary rather than touched.
+#
+# It also covers the case where $SUDO_USER *is* the console user but CONSOLE_UID
+# could not be looked up. The whole console block above is gated on that uid, so a
+# Mac with somebody at the keyboard and an unreachable directory server — the
+# script's own `no-console-uid` case — skipped the preference deletion entirely,
+# leaving `dezhban.firstRunCompleted` set. The bare `sudo -u` fallback below needs
+# no uid and works there.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ] &&
+	{ [ "$SUDO_USER" != "${CONSOLE_USER:-}" ] || [ -z "$CONSOLE_UID" ]; }; then
+	echo "removing $SUDO_USER's app preferences ..."
+	# Through that user's own launchd session when they have one, exactly as the
+	# console-user path above does. A bare `sudo -u` from a root shell lands in
+	# root's bootstrap namespace and talks to the wrong cfprefsd, so over ssh the
+	# delete silently no-opped and `|| true` hid it. The bare form is still right
+	# for a user with no session at all — there is no cfprefsd to reach, and
+	# defaults then works on the file.
+	#
+	# Which one is chosen by probing the session with `launchctl asuser … true`,
+	# not by the exit status of the delete itself: `defaults delete` of a domain
+	# that does not exist also exits non-zero, so keying off it ran the fallback
+	# on every Mac for the legacy domain — a second unbounded hop bought by a
+	# result that said nothing about whether a session existed.
+	sudo_uid=$(id -u "$SUDO_USER" 2>/dev/null || echo "")
+	if [ -n "$sudo_uid" ] && launchctl asuser "$sudo_uid" true >/dev/null 2>&1; then
+		launchctl asuser "$sudo_uid" sudo -u "$SUDO_USER" sh -c \
+			'defaults delete "$1" >/dev/null 2>&1; defaults delete "$2" >/dev/null 2>&1' \
+			sh "$APP_BUNDLE_ID" "$LEGACY_APP_BUNDLE_ID" >/dev/null 2>&1 || true
+	else
+		sudo -u "$SUDO_USER" sh -c \
+			'defaults delete "$1" >/dev/null 2>&1; defaults delete "$2" >/dev/null 2>&1' \
+			sh "$APP_BUNDLE_ID" "$LEGACY_APP_BUNDLE_ID" >/dev/null 2>&1 || true
+	fi
+	# Same gate as CONSOLE_PREFS_RAN below, for the same reason: both limbs above
+	# resolve $SUDO_USER through the name service, so an empty sudo_uid means that
+	# lookup failed and the deletes plausibly never ran. Claiming the pass then
+	# would suppress the one warning that names the leftover.
+	[ -n "$sudo_uid" ] && INVOKER_PREFS_RAN=1
+	# The fallthrough case: SUDO_USER *is* the console user, whose uid could not
+	# be looked up. Then this pass did cover them, and the console warning below
+	# must stop claiming their preferences were left behind.
+	#
+	# But only if `id -u` worked HERE. The reason CONSOLE_UID is empty is that the
+	# same lookup failed moments ago, and both branches above resolve the name
+	# through that same name service — so on an unreachable directory server the
+	# deletes plausibly never ran at all. Claiming the pass then would suppress
+	# the one warning that names the leftover this whole change is about.
+	[ -n "$sudo_uid" ] && [ "$SUDO_USER" = "${CONSOLE_USER:-}" ] && CONSOLE_PREFS_RAN=1
+	# The login item, unlike the preferences, is NOT attempted for this user: the
+	# only thing that retracts it is the app's own --unregister-login-item errand,
+	# and that needs the account's launchd session. The console-user block runs it
+	# where there is one; here there is not.
+	echo "note: $SUDO_USER's \"open at login\" registration is not removed here — retracting" >&2
+	echo "      it needs Dezhban.app running in that account's own session. Untick Dezhban" >&2
+	echo "      in System Settings > General > Login Items." >&2
+elif [ -z "${SUDO_USER:-}" ] || [ "$SUDO_USER" = root ]; then
+	echo "note: no invoking user to clean up after (running as root directly)." >&2
 fi
 
 # Forget the receipts, or macOS still believes dezhban is installed (and a later
@@ -404,14 +516,37 @@ none) ;;
 		echo "         be retracted — only the app itself can do that."
 		;;
 	no-console-uid)
-		echo "warning: could not look up $CONSOLE_USER's user id, so Dezhban's"
-		echo "         per-user leftovers were not removed. This usually means the"
-		echo "         directory service is unreachable; re-run once it is back."
+		echo "warning: could not look up $CONSOLE_USER's user id, so Dezhban's login"
+		echo "         item was not retracted — only the app, running inside that"
+		echo "         account's own session, can do that. This usually means the"
+		echo "         directory service is unreachable; re-run once it is back, or"
+		echo "         untick Dezhban in System Settings > General > Login Items."
+		if [ "$CONSOLE_PREFS_RAN" != "1" ]; then
+			echo "         Its saved preferences were not removed either, so a later"
+			echo "         reinstall would skip the login-item migration."
+		fi
+		# A home outside /Users is reachable only through the block this path
+		# skipped: the sweep below globs /Users. Named rather than left out —
+		# the old wording said "per-user leftovers" and covered this by being
+		# vague, and a closing report that stops naming what survived is the
+		# false clean report this file keeps guarding against.
+		case "${CONSOLE_HOME:-}" in
+		/Users/* | "") ;;
+		*)
+			echo "         Its session lock and saved window state under $CONSOLE_HOME"
+			echo "         were not removed either — that home is outside /Users, which"
+			echo "         is the only place root can sweep without that user's session."
+			;;
+		esac
 		;;
 	no-console-user)
-		echo "warning: nobody is logged in, so Dezhban's per-user leftovers could not"
-		echo "         be removed — its login item, and the saved preferences that"
-		echo "         would make a later reinstall skip the login-item migration."
+		echo "warning: nobody is logged in, so Dezhban's login item could not be"
+		echo "         retracted — only the app, running inside that account's own"
+		echo "         session, can do that."
+		if [ "$INVOKER_PREFS_RAN" != "1" ]; then
+			echo "         Nor could the saved preferences that would make a later"
+			echo "         reinstall skip the login-item migration."
+		fi
 		echo "         Re-run this uninstaller from a logged-in graphical session."
 		;;
 	esac
@@ -424,10 +559,32 @@ esac
 if [ "$SUPPORT_DIR_KEPT" = "1" ]; then
 	echo
 	echo "warning: $CONSOLE_USER's home directory could not be resolved, so"
-	echo "         ~/Library/Application Support/$APP_BUNDLE_ID was left behind."
-	echo "         It holds only Dezhban's session lock. (The saved preferences"
-	echo "         were removed.)"
+	echo "         ~/Library/Application Support/$APP_BUNDLE_ID and its saved window"
+	echo "         state were left behind. They hold only Dezhban's session lock and"
+	echo "         window positions. (The saved preferences were removed.)"
 fi
+# The login keychain, unconditionally: no branch above can reach it, and unlike
+# the login item there is no errand that can. A login keychain item's ACL is bound
+# to the unlocked session that owns it, so root has no route to this one even for
+# the console user (ADR-0015). Here rather than mid-transcript, because this is
+# where the things left for the user to do are collected.
+#
+# Worded as a condition, not as a fact. On the flow ADR-0015 makes the recommended
+# one the app has ALREADY cleared these items and then launched this script, so
+# "your Touch ID key stays in your login keychain" would close that transcript with
+# a statement about a key that is gone, telling the user to go and do the thing
+# they just did. This script cannot check — the keychain is the one thing it cannot
+# read — so it says which case it is talking about instead of guessing.
+echo
+echo "If you did NOT remove Dezhban from the app's Settings > Remove Dezhban, its"
+echo "Touch ID key is still in your login keychain. Root cannot remove it; clear it"
+echo "by running this as yourself:"
+# A loop, not one invocation, and no -a: the service holds TWO items (the token
+# and enrollment's capability probe) and each delete removes one. Naming the
+# accounts here would be a second copy of strings that live in ControlToken.swift;
+# deleting by service until none is left needs neither.
+echo "    while security delete-generic-password -s sh.dezhban.menu >/dev/null 2>&1; do :; done"
+
 echo
 echo "If any OTHER account on this Mac ran the app, two things remain there that"
 echo "root cannot reach: its login agent registration — nothing will start Dezhban,"
@@ -436,3 +593,6 @@ echo "General > Login Items until that user removes it — and Dezhban's saved"
 echo "preferences, which record that the login-item migration has run, so a later"
 echo "reinstall for that account would skip it. From that account:"
 echo "    defaults delete $APP_BUNDLE_ID"
+echo "    defaults delete $LEGACY_APP_BUNDLE_ID"
+echo "(the second is a superseded bundle identifier; it carries the same flag, and"
+echo "reports \"domain does not exist\" if that account never ran an early build.)"

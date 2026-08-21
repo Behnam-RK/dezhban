@@ -342,6 +342,22 @@ struct SettingsView: View {
                     Text("Some advanced options (control socket, geo providers, allowlist) live only in the config file.")
                         .foregroundStyle(.secondary)
                 }
+                Section {
+                    // Deliberately NOT gated on state.cliFound. The half this
+                    // button exists for — the keychain token, the login item,
+                    // the preference domains — is exactly what survives a
+                    // `uninstall.sh` run that already took the CLI away, and
+                    // it is the residue that made a reinstall look configured
+                    // to the first-run wizard. Disabling the button there would
+                    // withhold the fix from the one machine that needs it. A
+                    // missing root uninstaller is reported after the fact
+                    // instead, by AppActions.UninstallerLaunch.scriptMissing.
+                    Button("Remove Dezhban…", action: uninstallEverything)
+                } header: {
+                    sectionHeader("Remove Dezhban",
+                                  "Takes the guard down, removes every firewall rule, and deletes "
+                                      + "everything Dezhban installed on this Mac.")
+                }
             }
             .formStyle(.grouped)
 
@@ -386,6 +402,212 @@ struct SettingsView: View {
                 .disabled(!canApply)
         }
         .padding(PaneMetrics.footerPadding)
+    }
+
+    // MARK: - remove everything
+
+    /// The complete removal: this account's own state first, in user context,
+    /// then the root uninstaller in a Terminal window, then quit.
+    ///
+    /// Handed to Terminal rather than run in-app for a reason the script makes
+    /// unavoidable: `uninstall.sh` quits Dezhban and deletes the bundle partway
+    /// through, so this app cannot survive to report its own result. A progress
+    /// sheet would die mid-teardown and leave the user unable to tell a finished
+    /// uninstall from one that stopped after `panic` removed the rules. A
+    /// terminal window outlives the app and shows every step, including that
+    /// teardown — which for a kill switch is the step you most want to see
+    /// succeed.
+    private func uninstallEverything() {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Remove Dezhban from this Mac?"
+        alert.informativeText = """
+            All dezhban firewall rules are removed first, so nothing is left blocking your network.
+
+            This then deletes the dezhban service, the command-line tool, Dezhban.app, its learned \
+            VPN state, your Touch ID key, this app's settings, and its "open at login" registration.
+
+            It leaves other accounts' own settings alone, and it cannot withdraw Dezhban's \
+            notification permission — turn that off yourself in System Settings › Notifications.
+
+            This cannot be undone.
+            """
+        let keepConfig = NSButton(checkboxWithTitle: "Keep my dezhban configuration in /etc/dezhban",
+                                  target: nil, action: nil)
+        keepConfig.state = .off
+        // Given a real frame before it is handed over. AppActions' own alert
+        // accessory sets an explicit NSRect for the same reason; a checkbox knows
+        // its own intrinsic size, so it asks for that instead of a magic number.
+        // An accessory left at a zero frame can render as a box with no label,
+        // and the label is the entire point — an unticked box the user notices is
+        // a choice offered, a missing one is a setting nobody knew existed.
+        keepConfig.sizeToFit()
+        alert.accessoryView = keepConfig
+        alert.addButton(withTitle: "Remove Dezhban")
+        alert.addButton(withTitle: "Cancel")
+        // No default button: the return key must not be able to uninstall a kill
+        // switch, and the destructive button should cost a deliberate click.
+        // Clearing the first button's "\r" is the whole change — Cancel keeps the
+        // escape key NSAlert gives a button of that title, which assigning "\r"
+        // to it used to overwrite, leaving the alert with no keyboard way out at all.
+        alert.buttons.first?.keyEquivalent = ""
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // The per-user half, in this account's own session. Root cannot do it,
+        // and it is the half whose survival made every reinstall look like an
+        // already-configured machine to the first-run wizard.
+        //
+        // Before the Terminal hand-off, not after: `uninstall.sh` quits this app
+        // in its first few lines, so anything left until then races a `pkill`
+        // and loses on a Mac where sudo does not stop to ask for a password.
+        // Everything in `perUserState()` is survivable; the one step that can
+        // end this process — retracting the login item — is deliberately not in
+        // it (see `Purge.retractLoginItem`).
+        let steps = Purge.perUserState()
+        // Anything that failed is said HERE, before the hand-off, and only here.
+        // The `.started` branch quits, so an alert raised after it would race
+        // the script's `pkill` — leaving the recommended path as the one outcome
+        // that could fail silently while the script's closing note asked only
+        // whether the button was used, not whether it worked.
+        reportFailures(steps)
+
+        let keep = keepConfig.state == .on
+        // One exhaustive switch, not a run of `if case` tests falling through to
+        // a bare no-script tail: a fourth `UninstallerLaunch` case added later
+        // would have taken that tail silently, and the tail is the one that can
+        // decide dezhban is already gone.
+        switch AppActions.openUninstallerInTerminal(keepConfig: keep) {
+        case .started:
+            // The login item is left to the script's own
+            // `--unregister-login-item` errand, which runs as the console user
+            // and already handles being killed doing it. Calling it here would
+            // duplicate that for no gain, and it is the one call that can end
+            // this process — dying on it now would mean Terminal is running the
+            // uninstaller while this app never got to hand it anything.
+            NSApp.terminate(nil)
+        case .terminalRefused:
+            // Terminal is there but would not take the command — usually
+            // Automation permission. NOTHING root-owned was removed, and the
+            // guard is still enforcing. Say both halves: the per-user state
+            // really is gone, so "nothing happened" would be a lie. The login
+            // item stays registered on purpose — dezhban is still installed, so
+            // the app it starts at login is one the user still has.
+            report(title: "Could not open Terminal",
+                   style: .warning,
+                   body: "This account's Touch ID key and this app's settings have been removed. "
+                       + "The dezhban service, the command-line tool and the firewall rules have "
+                       + "not — dezhban is still installed and still enforcing.\n\n"
+                       + "Finish removing it by running this in a terminal:\n\n"
+                       + UninstallDecision.command(keepConfig: keep)
+                       + "\n\nIf Terminal keeps refusing, allow Dezhban under System Settings › "
+                       + "Privacy & Security › Automation. If you stop here instead, run "
+                       + "`sudo dezhban token forget` too — dezhban still holds an enrollment "
+                       + "for the Touch ID key just removed.")
+        case .scriptMissing:
+            purgeWithoutTheUninstaller()
+        }
+    }
+
+    /// The no-script half of `uninstallEverything`, split out so that switch stays
+    /// one screen and this one keeps its own exhaustive.
+    ///
+    /// Whether a missing uninstaller means a missing dezhban is a decision, not
+    /// an observation — `UninstallDecision.situation` is where it is made, and
+    /// where it is tested.
+    private func purgeWithoutTheUninstaller() {
+        // `binaryPath()` rather than `state.cliFound`: that cache is refreshed on
+        // launch and on window open, so a CLI removed while this window was
+        // already up would still read as present — and the remedy this decides
+        // would name a toggle that is disabled.
+        switch UninstallDecision.situation(uninstallerExists: false,
+                                           cliFound: DezhbanCLI.binaryPath() != nil,
+                                           daemonPlistExists: FileManager.default
+                                               .fileExists(atPath: UninstallDecision
+                                                   .daemonPlistPath)) {
+        case .handOff:
+            // Unreachable: `uninstallerExists: false` above.
+            return
+        case .uninstallerMissingButInstalled(let cliFound):
+            // No retraction and no invitation to delete the bundle. The app
+            // stays the user's status surface for a guard that is still
+            // enforcing, exactly as on `.terminalRefused`.
+            report(title: "The uninstaller isn't installed",
+                   style: .warning,
+                   body: "This account's Touch ID key and this app's settings have been removed, "
+                       + "but dezhban itself has not — it is still installed and still "
+                       + "enforcing. \(UninstallDecision.uninstallerPath) is not on this Mac, "
+                       + "which a network install treats as a non-fatal failure, so this can "
+                       + "happen on an otherwise healthy install.\n\n"
+                       + UninstallDecision.remedy(cliFound: cliFound))
+        case .nothingRootOwnedLeft:
+            // The machine somebody uninstalled from the command line and then
+            // launched the app on: the per-user residue was the whole job. It is
+            // also the only situation that may retract the login item itself,
+            // since no script will ever run the errand that normally does.
+            report(title: "Removed this account's Dezhban settings",
+                   style: .informational,
+                   body: "The Dezhban uninstaller isn't on this Mac, so the service and the "
+                       + "command-line tool were removed already — or were never installed. "
+                       + "This account's Touch ID key and settings are removed, and its "
+                       + "\"open at login\" registration is retracted as this window "
+                       + "closes.\n\nYou can delete Dezhban.app from Applications.")
+            // After the alert, because launchd may kill this process for it —
+            // and reported rather than only logged when it refuses. The sentence
+            // above states the retraction as done; on the one path where nothing
+            // else will ever retract it, a refusal the user never sees would make
+            // that a flat falsehood and leave a Login Items row pointing at a
+            // bundle they are about to delete.
+            let loginItem = Purge.retractLoginItem()
+            if let err = loginItem.error {
+                NSLog("DezhbanMenu: purge could not remove %@: %@", loginItem.what, err)
+                report(title: "Could not retract \"open at login\"",
+                       style: .warning,
+                       body: "Everything else on this account was removed. macOS would not "
+                           + "retract the login registration, so untick Dezhban in System "
+                           + "Settings › General › Login Items — otherwise it keeps trying "
+                           + "to start an app that is no longer there.")
+            }
+            // The two things only this branch has to do itself, then quit.
+            //
+            // The support directory holds this app's live session lock, so it is
+            // never in `perUserState()` — on the branches where the app keeps
+            // running, deleting it underneath itself would be a bug rather than a
+            // purge step. The script sweeps it for every account; here no script
+            // will ever run.
+            //
+            // The domains are cleared a second time for the same reason the
+            // script clears them a second time everywhere else: the window frame
+            // and split position autosave into `UserDefaults`, so the alerts
+            // above can have put keys back into a domain `perUserState()` had
+            // already emptied. Saved window state is deliberately NOT repeated —
+            // the window opts out of restoration, so nothing rewrites it. Then
+            // quit, rather than stay open writing frames back into a domain the
+            // alert just called empty.
+            reportFailures(Purge.removeSupportDirectories()
+                + Purge.clearPreferenceDomains())
+            NSApp.terminate(nil)
+        }
+    }
+
+    /// The one place a failed purge step reaches the user. Silent when every
+    /// step is clean: a wall of successes would bury the sentence that matters,
+    /// and there is nothing for them to do about a step that worked.
+    private func reportFailures(_ steps: [Purge.Step]) {
+        let failures = steps.compactMap { step in step.error.map { "• \(step.what): \($0)" } }
+        guard !failures.isEmpty else { return }
+        for line in failures { NSLog("DezhbanMenu: purge %@", line) }
+        report(title: "Some of this account's Dezhban state could not be removed",
+               style: .warning,
+               body: "Removal continues, but these are still here:\n\n"
+                   + failures.joined(separator: "\n"))
+    }
+
+    private func report(title: String, style: NSAlert.Style, body: String) {
+        let alert = NSAlert()
+        alert.alertStyle = style
+        alert.messageText = title
+        alert.informativeText = body
+        alert.runModal()
     }
 
     // MARK: - explicit restart

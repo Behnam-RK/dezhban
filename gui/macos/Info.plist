@@ -26,6 +26,13 @@
 	     posture), so the app must be visible in the Dock. -->
 	<key>LSUIElement</key>
 	<false/>
+	<!-- Required to send `do script` to Terminal.app for Settings › Remove
+	     Dezhban…, which hands the root uninstaller to a window that outlives
+	     this app (ADR-0015). Without this key macOS denies the Apple event with
+	     errAEEventNotPermitted and never offers the user a prompt, so the
+	     complete-purge flow could only ever report failure. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Dezhban opens Terminal to run its uninstaller, so you can watch the firewall rules being removed.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>dezhban network kill switch</string>
 </dict>

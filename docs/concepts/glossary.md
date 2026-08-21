@@ -196,6 +196,17 @@ streak resolves or a bounded budget runs out. It changes **cadence only** — hy
 still gates the change, and it is skipped entirely when checking would require lifting
 the guard.
 
+**Complete purge** — removing every trace of dezhban from this Mac, root-owned and
+per-user alike. It is split by who can perform it, because a login keychain item's ACL
+is bound to the user's session and a login item is registered per user: **Settings →
+Remove Dezhban…** in the app does that half, then hands the root half to
+`uninstall.sh` in a Terminal window so the rule teardown stays visible. It never
+touches another account's own settings, keychain items or login registration —
+dezhban's own machine-derived files (its session lock, its saved window state) are
+removed under every account, since only root can reach them for an account nobody is
+logged into. Nothing can withdraw notification permission; macOS owns that. See
+[ADR-0015](../adr/0015-complete-purge-semantics.md).
+
 **Enforcement verification** — a periodic check (`vpn.advanced.verifyInterval`,
 default `1m`) that the firewall rules dezhban believes it installed are still
 installed AND still actually enforcing — not just present but disconnected
