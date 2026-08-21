@@ -95,10 +95,12 @@ checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
    `packaging/linux/uninstall.sh`, from the **same tag** just installed) to
    `/usr/local/share/dezhban/uninstall.sh`, and the `LICENSE` from that same
    tag to `/usr/local/share/dezhban/LICENSE` — the license requires that
-   anyone who receives the software receives it too. Either fetch failing is a
-   warning, not a failed install. `install.ps1` fetches no uninstaller (Windows
-   has none) but does fetch the `LICENSE`, to `%ProgramFiles%\dezhban\LICENSE`,
-   beside `dezhban.exe`.
+   anyone who receives the software receives it too. Both are downloaded to a
+   temporary file and moved into place only once complete, so a fetch that fails
+   or times out is a warning rather than a failed install *and* never replaces a
+   good copy from an earlier install with a truncated one — or with nothing.
+   `install.ps1` fetches no uninstaller (Windows has none) but does fetch the
+   `LICENSE`, to `%ProgramFiles%\dezhban\LICENSE`, beside `dezhban.exe`.
 
 Re-running either script upgrades or reinstalls: it replaces the binary, and
 if a service was already running, stops it first and restarts it after — but

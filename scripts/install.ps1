@@ -159,18 +159,28 @@ try {
 	# LICENSE is a fixable notice problem, not a reason to fail an install that
 	# already put a kill switch on the host. $ErrorActionPreference = "Stop"
 	# makes the failure terminating, so the catch is what keeps it non-fatal.
+	#
+	# -TimeoutSec bounds getting the RESPONSE, not reading its body: on Windows
+	# PowerShell 5.1 it maps to HttpWebRequest.Timeout, while a stalled body is
+	# governed by ReadWriteTimeout (5 minutes, not settable from this cmdlet).
+	# It is still the bound that matters here — a black-holed host fails the
+	# connect — but it is not curl's --max-time and the retry hint below says so.
+	#
+	# STAGED into $tmp and moved into place only on success, the same way
+	# install.sh does it. -OutFile streams to disk, so a drop mid-body leaves a
+	# TRUNCATED LICENSE — worse than none, because it reads as the real thing
+	# while silently missing clauses. And on a reinstall/upgrade $installDir
+	# already holds a good LICENSE: writing straight to it (or deleting it from
+	# the catch, which fires even when the request never created a file — a DNS
+	# failure, say) would destroy that copy and leave the host with neither.
 	$licensePath = Join-Path $installDir "LICENSE"
 	$licenseUrl = "https://raw.githubusercontent.com/$Repo/$tag/LICENSE"
+	$licenseStage = Join-Path $tmp "LICENSE"
 	try {
-		Invoke-WebRequest -Uri $licenseUrl -OutFile $licensePath -UseBasicParsing -TimeoutSec 30
+		Invoke-WebRequest -Uri $licenseUrl -OutFile $licenseStage -UseBasicParsing -TimeoutSec 30
+		Move-Item -Path $licenseStage -Destination $licensePath -Force
 	} catch {
-		# Delete whatever landed. -OutFile streams to disk, so a connection dropped
-		# or -TimeoutSec tripped mid-body leaves a TRUNCATED LICENSE sitting beside
-		# dezhban.exe — worse than none, because it reads as the real thing while
-		# silently missing clauses. install.sh has the same failure mode — `-f`
-		# suppresses the file only on an HTTP error, not on a mid-body drop — and
-		# deletes the partial file in its own warning branch for this reason.
-		Remove-Item -Path $licensePath -Force -ErrorAction SilentlyContinue
+		Remove-Item -Path $licenseStage -Force -ErrorAction SilentlyContinue
 		Write-Host "warning: could not fetch the license — install itself succeeded. Retry later with:" -ForegroundColor Yellow
 		Write-Host "  Invoke-WebRequest -Uri $licenseUrl -OutFile '$licensePath' -UseBasicParsing"
 	}

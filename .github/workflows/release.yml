@@ -309,12 +309,17 @@ jobs:
           # Shipping the LICENSE is a condition of the license itself (Part B
           # section 5.1, cure-or-terminate under 7.2), so it is an assertion,
           # not a nicety: a payload change that drops it must fail the release.
-          test -s /usr/local/share/dezhban/LICENSE || { echo "LICENSE not installed by the .pkg" >&2; exit 1; }
+          # cmp, not `test -s`: a non-empty file proves nothing about WHICH file
+          # landed, and the failure this guards against — a truncated or stale
+          # copy — is non-empty by definition. The checkout's LICENSE is the one
+          # the notice clause is about, so compare against it byte for byte.
+          cmp -s LICENSE /usr/local/share/dezhban/LICENSE \
+            || { echo "LICENSE not installed by the .pkg, or does not match the tree's" >&2; exit 1; }
           # And the app's own copy, which is the ONLY one a Dezhban-macos.app.zip
           # download gets — that archive unpacks into /Applications, so there is
           # no place beside the bundle to put it.
-          test -s /Applications/Dezhban.app/Contents/Resources/LICENSE \
-            || { echo "LICENSE missing from the app bundle" >&2; exit 1; }
+          cmp -s LICENSE /Applications/Dezhban.app/Contents/Resources/LICENSE \
+            || { echo "LICENSE missing from the app bundle, or does not match the tree's" >&2; exit 1; }
 
           # The installed binary must report the version we are releasing.
           got="$(/usr/local/bin/dezhban version | awk '{print $2}')"
@@ -369,6 +374,27 @@ jobs:
 
       - name: Build .deb/.rpm packages
         run: task pkg:linux VERSION=${{ needs.prepare.outputs.tag }}
+
+      # Same assertion the macOS smoke test makes about the .pkg and the app
+      # bundle: shipping the LICENSE is a condition of the license itself (Part B
+      # section 5.1, cure-or-terminate under 7.2), so a packaging change that
+      # drops it must fail the release rather than ship a payload nobody checked.
+      # Extracted and compared byte for byte — presence alone would not catch a
+      # stale or truncated copy. dpkg-deb ships on the runner image; rpm tooling
+      # does not, and the two packages are built from the same nfpm.yaml contents
+      # list, so the .deb is the one that gets asserted.
+      - name: The .deb must carry the LICENSE
+        run: |
+          set -eu
+          for deb in dist/*.deb; do
+            out="$(mktemp -d)"
+            dpkg-deb -x "$deb" "$out"
+            test -f "$out/usr/share/doc/dezhban/LICENSE" \
+              || { echo "error: $deb has no /usr/share/doc/dezhban/LICENSE" >&2; exit 1; }
+            cmp -s LICENSE "$out/usr/share/doc/dezhban/LICENSE" \
+              || { echo "error: $deb ships a LICENSE that differs from the tree's" >&2; exit 1; }
+            rm -rf "$out"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
