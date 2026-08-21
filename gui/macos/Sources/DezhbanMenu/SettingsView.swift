@@ -822,16 +822,21 @@ struct SettingsView: View {
                 let revision = loginRevision
                 loginPending = true
                 loginEnabled = wanted
-                status = wanted ? "Registering the login item…" : "Removing the login item…"
-                DispatchQueue.global(qos: .userInitiated).async {
-                    let outcome = LoginItem.set(enabled: wanted)
-                    DispatchQueue.main.async {
-                        // A newer click supersedes this one's result.
-                        guard revision == loginRevision else { return }
-                        loginPending = false
-                        loginEnabled = outcome.isOn
-                        status = outcome.message
-                    }
+                let inProgress = wanted ? "Registering the login item…" : "Removing the login item…"
+                status = inProgress
+                // The enqueueing form, so two quick clicks are applied in the order
+                // they were made — dispatching each to a concurrent queue let them
+                // race into LoginItem's serial queue and land out of order.
+                LoginItem.set(enabled: wanted) { outcome in
+                    // A newer click supersedes this one's result.
+                    guard revision == loginRevision else { return }
+                    loginPending = false
+                    loginEnabled = outcome.isOn
+                    // `status` is the whole pane's line and this completion can land
+                    // seconds later, so it is only written if nothing else has
+                    // claimed it since — otherwise a login result overwrites, say,
+                    // "Installing service…" while that install is still running.
+                    if status == inProgress { status = outcome.message }
                 }
             })
     }

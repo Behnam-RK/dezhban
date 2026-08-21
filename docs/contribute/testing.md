@@ -826,10 +826,18 @@ task gui:build && open dist/Dezhban.app
       marked done with the agent pointing into `~/Downloads`. Then run the copy in
       `/Applications`: that one must migrate.
 - [ ] **A login item the user turned off in System Settings stays off across an
-      upgrade.** With a pre-agent build, switch Dezhban off under System Settings
-      → General → Login Items (this leaves `mainApp` at `.requiresApproval`, not
-      unregistered), then upgrade and launch. Login-at-launch must still be off
-      and no agent registered.
+      upgrade — and is cleared, not left dormant.** With a pre-agent build, switch
+      Dezhban off under System Settings → General → Login Items (this leaves
+      `mainApp` at `.requiresApproval`, not unregistered), then upgrade and launch.
+      Login-at-launch must still be off and no agent registered — *and* the entry
+      must be gone from Login Items. A dormant `.requiresApproval` item is live:
+      re-approving it there would start the app at login with no marker, and the
+      migration will not run again to fix it.
+- [ ] **Two quick clicks on the login switch settle on the second one.** Click it
+      off then immediately on (and the reverse). The final switch state must match
+      the last click *and* the actual registration —
+      `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` agreeing with what
+      the switch shows. Then reopen the pane to confirm it still agrees.
 - [ ] **Switching login-at-launch off from a login-started session.** Log out
       and back in so the agent starts the app, then switch Settings → "Open this
       app at login" **off**. `SMAppService.unregister()` unloads the launchd job

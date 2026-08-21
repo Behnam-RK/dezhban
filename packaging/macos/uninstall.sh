@@ -76,7 +76,14 @@ if [ -n "$CONSOLE_UID" ]; then
 		# gone — dragged to the Trash before running this — the registration cannot
 		# be retracted by anything here, or ever again. Saying nothing would report a
 		# clean uninstall over exactly the orphan this errand exists to remove.
-		LOGIN_ITEM_STUCK=no-app
+		#
+		# But only warn if there IS one. Installing via the .pkg and never launching
+		# the menubar app registers nothing, and sending that user to hunt for a
+		# "Dezhban" entry under Login Items that does not exist is its own small
+		# failure.
+		if launchctl print "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1; then
+			LOGIN_ITEM_STUCK=no-app
+		fi
 	# The marker directory is created by this script, mode 700, owned by root. The
 	# obvious "${TMPDIR:-/tmp}/name.$$" is a predictable path in a world-writable
 	# directory, and under `sudo sh` TMPDIR is often unset — so an unprivileged
@@ -105,12 +112,19 @@ if [ -n "$CONSOLE_UID" ]; then
 		# `kill -9` at a pid the system may have recycled.
 		errand_done="$errand_dir/done"
 		(
+			# Written to a side name and moved into place, so the marker only ever
+			# appears complete. `echo failed >"$errand_done"` truncates before it
+			# writes, and a poll landing in that gap saw the file and `cat`ed an
+			# empty string — which is not "failed", so a retraction macOS had
+			# refused was reported as a clean uninstall. One-directional, and
+			# towards the silent orphan this block exists to catch.
 			if launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
 				"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1; then
-				echo ok >"$errand_done"
+				echo ok >"$errand_done.partial"
 			else
-				echo failed >"$errand_done"
+				echo failed >"$errand_done.partial"
 			fi
+			mv "$errand_done.partial" "$errand_done"
 		) &
 		errand=$!
 		waited=0

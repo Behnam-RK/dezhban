@@ -215,6 +215,21 @@ enum LoginItem {
         queue.sync { enabled ? enable() : disable() }
     }
 
+    /// Same, enqueued rather than blocking, with the result delivered on main.
+    ///
+    /// `queue` is serial, so this preserves click order — which the synchronous
+    /// form did not when each click was dispatched to a *concurrent* queue and the
+    /// blocks then raced into `sync`. Two quick clicks could reach the serial queue
+    /// in the wrong order, leaving the registration in click 1's state while the UI
+    /// applied click 2's outcome: the switch showing OFF while the app still starts
+    /// at login, which is the lie the whole `Outcome` type exists to prevent.
+    static func set(enabled: Bool, completion: @escaping (Outcome) -> Void) {
+        queue.async {
+            let outcome = enabled ? enable() : disable()
+            DispatchQueue.main.async { completion(outcome) }
+        }
+    }
+
     private static func enable() -> Outcome {
         // The agent must never be registered beside a live legacy item — that is
         // two launches at login, one with the marker and one without, and
@@ -340,32 +355,40 @@ enum LoginItem {
             return
         }
 
-        if legacyEnabled {
-            // Checks after the attempt rather than trusting it not to throw, and
-            // records the retraction — see `retractLegacy`. `registered`, not
-            // `legacyEnabled`: a retraction that left it awaiting approval has not
-            // retracted anything.
+        if registered(.mainApp) {
+            // Whether it was *enabled* decides what happens afterwards — that is
+            // the user's own on/off — but the retraction attempt itself is
+            // unconditional, and that is the correction here.
+            //
+            // The earlier shape left a present-but-not-enabled item alone, on the
+            // reasoning that the user had switched it off in System Settings and
+            // their "off" should not be undone behind their back. But
+            // `.requiresApproval` is a *live* registration, not a dead one: if they
+            // later re-approve "Dezhban" under Login Items, LaunchServices starts
+            // the app with no `--background` and "Open minimized" is broken again —
+            // permanently, because `migratedKey` is set and this never runs a second
+            // time. And it was unreachable: `isEnabled` asks `legacyEnabled`, so the
+            // switch read OFF and a click routed to `enable()`, never to the
+            // `disable()` the old comment pointed at. Retracting it honours the same
+            // "off" while removing the way back to the defect.
+            let wasEnabled = legacyEnabled
             retractLegacy()
             if registered(.mainApp) {
-                // Same reasoning as `disable()`'s stuck path — the agent is left
-                // unregistered rather than stacked on top of a live legacy item.
-                // The Settings toggle reports the legacy registration, so the user
-                // can see login-at-launch is on; clearing it is a System Settings
-                // job, which `Outcome.legacyStuck` spells out when they try.
-                NSLog("DezhbanMenu: the legacy login item could not be retracted; "
-                    + "leaving login-at-launch as it was. Remove \"Dezhban\" under "
-                    + "System Settings → General → Login Items to move onto the login agent.")
+                // Stuck. The agent is left unregistered rather than stacked on top
+                // of a live legacy item — two launches at login, one with the marker
+                // and one without. Only the user can clear it now.
+                NSLog("DezhbanMenu: the legacy login item could not be retracted. "
+                    + "Remove \"Dezhban\" under System Settings → General → Login Items; "
+                    + "until then it may start Dezhban at login without the launch marker.")
                 markMigrated()
                 return
             }
-        } else if registered(.mainApp) {
-            // Present but not enabled — the user switched it off in System
-            // Settings. Their "off" is the answer: nothing is carried forward and
-            // the agent is not registered. The stale registration is left alone
-            // rather than retracted behind their back; `isEnabled` reports it, so
-            // the switch shows it and `disable()` can clear it on request.
-            markMigrated()
-            return
+            guard wasEnabled else {
+                // It was off. Nothing is carried forward and the agent is not
+                // registered; turning login-at-launch on is the user's call.
+                markMigrated()
+                return
+            }
         } else if !UserDefaults.standard.bool(forKey: legacyRetractedKey) {
             // Nothing was ever registered the old way on this account, so there is
             // nothing to move onto the agent. Turning login-at-launch on is the

@@ -248,6 +248,18 @@ with an argument, the pre-`SMAppService` pattern.
   the user had switched login-at-launch off in Settings, leaving it on with no
   way to turn it off from the UI.
 
+  The retraction attempt is unconditional, even for a legacy item that is present
+  but not enabled. Leaving that one alone was the earlier choice, on the reasoning
+  that the user had switched it off in System Settings and their "off" should not be
+  undone behind their back — but `.requiresApproval` is a *live* registration, not a
+  dead one. Re-approving "Dezhban" under Login Items later would have LaunchServices
+  start the app with no `--background`, breaking "Open minimized" permanently, since
+  the migration is marked done and never runs again. It was also unreachable:
+  `isEnabled` asks whether the legacy item is *enabled*, so the switch read OFF and
+  a click routed to `enable()`, never to the `disable()` that could have cleared it.
+  Retracting it honours the same "off" and removes the way back to the defect;
+  whether it *was* enabled still decides whether the agent is then registered.
+
   When the legacy item survives the attempt — checked by reading its status
   after, not by trusting the call not to throw — the agent is deliberately left
   unregistered. Registering it anyway would mean two launches at login, the
