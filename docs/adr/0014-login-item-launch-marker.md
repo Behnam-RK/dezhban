@@ -152,9 +152,13 @@ with an argument, the pre-`SMAppService` pattern.
   because a permanent per-tick stat on the main thread is the hazard
   `pollStateFile` was restructured to remove and this feature is cosmetic; the
   window it covers is a launch-time one, and once the observer exists the
-  notification carries every later hand-off. The notification path discards the
-  file as it handles it, since the file is written first and would otherwise have
-  the backstop open the window a second time. Requests carry
+  notification carries every later hand-off. Both signals describe the same
+  request, so acting on it is a *claim* — whoever removes the file acts and the
+  other stands down. Reading the timestamp and removing without checking, which is
+  what it did first, let the notification handler and the backstop both conclude
+  they had it and open the window twice: a second `NSApp.activate` half a second
+  after the first, or a window reopening right after the user closed it. Requests
+  carry
   their own freshness: one the incumbent never got to must not be inherited by the
   *next* app to start and turned into a window nobody asked for, so a stale file is
   discarded rather than obeyed, and a process that has just taken the lock discards

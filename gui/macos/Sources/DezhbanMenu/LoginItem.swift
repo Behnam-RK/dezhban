@@ -193,7 +193,7 @@ enum LoginItem {
         // the stuck-migration path led straight here: switch reads ON, user clicks
         // it off, clicks it on again, and both are registered.
         if registered(.mainApp) {
-            unregister(.mainApp, what: "legacy login item")
+            retractLegacy()
             if registered(.mainApp) { return .legacyStuck }
         }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
@@ -221,8 +221,14 @@ enum LoginItem {
         // launch — turning login-at-launch back on behind the user, which is the
         // single thing this key exists to prevent.
         UserDefaults.standard.synchronize()
+        // Legacy FIRST, agent last, for the same reason the flush above exists:
+        // the agent unregister is the call that may get this process killed by
+        // launchd. Done the other way round, a stuck-legacy install in a
+        // login-started session lost the app between the two lines and left the
+        // legacy item registered — still starting the app at login, without the
+        // marker, which is the state this function exists to clear.
+        retractLegacy()
         if registered(service) { unregister(service, what: "login agent") }
-        if registered(.mainApp) { unregister(.mainApp, what: "legacy login item") }
         if registered(.mainApp) {
             // The stuck path. Reported rather than worked around: registering the
             // agent alongside it would mean two launches at login, one with the
@@ -245,6 +251,9 @@ enum LoginItem {
     static func retractAll() {
         if registered(service) { unregister(service, what: "login agent") }
         if registered(.mainApp) { unregister(.mainApp, what: "legacy login item") }
+        // Deliberately NOT through `retractLegacy`: this runs from the uninstall
+        // errand, where recording "the agent still needs registering" would be a
+        // lie about an app that is about to be deleted.
     }
 
     /// Moves an install that registered `SMAppService.mainApp` (every build
@@ -281,11 +290,11 @@ enum LoginItem {
         }
 
         if legacyEnabled {
-            unregister(.mainApp, what: "legacy login item")
-            // Checked after the attempt rather than trusting it not to throw: what
-            // matters is whether the old item is actually gone. `registered`, not
+            // Checks after the attempt rather than trusting it not to throw, and
+            // records the retraction — see `retractLegacy`. `registered`, not
             // `legacyEnabled`: a retraction that left it awaiting approval has not
             // retracted anything.
+            retractLegacy()
             if registered(.mainApp) {
                 // Same reasoning as `disable()`'s stuck path — the agent is left
                 // unregistered rather than stacked on top of a live legacy item.
@@ -298,11 +307,6 @@ enum LoginItem {
                 markMigrated()
                 return
             }
-            // Recorded BEFORE the register below, and this is the whole point of
-            // the flag: it is what a retry launch has to go on, since by then the
-            // legacy item is gone and there is nothing else left to tell "this
-            // account had a login item to migrate" from "this account never did".
-            UserDefaults.standard.set(true, forKey: legacyRetractedKey)
         } else if registered(.mainApp) {
             // Present but not enabled — the user switched it off in System
             // Settings. Their "off" is the answer: nothing is carried forward and
@@ -337,6 +341,24 @@ enum LoginItem {
             // already on, never override an explicit "off".
             NSLog("DezhbanMenu: could not register the login agent, will retry on next launch: \(error)")
         }
+    }
+
+    /// Retracts the legacy item and records the fact if it worked.
+    ///
+    /// The recording is the point. `legacyRetractedKey` is what tells "this
+    /// account had a login item and the agent is not up yet" from "this account
+    /// never had one", and while only the migration wrote it, retracting through
+    /// the Settings switch destroyed the fact without recording it — reopening the
+    /// dead-retry hole from the other side. Switch off (legacy gone, nothing
+    /// recorded), switch on, `register()` fails, and the next launch sees no
+    /// legacy item and no flag, concludes there was never anything to migrate,
+    /// and marks the account done with nothing starting the app at login.
+    private static func retractLegacy() {
+        guard registered(.mainApp) else { return }
+        unregister(.mainApp, what: "legacy login item")
+        guard !registered(.mainApp) else { return }
+        UserDefaults.standard.set(true, forKey: legacyRetractedKey)
+        UserDefaults.standard.synchronize()
     }
 
     private static func markMigrated() {

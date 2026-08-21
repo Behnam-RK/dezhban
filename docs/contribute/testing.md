@@ -957,8 +957,10 @@ end up typing a password.
 - [ ] **Start at boot** reflects whether the service is registered, flips after
       install/uninstall (one prompt each, uninstall confirms first), and the
       uninstall tears rules down before unload.
-- [ ] **Launch at login** toggles `SMAppService.mainApp.status` to `.enabled`, and
-      the app relaunches after a logout/login cycle.
+- [ ] **Launch at login** — the login-item checks live with the launch-marker
+      block earlier in this file, since they are the same mechanism; the switch
+      registers the *agent* and a correct run leaves `SMAppService.mainApp`
+      unregistered.
 - [ ] Guard fields seed from `dezhban config show` values; Apply raises the
       restart-warning choice; "Save only" writes without restarting.
 - [ ] **Restart dezhban…** works with nothing else pending: a plain "are you

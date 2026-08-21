@@ -92,9 +92,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         watchdog.start()
         refresh()
-        // Move any pre-agent install onto the login LaunchAgent before anything
-        // reads the launch marker, so the NEXT login is already correct.
-        LoginItem.migrateFromMainAppRegistration()
+        // Move any pre-agent install onto the login LaunchAgent. Off the main
+        // thread: it is up to five blocking SMAppService round-trips over XPC plus
+        // a register() that forks a process, and the moment it runs is a
+        // slow-to-start login — the exact situation this whole feature is tuned
+        // around, and the one where a frozen launch is most visible. It only
+        // affects the NEXT login, so nothing here waits on it.
+        DispatchQueue.global(qos: .utility).async {
+            LoginItem.migrateFromMainAppRegistration()
+        }
         // Launching the app shows the app: reaching the main window only through
         // the menubar dropdown made opening it a two-step discovery problem, and
         // the menubar item stays available either way.
@@ -129,13 +135,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// bothered to tell us — it is standing in for the launch the user performed.
     @objc private func openWindowRequested() {
         // The file is written BEFORE the notification is posted, so in the normal
-        // hand-off it is already on disk and this notification has answered it.
-        // Leaving it would have the backstop below open the window a second time
-        // up to a second later — and `MainWindow.open()` activates the app, so
-        // that is a second focus steal, or a window reopening after the user just
-        // closed it.
-        sessionHandoff?.discard()
-        MainWindow.shared.open()
+        // hand-off it is already on disk and this notification is answering it.
+        // Claiming it here is what stops the backstop below answering it too — a
+        // second `NSApp.activate` up to half a second later, or a window
+        // reopening after the user just closed it.
+        //
+        // `.lost` means the backstop got there first and is opening the window, so
+        // this stands down. `.absent` means there is no file to coordinate over
+        // (the write failed, or this is a notification from something else) and the
+        // fast path is all there is — so it acts.
+        switch sessionHandoff?.claim() ?? .absent {
+        case .fresh, .absent:
+            MainWindow.shared.open()
+        case .stale, .lost:
+            break
+        }
     }
 
     /// The notification's backstop, for the gap before the observer above exists.
@@ -163,7 +177,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func checkHandoffRequest() {
         guard let handoff = sessionHandoff else { return }
         DispatchQueue.global(qos: .utility).async {
-            guard handoff.consume() else { return }
+            // Only `.fresh`: `.lost` means the notification handler claimed it and
+            // is already opening the window.
+            guard handoff.claim() == .fresh else { return }
             DispatchQueue.main.async { MainWindow.shared.open() }
         }
     }

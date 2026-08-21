@@ -55,9 +55,9 @@ func makeMainMenu() -> NSMenu {
 /// The hand-off request beside this install's instance lock, once known.
 ///
 /// A global because both ends of the launch need it: `acquireSessionOwnership()`
-/// writes it from a losing copy, and `AppDelegate` consumes it — including on the
-/// ordinary 1-second tick, which is what makes a request that arrived before the
-/// observer existed still get honoured.
+/// writes it from a losing copy, and `AppDelegate` claims it — from the
+/// notification handler, and from a bounded backstop after launch, which is what
+/// makes a request that arrived before the observer existed still get honoured.
 var sessionHandoff: HandoffRequest?
 
 /// Retracts every login registration and exits, without starting the app.
@@ -147,7 +147,9 @@ func acquireSessionOwnership() -> InstanceLock? {
                 // The file first, then the notification. The notification is the
                 // fast path but is never queued, and the incumbent may still be
                 // starting up with no observer installed — the file is the one
-                // that waits, and its ordinary once-a-second tick finds it.
+                // that waits, and the incumbent's launch-time backstop finds it.
+                // Whichever of the two gets there claims it, so the window opens
+                // once (see HandoffRequest).
                 sessionHandoff?.post()
                 DistributedNotificationCenter.default().postNotificationName(
                     NSNotification.Name(AppDelegate.openWindowNotification),
