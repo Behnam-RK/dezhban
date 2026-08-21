@@ -164,6 +164,13 @@ try {
 	try {
 		Invoke-WebRequest -Uri $licenseUrl -OutFile $licensePath -UseBasicParsing -TimeoutSec 30
 	} catch {
+		# Delete whatever landed. -OutFile streams to disk, so a connection dropped
+		# or -TimeoutSec tripped mid-body leaves a TRUNCATED LICENSE sitting beside
+		# dezhban.exe — worse than none, because it reads as the real thing while
+		# silently missing clauses. install.sh has the same failure mode — `-f`
+		# suppresses the file only on an HTTP error, not on a mid-body drop — and
+		# deletes the partial file in its own warning branch for this reason.
+		Remove-Item -Path $licensePath -Force -ErrorAction SilentlyContinue
 		Write-Host "warning: could not fetch the license — install itself succeeded. Retry later with:" -ForegroundColor Yellow
 		Write-Host "  Invoke-WebRequest -Uri $licenseUrl -OutFile '$licensePath' -UseBasicParsing"
 	}

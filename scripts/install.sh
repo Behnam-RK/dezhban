@@ -518,7 +518,19 @@ fi
 # same reason the uninstaller is. Non-fatal: a machine with the binary and no
 # LICENSE is a fixable notice problem, not a reason to fail an install that
 # already put a kill switch on the host.
-if ! curl -fsSL -o "$SHARE_DIR/LICENSE" "https://raw.githubusercontent.com/$REPO/$tag/LICENSE"; then
+#
+# Bounded, for the reason install.ps1's -TimeoutSec spells out: curl has no
+# default max-time. On the upgrade path `dezhban start` has already re-armed the
+# guard several steps above, so a host whose tunnel has not come back black-holes
+# this request — unbounded, the script simply stops printing and looks hung.
+if ! curl -fsSL --connect-timeout 10 --max-time 30 \
+	-o "$SHARE_DIR/LICENSE" "https://raw.githubusercontent.com/$REPO/$tag/LICENSE"; then
+	# Delete whatever landed. `-f` suppresses the file only on an HTTP error;
+	# curl streams to disk, so a connection dropped or --max-time tripped
+	# mid-body leaves a TRUNCATED LICENSE (measured: 20480 of 533337 bytes on a
+	# 1s timeout). That is worse than none — it reads as the real thing while
+	# silently missing clauses.
+	rm -f "$SHARE_DIR/LICENSE"
 	echo "warning: could not fetch the license — install itself succeeded. Retry later with:" >&2
 	echo "  curl -fsSL -o $SHARE_DIR/LICENSE https://raw.githubusercontent.com/$REPO/$tag/LICENSE" >&2
 fi

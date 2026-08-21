@@ -20,14 +20,19 @@ current as you land changes.
   so the world could not watch. It appears at the top of the README and in the
   macOS app's **About** pane, as its own section below Updates.
   ([2025–2026 Iran massacres](https://en.wikipedia.org/wiki/2025%E2%80%932026_Iran_massacres))
-- Every install path now ships the `LICENSE` file — `/usr/share/doc/dezhban/`
-  on the `.deb`/`.rpm`, `/usr/local/share/dezhban/` for the `.pkg` and
-  `curl | sudo bash`, the install directory on Windows, `share/doc/dezhban`
-  under the Homebrew prefix, and `Contents/Resources/LICENSE` inside
-  `Dezhban.app` — which is what covers the standalone `Dezhban-macos.app.zip`
-  download, since that archive unpacks straight into `/Applications` and has no
-  top level to put a loose file on. Only the tarball carried it before, which
-  did not satisfy MIT's notice clause either and is now a cure-or-terminate
+- Every packaged install path now ships the `LICENSE` file —
+  `/usr/share/doc/dezhban/` on the `.deb`/`.rpm`, `/usr/local/share/dezhban/`
+  for the `.pkg`, `share/doc/dezhban` under the Homebrew prefix, and
+  `Contents/Resources/LICENSE` inside `Dezhban.app` — which is what covers the
+  standalone `Dezhban-macos.app.zip` download, since that archive unpacks
+  straight into `/Applications` and has no top level to put a loose file on.
+  The `curl | sudo bash` and `install.ps1` scripts fetch it from the tag they
+  just installed, to `/usr/local/share/dezhban/` and the Windows install
+  directory respectively; a failed fetch is a warning, not a failed install, so
+  those two paths are best-effort. The bare per-target binaries on the Releases
+  page still carry nothing — take the `.tar.gz` instead if you want the license
+  and README beside the binary. Only the tarball carried it before, which did
+  not satisfy MIT's notice clause either and is now a cure-or-terminate
   condition under the new license.
 
 ### Changed

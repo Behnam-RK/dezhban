@@ -12,6 +12,14 @@ not the Hippocratic License 3.0 as published, and must not be referred to
 by that name alone. Refer to it as "Hippocratic License 3.0 (Core) with the
 Dezhban named-entity restriction".
 
+Part B is verifiable against the published text:
+
+    sed -n '/^HIPPOCRATIC LICENSE$/,$p' LICENSE | diff - <(curl -fsSL \
+        https://firstdonoharm.dev/version/3/0/core.txt)
+
+The only difference diff will report is that this file ends with a newline
+and the published one does not. Nothing else about Part B is changed.
+
 This license replaces the MIT License, under which all releases of Dezhban
 up to and including v0.10.1 were published. Those releases remain available
 under the MIT License; that grant is not revoked and cannot be. This license
