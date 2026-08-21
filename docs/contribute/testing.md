@@ -879,6 +879,12 @@ task gui:build && open dist/Dezhban.app
       `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
       doing its job — this is the switch a user reaches for to stop the app
       starting at login, and it is useless if nobody can tell what it governs).
+- [ ] **Uninstall with nobody logged in says so.** From an ssh session on a Mac
+      sitting at the login window, run the uninstaller. It must finish *and* warn
+      that the per-user leftovers could not be removed — every step of that
+      teardown needs the user's own launchd session, and reporting a clean removal
+      would hide both a surviving login item and the migration flag that makes a
+      later reinstall skip the migration.
 - [ ] **Uninstall over an already-trashed app says so.** Drag
       `/Applications/Dezhban.app` to the Trash, then run the uninstaller. It must
       finish *and* print the warning naming System Settings — only the app can

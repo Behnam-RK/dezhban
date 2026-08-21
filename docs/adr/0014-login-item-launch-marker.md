@@ -219,7 +219,9 @@ with an argument, the pre-`SMAppService` pattern.
   it is not a second copy competing for the session — and
   `packaging/macos/uninstall.sh` runs it as the console user inside their GUI
   session before deleting the bundle. Root cannot reach another account's launchd
-  session, so other users' entries are named in the closing message instead.
+  session, so other users' entries are named in the closing message instead — as is
+  the case where there is no logged-in user at all (run at the login window, or
+  over ssh), where none of the per-user teardown can happen.
 
   The errand's exit status is load-bearing: `unregister()` only logs a refusal and
   the script discards the output, so without it a login item macOS would not
@@ -268,6 +270,15 @@ with an argument, the pre-`SMAppService` pattern.
   replaces. `LoginItem.isEnabled` reports the legacy registration too, so the
   Settings toggle tells the truth about whether anything starts the app at
   login, and switching it off retracts *both*.
+
+  The two stuck states are separate outcomes, because they are opposite facts.
+  From the disable direction the old item is still *enabled*, so something is
+  starting the app and the switch must stay on. From the enable direction nothing
+  is registered at all — `enable()` is only entered when the switch read off — so
+  an on-ish outcome snapped the switch on over a state where nothing was
+  registered, and the next `seed()` flipped it back: the switch-versus-`isEnabled`
+  disagreement that must never exist. Sharing one case also had it telling a user
+  who clicked *off* what switching it *on* would do.
 
   `enable()` refuses while *any* legacy registration survives, not merely an
   enabled one. Guarding on enablement looked like a way to keep the advice below

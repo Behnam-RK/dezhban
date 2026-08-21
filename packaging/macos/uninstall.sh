@@ -189,6 +189,16 @@ if [ -n "$CONSOLE_UID" ]; then
 	# that user rather than by unlinking the plist under them.
 	launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
 		defaults delete "$APP_BUNDLE_ID" >/dev/null 2>&1 || true
+else
+	# No non-root console user: run at the login window, or over ssh on a Mac
+	# nobody is logged into. Every step above needs that user's own launchd
+	# session, so the whole per-user teardown is skipped — and because each
+	# LOGIN_ITEM_STUCK assignment lives inside that block, the script used to print
+	# an unqualified "files deleted" over an agent registration that survives, an
+	# entry that fails to load at every subsequent login, and a migration flag that
+	# makes a LATER reinstall skip the migration. The same silent-clean-report the
+	# other states were introduced to end.
+	LOGIN_ITEM_STUCK=no-console-user
 fi
 
 rm -rf "$APP"
@@ -232,6 +242,12 @@ none) ;;
 	no-app)
 		echo "warning: the app bundle was already gone, so its login item could not"
 		echo "         be retracted — only the app itself can do that."
+		;;
+	no-console-user)
+		echo "warning: nobody is logged in, so Dezhban's per-user leftovers could not"
+		echo "         be removed — its login item, and the saved preferences that"
+		echo "         would make a later reinstall skip the login-item migration."
+		echo "         Re-run this uninstaller from a logged-in graphical session."
 		;;
 	esac
 	echo "         Nothing will start Dezhban (the app is gone). If a \"Dezhban\""

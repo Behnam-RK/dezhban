@@ -72,10 +72,21 @@ enum LoginItem {
         /// Registered, but macOS is holding it for the user's approval — most
         /// often because they switched this app off in System Settings before.
         case awaitingApproval
-        /// The legacy LaunchServices login item is still live and macOS refuses
-        /// to retract it, so the app still starts at login without the launch
-        /// marker. Only the user can clear this, in System Settings.
+        /// The legacy LaunchServices login item is still **enabled** and macOS
+        /// refuses to retract it, so the app still starts at login without the
+        /// launch marker. Reached only from the disable direction.
         case legacyStuck
+        /// Login-at-launch could not be turned on: an old registration survives
+        /// that macOS will not remove, and registering the agent beside it would
+        /// arm two launches at login. Nothing starts the app, so `isOn` is false.
+        ///
+        /// Its own case rather than `legacyStuck`, which has `isOn == true`.
+        /// `enable()` is only entered when the switch read OFF — meaning
+        /// `isEnabled` was false — so returning an on-ish outcome snapped the
+        /// switch ON over a state where *nothing* was registered, and the next
+        /// `seed()` flipped it back. That switch-versus-`isEnabled` disagreement is
+        /// the one thing `isEnabled`'s docstring says must never exist.
+        case blockedByLegacy
         /// The **agent** registration survived an unregister that failed, so the
         /// app still starts at login.
         ///
@@ -93,7 +104,7 @@ enum LoginItem {
         var isOn: Bool {
             switch self {
             case .enabled, .awaitingApproval, .legacyStuck, .agentStuck: return true
-            case .disabled, .failed: return false
+            case .disabled, .failed, .blockedByLegacy: return false
             }
         }
 
@@ -106,9 +117,16 @@ enum LoginItem {
                 return "macOS is holding this for your approval — enable Dezhban in "
                     + "System Settings → General → Login Items."
             case .legacyStuck:
+                // The disable direction: the old item is still enabled, so it is
+                // still starting the app. Worded for the click the user made — the
+                // shared wording described switching it *on*, which is not what
+                // they did.
+                return "macOS would not remove the old login item, so Dezhban will still open "
+                    + "at login. Logging out and back in usually clears it."
+            case .blockedByLegacy:
                 return "An old login-item registration is still on file and macOS will not "
-                    + "remove it, so switching this on could start Dezhban twice at login. "
-                    + "Logging out and back in usually clears it."
+                    + "remove it. Switching this on could start Dezhban twice at login, so it "
+                    + "has been left off. Logging out and back in usually clears it."
             case .agentStuck:
                 return "macOS would not remove the login item, so Dezhban will still open at "
                     + "login. Remove \"Dezhban\" under System Settings → General → Login Items."
@@ -255,7 +273,7 @@ enum LoginItem {
         // nothing the app can do will make enabling this safe. See
         // `Outcome.legacyStuck`.
         retractLegacy()
-        if registered(.mainApp) { return .legacyStuck }
+        if registered(.mainApp) { return .blockedByLegacy }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
         do {
             try service.register()
