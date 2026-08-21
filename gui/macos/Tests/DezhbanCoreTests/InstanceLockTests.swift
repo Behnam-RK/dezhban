@@ -72,8 +72,9 @@ struct InstanceLockTests {
         #expect(lock.acquire() == .acquired)
     }
 
-    /// An unwritable location must not stop the app from starting. A broken cache
-    /// directory is a worse thing to fail a launch on than a duplicate icon.
+    /// An unwritable location must not stop the app from starting. A broken
+    /// support directory is a worse thing to fail a launch on than a duplicate
+    /// icon.
     @Test func anUnopenableLockPathIsReportedRatherThanBlocking() {
         let lock = InstanceLock(url: URL(fileURLWithPath: "/dev/null/nope/e.lock"))
         defer { lock.release() }
@@ -91,10 +92,10 @@ struct InstanceLockTests {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let installed = InstanceLock.forBundle(
-            path: "/Applications/Dezhban.app", identifier: "com.example.app", cachesDirectory: dir)
+            path: "/Applications/Dezhban.app", identifier: "com.example.app", supportDirectory: dir)
         let built = InstanceLock.forBundle(
             path: "/Users/x/dev/dezhban/dist/Dezhban.app", identifier: "com.example.app",
-            cachesDirectory: dir)
+            supportDirectory: dir)
         defer { installed.release(); built.release() }
 
         #expect(installed.url != built.url)
@@ -109,9 +110,9 @@ struct InstanceLockTests {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let a = InstanceLock.forBundle(
-            path: "/Applications/Dezhban.app", identifier: "com.example.app", cachesDirectory: dir)
+            path: "/Applications/Dezhban.app", identifier: "com.example.app", supportDirectory: dir)
         let b = InstanceLock.forBundle(
-            path: "/Applications/Dezhban.app", identifier: "com.example.app", cachesDirectory: dir)
+            path: "/Applications/Dezhban.app", identifier: "com.example.app", supportDirectory: dir)
         #expect(a.url == b.url)
         // FNV-1a of the empty string is its offset basis; a seeded hash would not
         // reproduce it.

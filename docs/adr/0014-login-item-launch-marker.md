@@ -121,13 +121,37 @@ with an argument, the pre-`SMAppService` pattern.
   `dist/Dezhban.app` run against an installed `/Applications/Dezhban.app` is the
   documented GUI dev loop and those two are not duplicates of each other.
 
+  The lock file lives under Application Support, not `~/Library/Caches`. `flock`
+  is per-inode and macOS may purge a caches directory under disk pressure; a
+  purged lock file while the incumbent holds its descriptor means the next launch
+  creates a fresh inode, locks *that*, and runs a second copy undetectably.
+
   A launch the *user* performed must never become a silent no-op, so the copy
-  that loses the lock focuses the winner and posts a distributed notification
-  asking it to open its window — the incumbent may be a `--background` login
-  launch with no window to be handed over to. A notification rather than
-  re-opening the bundle through `NSWorkspace`: asking LaunchServices to open the
-  app we are in the middle of quitting could spawn yet another copy, which would
-  find the lock held and ask again.
+  that loses the lock focuses the winner and — when this launch would have opened
+  a window at all — posts a distributed notification asking it to open its own,
+  since the incumbent may be a `--background` login launch with none. Gated on
+  the preference, because "Open minimized: Always" has to mean always: otherwise
+  a second launch of the same app becomes the one way to make a window appear.
+  Scoped by posting the bundle **path** as the notification object, since the
+  name derives from the bundle id and two installs may legitimately run side by
+  side. And a notification rather than re-opening the bundle through
+  `NSWorkspace`: asking LaunchServices to open the app we are in the middle of
+  quitting could spawn yet another copy, which would find the lock held and ask
+  again. The observer is registered as the first statement of
+  `applicationDidFinishLaunching` — distributed notifications are delivered
+  immediately and never queued, so anything ahead of it is time in which the
+  hand-off is dropped.
+- **macOS has a second way to start the app at login, and it carries no marker.**
+  "Reopen windows when logging back in" relaunches whatever was running at
+  logout, through LaunchServices, with no arguments. `SMAppService.mainApp` was
+  reconciled with that path because it went through LaunchServices too; a launchd
+  agent is not, so both would start at login and race for the instance lock, and
+  a resume copy that won made the window open at login under the default
+  `bootOnly` — this very defect, intermittent instead of absent.
+  `NSApp.disableRelaunchOnLogin()` is the API for "the login item is the only way
+  I start at login", and the app calls it at launch. `MainWindow`'s
+  `isRestorable = false` covers window restoration; this covers app relaunch,
+  which is a different mechanism.
 - **Uninstalling has to retract the registration, and only the app can.** A
   LaunchServices login item disappears with its bundle; a per-user launchd agent
   does not. `launchctl bootout` is not the answer either — it unloads the job for
@@ -175,10 +199,31 @@ with an argument, the pre-`SMAppService` pattern.
   and could never reach `register()`. `LoginItem.toggle()` therefore returns an
   `Outcome` rather than a `Bool`, and the `legacyStuck` case tells the user the
   one thing that does work: remove "Dezhban" under System Settings → General →
-  Login Items. Once they do, the toggle registers a clean agent. The same
-  `Outcome` carries `awaitingApproval`, because `register()` reports "the user
-  must approve this in System Settings" as a *status* rather than an error, and a
-  switch that snaps back with no explanation is indistinguishable from a bug.
+  Login Items. Once they do, the toggle registers a clean agent.
+
+  The same `Outcome` carries `awaitingApproval`, because `register()` reports
+  "the user must approve this in System Settings" as a *status* rather than an
+  error, and a switch that snaps back with no explanation is indistinguishable
+  from a bug. `.requiresApproval` is why "is there a registration" and "will this
+  start the app" have to be separate questions: it is a live registration that
+  starts the app the moment approval lands, so the unregisters are guarded on the
+  former. Guarding them on `.enabled` meant an awaiting-approval registration
+  could not be retracted by the Settings switch *or* by the uninstaller's errand
+  — the bundle would be deleted with the registration still on file, which is the
+  orphan the errand exists to remove. `isEnabled` reports that same question, so
+  the value the switch shows and the value `toggle()` branches on are one value;
+  when they were two, an awaiting-approval registration painted the switch ON
+  while `toggle()` still read "off", and the user's attempt to switch it off
+  re-registered instead.
+
+  One more thing the persisted flag may not swallow: a migration that retracted
+  the legacy item and then *failed* to register the agent leaves nothing starting
+  the app at login. Marking that migrated would cost the user a setting they had
+  switched on, with no retry ever, so it is deliberately left unmarked and
+  retried on the next launch. What makes the retry safe rather than a return of
+  the every-launch re-registration bug is a second flag, set whenever the user
+  switches login-at-launch off themselves: an explicit "off" outlives every
+  retry, so a retry can only restore what was already on.
 - **The marker could be passed by something other than the agent**, making a
   user launch look like a login launch. The only consequence is a window that
   does not open, and the Dock icon and "Open Dezhban…" both open it

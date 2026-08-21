@@ -86,11 +86,12 @@ func acquireSessionOwnership() -> InstanceLock? {
     // No bundle identifier means a bare `swift run` binary: no agent could have
     // spawned it, and nothing to scope a lock to.
     guard let id = Bundle.main.bundleIdentifier,
-          let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
+          let support = FileManager.default
+              .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     else { return nil }
 
     let lock = InstanceLock.forBundle(
-        path: Bundle.main.bundleURL.path, identifier: id, cachesDirectory: caches)
+        path: Bundle.main.bundleURL.path, identifier: id, supportDirectory: support)
     switch lock.acquire() {
     case .acquired:
         return lock
@@ -102,9 +103,7 @@ func acquireSessionOwnership() -> InstanceLock? {
     case .heldByAnother:
         // A background launch loses silently — that copy was never going to show
         // the user anything. A launch the user performed must not be a no-op, so
-        // hand them over to the instance that owns the session: focus it, and ask
-        // it to open its window, which it may not currently have (the incumbent
-        // may be a --background login launch under the default "Only at login").
+        // hand them over to the instance that owns the session.
         if !LaunchVisibility.isBackgroundLaunch(arguments: CommandLine.arguments) {
             let mePID = ProcessInfo.processInfo.processIdentifier
             let incumbent = NSRunningApplication
@@ -114,13 +113,28 @@ func acquireSessionOwnership() -> InstanceLock? {
                         && $0.bundleURL?.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
                 }
             incumbent?.activate()
+            // Ask it to open its window — which it may not currently have, since
+            // the incumbent may be a --background login launch — but only when
+            // this launch would have opened one itself. "Open minimized: Always"
+            // means always: a second launch of the same app must not become the
+            // one way to make a window appear, or the setting means one thing on
+            // the first launch and the opposite on the second.
+            //
             // A notification rather than re-opening the bundle through
             // NSWorkspace: asking LaunchServices to open the app we are in the
             // middle of quitting could spawn yet another copy, which would find
             // the lock held and ask again.
-            DistributedNotificationCenter.default().postNotificationName(
-                NSNotification.Name(AppDelegate.openWindowNotification),
-                object: id, userInfo: nil, deliverImmediately: true)
+            //
+            // Scoped to this install by posting the bundle PATH as the object.
+            // The name derives from the bundle id, and the lock deliberately lets
+            // dist/Dezhban.app run beside an installed copy — an unscoped
+            // notification would have a duplicate launch of one install open the
+            // other install's window.
+            if LaunchPreference.current.opensWindow(backgroundLaunch: false) {
+                DistributedNotificationCenter.default().postNotificationName(
+                    NSNotification.Name(AppDelegate.openWindowNotification),
+                    object: Bundle.main.bundleURL.path, userInfo: nil, deliverImmediately: true)
+            }
         }
         NSLog("DezhbanMenu: another copy of this install owns the session; exiting")
         exit(0)
@@ -146,7 +160,3 @@ app.delegate = delegate
 app.setActivationPolicy(.regular)
 app.mainMenu = makeMainMenu()
 app.run()
-
-// Referenced so the lock cannot be optimised away as unused; `app.run()` never
-// returns, so this line is only ever reached conceptually.
-_ = sessionLock

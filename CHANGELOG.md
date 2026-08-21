@@ -37,7 +37,13 @@ current as you land changes.
   subsequent login; the Login Items entry reads "Dezhban" now instead of a raw
   job label. And the login toggle says what actually happened — including when
   macOS is holding the registration for your approval, and when it refuses to
-  remove the old login item and only you can clear it in System Settings.
+  remove the old login item and only you can clear it in System Settings; either
+  state can still be switched back off, which an earlier build could not do.
+
+  Dezhban also stops relying on macOS's "Reopen windows when logging back in" to
+  leave it alone: that path relaunches the app at login without the marker, so it
+  is now opted out of explicitly, leaving the login item as the only thing that
+  starts the app at login.
 
 ## [0.11.0] - 2026-08-21
 

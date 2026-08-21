@@ -790,7 +790,23 @@ task gui:build && open dist/Dezhban.app
       again from Finder. The second copy must exit *and* the first must come
       forward with its window open — that is the distributed notification in
       `acquireSessionOwnership()`. Doing nothing at all here is a worse bug than
-      the duplicate icon this check's predecessor covers.
+      the duplicate icon this check's predecessor covers. Then set "Open
+      minimized" to **Always** and repeat: the first copy must come forward with
+      **no** window, because always means always.
+- [ ] **"Reopen windows when logging back in" does not start a second, unmarked
+      copy.** Check that box in System Settings → Desktop & Dock, leave the app
+      running, log out and back in. Exactly one copy must be running and it must
+      have come from the login agent, not the resume: `ps -o args= -p "$(pgrep -x
+      DezhbanMenu)"` ends in `--background`, and under the default "Only at
+      login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
+      it, LaunchServices relaunches the app with no arguments and races the agent
+      for the lock.
+- [ ] **An awaiting-approval registration can still be switched off.** Turn the
+      login item off *in System Settings* (not in Dezhban), then switch Dezhban's
+      "Open this app at login" on: the status line must say macOS is holding it
+      for approval, and the switch must then turn **off** again on the next click
+      rather than re-registering. `launchctl print
+      gui/$UID/com.behnam-rk.dezhban.app.login` must fail afterwards.
 - [ ] **The dev build is not deduped against the installed one.** With
       `/Applications/Dezhban.app` running, `task gui:build && open
       dist/Dezhban.app`. Both must run — the lock is keyed on the bundle path

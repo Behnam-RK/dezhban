@@ -39,7 +39,7 @@ public final class InstanceLock {
         case heldByAnother
         /// The lock file could not be opened at all (unwritable directory, and so
         /// on). Treated as `acquired` by callers: refusing to start because a
-        /// cache directory is broken would be a worse bug than a duplicate icon.
+        /// support directory is broken would be a worse bug than a duplicate icon.
         case unavailable(String)
     }
 
@@ -54,7 +54,14 @@ public final class InstanceLock {
         self.url = url
     }
 
-    /// The conventional location: one file per install, under the user's caches.
+    /// The conventional location: one file per install, under Application
+    /// Support.
+    ///
+    /// **Not** under `~/Library/Caches`, which is where this first lived. `flock`
+    /// is per-inode, and macOS is licensed to purge a caches directory under disk
+    /// pressure — if it removed the file while the incumbent held its descriptor,
+    /// the next launch's `open(O_CREAT)` would make a *new* inode, take the lock
+    /// on that, and run a second copy of the app with nothing able to detect it.
     ///
     /// `bundlePath` is hashed rather than embedded so the name cannot exceed a
     /// filename limit, and hashed with FNV-1a rather than `hashValue` because
@@ -62,8 +69,8 @@ public final class InstanceLock {
     /// *same* name, which a randomly seeded hash would not give them.
     public static func forBundle(path bundlePath: String,
                                  identifier: String,
-                                 cachesDirectory: URL) -> InstanceLock {
-        let dir = cachesDirectory.appendingPathComponent(identifier, isDirectory: true)
+                                 supportDirectory: URL) -> InstanceLock {
+        let dir = supportDirectory.appendingPathComponent(identifier, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let name = "instance-" + String(fnv1a(bundlePath), radix: 16) + ".lock"
         return InstanceLock(url: dir.appendingPathComponent(name))

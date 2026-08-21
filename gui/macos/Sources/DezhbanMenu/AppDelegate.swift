@@ -40,6 +40,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let openWindowNotification = "com.behnam-rk.dezhban.app.openWindow"
 
     func applicationDidFinishLaunching(_: Notification) {
+        // FIRST. A duplicate copy of the app posts this as it exits and then dies;
+        // the notification is delivered immediately and never queued, so anything
+        // ahead of this line is time in which a user-initiated launch is silently
+        // dropped — the one outcome `acquireSessionOwnership` exists to prevent.
+        // Scoped to the bundle path, which is what the poster sends: the name
+        // comes from the bundle id, and two installs of the app may legitimately
+        // run side by side (see InstanceLock).
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(openWindowRequested),
+            name: NSNotification.Name(Self.openWindowNotification),
+            object: Bundle.main.bundleURL.path)
+        // macOS has a second way to start this app at login, and it does not pass
+        // the launch marker: "Reopen windows when logging back in" relaunches
+        // whatever was running at logout, through LaunchServices, with no
+        // arguments. `SMAppService.mainApp` used to be reconciled with that path
+        // because it went through LaunchServices too; a launchd agent is not, so
+        // both would start at login and race for the instance lock — and if the
+        // resume copy won, the window opened at login under the default "Only at
+        // login", the exact defect this replaced, now intermittent instead of
+        // absent. This is the API for saying "the login item is the only way I
+        // start at login". MainWindow's isRestorable = false covers window
+        // restoration; this covers app relaunch, which is a different thing.
+        NSApp.disableRelaunchOnLogin()
         NotificationManager.requestAuthorizationIfNeeded()
         // Resolve the config path once, off the main thread, before any pane asks for
         // it — every later read is then a memoized lookup rather than a shell-out on
@@ -83,9 +106,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if LaunchPreference.current.opensWindow(backgroundLaunch: backgroundLaunch) {
             MainWindow.shared.open()
         }
-        DistributedNotificationCenter.default().addObserver(
-            self, selector: #selector(openWindowRequested),
-            name: NSNotification.Name(Self.openWindowNotification), object: nil)
         AppState.shared.refreshServiceState()
         AppState.shared.checkForUpdates()
         AppState.shared.offerFirstRunIfNeeded()
