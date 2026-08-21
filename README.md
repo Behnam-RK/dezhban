@@ -51,6 +51,21 @@ rough edges.
 ## Install (macOS)
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh -o /tmp/dezhban-install.sh
+sudo bash /tmp/dezhban-install.sh
+```
+
+Two lines rather than one, on purpose. The installer asks a few
+questions — which components to install, whether to register the service,
+whether to run the setup wizard — and it can only ask when it is run from a
+file. Piped straight into `bash`, stdin *is* the script text, so there is
+nowhere to read an answer from and it silently takes the defaults. The
+two-line form also lets you read the script before running it as root, which
+is the right habit for a kill switch. For an unattended install (a
+provisioner, CI, a second machine you have already decided about), the
+one-liner still works and takes today's defaults with no prompt:
+
+```sh
 curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
 ```
 
@@ -58,7 +73,7 @@ Then open **Dezhban** from Applications (or Spotlight). That's the only
 terminal step, ever — not because the app can't be double-clicked, but because
 there's no Apple Developer certificate to sign it with yet, so Gatekeeper would
 otherwise block it. `curl` genuinely doesn't trip that check (it's documented
-Apple behavior, not a workaround), so this line installs the app with **zero
+Apple behavior, not a workaround), so either form installs the app with **zero
 Gatekeeper friction** and asks for your password exactly once. Details, the
 `.pkg` alternative, and Linux/Windows installers:
 [docs/usage/install.md](docs/usage/install.md).
