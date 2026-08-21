@@ -141,6 +141,18 @@ with an argument, the pre-`SMAppService` pattern.
   `applicationDidFinishLaunching` — distributed notifications are delivered
   immediately and never queued, so anything ahead of it is time in which the
   hand-off is dropped.
+
+  That is not the whole window, though, and the rest of it needs a file. The lock
+  is taken before `NSApplication` exists, so between acquiring it and installing
+  the observer there is a stretch in which a hand-off is posted to nobody — short,
+  but landing exactly at login, when someone impatient with a slow start
+  double-clicks the app. So the losing copy writes a `HandoffRequest` beside the
+  lock as well as posting, and the incumbent consumes it both when it installs the
+  observer and on the ordinary once-a-second tick it already runs. Requests carry
+  their own freshness: one the incumbent never got to must not be inherited by the
+  *next* app to start and turned into a window nobody asked for, so a stale file is
+  discarded rather than obeyed, and a process that has just taken the lock discards
+  whatever it finds as belonging to a predecessor.
 - **macOS has a second way to start the app at login, and it carries no marker.**
   "Reopen windows when logging back in" relaunches whatever was running at
   logout, through LaunchServices, with no arguments. `SMAppService.mainApp` was
@@ -233,6 +245,35 @@ with an argument, the pre-`SMAppService` pattern.
   moment the legacy item is confirmed retracted, before the register is
   attempted, is what distinguishes "this account had a login item and the agent
   is not up yet" from "this account never had one".
+
+  The migration decides on `.enabled`, not on "is there a registration". These
+  are different questions and using one predicate for both was a bug in the
+  user's favour nowhere: `.requiresApproval` is what `mainApp` reports once the
+  user has switched Dezhban *off* under System Settings → General → Login Items,
+  so a migration gated on mere presence treated a deliberate off as something to
+  carry forward — retracting it and registering the agent, turning
+  login-at-launch back on during an upgrade, with `userDisabledKey` unable to
+  help because a pre-upgrade user never set it. The unregister *guards* keep
+  asking the presence question, because a `.requiresApproval` registration is
+  still a registration to retract.
+
+  And the migration runs only from `/Applications`, without marking the account
+  migrated otherwise. `register()` records the plist of the *calling* bundle
+  (`BundleProgram` is bundle-relative) while the flag is shared by every copy of
+  the app, so one launch from `~/Downloads` — an upgrader trying the app zip
+  before moving it — or from `dist/` would point the login agent at a bundle
+  about to move or be deleted and mark the account done forever. It runs
+  unattended, so it takes the conservative branch; an explicit toggle from
+  Settings is the user's own call and is not gated.
+
+  Two smaller versions of the same "the switch must not lie" rule.
+  `LoginItem.enable()` refuses to register the agent while a legacy item is live,
+  which `disable()` and the migration already refused — without it the stuck path
+  led straight to both being registered, which is the two-launch race. And a
+  failed *agent* unregister has its own outcome rather than reusing `.failed`,
+  whose `isOn` is false: `unregister()` swallows its throw, so that combination
+  painted the switch OFF while the registration was live and the app kept
+  starting at login.
 - **Switching login-at-launch off may terminate the app.** Unverified, and
   listed here rather than worked around because the workarounds are worse than
   the symptom. `SMAppService.unregister()` unloads the job from the launchd

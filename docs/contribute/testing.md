@@ -801,6 +801,25 @@ task gui:build && open dist/Dezhban.app
       login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
       it, LaunchServices relaunches the app with no arguments and races the agent
       for the lock.
+- [ ] **A hand-off that arrives before the app is observing still works.** The
+      race the `HandoffRequest` file exists for: log out and back in and
+      double-click the app in `/Applications` as early as you can, while it is
+      still starting from the login agent. The window must open — within a second
+      if the notification missed, since the file is picked up on the ordinary
+      tick. Then confirm no `.handoff` file is left in `~/Library/Application
+      Support/com.behnam-rk.dezhban.app/`.
+- [ ] **A copy run from outside /Applications does not migrate the login item.**
+      Unzip `Dezhban-macos.app.zip` to `~/Downloads` on a Mac with a pre-agent
+      install and login-at-launch on, run it once, quit. The legacy login item
+      must still be there and `defaults read com.behnam-rk.dezhban.app
+      dezhban.loginItemMigratedToAgent` must be absent — otherwise the account is
+      marked done with the agent pointing into `~/Downloads`. Then run the copy in
+      `/Applications`: that one must migrate.
+- [ ] **A login item the user turned off in System Settings stays off across an
+      upgrade.** With a pre-agent build, switch Dezhban off under System Settings
+      → General → Login Items (this leaves `mainApp` at `.requiresApproval`, not
+      unregistered), then upgrade and launch. Login-at-launch must still be off
+      and no agent registered.
 - [ ] **Switching login-at-launch off from a login-started session.** Log out
       and back in so the agent starts the app, then switch Settings → "Open this
       app at login" **off**. `SMAppService.unregister()` unloads the launchd job

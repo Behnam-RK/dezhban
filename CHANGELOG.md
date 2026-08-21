@@ -46,7 +46,10 @@ current as you land changes.
   starts the app at login. And clicking the login switch acts on the state you
   clicked, not on a re-read a moment later — with the Settings window open,
   removing the login item in System Settings and coming back used to make the
-  next click turn login-at-launch *on*.
+  next click turn login-at-launch *on*. If you had switched Dezhban off under
+  System Settings → General → Login Items, upgrading leaves it off; and a copy of
+  the app run from somewhere other than `/Applications` no longer claims the
+  login item for a location it is about to be moved out of.
 
 ## [0.11.0] - 2026-08-21
 

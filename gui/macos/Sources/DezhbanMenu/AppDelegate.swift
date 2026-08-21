@@ -51,6 +51,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self, selector: #selector(openWindowRequested),
             name: NSNotification.Name(Self.openWindowNotification),
             object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path)
+        // And the file the notification cannot cover: a duplicate that posted
+        // while this process was still starting up found no observer, so its
+        // request is on disk. Checked here and again on every tick (see refresh).
+        consumeHandoffRequest()
         // macOS has a second way to start this app at login, and it does not pass
         // the launch marker: "Reopen windows when logging back in" relaunches
         // whatever was running at logout, through LaunchServices, with no
@@ -124,6 +128,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         MainWindow.shared.open()
     }
 
+    /// The notification's backstop. A duplicate writes a file as well as posting,
+    /// because the post is never queued and this process may not have been
+    /// observing yet; this is polled from the same 1-second timer that already
+    /// reads the state file, so a request cannot go unseen however late it lands.
+    private func consumeHandoffRequest() {
+        guard let handoff = sessionHandoff, handoff.consume() else { return }
+        MainWindow.shared.open()
+    }
+
     /// Clicking the Dock icon (re)opens the main window — the standard macOS
     /// contract for a regular app whose windows are all closed.
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
@@ -143,6 +156,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refresh() {
         pollStateFile()
         repaint()
+        consumeHandoffRequest()
     }
 
     /// Stats and decodes the state file on a background queue, publishing the

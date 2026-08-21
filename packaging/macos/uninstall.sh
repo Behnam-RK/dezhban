@@ -74,20 +74,48 @@ if [ -n "$CONSOLE_UID" ]; then
 		# Bounded. The errand talks to launchd over XPC, and this runs before
 		# `rm -rf "$APP"` — an uninstaller that hangs here, silently (output is
 		# discarded), leaves the machine mid-removal with no message on screen.
-		launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
-			"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1 &
+		#
+		# Completion is signalled by a file rather than by watching the child:
+		# an exited-but-unreaped child is a zombie, which `kill -0` still reports
+		# as alive, so polling the pid would wait out the whole timeout on a
+		# perfectly successful run. And no `( sleep N; kill ) &` watchdog — that
+		# leaks its `sleep` past the end of the script and, if it ever fires late,
+		# aims a `kill -9` at a pid the system may have recycled.
+		errand_done="${TMPDIR:-/tmp}/dezhban-uninstall-errand.$$"
+		rm -f "$errand_done"
+		(
+			launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+				"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1
+			: >"$errand_done"
+		) &
 		errand=$!
-		( sleep 15; kill -9 "$errand" >/dev/null 2>&1 ) &
-		watchdog=$!
+		waited=0
+		while [ ! -f "$errand_done" ] && [ "$waited" -lt 150 ]; do
+			sleep 0.1
+			waited=$((waited + 1))
+		done
+		if [ ! -f "$errand_done" ]; then
+			echo "note: retracting the login item did not finish in 15s; continuing" >&2
+			kill -9 "$errand" >/dev/null 2>&1 || true
+		fi
+		rm -f "$errand_done"
 		wait "$errand" >/dev/null 2>&1 || true
-		kill -9 "$watchdog" >/dev/null 2>&1 || true
 	fi
 	launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
-	# The app's own per-user directory: nothing but the instance lock the GUI
-	# takes at startup to keep a second copy of itself from running. Machine-
-	# derived, none of it the user's — and a file this version creates that no
-	# earlier one did, so leaving it would make this script's own promise false.
-	rm -rf "/Users/$CONSOLE_USER/Library/Application Support/$APP_BUNDLE_ID"
+	# The app's own per-user directory: the instance lock the GUI takes at startup
+	# to keep a second copy of itself from running, and the hand-off file beside
+	# it. Machine-derived, none of it the user's — and files this version creates
+	# that no earlier one did, so leaving them would make this script's own
+	# promise false.
+	#
+	# The home directory is asked for, not assumed: a network or mobile account,
+	# or a relocated home, is not under /Users, and hardcoding that path made the
+	# closing "files deleted" line untrue for exactly those users.
+	CONSOLE_HOME=$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
+		sed -n 's/^NFSHomeDirectory: //p')
+	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
+		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
+	fi
 fi
 
 rm -rf "$APP"

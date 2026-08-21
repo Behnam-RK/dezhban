@@ -52,6 +52,14 @@ func makeMainMenu() -> NSMenu {
     return main
 }
 
+/// The hand-off request beside this install's instance lock, once known.
+///
+/// A global because both ends of the launch need it: `acquireSessionOwnership()`
+/// writes it from a losing copy, and `AppDelegate` consumes it — including on the
+/// ordinary 1-second tick, which is what makes a request that arrived before the
+/// observer existed still get honoured.
+var sessionHandoff: HandoffRequest?
+
 /// Retracts every login registration and exits, without starting the app.
 ///
 /// The uninstaller needs this. A LaunchServices login item disappeared with its
@@ -83,6 +91,9 @@ func retractLoginRegistrationsAndExit() {
 /// Returns the lock on success. The caller must keep it alive for the lifetime of
 /// the process — the lock IS the open file descriptor.
 func acquireSessionOwnership() -> InstanceLock? {
+    // Set for the winner, read by AppDelegate. A hand-off request that arrives
+    // before the observer exists lands here instead of nowhere.
+    defer { _ = sessionHandoff }
     // No bundle identifier means a bare `swift run` binary: no agent could have
     // spawned it, and nothing to scope a lock to.
     guard let id = Bundle.main.bundleIdentifier,
@@ -92,13 +103,17 @@ func acquireSessionOwnership() -> InstanceLock? {
 
     let lock = InstanceLock.forBundle(
         path: Bundle.main.bundleURL.path, identifier: id, supportDirectory: support)
+    sessionHandoff = HandoffRequest.beside(lock: lock.url)
     switch lock.acquire() {
     case .acquired:
+        // Anything already on disk was meant for a predecessor, not for us.
+        sessionHandoff?.discard()
         return lock
     case .unavailable(let why):
         // Never refuse to start over this. A duplicate icon is a smaller failure
-        // than an app that will not launch because a cache directory is broken.
+        // than an app that will not launch because a support directory is broken.
         NSLog("DezhbanMenu: instance lock unavailable, starting anyway: \(why)")
+        sessionHandoff?.discard()
         return lock
     case .heldByAnother:
         // A background launch loses silently — that copy was never going to show
@@ -132,6 +147,11 @@ func acquireSessionOwnership() -> InstanceLock? {
             // notification would have a duplicate launch of one install open the
             // other install's window.
             if LaunchPreference.current.opensWindow(backgroundLaunch: false) {
+                // The file first, then the notification. The notification is the
+                // fast path but is never queued, and the incumbent may still be
+                // starting up with no observer installed — the file is the one
+                // that waits, and its ordinary once-a-second tick finds it.
+                sessionHandoff?.post()
                 DistributedNotificationCenter.default().postNotificationName(
                     NSNotification.Name(AppDelegate.openWindowNotification),
                     object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path,
