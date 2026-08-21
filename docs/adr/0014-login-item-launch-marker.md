@@ -344,6 +344,22 @@ with an argument, the pre-`SMAppService` pattern.
   whose `isOn` is false: `unregister()` swallows its throw, so that combination
   painted the switch OFF while the registration was live and the app kept
   starting at login.
+- **The first logout after upgrading is not covered, once.**
+  `NSApp.disableRelaunchOnLogin()` is asserted by the *running* app, and the
+  build being replaced never called it — so at that one logout the system has
+  already registered the app for a LaunchServices resume relaunch. At the next
+  login both copies start: the agent's with `--background`, the resume's without.
+  Either way the window opens under the default `bootOnly` — if the agent wins the
+  lock, the resume copy loses it, reads as a user launch and hands off, which the
+  incumbent honours; if the resume copy wins, it opens the window itself. So the
+  defect this ADR fixes reappears exactly once, on the first login after the
+  upgrade, and never again.
+  Not worked around, because every workaround guesses. Suppressing a hand-off for
+  the first N seconds after login would break the case the hand-off exists for —
+  an impatient double-click at login is *precisely* that window — and it would
+  keep doing so on every subsequent login to fix one event that has already
+  passed. A one-off wrong window beats a permanent rule that throws away real
+  launches.
 - **Switching login-at-launch off may terminate the app.** Unverified, and
   listed here rather than worked around because the workarounds are worse than
   the symptom. `SMAppService.unregister()` unloads the job from the launchd

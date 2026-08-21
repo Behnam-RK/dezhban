@@ -793,6 +793,13 @@ task gui:build && open dist/Dezhban.app
       the duplicate icon this check's predecessor covers. Then set "Open
       minimized" to **Always** and repeat: the first copy must come forward with
       **no** window, because always means always.
+- [ ] **The first logout after upgrading may open the window once — and only
+      once.** Expected, not a regression:
+      [ADR-0014](../adr/0014-login-item-launch-marker.md) records why
+      `NSApp.disableRelaunchOnLogin()` cannot cover the logout that happened before
+      the new build ever ran. Upgrade, log out, log back in: a window here is
+      acceptable. Log out and back in a *second* time — there must be none, and
+      `pgrep -x DezhbanMenu | wc -l` must be 1.
 - [ ] **"Reopen windows when logging back in" does not start a second, unmarked
       copy.** Check that box in System Settings → Desktop & Dock, leave the app
       running, log out and back in. Exactly one copy must be running and it must

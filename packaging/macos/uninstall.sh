@@ -77,13 +77,15 @@ if [ -n "$CONSOLE_UID" ]; then
 		# be retracted by anything here, or ever again. Saying nothing would report a
 		# clean uninstall over exactly the orphan this errand exists to remove.
 		#
-		# But only warn if there IS one. Installing via the .pkg and never launching
-		# the menubar app registers nothing, and sending that user to hunt for a
-		# "Dezhban" entry under Login Items that does not exist is its own small
-		# failure.
-		if launchctl print "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1; then
-			LOGIN_ITEM_STUCK=no-app
-		fi
+		# Always warned, but worded as a conditional. Gating this on
+		# `launchctl print` was wrong in the direction that matters: it reports only
+		# *loaded* jobs, and a registration sitting at `.requiresApproval` — the
+		# state the app documents as "the user switched Dezhban off under Login
+		# Items" — is registered without being loaded. So the one case this branch
+		# exists for printed a clean "files deleted" over a surviving entry. There is
+		# no root-side way to read SMAppService status, so the honest thing is to say
+		# "if there is an entry, remove it" rather than to claim either way.
+		LOGIN_ITEM_STUCK=no-app
 	# The marker directory is created by this script, mode 700, owned by root. The
 	# obvious "${TMPDIR:-/tmp}/name.$$" is a predictable path in a world-writable
 	# directory, and under `sudo sh` TMPDIR is often unset — so an unprivileged
@@ -98,7 +100,11 @@ if [ -n "$CONSOLE_UID" ]; then
 		# "timeout", and the kill -9 below murdered a retraction that had very likely
 		# just succeeded.
 		echo "note: could not create a private temp directory; skipping the login-item retraction" >&2
-		LOGIN_ITEM_STUCK=refused
+		# Its own state. Reporting this as "refused" told the user macOS would not
+		# retract the item and sent them to clear it by hand, when in fact nothing
+		# was ever attempted and simply running the uninstaller again would very
+		# likely retract it cleanly.
+		LOGIN_ITEM_STUCK=not-attempted
 	else
 		# Bounded. The errand talks to launchd over XPC, and this runs before
 		# `rm -rf "$APP"` — an uninstaller that hangs here, silently (output is
@@ -166,7 +172,11 @@ if [ -n "$CONSOLE_UID" ]; then
 	# The home directory is asked for, not assumed: a network or mobile account,
 	# or a relocated home, is not under /Users, and hardcoding that path made the
 	# closing "files deleted" line untrue for exactly those users.
-	CONSOLE_HOME=$(dscl . -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
+	#
+	# /Search, not the local node. `dscl .` reads only local records, so for a
+	# network/LDAP/AD account it returns nothing — leaving this to skip the delete
+	# for precisely the accounts the lookup exists to serve.
+	CONSOLE_HOME=$(dscl /Search -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
 		sed -n 's/^NFSHomeDirectory: //p')
 	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
 		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
@@ -215,12 +225,18 @@ none) ;;
 	case "$LOGIN_ITEM_STUCK" in
 	refused) echo "warning: macOS would not retract the login item." ;;
 	timeout) echo "warning: retracting the login item did not finish in time." ;;
-	no-app) echo "warning: the app bundle was already gone, so its login item could not" ;
-		echo "         be retracted — only the app itself can do that." ;;
+	not-attempted)
+		echo "warning: the login item was not retracted — the step was skipped."
+		echo "         Running this uninstaller again will most likely clear it."
+		;;
+	no-app)
+		echo "warning: the app bundle was already gone, so its login item could not"
+		echo "         be retracted — only the app itself can do that."
+		;;
 	esac
-	echo "         Nothing will start Dezhban (the app is gone), but the entry"
-	echo "         remains — remove \"Dezhban\" under System Settings >"
-	echo "         General > Login Items."
+	echo "         Nothing will start Dezhban (the app is gone). If a \"Dezhban\""
+	echo "         entry remains under System Settings > General > Login Items,"
+	echo "         remove it there."
 	;;
 esac
 echo

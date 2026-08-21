@@ -210,12 +210,12 @@ enum LoginItem {
     /// Turning it OFF retracts both registrations, for the reason `isEnabled`
     /// reports both. Turning it ON registers only the agent — the legacy one is
     /// never created again.
-    @discardableResult
-    static func set(enabled: Bool) -> Outcome {
-        queue.sync { enabled ? enable() : disable() }
-    }
-
-    /// Same, enqueued rather than blocking, with the result delivered on main.
+    /// Enqueued, with the result delivered on main.
+    ///
+    /// There is no synchronous form. There was, and it had no callers left — a
+    /// `queue.sync` on a type whose whole job is serializing two mutation paths is
+    /// an invitation to block the main thread on six XPC round-trips, which is the
+    /// beachball this was moved off-main to avoid.
     ///
     /// `queue` is serial, so this preserves click order — which the synchronous
     /// form did not when each click was dispatched to a *concurrent* queue and the
@@ -252,7 +252,14 @@ enum LoginItem {
             try service.register()
         } catch {
             NSLog("DezhbanMenu: could not register the login agent: \(error)")
-            return .failed(error.localizedDescription)
+            // Re-read rather than assume the throw means nothing is registered.
+            // This is the same asymmetry `.agentStuck` was added to close on the
+            // other side: a throw reported as `.failed` has `isOn == false`, so a
+            // registration that *is* live paints the switch OFF while the app keeps
+            // starting at login. `kSMErrorAlreadyRegistered` is the obvious way in —
+            // the switch stale-OFF, the user clicks it on, and the register throws
+            // precisely because it is already registered.
+            return registered(service) ? .agentStuck : .failed(error.localizedDescription)
         }
         // Checked, not assumed: `register()` returns without throwing when macOS
         // is going to make the user approve it, and the switch snapping back with
