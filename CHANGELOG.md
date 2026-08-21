@@ -49,7 +49,8 @@ current as you land changes.
   next click turn login-at-launch *on*. If you had switched Dezhban off under
   System Settings → General → Login Items, upgrading leaves it off; and a copy of
   the app run from somewhere other than `/Applications` no longer claims the
-  login item for a location it is about to be moved out of.
+  login item for a location it is about to be moved out of. The login switch also
+  no longer freezes the Settings window while macOS thinks about it.
 
 ## [0.11.0] - 2026-08-21
 

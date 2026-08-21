@@ -157,8 +157,19 @@ with an argument, the pre-`SMAppService` pattern.
   other stands down. Reading the timestamp and removing without checking, which is
   what it did first, let the notification handler and the backstop both conclude
   they had it and open the window twice: a second `NSApp.activate` half a second
-  after the first, or a window reopening right after the user closed it. Requests
-  carry
+  after the first, or a window reopening right after the user closed it.
+
+  The claim settles ownership; it cannot settle everything, and trying to make it
+  do so was the wrong instinct. The duplicate writes the file and *then* posts, so
+  the two signals can pass each other in ways where both callers legitimately
+  conclude they should act — and refusing to act on the ambiguous ones turns a
+  hand-off into the silent no-op the mechanism exists to prevent, which is the
+  worse failure of the two. So the notification acts on everything except `.lost`,
+  the backstop acts only on `.fresh`, and the *effect* is debounced: an open within
+  three seconds of a previous hand-off open is dropped. Debouncing what the user
+  notices is cheaper and safer than making two asynchronous signals agree.
+
+  Requests carry
   their own freshness: one the incumbent never got to must not be inherited by the
   *next* app to start and turned into a window nobody asked for, so a stale file is
   discarded rather than obeyed, and a process that has just taken the lock discards

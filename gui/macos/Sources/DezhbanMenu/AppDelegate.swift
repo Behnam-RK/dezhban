@@ -22,6 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var updateTimer: Timer?
     /// Runs only for a few seconds after launch — see `startHandoffBackstop`.
     private var handoffTimer: Timer?
+    /// When a hand-off last opened the window, so two signals for one request
+    /// cannot open it twice — see `openForHandoff`.
+    private var lastHandoffOpenAt: Date?
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
@@ -134,23 +137,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// already owning the session. Opening the window is the whole reason it
     /// bothered to tell us — it is standing in for the launch the user performed.
     @objc private func openWindowRequested() {
-        // The file is written BEFORE the notification is posted, so in the normal
-        // hand-off it is already on disk and this notification is answering it.
-        // Claiming it here is what stops the backstop below answering it too — a
-        // second `NSApp.activate` up to half a second later, or a window
-        // reopening after the user just closed it.
+        // `.lost` is the one stand-down: the backstop claimed the file first and is
+        // opening the window.
         //
-        // `.lost` means the backstop got there first and is opening the window, so
-        // this stands down. `.absent` means there is no file to coordinate over
-        // (the write failed, or this is a notification from something else) and the
-        // fast path is all there is — so it acts.
+        // Everything else acts. `.absent` covers both "the file write failed" and
+        // the microsecond between the duplicate writing the file and posting this
+        // — refusing it would turn a hand-off into the silent no-op the whole
+        // mechanism exists to prevent. `.stale` is actionable *here* though not in
+        // the backstop: freshness guards against inheriting a dead predecessor's
+        // file, and a notification arriving is itself proof somebody is alive and
+        // asking right now, even if this process was wedged for longer than the
+        // freshness window. Both of those can therefore double up with a backstop
+        // tick, which is what `openForHandoff`'s debounce is for.
         switch sessionHandoff?.claim() ?? .absent {
-        case .fresh, .absent:
-            MainWindow.shared.open()
-        case .stale, .lost:
+        case .fresh, .absent, .stale:
+            openForHandoff()
+        case .lost:
             break
         }
     }
+
+    /// Opens the window for a hand-off, at most once per request.
+    ///
+    /// The claim in `HandoffRequest` settles who *owns* a request; this settles the
+    /// residue, which the claim cannot: the two signals for one request can pass
+    /// each other such that both legitimately conclude they should act. Debouncing
+    /// the effect is cheaper and safer than trying to make two asynchronous signals
+    /// agree — and the effect is what the user notices, since `MainWindow.open()`
+    /// calls `NSApp.activate(ignoringOtherApps:)` and so a duplicate is a second
+    /// focus steal, or a window reopening just after they closed it.
+    private func openForHandoff() {
+        let now = Date()
+        if let last = lastHandoffOpenAt, now.timeIntervalSince(last) < Self.handoffDebounce {
+            return
+        }
+        lastHandoffOpenAt = now
+        MainWindow.shared.open()
+    }
+
+    /// Long enough to cover the gap between a notification and a backstop tick
+    /// (0.5s), short enough that two genuinely separate launches both get a window.
+    private static let handoffDebounce: TimeInterval = 3
 
     /// The notification's backstop, for the gap before the observer above exists.
     ///
@@ -176,11 +203,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     private func checkHandoffRequest() {
         guard let handoff = sessionHandoff else { return }
-        DispatchQueue.global(qos: .utility).async {
-            // Only `.fresh`: `.lost` means the notification handler claimed it and
-            // is already opening the window.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            // Only `.fresh` here. `.lost` means the notification handler claimed it
+            // and is already opening the window; `.stale` means the file outlived
+            // whoever wrote it, and unlike a notification arrival there is nothing
+            // to prove anyone is still asking; `.absent` is the ordinary case of
+            // there being no request at all, which is what almost every tick sees.
             guard handoff.claim() == .fresh else { return }
-            DispatchQueue.main.async { MainWindow.shared.open() }
+            DispatchQueue.main.async { self?.openForHandoff() }
         }
     }
 

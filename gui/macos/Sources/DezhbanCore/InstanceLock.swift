@@ -98,7 +98,16 @@ public final class InstanceLock {
 
     public func acquire() -> Acquisition {
         guard fd < 0 else { return .acquired }
-        let opened = open(url.path, O_CREAT | O_RDWR, 0o644)
+        // O_CLOEXEC because the lock IS this descriptor: a child that inherited it
+        // would hold the lock past this app's death and lock its own successor out
+        // — permanently, since nothing would ever release it. Every subprocess the
+        // app starts goes through Foundation's `Process`, which spawns with
+        // POSIX_SPAWN_CLOEXEC_DEFAULT on macOS and so does not leak it today. That
+        // makes this insurance rather than a fix, which is exactly why it belongs
+        // here: the safety currently rests on an implementation detail of a
+        // framework, stated nowhere, and the failure it would cause is an app that
+        // never starts again.
+        let opened = open(url.path, O_CREAT | O_RDWR | O_CLOEXEC, 0o644)
         if opened < 0 {
             return .unavailable("open(\(url.path)): \(String(cString: strerror(errno)))")
         }

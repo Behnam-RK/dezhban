@@ -789,9 +789,25 @@ struct SettingsView: View {
                 // still hold it for the user's approval, and there is one path
                 // where only they can clear the old login item. A switch that
                 // snaps back with no explanation reads as a bug.
-                let outcome = LoginItem.set(enabled: wanted)
-                loginEnabled = outcome.isOn
-                status = outcome.message
+                //
+                // Off the main thread: `set(enabled:)` is six to eight blocking
+                // SMAppService round-trips over XPC plus an unregister, and this
+                // runs from a SwiftUI setter, so doing it inline beachballs the
+                // Settings window. It is the same cost that had the migration moved
+                // off-main in AppDelegate. The switch moves immediately to where the
+                // user put it and is corrected from the outcome when it lands — and
+                // on the disable path launchd may terminate the app partway
+                // through (ADR-0014's known risk), which is one more reason not to
+                // be holding the main thread while it happens.
+                loginEnabled = wanted
+                status = wanted ? "Registering the login item…" : "Removing the login item…"
+                DispatchQueue.global(qos: .userInitiated).async {
+                    let outcome = LoginItem.set(enabled: wanted)
+                    DispatchQueue.main.async {
+                        loginEnabled = outcome.isOn
+                        status = outcome.message
+                    }
+                }
             })
     }
 
