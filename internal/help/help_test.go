@@ -54,6 +54,11 @@ func TestBundleBuilds(t *testing.T) {
 // TestEveryTunableDocAnchorResolves ties the settings schema to the bundle. A
 // contextual help link is a promise that the section exists; a stale anchor
 // silently lands the reader at the top of a long reference page instead.
+//
+// Key anchors count alongside headings: a Tunable's DocAnchor names the key's
+// own row (config.docAnchorFor), which is the whole point of the per-key grain.
+// A key that loses its documentation row fails here by name rather than
+// degrading into a link to the top of the section.
 func TestEveryTunableDocAnchorResolves(t *testing.T) {
 	index := buildInto(t)
 
@@ -62,6 +67,9 @@ func TestEveryTunableDocAnchorResolves(t *testing.T) {
 		set := map[string]bool{}
 		for _, h := range e.Headings {
 			set[h.Anchor] = true
+		}
+		for _, k := range e.Keys {
+			set[k.Anchor] = true
 		}
 		anchors[e.Source] = set
 	}
@@ -79,6 +87,32 @@ func TestEveryTunableDocAnchorResolves(t *testing.T) {
 		}
 		if !set[frag] {
 			t.Errorf("%s: no heading in %s has the anchor %q", tun.Key, page, frag)
+		}
+	}
+}
+
+// TestKeyAnchorSlugMatchesTheRenderer pins config.anchorSlug (which cannot
+// import this package — internal/help imports internal/config to check its own
+// work) to help.KeyAnchor. The two derive the same fragment id from opposite
+// ends of the same link, and a divergence would break every contextual help
+// link at once while both packages' own tests still passed.
+func TestKeyAnchorSlugMatchesTheRenderer(t *testing.T) {
+	index := buildInto(t)
+
+	rendered := map[string]bool{}
+	for _, e := range index {
+		for _, k := range e.Keys {
+			rendered[e.Source+"#"+k.Anchor] = true
+		}
+	}
+	for _, tun := range config.Tunables() {
+		if !rendered[tun.DocAnchor] {
+			continue // documented in prose; covered by the resolution test above
+		}
+		page, frag, _ := strings.Cut(tun.DocAnchor, "#")
+		if want := KeyAnchor(tun.Key); frag != want {
+			t.Errorf("%s: schema derived %q, renderer derives %q (page %s)",
+				tun.Key, frag, want, page)
 		}
 	}
 }

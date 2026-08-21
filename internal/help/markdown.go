@@ -39,6 +39,13 @@ type Heading struct {
 type Rendered struct {
 	HTML     string
 	Headings []Heading
+	// Keys are the per-row anchors emitted for reference tables: one entry per
+	// table row whose first cell is a lone code span, which is how every field
+	// table in the docs is written. They are what lets a contextual help link
+	// land on `vpn.redialWindow` itself rather than on the section heading four
+	// dozen keys share. Kept separate from Headings because they are not
+	// headings: they never appear in the sidebar outline.
+	Keys []Heading
 	// Text is the page with markup stripped, for substring search.
 	Text string
 	// Unsupported names constructs the renderer met and could not represent.
@@ -47,7 +54,10 @@ type Rendered struct {
 }
 
 var (
-	inlineCode  = regexp.MustCompile("`([^`]+)`")
+	inlineCode = regexp.MustCompile("`([^`]+)`")
+	// A table cell that is one code span and nothing else — how every field
+	// table in the docs names the key a row documents. See rowKey.
+	loneCode    = regexp.MustCompile("^`([^`]+)`$")
 	inlineLink  = regexp.MustCompile(`\[([^\]]*)\]\(([^)]+)\)`)
 	inlineImage = regexp.MustCompile(`!\[([^\]]*)\]\(([^)]+)\)`)
 	// Non-greedy and NOT [^*]+, so a bold span may contain italics: the docs
@@ -116,6 +126,23 @@ func Render(source, markdown string) Rendered {
 			note("unpaired ** (bold that never closed)")
 		}
 		return rendered
+	}
+
+	// claimKey hands out the anchor for a key row, the FIRST time that key is
+	// seen on this page. A key documented in more than one table — several are,
+	// e.g. `pollInterval` in both the field reference and the presets
+	// comparison — must anchor to its definition, and duplicate ids are invalid
+	// HTML besides: a browser jumps to whichever came first, so the choice is
+	// made here rather than left to chance.
+	claimedKeys := map[string]bool{}
+	claimKey := func(key string) (string, bool) {
+		anchor := KeyAnchor(key)
+		if claimedKeys[anchor] {
+			return "", false
+		}
+		claimedKeys[anchor] = true
+		r.Keys = append(r.Keys, Heading{Text: key, Anchor: anchor})
+		return anchor, true
 	}
 
 	lines := strings.Split(markdown, "\n")
@@ -196,7 +223,7 @@ func Render(source, markdown string) Rendered {
 		if strings.HasPrefix(trimmed, "|") && i+1 < len(lines) && isTableSeparator(lines[i+1]) {
 			closeList()
 			closeQuote()
-			consumed := renderTable(&out, &text, lines[i:], renderInline)
+			consumed := renderTable(&out, &text, lines[i:], renderInline, claimKey)
 			i += consumed - 1
 			continue
 		}
@@ -366,7 +393,14 @@ func isTableSeparator(line string) bool {
 }
 
 // renderTable emits one table and reports how many lines it consumed.
-func renderTable(out *strings.Builder, text *strings.Builder, lines []string, renderInline func(string) string) int {
+//
+// A row whose first cell is a lone code span — `vpn.redialWindow`, which is how
+// every field table in the docs opens a row — gets an `id` on its <tr> so a
+// contextual help link can land on that key. Every other row is emitted exactly
+// as before. claimKey decides the anchor and reports whether this row is the
+// one that gets it — see Render, which resolves keys documented in two tables.
+func renderTable(out *strings.Builder, text *strings.Builder, lines []string,
+	renderInline func(string) string, claimKey func(string) (string, bool)) int {
 	header := splitRow(lines[0])
 	out.WriteString("<div class=\"table-scroll\"><table>\n<thead><tr>")
 	for _, c := range header {
@@ -382,8 +416,17 @@ func renderTable(out *strings.Builder, text *strings.Builder, lines []string, re
 		if !strings.HasPrefix(s, "|") {
 			break
 		}
-		out.WriteString("<tr>")
-		for _, c := range splitRow(s) {
+		cells := splitRow(s)
+		anchor := ""
+		if key, ok := rowKey(cells); ok {
+			anchor, _ = claimKey(key)
+		}
+		if anchor != "" {
+			fmt.Fprintf(out, "<tr id=%q>", anchor)
+		} else {
+			out.WriteString("<tr>")
+		}
+		for _, c := range cells {
 			out.WriteString("<td>" + renderInline(c) + "</td>")
 			text.WriteString(stripInline(c) + " ")
 		}
@@ -524,6 +567,36 @@ func stripInline(s string) string {
 	out = inlineLink.ReplaceAllString(out, "$1")
 	out = strings.NewReplacer("`", "", "**", "", "*", "", "_", "").Replace(out)
 	return strings.TrimSpace(out)
+}
+
+// rowKey reports the config key a table row documents, when its first cell is a
+// lone code span and nothing else. The "nothing else" is deliberate: a row whose
+// first cell is prose that happens to contain code (`"see `vpn.endpoints`"`) is
+// not a definition of that key, and anchoring to it would send a help link to
+// the wrong row — silently, which is the one failure mode this package refuses.
+func rowKey(cells []string) (string, bool) {
+	if len(cells) == 0 {
+		return "", false
+	}
+	m := loneCode.FindStringSubmatch(strings.TrimSpace(cells[0]))
+	if m == nil {
+		return "", false
+	}
+	key := strings.TrimSpace(m[1])
+	if key == "" {
+		return "", false
+	}
+	return key, true
+}
+
+// KeyAnchor derives the fragment id a documented config key gets.
+//
+// Prefixed, so a key anchor can never collide with the heading anchor GitHub
+// would derive from a heading of the same words — the two namespaces share one
+// document and a silent collision would send a help link somewhere plausible
+// and wrong.
+func KeyAnchor(key string) string {
+	return "key-" + Anchor(key)
 }
 
 // Anchor derives the fragment id a heading gets, matching GitHub's rule so an

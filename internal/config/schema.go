@@ -1,6 +1,9 @@
 package config
 
-import "sort"
+import (
+	"sort"
+	"strings"
+)
 
 // This file exists because a default stated in more than one place is a default
 // that will drift — and this one already had. Before it, every tunable's default
@@ -100,8 +103,9 @@ type Tunable struct {
 // LiveAppliable reports whether a running daemon adopts this key in place.
 func (t Tunable) LiveAppliable() bool { return t.RestartReason == "" }
 
-// Doc anchors. Keys are documented by section, so these are the four sections of
-// docs/usage/config.md that between them cover every key.
+// Doc anchors. Each key resolves to its own row in docs/usage/config.md — see
+// docAnchorFor. These four section anchors are the declared fallback for a key
+// the reference documents in prose rather than as a table row.
 const (
 	anchorFields   = "usage/config.md#fields"
 	anchorControl  = "usage/config.md#control-block"
@@ -475,9 +479,58 @@ func Tunables() []Tunable {
 	for i, t := range tunables {
 		t.Default = defaults[t.Key]
 		t.RestartReason = restartReasonFor(t.Key)
+		t.DocAnchor = docAnchorFor(t.Key, t.DocAnchor)
 		out[i] = t
 	}
 	return out
+}
+
+// docAnchorFor upgrades a key's declared section anchor to the anchor of its own
+// row in the reference.
+//
+// The reference documents each key as a table row opening with the key in a code
+// span, and the help renderer gives every such row an id (help.KeyAnchor). So a
+// contextual help link can land on the key the reader clicked rather than on a
+// section heading that four dozen keys share, which is what the four constants
+// above delivered on their own.
+//
+// Derived rather than hand-written, for the same reason defaults are: forty-odd
+// anchors restated by hand is forty-odd chances to drift. keysDocumentedInProse
+// names the exceptions, and TestEveryTunableDocAnchorResolves fails the build
+// naming any key whose derived anchor does not exist — so a key that loses its
+// row cannot silently fall back to landing somewhere plausible and wrong.
+func docAnchorFor(key, declared string) string {
+	if keysDocumentedInProse[key] {
+		return declared
+	}
+	page, _, ok := strings.Cut(declared, "#")
+	if !ok || page == "" {
+		return declared
+	}
+	return page + "#key-" + anchorSlug(key)
+}
+
+// keysDocumentedInProse are the keys docs/usage/config.md covers outside a table
+// row, which therefore have no row anchor to land on. They keep their section
+// anchor. Adding a row for one of these is an improvement — delete it from here
+// when you do.
+var keysDocumentedInProse = map[string]bool{}
+
+// anchorSlug mirrors help.Anchor's rule (GitHub's), applied to a config key.
+// Duplicated deliberately rather than imported: internal/help renders the docs
+// and would import this package to check its work, so depending on it here would
+// close a cycle. TestKeyAnchorSlugMatchesTheRenderer pins the two together.
+func anchorSlug(key string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(key) {
+		switch {
+		case r >= 'a' && r <= 'z', r >= '0' && r <= '9', r == '-':
+			b.WriteRune(r)
+		case r == ' ':
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
 }
 
 // TunableByKey looks one key up. The bool is false for a key that is not

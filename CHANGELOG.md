@@ -12,6 +12,26 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Contextual help lands on the key you asked about.** The **?** beside a
+  setting used to open one of four section anchors shared by every key in that
+  section; it now scrolls to that key's own row in the configuration reference.
+  The help renderer gives each documented key a row anchor, and each key's
+  anchor is derived from the key rather than hand-written, so the two cannot
+  drift — a key that loses its documentation row now fails the build by name.
+  The **?** tooltip is the key's own one-line help instead of "Read about X in
+  the documentation".
+- **Shorter action buttons, with one caption line under the row.** The Overview's
+  controls are now Block / Unblock / Switch VPN… / Pause / Guard down / Panic…,
+  and the sentence each title used to carry inline moved to a single caption
+  line beneath the row that follows the pointer and the keyboard focus (falling
+  back to the posture headline). The same sentence remains the tooltip. The
+  menubar's items are unchanged: a menu has no caption line to delegate to, and
+  a guided empty state's panic button keeps its full title for the same reason.
+- **The advanced tunables table names its keys in full** (`vpn.advanced.redialBudget`
+  rather than `redialBudget`), matching every other table in the reference.
+
 ### Fixed
 
 - **"Open minimized" now actually decides whether the window opens.** The app

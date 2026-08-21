@@ -999,6 +999,18 @@ task gui:build && open dist/Dezhban.app
 
 ### Actions
 
+- [ ] **The action row explains itself before the click.** Titles are short
+      (Block / Unblock / Switch VPN… / Pause / Guard down / Panic…). Move the
+      pointer across the row: the caption line beneath it changes to that
+      control's sentence — in particular, hovering **Pause** must say it uses
+      your real ISP IP, which is the warning its old title carried. Moving off
+      the row restores the posture headline. Tab through the row with Full
+      Keyboard Access on and confirm focus drives the caption too. The line must
+      never go blank or change height, which would reflow the row under the
+      pointer.
+- [ ] **The degraded states keep their long panic title.** With the CLI missing
+      or the service not installed, the panic button still reads "Panic — force
+      unblock…" — there is no caption line there to carry the explanation.
 - [ ] **Routine ops are passwordless with a live daemon.** Block/Unblock and the
       switch window complete over the control socket with **no** prompt, from both
       the menubar and Overview; the switch countdown ticks in both surfaces and
@@ -1164,9 +1176,12 @@ traffic, so the check that matters is the one CI cannot run: with egress gone.
       shows this; the Go tests cannot.
 - [ ] Built from a checkout whose `docs/` was renamed under it, `task gui:build`
       **fails** rather than producing an app whose Help pane is missing a page.
-- [ ] The **?** beside a Settings field opens Help scrolled to that key's own
-      heading — not the top of the configuration reference. Spot-check one field
-      per section, including one under Advanced.
+- [ ] The **?** beside a Settings field opens Help scrolled to **that key's own
+      table row** — not to the section heading it shares with dozens of other
+      keys, and not to the top of the reference. Spot-check one field per
+      section, including one under Advanced (whose rows are anchored on the
+      fully-qualified `vpn.advanced.*` name). Its **tooltip** is the key's own
+      one-line help, not "Read about X in the documentation".
 - [ ] Against a CLI too old to know `config schema`, the **?** buttons are absent
       rather than present and inert.
 

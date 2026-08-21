@@ -622,7 +622,8 @@ Two surfaces, split by urgency:
 
 - **Menubar dropdown — the safety/glance core.** One status line (posture, exit
   country/provider), **Open Dezhban…**, **Block now/Unblock**, the VPN switch
-  window (Switching VPN… / Cancel with a live countdown) when in VPN mode,
+  window (Switching VPN… / Cancel VPN switch, with a live countdown) when in VPN
+  mode,
   **Panic — force unblock…**, Quit. These are the time-critical and
   lockout-recovery actions; they never depend on the main window opening. Items
   enable/disable from the current state.
@@ -640,7 +641,14 @@ The main window's sidebar sections:
   banners above the grid — enforcement problems in red, failing exit checks in
   orange, first line only with the full text behind a disclosure — while an
   *expected* unknown exit stays a plain row. With profiles configured,
-  "Switching VPN…" becomes a menu so a switch window can target one by name.
+  "Switch VPN…" becomes a menu so a switch window can target one by name.
+  The action row's titles are deliberately short (Block, Unblock, Switch VPN…,
+  Pause, Guard down, Panic…) with a **single caption line beneath the row**
+  carrying the sentence each one used to hold inline — it follows the pointer
+  and the keyboard focus, and falls back to the posture headline. The same
+  sentence is also the control's tooltip, so the two can never disagree. The
+  menubar's items keep their long, self-explaining titles: a menu has no caption
+  line to delegate to.
   Degraded states are guided: CLI missing, service not installed, and daemon
   stopped each render an explanation with the one relevant action inline
   (Install service… / Guard up).

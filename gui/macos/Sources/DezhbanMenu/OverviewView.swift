@@ -8,6 +8,15 @@ import DezhbanCore
 struct OverviewView: View {
     @EnvironmentObject var state: AppState
     @State private var busy = false
+    /// The action control the pointer is over, and the sentence it explains.
+    /// Carried together so a control can only clear the caption it actually put
+    /// there — see `captioned`.
+    @State private var hoveredAction: (id: String, hint: String)?
+    /// Last hint handed over by keyboard focus. Read only while
+    /// `focusedAction != nil`, so blurring the row falls back to the posture
+    /// headline instead of stranding the caption on a control nobody is on.
+    @State private var focusedHint = ""
+    @FocusState private var focusedAction: String?
 
     var body: some View {
         Group {
@@ -58,7 +67,10 @@ struct OverviewView: View {
 
                 Divider()
 
-                actionButtons(s)
+                VStack(alignment: .leading, spacing: 6) {
+                    actionButtons(s)
+                    actionCaption(s)
+                }
 
                 Spacer(minLength: 12)
 
@@ -272,6 +284,11 @@ struct OverviewView: View {
     private func actionButtons(_ s: Snapshot) -> some View {
         let blocked = s.blocked
         let guardHolds = PostureUI.guardHoldsDownedTunnel(s)
+        // Titles are one or two words; the sentence each one used to carry
+        // inline ("Pause — use my real IP") is now the caption line below, fed
+        // by hover and keyboard focus. Same strings still go to `.help`, so the
+        // tooltip and the caption can never say different things.
+        //
         // ActionRow, not HStack: an HStack given less width than its children's
         // ideal sum compresses every one of them, so at a narrow window all
         // five labels truncated at once ("Block n…", "Switchin…", "Guard…").
@@ -279,37 +296,86 @@ struct OverviewView: View {
         // of whatever line it lands on — which is also why the Spacer that used
         // to sit before it is gone.
         return ActionRow(trailingCount: 1) {
-            Button("Block now") { AppActions.routine(["block"], "block") }
-                .disabled(blocked)
-                .help(state.routineHint("Cuts all traffic and holds it until you unblock."))
-            Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
-                .disabled(!(blocked || guardHolds))
-                .help(state.routineHint("Releases a manual block and resumes monitoring."))
+            captioned("block",
+                      state.routineHint("Cuts all traffic and holds it until you unblock.")) {
+                Button("Block") { AppActions.routine(["block"], "block") }
+                    .disabled(blocked)
+            }
+            captioned("unblock",
+                      state.routineHint("Releases a manual block and resumes monitoring.")) {
+                Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
+                    .disabled(!(blocked || guardHolds))
+            }
             if let sw = s.switch, sw.open, sw.isPause {
                 // `switch --cancel` deliberately refuses to touch a pause (see the
                 // glossary's Pause entry) — `resume` is the only way to end one early.
-                Button("Resume now" + sw.leftSuffix(asOf: state.now)) {
-                    AppActions.routine(["resume"], "resume the guard")
+                captioned("resume",
+                          state.routineHint("Ends the pause early and re-arms the guard.")) {
+                    Button("Resume" + sw.leftSuffix(asOf: state.now)) {
+                        AppActions.routine(["resume"], "resume the guard")
+                    }
                 }
-                .help(state.routineHint("Ends the pause early and re-arms the guard."))
             } else if let sw = s.switch, sw.open {
-                Button("\(sw.isAutoRedial ? "Cancel redial window" : "Cancel VPN switch")"
-                       + sw.leftSuffix(asOf: state.now)) {
-                    AppActions.routine(["switch", "--cancel"], "cancel the switch window")
+                captioned("cancel-window",
+                          state.routineHint("Closes the window and restores the guard.")) {
+                    Button("Cancel" + sw.leftSuffix(asOf: state.now)) {
+                        AppActions.routine(["switch", "--cancel"], "cancel the switch window")
+                    }
                 }
-                .help(state.routineHint("Closes the window and restores the guard."))
             } else {
                 switchMenu
-                Button("Pause — use my real IP") { AppActions.routine(["pause"], "pause the guard") }
-                    .disabled(!state.pauseIsEnabled)
-                    .help(state.pauseIsEnabled
-                        ? state.routineHint("Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
-                        : "Disabled — vpn.pauseMax is \"0\" in your config.")
+                captioned("pause", state.pauseIsEnabled
+                            ? state.routineHint("Uses your real ISP IP instead of the VPN, then re-arms the guard automatically.")
+                            : "Disabled — vpn.pauseMax is \"0\" in your config.") {
+                    Button("Pause") { AppActions.routine(["pause"], "pause the guard") }
+                        .disabled(!state.pauseIsEnabled)
+                }
             }
-            Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
-                .help("Stops dezhban. Asks for your password — it can’t stop itself while running.")
+            captioned("stop",
+                      "Stops dezhban. Asks for your password — it can’t stop itself while running.") {
+                Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Wraps one action control so pointing at it, or focusing it with the
+    /// keyboard, puts `hint` in the caption line — and puts the same string in
+    /// the tooltip, so the two surfaces cannot drift apart.
+    ///
+    /// `id` is what distinguishes controls in the hover/focus state; it is never
+    /// shown. Hover is cleared only by the control that owns the current hint,
+    /// so the pointer leaving A after it has already entered B does not blank
+    /// out B's caption.
+    @ViewBuilder
+    private func captioned<Content: View>(_ id: String, _ hint: String,
+                                          @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .help(hint)
+            .focused($focusedAction, equals: id)
+            .onHover { inside in
+                if inside {
+                    hoveredAction = (id, hint)
+                } else if hoveredAction?.id == id {
+                    hoveredAction = nil
+                }
+            }
+            .onChange(of: focusedAction) { _ in focusedHint = focusedAction == id ? hint : focusedHint }
+    }
+
+    /// The one line that explains whatever the user is pointing at. Always
+    /// present and always one line high — a caption that vanished between two
+    /// buttons would reflow the row under the pointer.
+    private func actionCaption(_ s: Snapshot) -> some View {
+        Text(ActionCaption.text(hovered: hoveredAction?.hint,
+                                focused: focusedAction == nil ? nil : focusedHint,
+                                fallback: PostureUI.humanPosture(s)))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityHidden(true)
     }
 
     /// Opens a switch window, optionally targeted at a known VPN profile so the
@@ -318,23 +384,26 @@ struct OverviewView: View {
     /// single "Any known VPN" entry would just be a worse button.
     @ViewBuilder
     private var switchMenu: some View {
+        let hint = state.routineHint("Briefly relaxes the guard so a new VPN can connect.")
         if let profiles = state.profiles, !profiles.profiles.isEmpty {
-            Menu("Switching VPN…") {
-                Button("Any known VPN") {
-                    AppActions.routine(["switch", "--no-wait"], "open a switch window")
-                }
-                Divider()
-                ForEach(profiles.profiles) { p in
-                    Button(p.name) {
-                        AppActions.routine(["switch", "--no-wait", "--name", p.name],
-                                           "open a switch window for \(p.name)")
+            captioned("switch", hint) {
+                Menu("Switch VPN…") {
+                    Button("Any known VPN") {
+                        AppActions.routine(["switch", "--no-wait"], "open a switch window")
+                    }
+                    Divider()
+                    ForEach(profiles.profiles) { p in
+                        Button(p.name) {
+                            AppActions.routine(["switch", "--no-wait", "--name", p.name],
+                                               "open a switch window for \(p.name)")
+                        }
                     }
                 }
             }
-            .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
         } else {
-            Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
-                .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
+            captioned("switch", hint) {
+                Button("Switch VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
+            }
         }
     }
 
@@ -346,11 +415,11 @@ struct OverviewView: View {
                     state.showInLogs(title: "dezhban — panic", text: result.output)
                 }
             } label: {
-                Label("Panic — force unblock…", systemImage: "exclamationmark.octagon.fill")
+                Label("Panic…", systemImage: "exclamationmark.octagon.fill")
             }
             .tint(.red)
             .fixedSize()
-            Text("Removes every dezhban firewall rule, even with dezhban not running.")
+            Text("Force unblock: removes every dezhban firewall rule, even with dezhban not running.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 // Wrap to a second line rather than truncate: this caption is
@@ -429,6 +498,12 @@ struct OverviewView: View {
                 .padding(.top, 4)
             // Panic stays reachable even from a degraded state — stale rules with
             // no daemon are exactly when the escape hatch matters.
+            //
+            // This one keeps its full title while the Overview's own panic
+            // button is just "Panic…": the rule is that a title may shed its
+            // explanation only where the explanation has somewhere else to
+            // live. Here there is no caption line and no action row — a lone
+            // "Panic…" in a guided empty state would explain itself to nobody.
             Button("Panic — force unblock…") {
                 guard AppActions.confirmPanic() else { return }
                 AppActions.capturedPrivileged(["panic"]) { result in

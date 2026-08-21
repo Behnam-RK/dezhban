@@ -758,7 +758,13 @@ struct SettingsView: View {
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
-            .help("Read about \(tunable.label) in the documentation")
+            // The key's own one-liner, not "Read about X in the documentation":
+            // a tooltip that only describes the button wastes the one surface
+            // that could answer the question without navigating anywhere. The
+            // generic phrasing survives as the accessibility label, where it is
+            // the right thing — VoiceOver announces the control, and `help` is
+            // read out separately as its description.
+            .help(tunable.help)
             .accessibilityLabel("Documentation for \(tunable.label)")
         }
     }

@@ -19,6 +19,11 @@ type IndexEntry struct {
 	Summary  string    `json:"summary"`
 	Tutorial int       `json:"tutorial,omitempty"`
 	Headings []Heading `json:"headings"`
+	// Keys are the per-row anchors of the page's reference tables, so a
+	// contextual help link can resolve to one config key rather than to the
+	// section heading it shares with dozens of others. Omitted for the pages
+	// that document no keys.
+	Keys []Heading `json:"keys,omitempty"`
 	// Text is the page stripped to words, so search can run entirely in the app
 	// with no second pass over the HTML.
 	Text string `json:"text"`
@@ -57,7 +62,8 @@ func Build(docsDir, outDir string) ([]IndexEntry, error) {
 
 		index = append(index, IndexEntry{
 			File: name, Source: page.Source, Title: page.Title, Summary: page.Summary,
-			Tutorial: page.Tutorial, Headings: rendered.Headings, Text: rendered.Text,
+			Tutorial: page.Tutorial, Headings: rendered.Headings, Keys: rendered.Keys,
+			Text: rendered.Text,
 		})
 	}
 
