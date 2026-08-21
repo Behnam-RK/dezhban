@@ -202,6 +202,42 @@ func (b *pfBackend) IsBlocked() (bool, error) {
 	return mainRulesetReferencesAnchor(main), nil
 }
 
+// InstalledRules reads dezhban's anchor back out of the kernel.
+//
+// Scoped to `-a dezhban` exactly like every other operation here: it reports our
+// own rules and nothing else, so it can never become a way to dump a user's
+// unrelated pf configuration. The anchor reference line from the main ruleset is
+// prepended when present, because a loaded anchor that the main ruleset does not
+// reference is not being evaluated at all — the same gap IsBlocked checks for,
+// and the reader of this text has to be able to see it.
+//
+// A read, not a write: it takes no lock in this package and is safe from any
+// goroutine or process. It does need root, which is why nothing calls it on a
+// tick.
+func (b *pfBackend) InstalledRules() (string, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pfctlTimeout)
+	defer cancel()
+
+	rules, err := pfctlCtx(ctx, "", "-a", anchorName, "-s", "rules")
+	if err != nil {
+		return "", false, fmt.Errorf("read the dezhban anchor: %w", err)
+	}
+	if strings.TrimSpace(rules) == "" {
+		return "", false, nil
+	}
+	var b0 strings.Builder
+	if main, err := pfctlCtx(ctx, "", "-s", "rules"); err == nil {
+		if mainRulesetReferencesAnchor(main) {
+			b0.WriteString("# main ruleset references the dezhban anchor\n")
+		} else {
+			b0.WriteString("# WARNING: the main ruleset does NOT reference the dezhban anchor —\n")
+			b0.WriteString("# these rules are loaded but pf never descends into them.\n")
+		}
+	}
+	b0.WriteString(rules)
+	return b0.String(), true, nil
+}
+
 // mainRulesetReferencesAnchor reports whether pfctl's rendered main ruleset
 // still contains our anchor reference. Split out from IsBlocked so it can be
 // exercised in tests against captured `pfctl -s rules` output without

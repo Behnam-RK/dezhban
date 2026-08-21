@@ -1202,6 +1202,35 @@ end up typing a password.
       `dezhban doctor` prints in a terminal.
 - [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
 
+### Firewall rules (Diagnostics)
+
+- [ ] **Applied appears without a password.** With the guard up, open
+      Diagnostics: "Applied by dezhban — Guard" shows a timestamp and the pf
+      ruleset, with no prompt. Compare it against
+      `dezhban print-rules --applied` in a terminal — same text.
+- [ ] **It tracks the posture.** Drive a block with `--simulate-country IR`; the
+      applied row becomes "Full block" and the timestamp moves. Open a switch
+      window; it becomes "Switch window".
+- [ ] **Teardown clears it.** `sudo dezhban stop` (or `panic`), then re-open
+      Diagnostics: the row reads "no ruleset recorded yet". A stale ruleset shown
+      as live over an open network is the failure this must never have.
+- [ ] **The kernel readback asks for a password and only reads.** "Read from the
+      kernel…" prompts once and shows `pfctl -a dezhban -s rules` output. Confirm
+      nothing changed: `dezhban status` and the posture are identical before and
+      after, and running it with the guard DOWN reports "no dezhban rules are
+      loaded" rather than an error.
+- [ ] **Drift is reported, not repaired.** With the guard up, flush the anchor by
+      hand (`sudo pfctl -a dezhban -F rules`), then "Read from the kernel…": the
+      pane must warn that dezhban applied rules the firewall no longer holds, and
+      must offer **no** repair button. Then confirm the daemon's own verify tick
+      re-applies them within `vpn.advanced.verifyInterval` and the log says so.
+- [ ] **The previews cost nothing and need no root.** As an unprivileged user
+      with dezhban stopped, expand each of Guard / Full block / Switch window:
+      each renders, and each matches `dezhban print-rules --mode <m>`.
+- [ ] **Only what is opened is fetched.** Visiting Diagnostics with every
+      disclosure collapsed must spawn no `print-rules` subprocess (watch with
+      `sudo fs_usage -w -f exec | grep dezhban`, or Activity Monitor).
+
 ### Help pane
 
 The pane's whole reason for existing is that it works while the guard has cut

@@ -121,6 +121,31 @@ func (b *nftBackend) IsBlocked() (bool, error) {
 	return outputChainPolicyIsDrop(out), nil
 }
 
+// InstalledRules renders dezhban's own table back out of the kernel.
+//
+// Scoped to `inet dezhban` by listTable, so it reports our table and nothing
+// else — it can never become a way to dump a user's unrelated nftables
+// configuration. A read: it installs nothing, needs no lock here, and is safe
+// from any goroutine or process. It does need root/CAP_NET_ADMIN, which is why
+// nothing calls it on a tick.
+//
+// A table with an output chain whose policy has drifted off drop is loaded but
+// not enforcing — the same gap IsBlocked checks — so the text says so, because
+// whoever is reading it has to be able to see that.
+func (b *nftBackend) InstalledRules() (string, bool, error) {
+	out, exists, err := b.listTable()
+	if err != nil || !exists {
+		return "", false, err
+	}
+	var sb strings.Builder
+	if !outputChainPolicyIsDrop(out) {
+		sb.WriteString("# WARNING: the output chain's policy is no longer drop —\n")
+		sb.WriteString("# this table is loaded but is not cutting anything.\n")
+	}
+	sb.WriteString(out)
+	return sb.String(), true, nil
+}
+
 // outputChainPolicyIsDrop reports whether nft's rendered `list table` output
 // still shows the output chain's hook policy as drop. Split out from
 // IsBlocked so it can be exercised in tests against captured `nft list table`

@@ -164,6 +164,15 @@ final class AppState: ObservableObject {
     @Published var doctorReport: DoctorReport?
     @Published var doctorError: String?
     @Published var doctorRunning = false
+
+    /// The rules dezhban recorded applying, and the rules the kernel actually
+    /// holds. Two separate reads: the first is unprivileged and refreshed with
+    /// the rest of the pane, the second costs a password and only happens when
+    /// asked for.
+    @Published var appliedRules: AppliedRuleset?
+    @Published var installedRules: InstalledRuleset?
+    @Published var installedRulesError: String?
+    @Published var installedRulesRunning = false
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
     /// sidebar can subscribe with removeDuplicates() and never reload at 1 Hz.
@@ -322,6 +331,47 @@ final class AppState: ObservableObject {
                     // not go on asserting the pre-failure verdict. A run that
                     // can't complete is itself something to look at.
                     self.diagnosticsAttention = true
+                }
+            }
+        }
+    }
+
+    /// Reads what dezhban recorded applying. Unprivileged and cheap — the record
+    /// is a small file beside state.json — so it refreshes with the rest of the
+    /// Diagnostics pane rather than on demand.
+    func refreshAppliedRules() {
+        guard cliFound else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let rules = DezhbanCLI.readAppliedRules()
+            DispatchQueue.main.async { self?.appliedRules = rules }
+        }
+    }
+
+    /// Reads dezhban's rules back out of the kernel. Costs an admin prompt, so
+    /// it is never automatic.
+    ///
+    /// A READ — it installs nothing, changes nothing, and does not go through
+    /// `Backend.Apply`, so it leaves the run loop's single-writer rule alone.
+    /// There is deliberately no repair here either: the run loop's verification
+    /// tick already re-applies rules that go missing, and a second repairer
+    /// would be a second writer.
+    func readInstalledRules() {
+        guard !installedRulesRunning, cliFound else { return }
+        installedRulesRunning = true
+        installedRulesError = nil
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let r = DezhbanCLI.runPrivileged(["print-rules", "--installed", "--json"])
+            let decoded = r.ok ? r.output.data(using: .utf8).flatMap(InstalledRuleset.decode) : nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.installedRulesRunning = false
+                if let decoded {
+                    self.installedRules = decoded
+                } else {
+                    self.installedRules = nil
+                    self.installedRulesError = r.output.isEmpty
+                        ? "No output from `dezhban print-rules --installed`."
+                        : r.output
                 }
             }
         }
