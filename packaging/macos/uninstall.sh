@@ -96,7 +96,12 @@ if [ -n "$CONSOLE_UID" ]; then
 		done
 		if [ ! -f "$errand_done" ]; then
 			echo "note: retracting the login item did not finish in 15s; continuing" >&2
+			# The subshell AND what it started. Killing only the subshell leaves the
+			# DezhbanMenu it launched running, and the very next statement deletes
+			# the bundle out from under it — the thing the `pkill` above exists to
+			# avoid, reintroduced on the one path this timeout is here for.
 			kill -9 "$errand" >/dev/null 2>&1 || true
+			pkill -x DezhbanMenu >/dev/null 2>&1 || true
 		fi
 		rm -f "$errand_done"
 		wait "$errand" >/dev/null 2>&1 || true

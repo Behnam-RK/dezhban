@@ -91,9 +91,6 @@ func retractLoginRegistrationsAndExit() {
 /// Returns the lock on success. The caller must keep it alive for the lifetime of
 /// the process — the lock IS the open file descriptor.
 func acquireSessionOwnership() -> InstanceLock? {
-    // Set for the winner, read by AppDelegate. A hand-off request that arrives
-    // before the observer exists lands here instead of nowhere.
-    defer { _ = sessionHandoff }
     // No bundle identifier means a bare `swift run` binary: no agent could have
     // spawned it, and nothing to scope a lock to.
     guard let id = Bundle.main.bundleIdentifier,

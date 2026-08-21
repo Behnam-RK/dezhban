@@ -20,6 +20,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menu = NSMenu()
     private var timer: Timer?
     private var updateTimer: Timer?
+    /// Runs only for a few seconds after launch — see `startHandoffBackstop`.
+    private var handoffTimer: Timer?
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
@@ -53,8 +55,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path)
         // And the file the notification cannot cover: a duplicate that posted
         // while this process was still starting up found no observer, so its
-        // request is on disk. Checked here and again on every tick (see refresh).
-        consumeHandoffRequest()
+        // request is on disk. Checked now and for a few seconds more — see
+        // startHandoffBackstop for why it is bounded rather than on every tick.
+        startHandoffBackstop()
         // macOS has a second way to start this app at login, and it does not pass
         // the launch marker: "Reopen windows when logging back in" relaunches
         // whatever was running at logout, through LaunchServices, with no
@@ -125,16 +128,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// already owning the session. Opening the window is the whole reason it
     /// bothered to tell us — it is standing in for the launch the user performed.
     @objc private func openWindowRequested() {
+        // The file is written BEFORE the notification is posted, so in the normal
+        // hand-off it is already on disk and this notification has answered it.
+        // Leaving it would have the backstop below open the window a second time
+        // up to a second later — and `MainWindow.open()` activates the app, so
+        // that is a second focus steal, or a window reopening after the user just
+        // closed it.
+        sessionHandoff?.discard()
         MainWindow.shared.open()
     }
 
-    /// The notification's backstop. A duplicate writes a file as well as posting,
-    /// because the post is never queued and this process may not have been
-    /// observing yet; this is polled from the same 1-second timer that already
-    /// reads the state file, so a request cannot go unseen however late it lands.
-    private func consumeHandoffRequest() {
-        guard let handoff = sessionHandoff, handoff.consume() else { return }
-        MainWindow.shared.open()
+    /// The notification's backstop, for the gap before the observer above exists.
+    ///
+    /// Bounded on purpose. The window it covers is a launch-time one — the lock is
+    /// taken before `NSApplication` — and once the observer is installed the
+    /// notification carries every later hand-off. Polling the file forever would
+    /// put a synchronous stat on the main thread on every tick, which is the exact
+    /// hazard `pollStateFile` below was restructured to remove, for a feature that
+    /// is cosmetic. So it runs for a few seconds after launch and then stops, and
+    /// even then it does its filesystem work off the main thread.
+    private func startHandoffBackstop() {
+        checkHandoffRequest()
+        var remaining = 10
+        handoffTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            remaining -= 1
+            if remaining <= 0 {
+                timer.invalidate()
+                self?.handoffTimer = nil
+            }
+            self?.checkHandoffRequest()
+        }
+    }
+
+    private func checkHandoffRequest() {
+        guard let handoff = sessionHandoff else { return }
+        DispatchQueue.global(qos: .utility).async {
+            guard handoff.consume() else { return }
+            DispatchQueue.main.async { MainWindow.shared.open() }
+        }
     }
 
     /// Clicking the Dock icon (re)opens the main window — the standard macOS
@@ -156,7 +187,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private func refresh() {
         pollStateFile()
         repaint()
-        consumeHandoffRequest()
     }
 
     /// Stats and decodes the state file on a background queue, publishing the

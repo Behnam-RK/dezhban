@@ -148,7 +148,13 @@ with an argument, the pre-`SMAppService` pattern.
   but landing exactly at login, when someone impatient with a slow start
   double-clicks the app. So the losing copy writes a `HandoffRequest` beside the
   lock as well as posting, and the incumbent consumes it both when it installs the
-  observer and on the ordinary once-a-second tick it already runs. Requests carry
+  observer and for a few seconds after — bounded rather than on every tick,
+  because a permanent per-tick stat on the main thread is the hazard
+  `pollStateFile` was restructured to remove and this feature is cosmetic; the
+  window it covers is a launch-time one, and once the observer exists the
+  notification carries every later hand-off. The notification path discards the
+  file as it handles it, since the file is written first and would otherwise have
+  the backstop open the window a second time. Requests carry
   their own freshness: one the incumbent never got to must not be inherited by the
   *next* app to start and turned into a window nobody asked for, so a stale file is
   discarded rather than obeyed, and a process that has just taken the lock discards
@@ -206,10 +212,12 @@ with an argument, the pre-`SMAppService` pattern.
 
   If macOS keeps refusing to retract it, the app has no way out on its own, and
   it must not pretend otherwise: "toggle it off and on again" was the first
-  advice here and it was unreachable, because `toggle()` branches on `isEnabled`,
-  which the stuck legacy item holds true — so every attempt took the *off* branch
-  and could never reach `register()`. `LoginItem.toggle()` therefore returns an
-  `Outcome` rather than a `Bool`, and the `legacyStuck` case tells the user the
+  advice here and it was unreachable. The control was a `toggle()` that derived
+  the direction to move in from `isEnabled`, which the stuck legacy item holds
+  true — so every attempt took the *off* branch and could never reach
+  `register()`. The control is `LoginItem.set(enabled:)` now, taking the state the
+  user asked for, and it returns an `Outcome` rather than a `Bool`; the
+  `legacyStuck` case tells the user the
   one thing that does work: remove "Dezhban" under System Settings → General →
   Login Items. Once they do, the toggle registers a clean agent.
 
@@ -223,10 +231,13 @@ with an argument, the pre-`SMAppService` pattern.
   could not be retracted by the Settings switch *or* by the uninstaller's errand
   — the bundle would be deleted with the registration still on file, which is the
   orphan the errand exists to remove. `isEnabled` reports that same question, so
-  the value the switch shows and the value `toggle()` branches on are one value;
-  when they were two, an awaiting-approval registration painted the switch ON
-  while `toggle()` still read "off", and the user's attempt to switch it off
-  re-registered instead.
+  what the switch shows agrees with what `set(enabled:)` does; when they
+  disagreed, an awaiting-approval registration painted the switch ON while
+  `isEnabled` read "off", and the user's attempt to switch it off re-registered
+  instead. Taking the requested state rather than re-deriving it also fixed the
+  stale-switch inversion: the login item is removable in System Settings too, so
+  a switch left showing ON while that happened turned login-at-launch *on* when
+  clicked.
 
   One more thing the persisted flag may not swallow: a migration that retracted
   the legacy item and then *failed* to register the agent leaves nothing starting

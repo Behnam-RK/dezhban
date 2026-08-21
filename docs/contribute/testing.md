@@ -804,9 +804,11 @@ task gui:build && open dist/Dezhban.app
 - [ ] **A hand-off that arrives before the app is observing still works.** The
       race the `HandoffRequest` file exists for: log out and back in and
       double-click the app in `/Applications` as early as you can, while it is
-      still starting from the login agent. The window must open — within a second
-      if the notification missed, since the file is picked up on the ordinary
-      tick. Then confirm no `.handoff` file is left in `~/Library/Application
+      still starting from the login agent. The window must open — within about
+      half a second if the notification missed it, from the bounded backstop that
+      runs for the first few seconds. It must open **once**: no second activation
+      a moment later, and a window you close right after must stay closed. Then
+      confirm no `.handoff` file is left in `~/Library/Application
       Support/com.behnam-rk.dezhban.app/`.
 - [ ] **A copy run from outside /Applications does not migrate the login item.**
       Unzip `Dezhban-macos.app.zip` to `~/Downloads` on a Mac with a pre-agent

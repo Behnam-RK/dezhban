@@ -13,7 +13,8 @@ import ServiceManagement
 /// `LaunchVisibility` and docs/adr/0014-login-item-launch-marker.md.
 ///
 /// Registering an agent `exec`s the app immediately (`RunAtLoad`), so both
-/// `toggle()` and the migration below can spawn a second copy of a running app.
+/// `set(enabled:)` and the migration below can spawn a second copy of a running
+/// app.
 /// That is caught at startup by the instance lock in main.swift, not here — the
 /// duplicate is a *process* problem and this type has no way to see it.
 enum LoginItem {
@@ -56,7 +57,8 @@ enum LoginItem {
     /// the exact outcome the unmarked flag exists to prevent.
     private static let legacyRetractedKey = "dezhban.loginItemLegacyRetracted"
 
-    /// What a `toggle()` actually achieved, so the UI can say something true.
+    /// What a `set(enabled:)` actually achieved, so the UI can say something
+    /// true.
     ///
     /// A plain `Bool` could not: `register()` reports "the user has to approve
     /// this in System Settings" as a *status* rather than an error, and the one
@@ -160,11 +162,11 @@ enum LoginItem {
     /// agent would show "off" while startup kept happening, and leave the user
     /// no control that reaches the thing launching them.
     ///
-    /// This is the value the switch displays *and* the value `toggle()` branches
-    /// on; they must be the same one. When they were not, an awaiting-approval
-    /// registration painted the switch ON while `toggle()` still saw "off", so
-    /// the user's next click re-registered instead of disabling and there was no
-    /// way to switch login-at-launch off at all.
+    /// This is the value the switch displays. It must agree with what
+    /// `set(enabled:)` does, or the two answer different questions about the same
+    /// switch: an awaiting-approval registration once painted the switch ON while
+    /// this read "off", so a click meant to disable re-registered instead and
+    /// there was no way to switch login-at-launch off at all.
     static var isEnabled: Bool { registered(service) || registered(.mainApp) }
 
     /// Sets login-at-launch to `enabled` and reports what actually happened.
@@ -210,6 +212,15 @@ enum LoginItem {
 
     private static func disable() -> Outcome {
         UserDefaults.standard.set(true, forKey: userDisabledKey)
+        // Flushed before the unregister below, because that unregister may get
+        // this process killed: launchd terminates a loaded job's running process,
+        // and in a login-started session that process is the app (recorded as an
+        // open risk in docs/adr/0014-login-item-launch-marker.md). UserDefaults
+        // does not write through synchronously, so losing this one would leave a
+        // pending migration retry free to register the agent again on the next
+        // launch — turning login-at-launch back on behind the user, which is the
+        // single thing this key exists to prevent.
+        UserDefaults.standard.synchronize()
         if registered(service) { unregister(service, what: "login agent") }
         if registered(.mainApp) { unregister(.mainApp, what: "legacy login item") }
         if registered(.mainApp) {
@@ -256,7 +267,7 @@ enum LoginItem {
         // account done forever. The symptom is an SMAppService status nobody
         // reads. This runs unattended, so it has to be the conservative one; an
         // explicit toggle from Settings is the user's own call and is not gated.
-        guard Bundle.main.bundleURL.deletingLastPathComponent().path == "/Applications" else {
+        guard isInStableInstallLocation else {
             NSLog("DezhbanMenu: not migrating the login item from a non-standard location "
                 + "(\(Bundle.main.bundleURL.path)); the copy in /Applications will do it")
             return
@@ -330,6 +341,32 @@ enum LoginItem {
 
     private static func markMigrated() {
         UserDefaults.standard.set(true, forKey: migratedKey)
+    }
+
+    /// Whether this bundle lives somewhere it is going to stay.
+    ///
+    /// `/Applications` is where every shipping path puts it (the `.pkg`, and the
+    /// app zip, which unpacks straight into it); `~/Applications` is the
+    /// system-sanctioned per-user equivalent. Anywhere else — `~/Downloads`,
+    /// `dist/` — is a copy that is about to move or be deleted, and registering
+    /// the login agent from it would point launchd at a bundle that stops
+    /// existing.
+    ///
+    /// Symlinks are resolved for the same reason `InstanceLock` resolves them: an
+    /// install reached through a symlinked directory is still that install, and a
+    /// literal string comparison silently answered "no" and left the migration
+    /// undone forever, reported only in a log line.
+    private static var isInStableInstallLocation: Bool {
+        let parent = Bundle.main.bundleURL
+            .resolvingSymlinksInPath()
+            .standardizedFileURL
+            .deletingLastPathComponent()
+        let candidates = [URL(fileURLWithPath: "/Applications")]
+            + FileManager.default
+            .urls(for: .applicationDirectory, in: .userDomainMask)
+        return candidates.contains {
+            $0.resolvingSymlinksInPath().standardizedFileURL.path == parent.path
+        }
     }
 
     /// Words, not a raw `SMAppService.Status`. It is an imported `NS_ENUM` with no
