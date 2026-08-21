@@ -500,7 +500,7 @@ fi
 # The uninstaller comes from the SAME tag being installed — same guarantee the
 # .pkg gives (it bakes in whichever uninstall.sh existed when that tag was
 # built), just fetched instead of embedded in a payload.
-step "fetching the uninstaller"
+step "fetching the uninstaller and the license"
 SHARE_DIR=/usr/local/share/dezhban
 mkdir -p "$SHARE_DIR"
 uninstall_src="packaging/macos/uninstall.sh"
@@ -510,6 +510,17 @@ if curl -fsSL -o "$SHARE_DIR/uninstall.sh" "https://raw.githubusercontent.com/$R
 else
 	echo "warning: could not fetch the uninstaller — install itself succeeded. Retry later with:" >&2
 	echo "  curl -fsSL -o $SHARE_DIR/uninstall.sh https://raw.githubusercontent.com/$REPO/$tag/$uninstall_src" >&2
+fi
+
+# Hippocratic 3.0 Core section 5.1 requires that everyone who receives the
+# Software also receives the License; 7.2 ends the grant if that is not cured
+# within 30 days of notice. Fetched from the SAME tag as the binary, for the
+# same reason the uninstaller is. Non-fatal: a machine with the binary and no
+# LICENSE is a fixable notice problem, not a reason to fail an install that
+# already put a kill switch on the host.
+if ! curl -fsSL -o "$SHARE_DIR/LICENSE" "https://raw.githubusercontent.com/$REPO/$tag/LICENSE"; then
+	echo "warning: could not fetch the license — install itself succeeded. Retry later with:" >&2
+	echo "  curl -fsSL -o $SHARE_DIR/LICENSE https://raw.githubusercontent.com/$REPO/$tag/LICENSE" >&2
 fi
 
 echo

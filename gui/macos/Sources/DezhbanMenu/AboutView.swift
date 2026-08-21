@@ -51,9 +51,32 @@ struct AboutView: View {
                 LabeledContent("Privileged actions", value: privilegedAuth)
             }
             updateSection
+            dedicationSection
         }
         .formStyle(.grouped)
         .onAppear(perform: load)
+    }
+
+    /// Last, deliberately. Somebody who opened About is usually diagnosing —
+    /// version, paths, posture and which auth path will be used are what they
+    /// came for, and none of them should be pushed down the pane by this.
+    ///
+    /// The link will not load while egress is cut, which is the normal state for
+    /// this app. That is cosmetic and not worth guarding: nothing here depends on
+    /// it resolving, and a dedication that hid itself during FULL BLOCK would be
+    /// absent exactly when the software is doing the thing it is dedicated for.
+    private var dedicationSection: some View {
+        Section {
+            Text("Dezhban is dedicated, humbly, to the civilians killed in Iran since "
+                 + "December 2025 — shot, executed, or tortured to death by the state "
+                 + "for protesting, while that same state cut the country off from the "
+                 + "internet so the world could not watch.")
+                .fixedSize(horizontal: false, vertical: true)
+            Link("2025–2026 Iran massacres",
+                 destination: URL(string: "https://en.wikipedia.org/wiki/2025%E2%80%932026_Iran_massacres")!)
+        } header: {
+            Text("Dedication")
+        }
     }
 
     /// Self-apply is macOS-only and this view only exists on macOS, but the

@@ -24,7 +24,7 @@ section: net
 priority: optional
 maintainer: "Behnam RK <behnam.rk47@gmail.com>"
 homepage: "https://github.com/Behnam-RK/dezhban"
-license: MIT
+license: "LicenseRef-Hippocratic-3.0-Core-with-Dezhban-named-entity-restriction"
 description: |
   Network kill switch for hosts behind a full-tunnel VPN.
   .
@@ -38,6 +38,16 @@ contents:
     dst: /usr/local/bin/dezhban
     file_info:
       mode: 0755
+  # The license is not MIT any more: Part B (Hippocratic 3.0 Core) section 5.1
+  # requires that everyone who receives the Software also receives the License,
+  # and section 7.2 terminates the grant if that is not cured within 30 days of
+  # notice. Shipping only the binary, as this package did while it was MIT, does
+  # not satisfy that. /usr/share/doc/<pkg>/ is where both deb and rpm tooling
+  # look for it.
+  - src: "./LICENSE"
+    dst: /usr/share/doc/dezhban/LICENSE
+    file_info:
+      mode: 0644
 
 # The Linux backend shells out to `nft` (CLAUDE.md: "Linux/Windows backends
 # shell out to nft / netsh rather than linking libraries") — without it,

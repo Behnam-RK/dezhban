@@ -17,7 +17,9 @@ class Dezhban < Formula
   desc "Network kill switch for hosts behind a full-tunnel VPN"
   homepage "https://github.com/Behnam-RK/dezhban"
   version "@VERSION@"
-  license "MIT"
+  # Hippocratic License 3.0 (Core) plus a named-entity restriction: no SPDX
+  # identifier exists for it, which is exactly what :cannot_represent is for.
+  license :cannot_represent
 
   on_macos do
     if Hardware::CPU.arm?

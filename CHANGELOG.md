@@ -12,6 +12,47 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **A dedication.** dezhban is dedicated, humbly, to the civilians killed in
+  Iran since December 2025 — shot, executed, or tortured to death by the state
+  for protesting, while that same state cut the country off from the internet
+  so the world could not watch. It appears at the top of the README and in the
+  macOS app's **About** pane, as its own section below Updates.
+  ([2025–2026 Iran massacres](https://en.wikipedia.org/wiki/2025%E2%80%932026_Iran_massacres))
+- The `.deb`, `.rpm`, `.pkg`, and `curl | sudo bash` installs now ship the
+  `LICENSE` file — at `/usr/share/doc/dezhban/LICENSE` on Linux packages and
+  `/usr/local/share/dezhban/LICENSE` otherwise. Only the tarball carried it
+  before, which did not satisfy MIT's notice clause either and is now a
+  cure-or-terminate condition under the new license.
+
+### Changed
+
+- **dezhban is no longer MIT-licensed.** It is now the **Hippocratic License
+  3.0 (Core) with the Dezhban named-entity restriction**: Part A of `LICENSE`
+  withholds any grant — never granted, rather than terminated, so the 30-day
+  cure period in Part B section 7 does not apply — from the IRGC (including the
+  Basij, the Quds Force, and the IRGC Intelligence Organization), the Ministry
+  of Intelligence (VAJA/MOIS), the Law Enforcement Command (FARAJA), anyone who
+  participated in or materially supported the killing, detention, torture, or
+  execution of civilians for protesting in Iran on or after 30 December 2025,
+  and their successors, renamings, and agents. Part A explicitly restricts no
+  one else in Iran, including people working for hospitals, universities,
+  municipal services, and utilities.
+
+  Three consequences worth being explicit about:
+
+  - **This is not an OSI-approved open source license.** GitHub will report the
+    repository's license as "Other", there is no SPDX identifier for it (package
+    metadata carries a `LicenseRef-`), and Debian, Fedora, and homebrew-core
+    would classify it as non-free. dezhban ships from its own tap and its own
+    release pipeline, so nothing in its distribution breaks.
+  - **Derivative works must carry the same license.** Part B section 5.2 is
+    copyleft; MIT permitted proprietary forks and this does not.
+  - **It is not retroactive.** Every release up to and including **v0.10.1
+    remains under the MIT License**. That grant is not revoked and cannot be —
+    including for the entities Part A names.
+
 ## [0.10.1] - 2026-08-17
 
 ### Added
