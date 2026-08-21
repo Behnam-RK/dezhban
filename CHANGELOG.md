@@ -50,7 +50,11 @@ current as you land changes.
   System Settings → General → Login Items, upgrading leaves it off; and a copy of
   the app run from somewhere other than `/Applications` no longer claims the
   login item for a location it is about to be moved out of. The login switch also
-  no longer freezes the Settings window while macOS thinks about it.
+  no longer freezes the Settings window while macOS thinks about it, and reads OFF
+  rather than ON when the item you see is one you had already switched off in
+  System Settings. Uninstalling clears Dezhban's saved app preferences too —
+  leaving them behind meant a later install silently skipped the login-item
+  migration.
 
 ## [0.11.0] - 2026-08-21
 

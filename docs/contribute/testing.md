@@ -801,6 +801,10 @@ task gui:build && open dist/Dezhban.app
       login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
       it, LaunchServices relaunches the app with no arguments and races the agent
       for the lock.
+- [ ] **Two hand-offs in quick succession both open the window.** The debounce
+      must not swallow real work: with the app running from a `--background` login
+      launch, double-click it (window opens), ⌘W to close, and double-click again
+      within a second or two. The window must open **both** times.
 - [ ] **A hand-off that arrives before the app is observing still works.** The
       race the `HandoffRequest` file exists for: log out and back in and
       double-click the app in `/Applications` as early as you can, while it is
@@ -860,7 +864,11 @@ task gui:build && open dist/Dezhban.app
       `launchctl bootout` alone only unloads it for the current boot — the
       reboot is what distinguishes a real retraction (the
       `--unregister-login-item` errand the script runs as the console user) from
-      an unload that comes back.
+      an unload that comes back. `defaults read com.behnam-rk.dezhban.app` must
+      also fail afterwards: a surviving migration flag means a later install is
+      never moved onto the agent. And if macOS *does* refuse the retraction, the
+      script must say so — the closing warning naming System Settings, not a clean
+      "files deleted".
 - [ ] **The login agent registers from an ad-hoc-signed build.** Only reachable
       on a real install: `build-app.sh` signs with `codesign -s -`, and
       `SMAppService.agent` registration goes through launchd's validation of the

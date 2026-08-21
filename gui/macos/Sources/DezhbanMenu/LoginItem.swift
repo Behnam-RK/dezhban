@@ -118,6 +118,18 @@ enum LoginItem {
         }
     }
 
+    /// Every mutation runs here, one at a time.
+    ///
+    /// Both callers are off the main thread now — the Settings switch, so a click
+    /// cannot beachball the window on six blocking XPC round-trips, and the
+    /// migration, so a slow login is not held up by it — which made them able to
+    /// interleave. The bad one: the migration passes its `userDisabledKey` check,
+    /// the user switches login-at-launch off, `disable()` retracts everything, and
+    /// the migration then registers the agent. Login-at-launch back on immediately
+    /// after being turned off is the single thing that key exists to prevent, so
+    /// the two paths cannot be allowed to overlap.
+    private static let queue = DispatchQueue(label: "com.behnam-rk.dezhban.app.loginitem")
+
     private static var service: SMAppService { .agent(plistName: plistName) }
 
     private static var agentEnabled: Bool { service.status == .enabled }
@@ -167,7 +179,16 @@ enum LoginItem {
     /// switch: an awaiting-approval registration once painted the switch ON while
     /// this read "off", so a click meant to disable re-registered instead and
     /// there was no way to switch login-at-launch off at all.
-    static var isEnabled: Bool { registered(service) || registered(.mainApp) }
+    ///
+    /// Asymmetric between the two, and deliberately. For the **agent**,
+    /// `.requiresApproval` means we registered it and macOS wants the user's
+    /// consent — on, pending. For the **legacy** item, which this app never
+    /// registers any more, `.requiresApproval` is the signature of the user having
+    /// switched Dezhban off under System Settings → General → Login Items — so it
+    /// launches nothing, and reporting it as ON contradicted the migration's own
+    /// reading of that exact state ("their 'off' is the answer") and showed a
+    /// switch that was on while nothing started the app.
+    static var isEnabled: Bool { registered(service) || legacyEnabled }
 
     /// Sets login-at-launch to `enabled` and reports what actually happened.
     ///
@@ -182,7 +203,7 @@ enum LoginItem {
     /// never created again.
     @discardableResult
     static func set(enabled: Bool) -> Outcome {
-        enabled ? enable() : disable()
+        queue.sync { enabled ? enable() : disable() }
     }
 
     private static func enable() -> Outcome {
@@ -192,10 +213,16 @@ enum LoginItem {
         // `disable()` and the migration both refuse it; this refused nothing, and
         // the stuck-migration path led straight here: switch reads ON, user clicks
         // it off, clicks it on again, and both are registered.
-        if registered(.mainApp) {
-            retractLegacy()
-            if registered(.mainApp) { return .legacyStuck }
-        }
+        // Retract any legacy registration, but refuse only if one is still
+        // *enabled*. The justification for refusing is "two launches at login,
+        // one with the marker and one without" — and a `.requiresApproval` legacy
+        // item launches nothing, so refusing on mere presence was stricter than
+        // its own reason. It also made `Outcome.legacyStuck`'s advice a dead end:
+        // removing the item under System Settings leaves `mainApp` at
+        // `.requiresApproval`, so "then switch this on again" hit the same refusal
+        // and the agent could never be registered.
+        retractLegacy()
+        if legacyEnabled { return .legacyStuck }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
         do {
             try service.register()
@@ -229,7 +256,7 @@ enum LoginItem {
         // marker, which is the state this function exists to clear.
         retractLegacy()
         if registered(service) { unregister(service, what: "login agent") }
-        if registered(.mainApp) {
+        if legacyEnabled {
             // The stuck path. Reported rather than worked around: registering the
             // agent alongside it would mean two launches at login, one with the
             // marker and one without, and whichever won the race would decide
@@ -248,12 +275,23 @@ enum LoginItem {
     /// retracts an agent registration — `launchctl bootout` unloads the job for
     /// this boot and leaves the record that recreates it at the next login — and
     /// only the app can call it.
-    static func retractAll() {
-        if registered(service) { unregister(service, what: "login agent") }
-        if registered(.mainApp) { unregister(.mainApp, what: "legacy login item") }
-        // Deliberately NOT through `retractLegacy`: this runs from the uninstall
-        // errand, where recording "the agent still needs registering" would be a
-        // lie about an app that is about to be deleted.
+    @discardableResult
+    static func retractAll() -> Bool {
+        queue.sync {
+            if registered(service) { unregister(service, what: "login agent") }
+            if registered(.mainApp) { unregister(.mainApp, what: "legacy login item") }
+            // Deliberately NOT through `retractLegacy`: this runs from the uninstall
+            // errand, where recording "the agent still needs registering" would be a
+            // lie about an app that is about to be deleted.
+            //
+            // Reported, not swallowed. `unregister` only logs its throw, and the
+            // uninstaller discards this process's output — so a refusal left the
+            // Login Items entry behind, pointing at a bundle about to be deleted and
+            // unreachable afterwards, while the script printed "service
+            // unregistered, files deleted". The orphan the errand exists to remove,
+            // now silent. The exit status is what makes it visible.
+            return !registered(service) && !registered(.mainApp)
+        }
     }
 
     /// Moves an install that registered `SMAppService.mainApp` (every build
@@ -264,6 +302,10 @@ enum LoginItem {
     /// The attempt is recorded either way, so this runs at most once whether it
     /// succeeded or not — see `migratedKey`.
     static func migrateFromMainAppRegistration() {
+        queue.sync { migrateLocked() }
+    }
+
+    private static func migrateLocked() {
         guard !UserDefaults.standard.bool(forKey: migratedKey) else { return }
         // Only from a bundle that is going to stay put, and deliberately WITHOUT
         // marking migrated — so the installed copy still does this later.

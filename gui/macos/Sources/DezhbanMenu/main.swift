@@ -74,8 +74,12 @@ var sessionHandoff: HandoffRequest?
 /// the app competing for the session, it is a one-shot errand, and it must work
 /// while the app is running — which is exactly when the uninstaller finds it.
 func retractLoginRegistrationsAndExit() {
-    LoginItem.retractAll()
-    exit(0)
+    // The exit status is the whole channel. `unregister()` only logs its throw and
+    // the uninstaller discards this process's output, so a refusal used to leave
+    // the Login Items entry behind — pointing at a bundle about to be deleted, and
+    // unreachable afterwards — while the script printed "service unregistered,
+    // files deleted".
+    exit(LoginItem.retractAll() ? 0 : 1)
 }
 
 /// Exits if another copy of this install already owns the session.

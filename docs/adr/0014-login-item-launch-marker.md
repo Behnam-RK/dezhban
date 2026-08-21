@@ -165,9 +165,16 @@ with an argument, the pre-`SMAppService` pattern.
   conclude they should act — and refusing to act on the ambiguous ones turns a
   hand-off into the silent no-op the mechanism exists to prevent, which is the
   worse failure of the two. So the notification acts on everything except `.lost`,
-  the backstop acts only on `.fresh`, and the *effect* is debounced: an open within
-  three seconds of a previous hand-off open is dropped. Debouncing what the user
-  notices is cheaper and safer than making two asynchronous signals agree.
+  the backstop acts only on `.fresh`, and the ambiguous signals' *effect* is
+  debounced: an open within three seconds of a previous hand-off open is dropped.
+  Debouncing what the user notices is cheaper and safer than making two
+  asynchronous signals agree.
+
+  Only the ambiguous ones, though. A claim of `.fresh` means the caller took a
+  request nobody else had, so it is a distinct launch by definition — two
+  double-clicks a second apart with the window closed in between are two requests
+  and both must be answered. Debouncing on elapsed time alone swallowed the second,
+  which is the silent no-op again, arrived at from the other direction.
 
   Requests carry
   their own freshness: one the incumbent never got to must not be inherited by the
@@ -197,6 +204,15 @@ with an argument, the pre-`SMAppService` pattern.
   `packaging/macos/uninstall.sh` runs it as the console user inside their GUI
   session before deleting the bundle. Root cannot reach another account's launchd
   session, so other users' entries are named in the closing message instead.
+
+  The errand's exit status is load-bearing: `unregister()` only logs a refusal and
+  the script discards the output, so without it a login item macOS would not
+  retract stayed behind — pointing at a bundle deleted moments later, unreachable
+  from then on — while the script reported everything removed. Uninstalling also
+  clears the app's preference domain, which is not the cosmetic cleanup it looks
+  like: the migration records that it has run, so a surviving flag means a *later*
+  install is never migrated onto the agent, silently restoring the defect this ADR
+  is about.
 
 ### Risks
 

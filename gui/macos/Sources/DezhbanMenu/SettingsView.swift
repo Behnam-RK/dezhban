@@ -932,7 +932,13 @@ struct SettingsView: View {
         refreshTokenCapability()
         status = "Loading…"
         canApply = false
-        loginEnabled = LoginItem.isEnabled
+        // Off-main for the same reason `set(enabled:)` is: this is two blocking
+        // SMAppService status reads over XPC (it was one before the agent), and
+        // opening the Settings pane should not hitch on them.
+        DispatchQueue.global(qos: .userInitiated).async {
+            let enabled = LoginItem.isEnabled
+            DispatchQueue.main.async { loginEnabled = enabled }
+        }
         notifyPrefs = NotificationManager.prefs
         checkUpdatesEnabled = UpdateChecker.isEnabled
         launchVisibility = LaunchPreference.current

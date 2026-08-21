@@ -22,6 +22,7 @@ PLIST=/Library/LaunchDaemons/dezhban.plist
 SHARE_DIR=/usr/local/share/dezhban
 LOGIN_AGENT=com.behnam-rk.dezhban.app.login
 APP_BUNDLE_ID=com.behnam-rk.dezhban.app
+LOGIN_ITEM_STUCK=0
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "error: run as root — sudo sh $0" >&2
@@ -84,9 +85,12 @@ if [ -n "$CONSOLE_UID" ]; then
 		errand_done="${TMPDIR:-/tmp}/dezhban-uninstall-errand.$$"
 		rm -f "$errand_done"
 		(
-			launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
-				"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1
-			: >"$errand_done"
+			if launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+				"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1; then
+				echo ok >"$errand_done"
+			else
+				echo failed >"$errand_done"
+			fi
 		) &
 		errand=$!
 		waited=0
@@ -102,6 +106,14 @@ if [ -n "$CONSOLE_UID" ]; then
 			# avoid, reintroduced on the one path this timeout is here for.
 			kill -9 "$errand" >/dev/null 2>&1 || true
 			pkill -x DezhbanMenu >/dev/null 2>&1 || true
+		fi
+		# The status matters. The app only logs a refused unregister, and this
+		# script discards its output — so without checking, a login item macOS
+		# would not retract stayed behind, pointing at a bundle deleted two lines
+		# later and unreachable from then on, while the closing message claimed
+		# everything was removed.
+		if [ "$(cat "$errand_done" 2>/dev/null)" = "failed" ]; then
+			LOGIN_ITEM_STUCK=1
 		fi
 		rm -f "$errand_done"
 		wait "$errand" >/dev/null 2>&1 || true
@@ -121,6 +133,14 @@ if [ -n "$CONSOLE_UID" ]; then
 	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
 		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
 	fi
+	# The app's preferences, for the same reason. These are not cosmetic: the
+	# migration that moves an old LaunchServices login item onto the login agent
+	# records that it has run, so a surviving flag means a LATER install is never
+	# migrated — silently restoring the "Open minimized" bug the agent exists to
+	# fix. Written by the user's own cfprefsd, so it is deleted through defaults as
+	# that user rather than by unlinking the plist under them.
+	launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
+		defaults delete "$APP_BUNDLE_ID" >/dev/null 2>&1 || true
 fi
 
 rm -rf "$APP"
@@ -150,6 +170,12 @@ rm -rf "$SHARE_DIR"
 
 echo
 echo "dezhban uninstalled — rules removed, service unregistered, files deleted."
+if [ "$LOGIN_ITEM_STUCK" = "1" ]; then
+	echo
+	echo "warning: macOS would not retract the login item. Nothing will start"
+	echo "         Dezhban (the app is gone), but the entry remains — remove"
+	echo "         \"Dezhban\" under System Settings > General > Login Items."
+fi
 echo
 echo "If any OTHER account on this Mac ran the app, its login agent is still"
 echo "registered there — root cannot reach another user's launchd session. Nothing"

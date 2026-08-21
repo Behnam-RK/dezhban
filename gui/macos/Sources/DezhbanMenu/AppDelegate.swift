@@ -150,25 +150,41 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // freshness window. Both of those can therefore double up with a backstop
         // tick, which is what `openForHandoff`'s debounce is for.
         switch sessionHandoff?.claim() ?? .absent {
-        case .fresh, .absent, .stale:
-            openForHandoff()
+        case .fresh:
+            // Definitively ours: some duplicate wrote this and nobody else took
+            // it. Always acted on, never debounced.
+            openForHandoff(definite: true)
+        case .absent, .stale:
+            // Ambiguous, and these are the two that can double up with a backstop
+            // tick, so they are the ones the debounce is for.
+            openForHandoff(definite: false)
         case .lost:
             break
         }
     }
 
-    /// Opens the window for a hand-off, at most once per request.
+    /// Opens the window for a hand-off.
     ///
     /// The claim in `HandoffRequest` settles who *owns* a request; this settles the
     /// residue, which the claim cannot: the two signals for one request can pass
     /// each other such that both legitimately conclude they should act. Debouncing
     /// the effect is cheaper and safer than trying to make two asynchronous signals
     /// agree — and the effect is what the user notices, since `MainWindow.open()`
-    /// calls `NSApp.activate(ignoringOtherApps:)` and so a duplicate is a second
-    /// focus steal, or a window reopening just after they closed it.
-    private func openForHandoff() {
+    /// calls `NSApp.activate(ignoringOtherApps:)`, so a duplicate is a second focus
+    /// steal or a window reopening just after they closed it.
+    ///
+    /// `definite` is what keeps the debounce from swallowing real work. A claim of
+    /// `.fresh` means this caller took a request nobody else had, so it is a
+    /// distinct launch by definition — two double-clicks a second apart, with the
+    /// window closed in between, are two requests and must both be answered.
+    /// Debouncing those on elapsed time alone made the second one the silent no-op
+    /// this whole mechanism exists to prevent. Only the ambiguous signals, which
+    /// may be describing a request another caller already handled, are debounced.
+    private func openForHandoff(definite: Bool) {
         let now = Date()
-        if let last = lastHandoffOpenAt, now.timeIntervalSince(last) < Self.handoffDebounce {
+        if !definite,
+           let last = lastHandoffOpenAt,
+           now.timeIntervalSince(last) < Self.handoffDebounce {
             return
         }
         lastHandoffOpenAt = now
@@ -210,7 +226,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // to prove anyone is still asking; `.absent` is the ordinary case of
             // there being no request at all, which is what almost every tick sees.
             guard handoff.claim() == .fresh else { return }
-            DispatchQueue.main.async { self?.openForHandoff() }
+            DispatchQueue.main.async { self?.openForHandoff(definite: true) }
         }
     }
 
