@@ -375,6 +375,12 @@ type Options struct {
 	// BlockedCountries is copied verbatim into each published snapshot so an
 	// observer can show what the daemon is configured to block. Informational only.
 	BlockedCountries []string
+	// AppliedRulesPath, when non-empty, is where the ruleset text of each
+	// successful Apply is recorded (internal/applied) for the Diagnostics pane.
+	// Run wraps Backend to do it, so every Apply is covered including ones added
+	// later. Purely diagnostic and best-effort: a failed write is logged and the
+	// enforcement stands. Empty → nothing is recorded.
+	AppliedRulesPath string
 
 	// ReloadC delivers replacement settings to the running loop, so a config
 	// edit takes effect without a restart. Nil (the default) means reloading is
@@ -607,6 +613,12 @@ func (o Options) pendingFlip(standby, windowOpen bool) *state.PendingFlip {
 // the daemon — that is the invariant that keeps the operator from being locked
 // out of their own network.
 func Run(ctx context.Context, o Options) error {
+	// Wrap BEFORE anything can apply — including the deferred Cleanup below,
+	// which has to clear the record rather than leave a ruleset on disk that a
+	// reader would take for live. Adds no goroutine and no writer: every call
+	// still comes from this loop.
+	o.Backend = newRecordingBackend(o.Backend, o.AppliedRulesPath, o.Log)
+
 	defer func() {
 		if err := o.Backend.Cleanup(); err != nil {
 			o.Log.Warn("cleanup failed; rules may persist (run `dezhban panic`)", "err", err)

@@ -134,4 +134,17 @@ type FirewallBackend interface {
 	// Cleanup is an always-safe, best-effort teardown for shutdown/panic. It
 	// never returns fatally; failures are the caller's to log.
 	Cleanup() error
+	// InstalledRules reads dezhban's rules back OUT of the kernel, as text, for
+	// a diagnostic surface to compare against what the daemon recorded applying
+	// (internal/applied). Scoped to dezhban's own tag/anchor/table like every
+	// other operation here — it must never dump unrelated firewall state.
+	//
+	// It is a READ. It installs nothing and changes nothing, so it does not
+	// belong to the single-writer rule that governs Apply: any goroutine, and
+	// any process, may call it. It does generally need root, which is why it is
+	// on demand rather than on a tick.
+	//
+	// The bool is false when dezhban has no rules loaded at all — an ordinary
+	// answer (standby, or nothing running), not an error.
+	InstalledRules() (string, bool, error)
 }

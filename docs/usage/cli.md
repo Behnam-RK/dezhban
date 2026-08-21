@@ -9,7 +9,7 @@ Commands:
   unblock      Remove dezhban's firewall rules                    (root)
   status       Show version, config, service, and block state (--json for tooling)
   validate     Load + validate a config file (no root, no effects)
-  print-rules  Print the ruleset a block/guard would apply, without applying it
+  print-rules  Print the ruleset a block/guard would apply (--applied/--installed: what is live)
   doctor       Diagnose VPN guard config (tunnels, endpoints, lockout risks)
   monitor      Live read-only view: IP, country, tunnel state, endpoints, verdict
   panic        Force-remove dezhban's rules even with no daemon   (root)
@@ -51,7 +51,7 @@ daemon** over its control socket and need no password at all — provided
 | Command | Needs a password? |
 |---|---|
 | `block`, `unblock`, `switch`, `pause`, `resume` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back — `block`/`unblock` act on the firewall directly; `switch`/`pause`/`resume` write the root-owned command file, which itself needs a running daemon to consume it. Either way, root. |
-| `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn` | **No** — read-only, no root, no firewall effects. |
+| `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn` | **No** — read-only, no root, no firewall effects. The one exception is `print-rules --installed`, which reads the firewall itself and therefore needs root; it still installs and changes nothing. |
 | `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
@@ -239,6 +239,8 @@ Inspect and validate before you risk a block — none of these touch the firewal
 ```sh
 dezhban validate    --config <config>                 # parse + validate, summarize
 dezhban print-rules --mode guard --config <config>    # exact ruleset, not applied
+dezhban print-rules --applied                         # what dezhban recorded installing
+sudo dezhban print-rules --installed                  # what the firewall itself holds
 dezhban doctor      --config <config>                 # tunnels, subnets, endpoint sanity
 dezhban doctor --discover --config <config>           # macOS: find the VPN's real server IP
 dezhban doctor --json --config <config>               # the same checks as structured JSON
@@ -246,7 +248,22 @@ dezhban monitor     --config <config>                 # live: IP, country, tunne
 ```
 
 `monitor` streams the live state the decision rests on; add `--once` for a single
-snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`. `doctor
+snapshot. `print-rules --mode` takes `guard`, `fullblock`, or `switch`, and
+renders purely — no root, no firewall effects.
+
+`--applied` and `--installed` answer the other question, "what is enforcing right
+now?", from two deliberately different sources. `--applied` reads a record
+dezhban writes on every successful apply (a 0644 file beside the state file, so
+the menubar app can read it without root): the exact text handed to the firewall,
+timestamped, with the interfaces and endpoints resolved at that moment.
+`--installed` asks the firewall — scoped to dezhban's own anchor/table/group,
+never a dump of unrelated state — and needs root for that reason. It is a read:
+it installs nothing and repairs nothing. When dezhban recorded applying rules and
+the firewall holds none, `--installed` says so; repairing that is the running
+daemon's verification tick's job, not this command's. Add `--json` to either for
+machine output. The two texts will not match byte for byte on a healthy host, so
+neither surface diffs them — see
+[modes.md](../concepts/modes.md#what-is-enforcing-right-now). `doctor
 --json` prints the identical findings `doctor` reports in prose — `{checks:
 [{name, status, summary, details, fixes}], ok}` — for a consumer (the macOS
 app's Diagnostics pane) that needs to render them itself rather than parse

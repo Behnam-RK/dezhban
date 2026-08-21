@@ -11,3 +11,8 @@ package firewall
 func RenderRules(p Policy) (string, error) {
 	return renderRuleset(p), nil
 }
+
+// RulesetKind names the mechanism RenderRules writes for, so a surface showing
+// the text does not have to infer a syntax from the platform it happens to be
+// running on. Here: the pf ruleset `pfctl -a dezhban -f -` loads.
+const RulesetKind = "pf"

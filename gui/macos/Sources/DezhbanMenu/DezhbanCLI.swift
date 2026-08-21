@@ -272,6 +272,35 @@ enum DezhbanCLI {
         return ProfilesInfo.decode(data)
     }
 
+    /// Reads what dezhban recorded applying, via `print-rules --applied --json`.
+    /// Unprivileged: the record is a 0644 file beside state.json, written so the
+    /// menubar app can read it without root.
+    ///
+    /// nil covers both "nothing recorded" (the CLI prints `null`) and a CLI too
+    /// old to know the flag. The pane says "nothing recorded yet" either way,
+    /// which is true in both cases — it must never claim rules that are not
+    /// there.
+    static func readAppliedRules() -> AppliedRuleset? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["print-rules", "--applied", "--json"])
+        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
+        return AppliedRuleset.decode(data)
+    }
+
+    /// Renders what one posture WOULD apply, via `print-rules --mode <m>`.
+    /// Pure, unprivileged, and with no firewall effects — the same guarantee the
+    /// command carries in a terminal.
+    ///
+    /// stdout only (`exec`, not `.run`): autodetect writes a timestamped line to
+    /// stderr on every call, and folding that into the rules would make the text
+    /// differ from run to run for no reason.
+    static func renderRules(mode: RulesetPreview) -> String? {
+        guard let bin = binaryPath() else { return nil }
+        let r = exec(bin, ["print-rules", "--mode", mode.rawValue, "--config", resolvedConfigPath()])
+        guard r.status == 0, !r.out.isEmpty else { return nil }
+        return r.out
+    }
+
     /// Reads all three presets and which (if any) matches the current config,
     /// via `config preset list --json`.
     static func readPresets() -> [PresetSummary]? {
