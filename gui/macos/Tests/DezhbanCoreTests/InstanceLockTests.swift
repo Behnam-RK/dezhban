@@ -103,6 +103,39 @@ struct InstanceLockTests {
         #expect(built.acquire() == .acquired)
     }
 
+    /// Two spellings of one install are one install. A symlinked install
+    /// directory is the realistic case (`/tmp` is itself a symlink to
+    /// `/private/tmp` on macOS), and deriving two locks from it would let both
+    /// copies run — silently, which is the whole failure this class prevents.
+    ///
+    /// Built on a real symlink to a real bundle directory on purpose:
+    /// `resolvingSymlinksInPath()` returns the path unchanged when the leaf does
+    /// not exist, so a test written against two invented paths would pass or fail
+    /// for reasons that have nothing to do with the code.
+    @Test func equivalentPathsGetTheSameLock() throws {
+        let root = try tempDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let locks = root.appendingPathComponent("locks", isDirectory: true)
+        try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
+
+        let real = root.appendingPathComponent("real", isDirectory: true)
+        let bundle = real.appendingPathComponent("Dezhban.app", isDirectory: true)
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let link = root.appendingPathComponent("link", isDirectory: true)
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        let viaReal = InstanceLock.forBundle(
+            path: bundle.path, identifier: "com.example.app", supportDirectory: locks)
+        let viaLink = InstanceLock.forBundle(
+            path: link.appendingPathComponent("Dezhban.app").path,
+            identifier: "com.example.app", supportDirectory: locks)
+        defer { viaReal.release(); viaLink.release() }
+
+        #expect(viaReal.url == viaLink.url)
+        #expect(viaReal.acquire() == .acquired)
+        #expect(viaLink.acquire() == .heldByAnother)
+    }
+
     /// The same install must derive the same name in every process, so the hash
     /// cannot be Swift's per-process-seeded one. Pinning a literal is the only
     /// way this test can fail if someone swaps it for `hashValue`.

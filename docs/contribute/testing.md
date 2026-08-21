@@ -801,6 +801,19 @@ task gui:build && open dist/Dezhban.app
       login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
       it, LaunchServices relaunches the app with no arguments and races the agent
       for the lock.
+- [ ] **Switching login-at-launch off from a login-started session.** Log out
+      and back in so the agent starts the app, then switch Settings → "Open this
+      app at login" **off**. `SMAppService.unregister()` unloads the launchd job
+      and launchd terminates a loaded job's process — which here is the app — so
+      watch for the app quitting instead of showing the status line. Recorded as
+      an open risk in [ADR-0014](../adr/0014-login-item-launch-marker.md); if it
+      reproduces, note whether the registration was still retracted.
+- [ ] **The migration retries a failed agent registration.** Hard to provoke
+      honestly: with a pre-agent install and login-at-launch on, make
+      `register()` fail once (an unsigned bundle is the easiest way), launch, and
+      confirm the log says it will retry. Then fix the bundle and launch again —
+      the agent must register. `defaults read com.behnam-rk.dezhban.app
+      dezhban.loginItemMigratedToAgent` must be absent or 0 between the two.
 - [ ] **An awaiting-approval registration can still be switched off.** Turn the
       login item off *in System Settings* (not in Dezhban), then switch Dezhban's
       "Open this app at login" on: the status line must say macOS is holding it

@@ -21,6 +21,7 @@ STATE_DIR=/var/db/dezhban
 PLIST=/Library/LaunchDaemons/dezhban.plist
 SHARE_DIR=/usr/local/share/dezhban
 LOGIN_AGENT=com.behnam-rk.dezhban.app.login
+APP_BUNDLE_ID=com.behnam-rk.dezhban.app
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "error: run as root — sudo sh $0" >&2
@@ -70,10 +71,23 @@ fi
 if [ -n "$CONSOLE_UID" ]; then
 	echo "unregistering the login agent for $CONSOLE_USER ..."
 	if [ -x "$APP/Contents/MacOS/DezhbanMenu" ]; then
+		# Bounded. The errand talks to launchd over XPC, and this runs before
+		# `rm -rf "$APP"` — an uninstaller that hangs here, silently (output is
+		# discarded), leaves the machine mid-removal with no message on screen.
 		launchctl asuser "$CONSOLE_UID" sudo -u "$CONSOLE_USER" \
-			"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1 || true
+			"$APP/Contents/MacOS/DezhbanMenu" --unregister-login-item >/dev/null 2>&1 &
+		errand=$!
+		( sleep 15; kill -9 "$errand" >/dev/null 2>&1 ) &
+		watchdog=$!
+		wait "$errand" >/dev/null 2>&1 || true
+		kill -9 "$watchdog" >/dev/null 2>&1 || true
 	fi
 	launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
+	# The app's own per-user directory: nothing but the instance lock the GUI
+	# takes at startup to keep a second copy of itself from running. Machine-
+	# derived, none of it the user's — and a file this version creates that no
+	# earlier one did, so leaving it would make this script's own promise false.
+	rm -rf "/Users/$CONSOLE_USER/Library/Application Support/$APP_BUNDLE_ID"
 fi
 
 rm -rf "$APP"

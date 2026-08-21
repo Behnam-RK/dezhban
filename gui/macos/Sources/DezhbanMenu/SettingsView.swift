@@ -780,12 +780,16 @@ struct SettingsView: View {
     private var loginBinding: Binding<Bool> {
         Binding(
             get: { loginEnabled },
-            set: { _ in
+            set: { wanted in
+                // `wanted`, not a re-read of live state: the switch can be stale
+                // (the login item is also removable in System Settings), and
+                // deciding from a fresh read then inverted the click.
+                //
                 // The outcome, not a bool: macOS can accept the registration and
                 // still hold it for the user's approval, and there is one path
                 // where only they can clear the old login item. A switch that
                 // snaps back with no explanation reads as a bug.
-                let outcome = LoginItem.toggle()
+                let outcome = LoginItem.set(enabled: wanted)
                 loginEnabled = outcome.isOn
                 status = outcome.message
             })

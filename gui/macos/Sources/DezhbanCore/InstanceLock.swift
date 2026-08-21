@@ -67,12 +67,21 @@ public final class InstanceLock {
     /// filename limit, and hashed with FNV-1a rather than `hashValue` because
     /// Swift's is seeded per process — two copies of the app must derive the
     /// *same* name, which a randomly seeded hash would not give them.
+    /// Symlinks are resolved before hashing, and must be: two launches of the same
+    /// install whose `bundleURL` spells differently (`/tmp` against
+    /// `/private/tmp`, a symlinked install directory) would otherwise derive
+    /// *different* lock files, both acquire, and both run — the failure this class
+    /// exists to prevent, arrived at silently. `standardizedFileURL` alone is not
+    /// enough: it collapses `.` and `..` and expands `~`, and does not touch
+    /// symlinks. The incumbent match in `acquireSessionOwnership` resolves the
+    /// same way, for the same reason.
     public static func forBundle(path bundlePath: String,
                                  identifier: String,
                                  supportDirectory: URL) -> InstanceLock {
         let dir = supportDirectory.appendingPathComponent(identifier, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let name = "instance-" + String(fnv1a(bundlePath), radix: 16) + ".lock"
+        let key = URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath().standardizedFileURL.path
+        let name = "instance-" + String(fnv1a(key), radix: 16) + ".lock"
         return InstanceLock(url: dir.appendingPathComponent(name))
     }
 

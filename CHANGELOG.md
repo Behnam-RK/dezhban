@@ -43,7 +43,10 @@ current as you land changes.
   Dezhban also stops relying on macOS's "Reopen windows when logging back in" to
   leave it alone: that path relaunches the app at login without the marker, so it
   is now opted out of explicitly, leaving the login item as the only thing that
-  starts the app at login.
+  starts the app at login. And clicking the login switch acts on the state you
+  clicked, not on a re-read a moment later — with the Settings window open,
+  removing the login item in System Settings and coming back used to make the
+  next click turn login-at-launch *on*.
 
 ## [0.11.0] - 2026-08-21
 

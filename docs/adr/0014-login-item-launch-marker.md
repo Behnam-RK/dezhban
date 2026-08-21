@@ -224,6 +224,30 @@ with an argument, the pre-`SMAppService` pattern.
   the every-launch re-registration bug is a second flag, set whenever the user
   switches login-at-launch off themselves: an explicit "off" outlives every
   retry, so a retry can only restore what was already on.
+
+  That retry needs a third flag to exist at all, which is not obvious and was
+  got wrong first: by the time `register()` is reached the legacy item is already
+  confirmed gone, so a retry launch that asks "is there a legacy item to
+  migrate?" reads *no*, marks itself migrated and returns — never reaching
+  `register()` again. The promised retry was dead code. A flag recorded at the
+  moment the legacy item is confirmed retracted, before the register is
+  attempted, is what distinguishes "this account had a login item and the agent
+  is not up yet" from "this account never had one".
+- **Switching login-at-launch off may terminate the app.** Unverified, and
+  listed here rather than worked around because the workarounds are worse than
+  the symptom. `SMAppService.unregister()` unloads the job from the launchd
+  domain, and launchd terminates a loaded job's running process — which, in a
+  session the agent started, is the app itself. So switching the Settings toggle
+  off from a login-started session may quit the app before it can show the
+  result. It is a nuisance rather than a risk: the daemon is what enforces, the
+  GUI is a status and control surface, and relaunching restores it. Routing the
+  agent through `/usr/bin/open` instead would sidestep it and hand the dedupe
+  back to LaunchServices, but it resolves the bundle by identifier and could
+  launch a *different* copy of the app than the one that registered — trading a
+  known nuisance for a silent wrong-bundle launch. There is a manual check for
+  this in [docs/contribute/testing.md](../contribute/testing.md); if it
+  reproduces, that trade is worth reopening with measurements rather than
+  guesses.
 - **The marker could be passed by something other than the agent**, making a
   user launch look like a login launch. The only consequence is a window that
   does not open, and the Dock icon and "Open Dezhban…" both open it

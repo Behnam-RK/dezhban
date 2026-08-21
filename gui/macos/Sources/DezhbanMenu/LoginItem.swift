@@ -45,6 +45,17 @@ enum LoginItem {
     /// outlive it, so a retry never re-registers what the user turned off.
     private static let userDisabledKey = "dezhban.loginItemUserDisabled"
 
+    /// Set the moment the legacy item is confirmed gone, before the agent is
+    /// registered.
+    ///
+    /// Without it the retry the comment on `migratedKey` promises is dead code:
+    /// on the next launch the legacy item is already retracted, so a migration
+    /// that keys "is there anything to do" off `legacyEnabled` reads false, marks
+    /// itself migrated and returns — never reaching `register()` again. The user
+    /// is then left with nothing starting the app at login, permanently, which is
+    /// the exact outcome the unmarked flag exists to prevent.
+    private static let legacyRetractedKey = "dezhban.loginItemLegacyRetracted"
+
     /// What a `toggle()` actually achieved, so the UI can say something true.
     ///
     /// A plain `Bool` could not: `register()` reports "the user has to approve
@@ -96,9 +107,6 @@ enum LoginItem {
 
     private static var agentEnabled: Bool { service.status == .enabled }
 
-    /// The legacy LaunchServices registration every build before the agent used.
-    private static var legacyEnabled: Bool { SMAppService.mainApp.status == .enabled }
-
     /// Whether a registration exists at all, as opposed to one that will start
     /// the app *right now*.
     ///
@@ -133,15 +141,20 @@ enum LoginItem {
     /// way to switch login-at-launch off at all.
     static var isEnabled: Bool { registered(service) || registered(.mainApp) }
 
-    /// Toggles login-at-launch and reports what actually happened.
+    /// Sets login-at-launch to `enabled` and reports what actually happened.
+    ///
+    /// Takes the state the user asked for rather than deriving it from a live
+    /// read, which inverted the click whenever the switch was stale: with the
+    /// Settings pane open, removing the login item in System Settings and then
+    /// clicking Dezhban's switch — visibly ON, so plainly an attempt to turn it
+    /// off — read "currently off" and turned login-at-launch on.
     ///
     /// Turning it OFF retracts both registrations, for the reason `isEnabled`
     /// reports both. Turning it ON registers only the agent — the legacy one is
     /// never created again.
     @discardableResult
-    static func toggle() -> Outcome {
-        if isEnabled { return disable() }
-        return enable()
+    static func set(enabled: Bool) -> Outcome {
+        enabled ? enable() : disable()
     }
 
     private static func enable() -> Outcome {
@@ -163,7 +176,7 @@ enum LoginItem {
         UserDefaults.standard.set(true, forKey: userDisabledKey)
         if registered(service) { unregister(service, what: "login agent") }
         if registered(.mainApp) { unregister(.mainApp, what: "legacy login item") }
-        if legacyEnabled {
+        if registered(.mainApp) {
             // The stuck path. Reported rather than worked around: registering the
             // agent alongside it would mean two launches at login, one with the
             // marker and one without, and whichever won the race would decide
@@ -200,46 +213,61 @@ enum LoginItem {
         // allowed to retry would re-register what the user had switched off — the
         // bug the persisted flag was introduced to kill.
         guard !UserDefaults.standard.bool(forKey: userDisabledKey) else {
-            UserDefaults.standard.set(true, forKey: migratedKey)
+            markMigrated()
             return
         }
 
-        guard legacyEnabled else {
-            UserDefaults.standard.set(true, forKey: migratedKey)
+        if registered(.mainApp) {
+            unregister(.mainApp, what: "legacy login item")
+            // Checked after the attempt rather than trusting it not to throw: what
+            // matters is whether the old item is actually gone.
+            if registered(.mainApp) {
+                // Same reasoning as `disable()`'s stuck path — the agent is left
+                // unregistered rather than stacked on top of a live legacy item.
+                // The Settings toggle reports the legacy registration, so the user
+                // can see login-at-launch is on; clearing it is a System Settings
+                // job, which `Outcome.legacyStuck` spells out when they try.
+                NSLog("DezhbanMenu: the legacy login item could not be retracted; "
+                    + "leaving login-at-launch as it was. Remove \"Dezhban\" under "
+                    + "System Settings → General → Login Items to move onto the login agent.")
+                markMigrated()
+                return
+            }
+            // Recorded BEFORE the register below, and this is the whole point of
+            // the flag: it is what a retry launch has to go on, since by then the
+            // legacy item is gone and there is nothing else left to tell "this
+            // account had a login item to migrate" from "this account never did".
+            UserDefaults.standard.set(true, forKey: legacyRetractedKey)
+        } else if !UserDefaults.standard.bool(forKey: legacyRetractedKey) {
+            // Nothing was ever registered the old way on this account, so there is
+            // nothing to move onto the agent. Turning login-at-launch on is the
+            // user's call, via Settings.
+            markMigrated()
             return
         }
-        unregister(.mainApp, what: "legacy login item")
 
-        // Checked after the attempt rather than trusting it not to throw: what
-        // matters is whether the old item is actually gone.
-        if legacyEnabled {
-            // Same reasoning as `disable()`'s stuck path — the agent is left
-            // unregistered rather than stacked on top of a live legacy item. The
-            // Settings toggle reports the legacy registration, so the user can
-            // see login-at-launch is on; clearing it is a System Settings job,
-            // which `Outcome.legacyStuck` spells out when they try.
-            NSLog("DezhbanMenu: the legacy login item could not be retracted; "
-                + "leaving login-at-launch as it was. Remove \"Dezhban\" under "
-                + "System Settings → General → Login Items to move onto the login agent.")
-            UserDefaults.standard.set(true, forKey: migratedKey)
-            return
-        }
+        // Reached with the legacy item confirmed gone — now, or on an earlier
+        // launch whose register() failed.
         if registered(service) {
-            UserDefaults.standard.set(true, forKey: migratedKey)
+            markMigrated()
             return
         }
         do {
             try service.register()
-            UserDefaults.standard.set(true, forKey: migratedKey)
+            markMigrated()
         } catch {
             // Deliberately NOT marked migrated. The legacy item is gone by now,
             // so leaving it here means *nothing* starts the app at login — and
             // with the flag set that would never be retried, silently costing the
-            // user a setting they had switched on. The retry is safe because it
-            // is gated on `userDisabledKey` above: it can only ever restore what
-            // was already on, never override an explicit "off".
+            // user a setting they had switched on. The retry is safe because it is
+            // gated on `userDisabledKey` above: it can only ever restore what was
+            // already on, never override an explicit "off".
             NSLog("DezhbanMenu: could not register the login agent, will retry on next launch: \(error)")
         }
+    }
+
+    private static func markMigrated() {
+        UserDefaults.standard.set(true, forKey: migratedKey)
     }
 
     /// Words, not a raw `SMAppService.Status`. It is an imported `NS_ENUM` with no

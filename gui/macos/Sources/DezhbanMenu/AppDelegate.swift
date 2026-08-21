@@ -50,7 +50,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(openWindowRequested),
             name: NSNotification.Name(Self.openWindowNotification),
-            object: Bundle.main.bundleURL.path)
+            object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path)
         // macOS has a second way to start this app at login, and it does not pass
         // the launch marker: "Reopen windows when logging back in" relaunches
         // whatever was running at logout, through LaunchServices, with no

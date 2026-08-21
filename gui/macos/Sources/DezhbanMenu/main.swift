@@ -110,7 +110,8 @@ func acquireSessionOwnership() -> InstanceLock? {
                 .runningApplications(withBundleIdentifier: id)
                 .first {
                     $0.processIdentifier != mePID && !$0.isTerminated
-                        && $0.bundleURL?.standardizedFileURL == Bundle.main.bundleURL.standardizedFileURL
+                        && $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL
+                        == Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
                 }
             incumbent?.activate()
             // Ask it to open its window — which it may not currently have, since
@@ -133,7 +134,8 @@ func acquireSessionOwnership() -> InstanceLock? {
             if LaunchPreference.current.opensWindow(backgroundLaunch: false) {
                 DistributedNotificationCenter.default().postNotificationName(
                     NSNotification.Name(AppDelegate.openWindowNotification),
-                    object: Bundle.main.bundleURL.path, userInfo: nil, deliverImmediately: true)
+                    object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path,
+                    userInfo: nil, deliverImmediately: true)
             }
         }
         NSLog("DezhbanMenu: another copy of this install owns the session; exiting")
