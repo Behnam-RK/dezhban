@@ -126,23 +126,6 @@ try {
 	Note "installing to $binPath"
 	Copy-Item -Path $assetPath -Destination $binPath -Force
 
-	# Hippocratic 3.0 Core section 5.1 requires that everyone who receives the
-	# Software also receives the License, and 7.2 ends the grant if that is not
-	# cured within 30 days of notice. Fetched from the SAME tag as the binary,
-	# the way scripts/install.sh does it. Non-fatal for the same reason: a
-	# machine with the binary and no LICENSE is a fixable notice problem, not a
-	# reason to fail an install that already put a kill switch on the host.
-	# $ErrorActionPreference = "Stop" makes the failure terminating, so the
-	# catch is what keeps it non-fatal.
-	$licensePath = Join-Path $installDir "LICENSE"
-	$licenseUrl = "https://raw.githubusercontent.com/$Repo/$tag/LICENSE"
-	try {
-		Invoke-WebRequest -Uri $licenseUrl -OutFile $licensePath -UseBasicParsing
-	} catch {
-		Write-Host "warning: could not fetch the license — install itself succeeded. Retry later with:" -ForegroundColor Yellow
-		Write-Host "  Invoke-WebRequest -Uri $licenseUrl -OutFile '$licensePath' -UseBasicParsing"
-	}
-
 	$machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
 	if ($machinePath -notlike "*$installDir*") {
 		[Environment]::SetEnvironmentVariable("Path", "$machinePath;$installDir", "Machine")
@@ -162,6 +145,27 @@ try {
 	if ($wasRunning) {
 		Note "restarting the service"
 		& $binPath --no-sudo start
+	}
+
+	# Hippocratic 3.0 Core section 5.1 requires that everyone who receives the
+	# Software also receives the License, and 7.2 ends the grant if that is not
+	# cured within 30 days of notice. Fetched from the SAME tag as the binary,
+	# the way scripts/install.sh does it — and, like install.sh, LAST: this is
+	# the one step here that talks to a host other than the release download
+	# already verified above, so a black-holed raw.githubusercontent.com must
+	# not be able to strand a run between "binary copied" and "service
+	# registered". -TimeoutSec is explicit for the same reason; Invoke-WebRequest
+	# defaults to no timeout at all. Non-fatal: a machine with the binary and no
+	# LICENSE is a fixable notice problem, not a reason to fail an install that
+	# already put a kill switch on the host. $ErrorActionPreference = "Stop"
+	# makes the failure terminating, so the catch is what keeps it non-fatal.
+	$licensePath = Join-Path $installDir "LICENSE"
+	$licenseUrl = "https://raw.githubusercontent.com/$Repo/$tag/LICENSE"
+	try {
+		Invoke-WebRequest -Uri $licenseUrl -OutFile $licensePath -UseBasicParsing -TimeoutSec 30
+	} catch {
+		Write-Host "warning: could not fetch the license — install itself succeeded. Retry later with:" -ForegroundColor Yellow
+		Write-Host "  Invoke-WebRequest -Uri $licenseUrl -OutFile '$licensePath' -UseBasicParsing"
 	}
 
 	Write-Host ""

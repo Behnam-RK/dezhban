@@ -310,6 +310,11 @@ jobs:
           # section 5.1, cure-or-terminate under 7.2), so it is an assertion,
           # not a nicety: a payload change that drops it must fail the release.
           test -s /usr/local/share/dezhban/LICENSE || { echo "LICENSE not installed by the .pkg" >&2; exit 1; }
+          # And the app's own copy, which is the ONLY one a Dezhban-macos.app.zip
+          # download gets — that archive unpacks into /Applications, so there is
+          # no place beside the bundle to put it.
+          test -s /Applications/Dezhban.app/Contents/Resources/LICENSE \
+            || { echo "LICENSE missing from the app bundle" >&2; exit 1; }
 
           # The installed binary must report the version we are releasing.
           got="$(/usr/local/bin/dezhban version | awk '{print $2}')"

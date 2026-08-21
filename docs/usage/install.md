@@ -96,7 +96,9 @@ checksums](../contribute/releasing.md#unsigned-artifacts-signed-checksums).
    `/usr/local/share/dezhban/uninstall.sh`, and the `LICENSE` from that same
    tag to `/usr/local/share/dezhban/LICENSE` — the license requires that
    anyone who receives the software receives it too. Either fetch failing is a
-   warning, not a failed install.
+   warning, not a failed install. `install.ps1` fetches no uninstaller (Windows
+   has none) but does fetch the `LICENSE`, to `%ProgramFiles%\dezhban\LICENSE`,
+   beside `dezhban.exe`.
 
 Re-running either script upgrades or reinstalls: it replaces the binary, and
 if a service was already running, stops it first and restarts it after — but
@@ -146,8 +148,11 @@ Registers the service on install (`postinstall.sh`, same never-auto-start
 rule) and tears down rules + unregisters on removal (`preremove.sh` — it has
 to run *before* the package manager deletes the binary, or there's nothing
 left to call `panic`/`stop`/`uninstall` on). The `LICENSE` lands at
-`/usr/share/doc/dezhban/LICENSE`, where both packaging families look for it —
-the `.pkg` and `install.sh` put it in `/usr/local/share/dezhban/` instead.
+`/usr/share/doc/dezhban/LICENSE` — the per-package documentation directory both
+`dpkg` and `rpm` own, so the package manager removes it again on uninstall. The
+`.pkg` and `install.sh` put it in `/usr/local/share/dezhban/` instead, and the
+menubar app carries its own copy at
+`Dezhban.app/Contents/Resources/LICENSE`.
 
 ### Bare binaries
 

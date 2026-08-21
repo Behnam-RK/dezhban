@@ -22,10 +22,13 @@ current as you land changes.
   ([2025–2026 Iran massacres](https://en.wikipedia.org/wiki/2025%E2%80%932026_Iran_massacres))
 - Every install path now ships the `LICENSE` file — `/usr/share/doc/dezhban/`
   on the `.deb`/`.rpm`, `/usr/local/share/dezhban/` for the `.pkg` and
-  `curl | sudo bash`, the install directory on Windows, and `share/doc/dezhban`
-  under the Homebrew prefix. Only the tarball carried it before, which did not
-  satisfy MIT's notice clause either and is now a cure-or-terminate condition
-  under the new license.
+  `curl | sudo bash`, the install directory on Windows, `share/doc/dezhban`
+  under the Homebrew prefix, and `Contents/Resources/LICENSE` inside
+  `Dezhban.app` — which is what covers the standalone `Dezhban-macos.app.zip`
+  download, since that archive unpacks straight into `/Applications` and has no
+  top level to put a loose file on. Only the tarball carried it before, which
+  did not satisfy MIT's notice clause either and is now a cure-or-terminate
+  condition under the new license.
 
 ### Changed
 

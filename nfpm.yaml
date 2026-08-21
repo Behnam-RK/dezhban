@@ -42,8 +42,12 @@ contents:
   # requires that everyone who receives the Software also receives the License,
   # and section 7.2 terminates the grant if that is not cured within 30 days of
   # notice. Shipping only the binary, as this package did while it was MIT, does
-  # not satisfy that. /usr/share/doc/<pkg>/ is where both deb and rpm tooling
-  # look for it.
+  # not satisfy that. /usr/share/doc/<pkg>/ is the per-package documentation
+  # directory both dpkg and rpm own, so the file is removed again on uninstall
+  # without preremove.sh having to know about it. (Debian's own convention for
+  # this file is the name `copyright`; `LICENSE` is what the notice clause
+  # actually asks for and what every other install path here uses, and dezhban
+  # ships from its own release pipeline, not from Debian.)
   - src: "./LICENSE"
     dst: /usr/share/doc/dezhban/LICENSE
     file_info:
