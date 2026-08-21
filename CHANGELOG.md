@@ -41,7 +41,7 @@ current as you land changes.
   one else in Iran, including people working for hospitals, universities,
   municipal services, and utilities.
 
-  Three consequences worth being explicit about:
+  Two consequences worth being explicit about:
 
   - **This is not an OSI-approved open source license.** GitHub will report the
     repository's license as "Other", there is no SPDX identifier for it (package
@@ -50,9 +50,6 @@ current as you land changes.
     release pipeline, so nothing in its distribution breaks.
   - **Derivative works must carry the same license.** Part B section 5.2 is
     copyleft; MIT permitted proprietary forks and this does not.
-  - **It is not retroactive.** Every release up to and including **v0.10.1
-    remains under the MIT License**. That grant is not revoked and cannot be —
-    including for the entities Part A names.
 
 ## [0.10.1] - 2026-08-17
 

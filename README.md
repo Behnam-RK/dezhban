@@ -150,7 +150,4 @@ FARAJA, and anyone who took part in or materially supported the killing of
 protesters in Iran. Part B is the Hippocratic License 3.0 (Core), verbatim,
 which requires derivative works to carry the same license.
 
-Releases up to and including **v0.10.1 remain under the MIT License** — that
-grant is not revoked and cannot be.
-
 [iran]: https://en.wikipedia.org/wiki/2025%E2%80%932026_Iran_massacres
