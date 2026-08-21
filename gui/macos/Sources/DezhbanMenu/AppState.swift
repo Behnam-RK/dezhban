@@ -199,6 +199,13 @@ final class AppState: ObservableObject {
     /// Bumped by every clear, captured by every read, compared on completion.
     /// A read whose generation no longer matches is discarded rather than shown.
     private var installedRulesGeneration = 0
+
+    /// Recent warn-and-worse records from dezhban's own log. nil is "not asked
+    /// yet, or could not ask"; an EMPTY array is "asked, and there were none" —
+    /// which is the good answer, and the pane says so. Collapsing the two would
+    /// make a healthy host look like a broken reader.
+    @Published var problems: [LogRecord]?
+
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
     /// sidebar can subscribe with removeDuplicates() and never reload at 1 Hz.
@@ -397,6 +404,16 @@ final class AppState: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let rules = DezhbanCLI.readAppliedRules()
             DispatchQueue.main.async { self?.appliedRules = rules }
+        }
+    }
+
+    /// Reads recent problem records from dezhban's log. Unprivileged and cheap,
+    /// so it refreshes with the rest of the Diagnostics pane.
+    func refreshProblems() {
+        guard cliFound else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let recs = DezhbanCLI.readProblems()
+            DispatchQueue.main.async { self?.problems = recs }
         }
     }
 
