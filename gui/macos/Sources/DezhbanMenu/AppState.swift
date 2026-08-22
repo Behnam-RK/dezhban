@@ -234,9 +234,16 @@ final class AppState: ObservableObject {
     /// forty-key reference is not a useful place to land.
     func openHelp(preferring targets: [HelpTarget]) {
         guard !targets.isEmpty else { return }
-        // Decoded once and kept. `bundled()` reads the payload off disk and JSON-
-        // decodes every page's full text plus its per-row key list, which is not a
-        // thing to do synchronously on the main thread on every click of a `?`.
+        // Decoded once and kept, rather than on every click of a `?`: `bundled()`
+        // reads the payload off disk and JSON-decodes every page's full text plus its
+        // per-row key list.
+        //
+        // It does not make that the app's only decode — `HelpView` evaluates
+        // `bundled()` in its own `@State` initialiser, so a second copy exists and is
+        // rebuilt more often than this one. Sharing them is worth doing and is not
+        // this change's business; the point here is only that resolving a target must
+        // not add a decode of its own.
+        //
         // Nil (a bare SwiftPM binary with no help payload) leaves the preferred
         // target, which is the right guess when nothing can be checked.
         if cachedHelpBundle == nil { cachedHelpBundle = HelpBundle.bundled() }

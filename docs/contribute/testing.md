@@ -1026,8 +1026,16 @@ task gui:build && open dist/Dezhban.app
       parked on **Pause**, open a switch window from the menubar: the button under
       the pointer becomes **Cancel**, and the caption must stop describing Pause
       without waiting for the mouse to move. And with the pointer parked on
-      **Block**, stop the daemon: the caption's password clause must follow the
-      tooltip's rather than keeping the answer it was given at hover-enter.
+      **Block**, make the control socket unreachable *without* stopping the daemon —
+      `dezhban config set control.enabled=false` then `dezhban restart` — and the
+      caption's password clause must follow the tooltip's rather than keeping the
+      answer it was given at hover-enter.
+
+      Not by stopping the daemon: `state.isLive` goes false, Overview renders its
+      guided "stopped" layout, and the action row and its caption line are gone
+      before any of this could be observed. `routineHint` keys on
+      `controlIsReachable`, which is the socket, not the posture — so the socket has
+      to be the thing that changes.
 - [ ] **VoiceOver still hears what each button does.** With VoiceOver on, move
       through the action row: each control announces its short title *and* its
       consequence as a hint — Cancel in particular must say whether it closes the
