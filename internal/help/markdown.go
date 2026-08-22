@@ -143,7 +143,18 @@ func Render(source, markdown string) Rendered {
 	// would quietly deep-link to the presets row instead, with the resolution test
 	// still green because *some* row carries the anchor. TestKeyRowsAnchorToTheir
 	// DefinitionSection pins the ordering this relies on.
-	claimedKeys := map[string]bool{}
+	// anchor -> the key that claimed it, not merely "claimed". The distinction is
+	// the whole point: refusing a *repeat* of the same key is benign and therefore
+	// silent (config.md documents several keys in more than one table, and failing
+	// the build on that would be absurd), but two *different* keys landing on one
+	// anchor is a silently wrong deep link. `Anchor` lowercases and strips `.`, `[`
+	// and `]`, so `vpn.pauseMax` and `vpn.pause-max` — or any rename that changes
+	// only punctuation or case — slug identically. The "Renamed keys" table precedes
+	// the definition tables and its first cell is the OLD name, so such a rename
+	// would hand the anchor to the old-name row and send every `?` for the live key
+	// there, with a green build: the resolution test only asks whether *some* row
+	// carries the fragment. Reported the same way a heading collision is.
+	claimedKeys := map[string]string{}
 	// Heading anchors are collected up front, because a heading can appear *after*
 	// the row that would collide with it while r.Headings is filled in the same
 	// single pass below.
@@ -187,14 +198,18 @@ func Render(source, markdown string) Rendered {
 	}
 	claimKey := func(key string) (string, bool) {
 		anchor := KeyAnchor(key)
-		if claimedKeys[anchor] {
+		if owner, taken := claimedKeys[anchor]; taken {
+			if owner != key {
+				note("two different keys claim the anchor " + anchor +
+					" (" + owner + " and " + key + ")")
+			}
 			return "", false
 		}
 		if headingAnchors[anchor] {
 			note("a key row and a heading both claim the anchor " + anchor)
 			return "", false
 		}
-		claimedKeys[anchor] = true
+		claimedKeys[anchor] = key
 		r.Keys = append(r.Keys, Heading{Text: key, Anchor: anchor})
 		return anchor, true
 	}
