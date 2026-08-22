@@ -17,8 +17,8 @@ struct HandoffRequestTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let request = HandoffRequest(url: dir.appendingPathComponent("a.handoff"))
 
-        request.post()
-        #expect(request.claim() == .fresh)
+        request.post(token: "t1")
+        #expect(request.claim() == .fresh(token: "t1"))
         #expect(request.claim() == .absent)
     }
 
@@ -38,9 +38,26 @@ struct HandoffRequestTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let request = HandoffRequest(url: dir.appendingPathComponent("e.handoff"))
 
-        request.post()
+        request.post(token: "t1")
         request.discard()
         #expect(request.claim() == .absent)
+    }
+
+    /// The token is what lets the two signals for one request be told apart from two
+    /// requests. Timing could not, which is why three attempts at a debounce each
+    /// both duplicated a window and swallowed a real launch.
+    @Test func theClaimCarriesThePostedToken() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let request = HandoffRequest(url: dir.appendingPathComponent("i.handoff"))
+
+        request.post(token: "abc-123")
+        #expect(request.claim() == .fresh(token: "abc-123"))
+
+        // A request from an older build carries nothing; `nil` means "cannot dedupe",
+        // which the caller treats as its own identity rather than as a match.
+        try Data().write(to: request.url)
+        #expect(request.claim() == .fresh(token: nil))
     }
 
     /// Two claimers overlapping on one request — the notification handler and the
@@ -53,7 +70,7 @@ struct HandoffRequestTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let request = HandoffRequest(url: dir.appendingPathComponent("f.handoff"))
 
-        request.post()
+        request.post(token: "t1")
         // Stands in for the other claimer winning between this one's stat and its
         // remove — the only way `.lost` can arise, and the reason `claim` takes
         // the hook.
@@ -74,7 +91,7 @@ struct HandoffRequestTests {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let request = HandoffRequest(url: dir.appendingPathComponent("h.handoff"))
-        request.post()
+        request.post(token: "t1")
 
         // Read-only parent: the file is visible but cannot be unlinked.
         try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: dir.path)

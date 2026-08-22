@@ -412,7 +412,16 @@ enum LoginItem {
     }
 
     private static func disable() -> Outcome {
-        UserDefaults.standard.set(true, forKey: userDisabledKey)
+        // The flag is account-wide (a shared UserDefaults domain), so only a copy
+        // that will still be here may set it. A dev build or a ~/Downloads copy
+        // switching login-at-launch off would otherwise record "the user turned this
+        // off" for the *installed* app, whose migration then skips its retraction
+        // forever — while this bundle's own `retractLegacy()` acted on something
+        // else entirely. Retracting from anywhere is fine; speaking for the account
+        // is not.
+        if isInStableInstallLocation {
+            UserDefaults.standard.set(true, forKey: userDisabledKey)
+        }
         // Flushed before the unregister below, because that unregister may get
         // this process killed: launchd terminates a loaded job's running process,
         // and in a login-started session that process is the app (recorded as an
@@ -504,13 +513,7 @@ enum LoginItem {
                 + "(\(Bundle.main.bundleURL.path)); the copy in /Applications will do it")
             return
         }
-        // An explicit "off" outlives every retry below. Without this, a migration
-        // allowed to retry would re-register what the user had switched off — the
-        // bug the persisted flag was introduced to kill.
-        guard !UserDefaults.standard.bool(forKey: userDisabledKey) else {
-            markMigrated()
-            return
-        }
+        let userDisabled = UserDefaults.standard.bool(forKey: userDisabledKey)
 
         if registered(.mainApp) {
             // Whether it was *enabled* decides what happens afterwards — that is
@@ -574,6 +577,19 @@ enum LoginItem {
         // Falling through means a retraction was attempted and the legacy item is
         // gone — this launch, or an earlier one that was killed by the unload before
         // it could finish.
+
+        // An explicit "off" outlives every retry: without this, a migration allowed
+        // to retry would re-register what the user had switched off. It gates the
+        // *register* only. Sitting above the legacy block, as it first did, it also
+        // short-circuited the retraction — which the code twenty lines up insists is
+        // unconditional, and for a reason: a live `mainApp` registration left on file
+        // is re-armed by the user approving the single "Dezhban" row under Login
+        // Items, and then starts the app with no marker, permanently, because the
+        // migration is marked done and never runs again.
+        guard !userDisabled else {
+            markMigrated()
+            return
+        }
 
         // Reached with the legacy item confirmed gone — now, or on an earlier
         // launch whose register() failed.

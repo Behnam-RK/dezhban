@@ -22,11 +22,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var updateTimer: Timer?
     /// Runs only for a few seconds after launch — see `startHandoffBackstop`.
     private var handoffTimer: Timer?
-    /// When a hand-off last opened the window, so two signals for one request
-    /// cannot open it twice — see `openForHandoff`.
-    private var lastHandoffOpenAt: Date?
-    /// Whether that open came from a definitive claim. See `openForHandoff`.
-    private var lastHandoffOpenWasDefinite = false
+    /// The last hand-off request acted on, so the two signals for one request
+    /// cannot open the window twice — see `openForHandoff`.
+    private var lastHandoffToken: String?
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
@@ -50,6 +48,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// signal there will be. Only the poster knows that, which is why it is carried
     /// here rather than inferred by the receiver from a timer.
     static let handoffFilelessKey = "dezhban.handoffFileless"
+
+    /// Identifies the request, so the notification and the file-watcher can tell
+    /// "the other signal for the request I already handled" from "a new launch".
+    static let handoffTokenKey = "dezhban.handoffToken"
 
     func applicationDidFinishLaunching(_: Notification) {
         // FIRST, and only for the session owner. A duplicate posts its hand-off as
@@ -151,14 +153,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Either the launch window, or the poster telling us its file never landed.
         let fileless = (note.userInfo?[Self.handoffFilelessKey] as? String) == "1"
         let acceptWithoutFile = handoffTimer != nil || fileless
+        // The poster's token, so a signal with no file to read still identifies its
+        // request and cannot be mistaken for a second launch — or for the same one.
+        let postedToken = note.userInfo?[Self.handoffTokenKey] as? String
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             switch sessionHandoff?.claim() ?? .absent {
-            case .fresh:
+            case .fresh(let token):
                 // A file, taken by us. The session owner discards whatever it finds
                 // when it takes the lock, so a file seen afterwards was written by a
                 // live duplicate however long ago — which is what makes a slow
                 // launch work rather than being thrown away for being slow.
-                DispatchQueue.main.async { self?.openForHandoff(definite: true) }
+                DispatchQueue.main.async { self?.openForHandoff(token: token ?? postedToken) }
             case .absent:
                 // No file to point at, so nothing here proves a duplicate of this
                 // app wrote it. Accepted only while the launch-time backstop is
@@ -181,7 +186,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // `open -a Dezhban` — and without it a full or read-only home turned
                 // the hand-off into the silent no-op it exists to prevent.
                 guard acceptWithoutFile else { return }
-                DispatchQueue.main.async { self?.openForHandoff(definite: false) }
+                DispatchQueue.main.async { self?.openForHandoff(token: postedToken) }
             case .lost:
                 // The backstop got there first and is opening the window.
                 break
@@ -191,63 +196,38 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // every tick), but this handler is a one-shot event tied to a real
                 // user launch: standing down here would make that launch the silent
                 // no-op the mechanism exists to prevent, and every launch after it.
-                // Definite, not indefinite. There is no other claimant to pair
-                // with — the backstop stands down on `.blocked` — so treating it as
-                // ambiguous only meant the debounce dropped the *second* of two
-                // launches inside three seconds, and, since a request that cannot be
-                // removed stays that way, every later pair too.
                 NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
-                DispatchQueue.main.async { self?.openForHandoff(definite: true) }
+                DispatchQueue.main.async { self?.openForHandoff(token: postedToken) }
             }
         }
     }
 
-    /// Opens the window for a hand-off.
+    /// Opens the window for a hand-off, once per request.
     ///
-    /// The claim in `HandoffRequest` settles who *owns* a request; this settles the
-    /// residue, which the claim cannot: the two signals for one request can pass
-    /// each other such that both legitimately conclude they should act. Debouncing
-    /// the effect is cheaper and safer than trying to make two asynchronous signals
-    /// agree — and the effect is what the user notices, since `MainWindow.open()`
-    /// calls `NSApp.activate(ignoringOtherApps:)`, so a duplicate is a second focus
-    /// steal or a window reopening just after they closed it.
+    /// `token` identifies the request. The two signals for one request — the
+    /// notification and the launch-time backstop — carry the same one, so whichever
+    /// arrives second is recognised and dropped; a genuinely new launch carries a
+    /// new token and always opens. That distinction has to be exact, because the
+    /// effect is what the user notices: `MainWindow.open()` activates the app, so a
+    /// duplicate is a second focus steal or a window reopening just after they
+    /// closed it, while a dropped one is the silent no-op the whole mechanism exists
+    /// to prevent.
     ///
-    /// `definite` is what keeps the debounce from swallowing real work. A claim of
-    /// `.fresh` means this caller took a request nobody else had, so it is a
-    /// distinct launch by definition — two double-clicks a second apart, with the
-    /// window closed in between, are two requests and must both be answered.
-    /// Debouncing those on elapsed time alone made the second one the silent no-op
-    /// this whole mechanism exists to prevent. Only the ambiguous signals, which
-    /// may be describing a request another caller already handled, are debounced.
-    private func openForHandoff(definite: Bool) {
-        let now = Date()
-        if let last = lastHandoffOpenAt, now.timeIntervalSince(last) < Self.handoffDebounce {
-            // An indefinite open never repeats inside the window.
-            if !definite { return }
-            // A definitive one is suppressed only when the open it would follow was
-            // *indefinite* — that pairing is the two signals for a single request
-            // (the backstop claimed `.fresh` while the notification saw `.absent`,
-            // and the `.absent` hop reached main first). Two genuine double-clicks
-            // both claim `.fresh`, so a definite open never suppresses another
-            // definite one, which is what keeps a real second request from being
-            // swallowed.
-            if !lastHandoffOpenWasDefinite {
-                // And that pair is now closed. Leaving the flag false meant the rest
-                // of the 3s window kept swallowing definite opens, so a genuine
-                // second double-click a second later was dropped — the no-op this
-                // exists to prevent, reached through the machinery preventing it.
-                lastHandoffOpenWasDefinite = true
-                return
-            }
-        }
-        lastHandoffOpenAt = now
-        lastHandoffOpenWasDefinite = definite
+    /// Identity rather than timing, after three attempts at timing. A debounce with
+    /// a definite/indefinite flag could not tell a paired signal from a new request
+    /// — elapsed time does not carry that information — so every version of it both
+    /// let a duplicate window through in one ordering and swallowed a real second
+    /// launch in another.
+    ///
+    /// A `nil` token cannot be matched (a request from an older build, or a poster
+    /// whose file never landed), so it is always acted on: an extra window is the
+    /// lesser failure.
+    private func openForHandoff(token: String?) {
+        if let token, token == lastHandoffToken { return }
+        lastHandoffToken = token
         MainWindow.shared.open()
     }
 
-    /// Long enough to cover the gap between a notification and a backstop tick
-    /// (0.5s), short enough that two genuinely separate launches both get a window.
-    private static let handoffDebounce: TimeInterval = 3
 
     /// Installs both hand-off consumers. Called only by the session owner.
     ///
@@ -294,16 +274,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // Only `.fresh`. `.lost` means the notification handler claimed it and
             // is already opening the window; `.absent` is the ordinary case of
             // there being no request at all, which is what almost every tick sees.
+            var claimed: String?
             switch handoff.claim() {
-            case .fresh:
-                break
+            case .fresh(let token):
+                claimed = token
             case .blocked(let why):
                 NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
                 return
             case .absent, .lost:
                 return
             }
-            DispatchQueue.main.async { self?.openForHandoff(definite: true) }
+            DispatchQueue.main.async { self?.openForHandoff(token: claimed) }
         }
     }
 

@@ -174,10 +174,23 @@ func acquireSessionOwnership() -> SessionLock? {
             // with no observer installed — the file is the one that waits, and the
             // incumbent's launch-time backstop finds it. Whichever of the two gets
             // there claims it, so the window opens once (see HandoffRequest).
-            var fileLanded = true
-            if case .failure(let error) = sessionHandoff?.post() ?? .success(()) {
+            // One token for both signals, so the incumbent can recognise the second
+            // one as describing a request it has already answered — and a genuinely
+            // new launch, with a new token, as a new request.
+            let token = UUID().uuidString
+            // Defaults to NOT landed. A nil `sessionHandoff` is unreachable today
+            // (it is assigned immediately above the acquire) but the safe reading of
+            // "there was no file to write" is the same as a failed write: say so, so
+            // the notification carries the fileless marker. Defaulting to success
+            // meant a future reordering would drop a launch with nothing logged.
+            var fileLanded = false
+            switch sessionHandoff?.post(token: token) {
+            case .success:
+                fileLanded = true
+            case .failure(let error):
                 NSLog("DezhbanMenu: could not record the hand-off request: \(error)")
-                fileLanded = false
+            case nil:
+                NSLog("DezhbanMenu: no hand-off request path; relying on the notification")
             }
             // Whether the file landed travels WITH the notification, because this
             // process is the only one that knows. The incumbent requires a file
@@ -191,7 +204,9 @@ func acquireSessionOwnership() -> SessionLock? {
             DistributedNotificationCenter.default().postNotificationName(
                 NSNotification.Name(AppDelegate.openWindowNotification),
                 object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path,
-                userInfo: fileLanded ? nil : [AppDelegate.handoffFilelessKey: "1"],
+                userInfo: fileLanded
+                    ? [AppDelegate.handoffTokenKey: token]
+                    : [AppDelegate.handoffTokenKey: token, AppDelegate.handoffFilelessKey: "1"],
                 deliverImmediately: true)
         }
         NSLog("DezhbanMenu: another copy of this install owns the session; exiting")

@@ -828,9 +828,9 @@ task gui:build && open dist/Dezhban.app
       out and back in, then double-click the app twice in quick succession as early
       as you can, closing the window (⌘W) in between. Both must open. Best-effort
       by nature: the deterministic coverage is
-      `HandoffRequestTests.anOverlappingClaimerIsToldItLost` and the `definite`
-      split in `openForHandoff`, which is what stops the debounce swallowing a real
-      second request.
+      `HandoffRequestTests.anOverlappingClaimerIsToldItLost` and
+      `theClaimCarriesThePostedToken`, since it is the token — not any timing rule —
+      that tells the two signals for one request from two requests.
 - [ ] **A hand-off that arrives before the app is observing still works.** The
       race the `HandoffRequest` file exists for: log out and back in and
       double-click the app in `/Applications` as early as you can, while it is

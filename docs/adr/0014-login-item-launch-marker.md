@@ -183,6 +183,14 @@ with an argument, the pre-`SMAppService` pattern.
   Debouncing what the user notices is cheaper and safer than making two
   asynchronous signals agree.
 
+  Which of the two signals is acting is settled by identity, not by timing. Each
+  request carries a token, written into the file and repeated in the notification, so
+  whichever signal arrives second is recognised as describing a request already
+  answered while a genuinely new launch — new token — always opens. Three earlier
+  versions inferred this from elapsed time plus a definite/indefinite flag, and every
+  one of them both let a duplicate window through in one ordering and swallowed a real
+  second launch in another, because elapsed time does not carry that information.
+
   Only the ambiguous ones, though. A claim of `.fresh` means the caller took a
   request nobody else had, so it is a distinct launch by definition — two
   double-clicks a second apart with the window closed in between are two requests

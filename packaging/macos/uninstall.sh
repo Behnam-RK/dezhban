@@ -111,7 +111,13 @@ fi
 if [ ! -d "$APP" ]; then
 	for root in /Applications "${CONSOLE_HOME:+$CONSOLE_HOME/Applications}"; do
 		[ -d "$root" ] || continue
-		found=$(find "$root" -maxdepth 3 -name Dezhban.app -type d -print 2>/dev/null | head -1)
+		# Unbounded depth, to match LoginItem.isInStableInstallLocation, which accepts
+		# anything *under* an Applications directory. A depth limit here meant an
+		# install the app would happily register the login agent from — say
+		# /Applications/Utilities/Network/Tools/Dezhban.app — was one the uninstaller
+		# could not find, so it printed "Nothing will start Dezhban (the app is gone)"
+		# over a bundle still sitting there launching at every login.
+		found=$(find "$root" -name Dezhban.app -type d -print 2>/dev/null | head -1)
 		if [ -n "$found" ]; then
 			APP="$found"
 			echo "note: found the app at $APP" >&2

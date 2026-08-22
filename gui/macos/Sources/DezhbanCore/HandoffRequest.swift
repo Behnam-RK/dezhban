@@ -36,7 +36,7 @@ public struct HandoffRequest {
         HandoffRequest(url: lock.deletingPathExtension().appendingPathExtension("handoff"))
     }
 
-    /// Records a request, reporting whether it landed.
+    /// Records a request under `token`, reporting whether it landed.
     ///
     /// Still best effort — a failure must never stop the losing process from
     /// exiting — but not silent. If this fails while the incumbent is between
@@ -45,9 +45,9 @@ public struct HandoffRequest {
     /// silent no-op the mechanism was written to prevent. The caller cannot repair
     /// that, but it can say so.
     @discardableResult
-    public func post() -> Result<Void, Error> {
+    public func post(token: String) -> Result<Void, Error> {
         do {
-            try Data().write(to: url, options: .atomic)
+            try Data(token.utf8).write(to: url, options: .atomic)
             return .success(())
         } catch {
             return .failure(error)
@@ -65,9 +65,18 @@ public struct HandoffRequest {
     /// starting is precisely the "user impatient with a slow start" case this whole
     /// mechanism is written around, and the cutoff threw that request away.
     public enum Claim: Equatable {
-        /// Taken. Because the session owner discards whatever it finds when it takes
-        /// the lock, a request seen after that was written by a live duplicate.
-        case fresh
+        /// Taken, carrying the token the poster wrote. Because the session owner
+        /// discards whatever it finds when it takes the lock, a request seen after
+        /// that was written by a live duplicate.
+        ///
+        /// The token is what makes "two signals for one request" distinguishable
+        /// from "two requests" *exactly*. Three earlier attempts inferred it from
+        /// timing and a definite/indefinite flag, and each one both let a duplicate
+        /// window through and swallowed a genuine second launch, because elapsed
+        /// time cannot tell those apart. Identity can: the notification carries the
+        /// same token, so whichever signal arrives second is recognised and dropped
+        /// while a new launch — new token — always opens.
+        case fresh(token: String?)
         /// There was nothing to take.
         case absent
         /// There was a request, and somebody else took it first. Whoever did is
@@ -111,6 +120,11 @@ public struct HandoffRequest {
     /// in a comment rather than a test would be asserting the whole point.
     public func claim(interleaved: () -> Void = {}) -> Claim {
         guard FileManager.default.fileExists(atPath: url.path) else { return .absent }
+        // Read before the unlink, since the unlink is what claims it. A request
+        // written by an older build carries no token; `nil` then means "cannot
+        // dedupe this one", which the caller treats as its own identity rather than
+        // as a match.
+        let token = (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) }
         interleaved()
         do {
             try FileManager.default.removeItem(at: url)
@@ -127,6 +141,6 @@ public struct HandoffRequest {
             }
             return .blocked(error.localizedDescription)
         }
-        return .fresh
+        return .fresh(token: token?.isEmpty == false ? token : nil)
     }
 }
