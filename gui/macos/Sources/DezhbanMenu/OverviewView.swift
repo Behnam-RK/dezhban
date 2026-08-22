@@ -364,6 +364,7 @@ struct OverviewView: View {
     /// shown. Hover is cleared only by the control that owns the current hint,
     /// so the pointer leaving A after it has already entered B does not blank
     /// out B's caption.
+    ///
     /// `focusable: false` skips the `.focused` binding, for a caller whose content is
     /// a branch rather than a control.
     ///
@@ -439,9 +440,11 @@ struct OverviewView: View {
             }
     }
 
-    /// The one line that explains whatever the user is pointing at. Always
-    /// present and always one line high — a caption that vanished between two
-    /// buttons would reflow the row under the pointer.
+    /// The line that explains whatever the user is pointing at or has focused.
+    ///
+    /// Always present and always the same height — three reserved lines, see below.
+    /// A caption that collapsed between two buttons would reflow the row under the
+    /// pointer, which is the one thing it may never do.
     private func actionCaption() -> some View {
         // The resting text is a prompt, not the posture. `PostureUI.humanPosture` is
         // exactly `display.headline`, which the hero already renders in title2 a

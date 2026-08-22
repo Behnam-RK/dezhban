@@ -1022,8 +1022,13 @@ task gui:build && open dist/Dezhban.app
       button** — focus is meant to supersede a parked pointer. Then move the pointer
       onto a control (the same one or another) and confirm it takes over again:
       re-entering is what hands it back, deliberately, since jiggling inside the
-      control you are already on aims at nothing new. The line must never go blank or change
-      height, which would reflow the row under the pointer.
+      control you are already on aims at nothing new.
+
+      Then, still with the pointer parked on a button, Tab *out* of the row
+      altogether. The caption must go back to describing the button under the pointer
+      — not to the resting prompt. Focus outranks a parked pointer while it is in the
+      row; it does not erase where the pointer is. The line must never go blank or
+      change height either, which would reflow the row under the pointer.
 
       Two more, both about a caption outliving what it described. With the pointer
       parked on **Pause**, open a switch window from the menubar: the button under

@@ -31,10 +31,12 @@ current as you land changes.
   VPN switch" (which window it closes is in the caption). The sentence each title
   used to carry inline moved to a caption line beneath the row that follows the
   pointer and the keyboard focus, and reads "Point at a button to see what it
-  does." when neither is on the row. The same
-  sentence remains the tooltip, and the caption wraps to a second line rather than
-  truncating, since its tail is where the password expectation is stated. The
-  menubar's items are unchanged: a menu has no caption line to delegate to, and
+  does." when neither is on the row. Whichever of the two you used last wins, so
+  tabbing takes the caption from a resting pointer and moving the pointer takes it
+  back. The same sentence remains the tooltip and is also announced by VoiceOver as
+  the control's hint, and the caption wraps rather than truncating — its tail is
+  where the password expectation is stated, and that has to survive a narrow window.
+  The menubar's items are unchanged: a menu has no caption line to delegate to, and
   a guided empty state's panic button keeps its full title for the same reason.
 - **The advanced tunables table names its keys in full** (`vpn.advanced.redialBudget`
   rather than `redialBudget`), matching every other table in the reference.
