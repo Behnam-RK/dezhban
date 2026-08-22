@@ -5,6 +5,20 @@ import Testing
 /// Builds a schema good enough to exercise the pane's use of it, without
 /// shelling out to the CLI. Kinds and labels match what `config schema --json`
 /// reports for these keys.
+/// Mirrors Go's `config.anchorSlug` / `help.Anchor`: lowercase, then keep only
+/// letters, digits and hyphens — so a dot is **dropped**, not turned into a hyphen.
+///
+/// Spelled out here because the fixture is the app-side reference for a
+/// cross-language contract, and it had the rule wrong: it mapped "." to "-" and
+/// then asserted `key-vpn-endpointrefresh`, which the pipeline never emits. Nothing
+/// failed, because the test only exercised decoding and ordering — but the next
+/// person deriving an anchor from this fixture would have got a fragment resolving
+/// nowhere. Go's TestKeyAnchorSlugMatchesTheRenderer pins the two derivations that
+/// actually ship; this keeps the fixture honest about them.
+private func goAnchorSlug(_ key: String) -> String {
+    key.lowercased().filter { $0.isLowercase && $0.isASCII || $0.isNumber || $0 == "-" }
+}
+
 private func testSchema() -> ConfigSchema {
     func tunable(_ key: String, _ label: String, _ kind: String,
                  defaultValue: String = "", capKey: String? = nil,
@@ -14,7 +28,7 @@ private func testSchema() -> ConfigSchema {
          \(capKey.map { "\"capKey\":\"\($0)\"," } ?? "")
          "disablable":\(disablable),"advanced":false,"preset":false,
          "help":"help for \(key)","docAnchor":"usage/config.md#fields",
-         "docKeyAnchor":"usage/config.md#key-\(key.replacingOccurrences(of: ".", with: "-").lowercased())"}
+         "docKeyAnchor":"usage/config.md#key-\(goAnchorSlug(key))"}
         """
         return try! JSONDecoder().decode(ConfigTunable.self, from: Data(json.utf8))
     }
@@ -261,7 +275,8 @@ struct ConfigSchemaTests {
         let targets = try! #require(schema["vpn.endpointRefresh"]?.docTargets)
         #expect(targets.count == 2)
         #expect(targets[0].source == "usage/config.md")
-        #expect(targets[0].anchor == "key-vpn-endpointrefresh")
+        // Dots dropped, not hyphenated — see `goAnchorSlug`.
+        #expect(targets[0].anchor == "key-vpnendpointrefresh")
         #expect(targets[1].anchor == "fields")
     }
 

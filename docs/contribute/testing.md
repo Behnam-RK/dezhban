@@ -1192,8 +1192,17 @@ traffic, so the check that matters is the one CI cannot run: with egress gone.
       table row** — not to the section heading it shares with dozens of other
       keys, and not to the top of the reference. Spot-check one field per
       section, including one under Advanced (whose rows are anchored on the
-      fully-qualified `vpn.advanced.*` name). Its **tooltip** is the key's own
-      one-line help, not "Read about X in the documentation".
+      fully-qualified `vpn.advanced.*` name). Its **tooltip** says what the button
+      does ("Open the documentation for …"): the key's own one-line help is already
+      on the control beside it, so repeating it here left nothing telling a pointer
+      user that the button navigates at all.
+- [ ] **A CLI newer than the bundled help still lands on the section.** The **?**
+      offers the key's row first and its section second, so an app bundle predating
+      row ids must land on the section heading rather than the top of the page.
+      Reproduce by running the built app against a help bundle from before this
+      change, or by checking that `dezhban config schema` prints a `docs:` anchor
+      that resolves as a heading on GitHub — that is the one a CLI reader follows,
+      and row ids exist only in the app's rendered help.
 - [ ] Against a CLI too old to know `config schema`, the **?** buttons are absent
       rather than present and inert.
 

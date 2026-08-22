@@ -119,23 +119,30 @@ func TestEveryTunableDocAnchorResolves(t *testing.T) {
 // ends of the same link, and a divergence would break every contextual help
 // link at once while both packages' own tests still passed.
 func TestKeyAnchorSlugMatchesTheRenderer(t *testing.T) {
-	index := buildInto(t)
-
-	rendered := map[string]bool{}
-	for _, e := range index {
-		for _, k := range e.Keys {
-			rendered[e.Source+"#"+k.Anchor] = true
-		}
-	}
+	checked := 0
 	for _, tun := range config.Tunables() {
-		if !rendered[tun.DocAnchor] {
+		// DocKeyAnchor, not DocAnchor: the latter is a *section* anchor, so reading it
+		// here made every iteration skip and the test could not fail — while its doc
+		// comment claimed to be the pin against exactly this divergence.
+		if tun.DocKeyAnchor == "" {
 			continue // documented in prose; covered by the resolution test above
 		}
-		page, frag, _ := strings.Cut(tun.DocAnchor, "#")
+		// Compared directly, with no "is it in the bundle" gate. Such a gate is the
+		// second way this went inert: a slug that has *diverged* is by definition not
+		// among the rendered anchors, so gating on presence skipped precisely the
+		// keys it was meant to catch. Whether the anchor exists is the resolution
+		// test's question; whether the two derivations agree is this one's.
+		page, frag, _ := strings.Cut(tun.DocKeyAnchor, "#")
 		if want := KeyAnchor(tun.Key); frag != want {
 			t.Errorf("%s: schema derived %q, renderer derives %q (page %s)",
 				tun.Key, frag, want, page)
 		}
+		checked++
+	}
+	// A test that silently checks nothing is worse than no test: this one already
+	// went inert once, when the field it reads stopped being the key anchor.
+	if checked == 0 {
+		t.Fatal("compared no anchors — the schema and the renderer are no longer being pinned together")
 	}
 }
 

@@ -220,12 +220,12 @@ final class AppState: ObservableObject {
     /// way a `Tunable`'s docAnchor writes it ("usage/config.md#fields").
     /// A docAnchor that names nothing bundled still opens the pane — better a
     /// reader lands in the documentation than on a dead control.
-    func openHelp(docAnchor: String) {
-        helpTarget = HelpTarget(docAnchor: docAnchor)
-        selectedSection = .help
-    }
-
     /// Opens the first of `targets` whose anchor actually exists in the bundle.
+    ///
+    /// The only entry point, deliberately. A second `openHelp(docAnchor:)` taking a
+    /// bare string survived this change with no callers, and it skipped the
+    /// resolution step this one exists for — so picking the shorter-looking overload
+    /// would have silently restored landing at the top of the page.
     ///
     /// Preference order, not alternatives: a key's own row first, then its
     /// section. Resolving here rather than in the Help pane is what makes the

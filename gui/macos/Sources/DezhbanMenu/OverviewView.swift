@@ -367,6 +367,17 @@ struct OverviewView: View {
                     hoveredAction = nil
                 }
             }
+            // Re-arms hover on the next mouse *movement*, not only on crossing a
+            // boundary. `onHover` fires on enter and exit alone, so once focus
+            // cleared the hover state (see below) a pointer already sitting on this
+            // control could not take the caption back until it left and re-entered —
+            // which is not what "move the pointer and it takes over again" means, and
+            // is the step the checklist now asks a tester to perform.
+            .onContinuousHover { phase in
+                if case .active = phase, hoveredAction?.id != id {
+                    hoveredAction = (id, hint)
+                }
+            }
             .onChange(of: focusedAction) { _ in
                 guard focusedAction == id else { return }
                 focusedHint = hint

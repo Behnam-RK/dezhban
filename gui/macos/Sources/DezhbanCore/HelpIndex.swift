@@ -70,8 +70,15 @@ public struct HelpPage: Codable, Identifiable, Hashable {
     }
 
     /// True when this page has a heading OR a documented-key row with that
-    /// fragment id — what a contextual deep link depends on. Keys count because
-    /// a `Tunable.docAnchor` names one directly ("usage/config.md#key-vpnredialwindow").
+    /// fragment id — what a contextual deep link depends on. Keys count because a
+    /// `ConfigTunable.docKeyAnchor` names one directly
+    /// ("usage/config.md#key-vpnredialwindow").
+    ///
+    /// Not `docAnchor`: that is the key's *section*, kept separate on purpose so a
+    /// CLI can print an anchor resolving in any markdown viewer, and so this index
+    /// has a step to fall back to when a bundle predates row ids. Collapsing the two
+    /// is the regression internal/config/schema.go spends a paragraph warning
+    /// against.
     public func hasAnchor(_ anchor: String) -> Bool {
         headings.contains { $0.anchor == anchor } || keys.contains { $0.anchor == anchor }
     }
