@@ -102,6 +102,21 @@ enum LoginItem {
         /// Registration failed outright, and nothing is registered.
         case failed(String)
 
+        /// Whether this message describes a moment that will pass on its own.
+        ///
+        /// `.awaitingApproval` expires the instant the user approves, and the two
+        /// plain states are legible from the switch itself — those may be cleared by
+        /// a refresh. The rest explain a *refusal*, and have no other channel: wiping
+        /// them leaves a switch that snapped back with no reason given, which is
+        /// indistinguishable from a bug and is the thing this type exists to prevent.
+        var isTransient: Bool {
+            switch self {
+            case .enabled, .disabled, .awaitingApproval: return true
+            case .legacyStuck, .agentStuck, .blockedByLegacy, .unstableLocation, .failed:
+                return false
+            }
+        }
+
         /// Whether anything starts the app at login — what the Settings switch
         /// shows.
         var isOn: Bool {
@@ -127,9 +142,14 @@ enum LoginItem {
                 return "macOS would not remove the old login item, so Dezhban will still open "
                     + "at login. Logging out and back in usually clears it."
             case .blockedByLegacy:
+                // Worded for neither direction, because both reach it: `enable()`
+                // refuses here, and `disable()` lands here too when the agent goes
+                // away but a dormant legacy registration will not. Describing a
+                // click the user may not have made is the mistake splitting
+                // `.legacyStuck` out was supposed to end.
                 return "An old login-item registration is still on file and macOS will not "
-                    + "remove it. Switching this on could start Dezhban twice at login, so it "
-                    + "has been left off. Logging out and back in usually clears it."
+                    + "remove it. Nothing starts Dezhban at login, and switching that on is "
+                    + "blocked while it exists. Logging out and back in usually clears it."
             case .agentStuck:
                 return "macOS would not remove the login item, so Dezhban will still open at "
                     + "login. Remove \"Dezhban\" under System Settings → General → Login Items."

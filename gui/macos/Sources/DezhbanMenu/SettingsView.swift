@@ -48,6 +48,12 @@ struct SettingsView: View {
     /// reason `Outcome` carries a message, could be wiped before it was read; and
     /// guarding it in one direction only moved the loss to the other.
     @State private var loginMessage: String?
+    /// True while `loginMessage` explains a refusal the user has to act on.
+    ///
+    /// A refresh may clear a message about a moment that has passed; it must not
+    /// clear one that is the only account of why a click did not take. See
+    /// `LoginItem.Outcome.isTransient`.
+    @State private var loginMessageIsTransient = true
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -859,6 +865,7 @@ struct SettingsView: View {
                     // so there is nothing else to collide with. That is the point of
                     // having split it from the pane's shared status.
                     loginMessage = outcome.message
+                    loginMessageIsTransient = outcome.isTransient
                     // And bumped, so any status read that was already in flight
                     // cannot land afterwards and clear this. `loginPending` cannot
                     // cover it: seed()'s read is a queue.sync behind this very
@@ -1003,12 +1010,18 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 guard revision == loginRevision, !loginPending else { return }
                 loginEnabled = enabled
-                // And clear the message, which described a moment that has passed.
-                // "macOS is holding this for your approval" outlived the approval:
-                // the user went to System Settings, granted it, came back — which is
-                // what fires this seed — and the pane still told them to go and do
-                // it. A fresh status read makes the switch speak for itself.
-                loginMessage = nil
+                // Clear only a message about a moment that has passed. "macOS is
+                // holding this for your approval" outlived the approval — the user
+                // went to System Settings, granted it, came back, which is what
+                // fires this seed — and a fresh status read makes the switch speak
+                // for itself there.
+                //
+                // But not the ones explaining a refusal. Clicking away from the app
+                // and back is enough to fire this, so clearing unconditionally erased
+                // "Dezhban has to live in Applications to open at login" a moment
+                // after the switch snapped back, leaving exactly the unexplained
+                // snap-back this message exists to prevent.
+                if loginMessageIsTransient { loginMessage = nil }
             }
         }
         notifyPrefs = NotificationManager.prefs

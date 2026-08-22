@@ -23,6 +23,9 @@ SHARE_DIR=/usr/local/share/dezhban
 LOGIN_AGENT=com.behnam-rk.dezhban.app.login
 APP_BUNDLE_ID=com.behnam-rk.dezhban.app
 LOGIN_ITEM_STUCK=none
+# Separate from LOGIN_ITEM_STUCK, which holds one value: the two conditions are
+# independent and both have to be reportable at once.
+SUPPORT_DIR_KEPT=0
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "error: run as root — sudo sh $0" >&2
@@ -222,8 +225,12 @@ if [ -n "$CONSOLE_UID" ]; then
 	# CONSOLE_HOME is resolved up top, where the bundle search needs it too.
 	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
 		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
-	elif [ "$LOGIN_ITEM_STUCK" = "none" ]; then
-		LOGIN_ITEM_STUCK=no-home
+	else
+		# Its own flag. Sharing LOGIN_ITEM_STUCK meant that whenever an earlier step
+		# had already recorded timeout/refused/not-attempted, an unresolvable home
+		# was swallowed — the session lock and any hand-off file surviving under a
+		# closing report that mentioned only the other problem.
+		SUPPORT_DIR_KEPT=1
 	fi
 	# The app's preferences, for the same reason. These are not cosmetic: the
 	# migration that moves an old LaunchServices login item onto the login agent
@@ -293,11 +300,6 @@ none) ;;
 		echo "warning: the app bundle was already gone, so its login item could not"
 		echo "         be retracted — only the app itself can do that."
 		;;
-	no-home)
-		echo "warning: $CONSOLE_USER's home directory could not be resolved, so the"
-		echo "         session lock under ~/Library/Application Support was left"
-		echo "         behind. (The saved preferences were still removed.)"
-		;;
 	no-console-uid)
 		echo "warning: could not look up $CONSOLE_USER's user id, so Dezhban's"
 		echo "         per-user leftovers were not removed. This usually means the"
@@ -315,6 +317,14 @@ none) ;;
 	echo "         remove it there."
 	;;
 esac
+
+if [ "$SUPPORT_DIR_KEPT" = "1" ]; then
+	echo
+	echo "warning: $CONSOLE_USER's home directory could not be resolved, so"
+	echo "         ~/Library/Application Support/$APP_BUNDLE_ID was left behind."
+	echo "         It holds only Dezhban's session lock. (The saved preferences"
+	echo "         were removed.)"
+fi
 echo
 echo "If any OTHER account on this Mac ran the app, its login agent is still"
 echo "registered there — root cannot reach another user's launchd session. Nothing"

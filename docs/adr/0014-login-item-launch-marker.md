@@ -406,8 +406,10 @@ with an argument, the pre-`SMAppService` pattern.
   the app, so one launch from `~/Downloads` — an upgrader trying the app zip
   before moving it — or from `dist/` would point the login agent at a bundle
   about to move or be deleted and mark the account done forever. It runs
-  unattended, so it takes the conservative branch; an explicit toggle from
-  Settings is the user's own call and is not gated.
+  unattended, so it takes the conservative branch — and the Settings toggle takes
+  the same one, for the reason given above: the consequence is not the user's to
+  undo, so an explicit click is no more entitled to claim the login item from a
+  doomed bundle.
 
   Two smaller versions of the same "the switch must not lie" rule.
   `LoginItem.enable()` refuses to register the agent while a legacy item is live,
