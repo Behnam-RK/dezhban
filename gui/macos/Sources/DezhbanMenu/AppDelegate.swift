@@ -22,9 +22,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var updateTimer: Timer?
     /// Runs only for a few seconds after launch — see `startHandoffBackstop`.
     private var handoffTimer: Timer?
-    /// The last hand-off request acted on, so the two signals for one request
-    /// cannot open the window twice — see `openForHandoff`.
-    private var lastHandoffToken: String?
+    /// Requests already answered, most recent last — see `openForHandoff`.
+    ///
+    /// A set rather than a single slot. Two duplicates launching inside the backstop
+    /// window put *three* signals in flight — D2's `post()` atomically replaces D1's
+    /// file, so a backstop tick can claim T2 while both notifications still arrive —
+    /// and with one slot the sequence T2, T1, T2 answered T2 twice: the second
+    /// activation half a second later that the token design was introduced to
+    /// prevent, on the exact gesture the checklist asks testers to perform.
+    private var answeredHandoffTokens: [String] = []
+    /// Enough for any plausible burst of interleaved signals, small enough to stay a
+    /// linear scan of nothing.
+    private static let answeredHandoffTokenLimit = 16
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
@@ -230,8 +239,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// whose file never landed), so it is always acted on: an extra window is the
     /// lesser failure.
     private func openForHandoff(token: String?) {
-        if let token, token == lastHandoffToken { return }
-        lastHandoffToken = token
+        if let token {
+            if answeredHandoffTokens.contains(token) { return }
+            answeredHandoffTokens.append(token)
+            if answeredHandoffTokens.count > Self.answeredHandoffTokenLimit {
+                answeredHandoffTokens.removeFirst(
+                    answeredHandoffTokens.count - Self.answeredHandoffTokenLimit)
+            }
+        }
         MainWindow.shared.open()
     }
 

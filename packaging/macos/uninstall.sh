@@ -109,6 +109,11 @@ fi
 # agent, an `rm -rf` that deleted nothing, and a bundle that kept launching at
 # every subsequent login while the script said everything was removed.
 if [ ! -d "$APP" ]; then
+	# Root-owned, mode 700, for the same reason the errand's marker directory is:
+	# this runs as root and a predictable name in a world-writable directory is a
+	# symlink-plant away from a root write.
+	search_dir=$(mktemp -d "${TMPDIR:-/tmp}/dezhban-search.XXXXXX") || search_dir=""
+	search_out="$search_dir/found"
 	# Every account's ~/Applications, not only the console user's. CONSOLE_HOME is
 	# resolved only when somebody is logged in at the console, so run over ssh or at
 	# the login window this searched /Applications alone — and an install in a
@@ -125,6 +130,7 @@ if [ ! -d "$APP" ]; then
 		set -- "$@" "$home_apps"
 	done
 	for root in "$@"; do
+		[ -n "$search_dir" ] || break
 		[ -d "$root" ] || continue
 		# Unbounded depth, to match LoginItem.isInStableInstallLocation, which accepts
 		# anything *under* an Applications directory. A depth limit here meant an
@@ -132,13 +138,24 @@ if [ ! -d "$APP" ]; then
 		# /Applications/Utilities/Network/Tools/Dezhban.app — was one the uninstaller
 		# could not find, so it printed "Nothing will start Dezhban (the app is gone)"
 		# over a bundle still sitting there launching at every login.
-		found=$(find "$root" -name Dezhban.app -type d -print 2>/dev/null | head -1)
+		# Written to a file by find itself, not piped through `head`. `$(… | head -1)`
+		# truncates at the first newline, and a directory name may legally contain one
+		# on macOS — so `/Applications/My<newline>Apps/Dezhban.app` yielded
+		# APP=/Applications/My, which is then handed to `rm -rf` as root and used to
+		# exec the retraction errand. `-quit` stops at the first match, and printf
+		# without a trailing newline means the command substitution below reproduces
+		# the path exactly, embedded newlines included.
+		: >"$search_out"
+		find "$root" -name Dezhban.app -type d \
+			-exec sh -c 'printf "%s" "$1" >"$2"' _ {} "$search_out" \; -quit 2>/dev/null
+		found=$(cat "$search_out")
 		if [ -n "$found" ]; then
 			APP="$found"
 			echo "note: found the app at $APP" >&2
 			break
 		fi
 	done
+	[ -n "$search_dir" ] && rm -rf "$search_dir"
 fi
 if [ -n "$CONSOLE_UID" ]; then
 	echo "unregistering the login agent for $CONSOLE_USER ..."

@@ -129,8 +129,8 @@ with an argument, the pre-`SMAppService` pattern.
   Only the session owner answers hand-offs. A copy that could not take the lock and
   started anyway — the `.unavailable` path, which exists so a broken support
   directory cannot stop the app launching — runs beside the real owner, and if both
-  answered, one double-click would open two windows, each with its own debounce, so
-  neither could suppress the other.
+  answered, one double-click would open two windows: each tracks separately which
+  requests it has answered, so neither can recognise the other's.
 
   A launch the *user* performed must never become a silent no-op, so the copy
   that loses the lock focuses the winner and posts a distributed notification
@@ -178,31 +178,28 @@ with an argument, the pre-`SMAppService` pattern.
   conclude they should act — and refusing to act on the ambiguous ones turns a
   hand-off into the silent no-op the mechanism exists to prevent, which is the
   worse failure of the two. So the notification acts on everything except `.lost`,
-  the backstop acts only on `.fresh`, and the ambiguous signals' *effect* is
-  debounced: an open within three seconds of a previous hand-off open is dropped.
-  Debouncing what the user notices is cheaper and safer than making two
-  asynchronous signals agree.
+  and the backstop acts only on `.fresh`.
 
-  Which of the two signals is acting is settled by identity, not by timing. Each
-  request carries a token, written into the file and repeated in the notification, so
-  whichever signal arrives second is recognised as describing a request already
-  answered while a genuinely new launch — new token — always opens. Three earlier
-  versions inferred this from elapsed time plus a definite/indefinite flag, and every
-  one of them both let a duplicate window through in one ordering and swallowed a real
-  second launch in another, because elapsed time does not carry that information.
+  Which signal acts is settled by identity, never by timing. Each request carries a
+  token, written into the file and repeated in the notification, so a signal
+  describing a request already answered is recognised as such while a genuinely new
+  launch — new token — always opens. Several answered tokens are remembered, not one:
+  two duplicates launching inside the backstop window put three signals in flight,
+  since the second `post()` atomically replaces the first's file, and a single slot
+  answered one of them twice.
 
-  Only the ambiguous ones, though. A claim of `.fresh` means the caller took a
-  request nobody else had, so it is a distinct launch by definition — two
-  double-clicks a second apart with the window closed in between are two requests
-  and both must be answered. Debouncing on elapsed time alone swallowed the second,
-  which is the silent no-op again, arrived at from the other direction.
+  Three earlier versions inferred this from elapsed time plus a definite/indefinite
+  flag, and every one of them both let a duplicate window through in one ordering and
+  swallowed a real second launch in another, because elapsed time does not carry the
+  information being asked for. There is no time-based debounce anywhere in the
+  shipped design.
 
   And accepting an ambiguous notification is bounded to the launch window, because
   `DistributedNotificationCenter` is a system-wide bus with no sender
   authentication and both the name and the object are derivable. Unbounded, any
   process running as this user could call `MainWindow.open()` — which activates the
-  app — once per debounce interval indefinitely, reopening a window the moment it
-  was closed. Requiring a file outside the launch window costs nothing real (the
+  app — indefinitely, reopening a window the moment it was closed. Requiring a file
+  outside the launch window costs nothing real (the
   file is written before the post, so only the microsecond gap between the two
   needs the exemption) and removes the channel — with one addition: a poster whose
   file could not be written says so in the notification, because it is then the only
@@ -210,7 +207,12 @@ with an argument, the pre-`SMAppService` pattern.
   unconditionally turned a full or read-only home into the silent no-op the
   mechanism exists to prevent, and the exemption weakens nothing that was not
   already reachable, since anything able to forge the notification could equally run
-  `open -a Dezhban`. The debounce is a rate limit, not a gate. Both consumers do their claim off the main thread, since it is a stat and an
+  `open -a Dezhban`. A request that cannot be claimed at all is held to the same rule
+  as no request: since the claim is a rename, that state means the directory is
+  unwritable, which is also why no poster could have written the file — it is a
+  leftover, and acting on it turned every later notification into an activation.
+
+  Both consumers do their claim off the main thread, since it is a stat and an
   unlink and a network or relocated home would otherwise block the run loop on the
   one path meant to feel instant.
 
