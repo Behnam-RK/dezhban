@@ -889,6 +889,12 @@ task gui:build && open dist/Dezhban.app
       confirm the log says it will retry. Then fix the bundle and launch again —
       the agent must register. `defaults read com.behnam-rk.dezhban.app
       dezhban.loginItemMigratedToAgent` must be absent or 0 between the two.
+- [ ] **The approval prompt's own guidance survives it.** Turn the login item off
+      *in System Settings*, then switch Dezhban's "Open this app at login" on: the
+      line says macOS is holding it for your approval. Click away and back **without
+      approving** — the line must still be there, because the switch reads ON either
+      way and cannot show the difference. Then approve it and return: the line must
+      go.
 - [ ] **An awaiting-approval registration can still be switched off.** Turn the
       login item off *in System Settings* (not in Dezhban), then switch Dezhban's
       "Open this app at login" on: the status line must say macOS is holding it

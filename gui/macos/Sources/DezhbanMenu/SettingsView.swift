@@ -61,6 +61,10 @@ struct SettingsView: View {
     /// switch moves and the refusal is false. Without this, that text stayed on
     /// screen contradicting the switch, clearable only by another click.
     @State private var loginMessageForEnabled: Bool?
+    /// True while `loginMessage` is waiting on the user approving Dezhban in System
+    /// Settings — a condition the switch cannot show, so only the status changing
+    /// may clear it. See `LoginItem.Outcome.awaitsApproval`.
+    @State private var loginMessageAwaitsApproval = false
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -865,6 +869,7 @@ struct SettingsView: View {
                 // if this click's completion was then superseded.
                 loginMessageIsTransient = true
                 loginMessageForEnabled = wanted
+                loginMessageAwaitsApproval = false
                 // The enqueueing form, so two quick clicks are applied in the order
                 // they were made — dispatching each to a concurrent queue let them
                 // race into LoginItem's serial queue and land out of order.
@@ -879,6 +884,7 @@ struct SettingsView: View {
                     loginMessage = outcome.message
                     loginMessageIsTransient = outcome.isTransient
                     loginMessageForEnabled = outcome.isOn
+                    loginMessageAwaitsApproval = outcome.awaitsApproval
                     // And bumped, so any status read that was already in flight
                     // cannot land afterwards and clear this. `loginPending` cannot
                     // cover it: seed()'s read is a queue.sync behind this very
@@ -1019,10 +1025,10 @@ struct SettingsView: View {
         // see `loginRevision`.
         let revision = loginRevision
         DispatchQueue.global(qos: .userInitiated).async {
-            let enabled = LoginItem.isEnabled
+            let live = LoginItem.state
             DispatchQueue.main.async {
                 guard revision == loginRevision, !loginPending else { return }
-                loginEnabled = enabled
+                loginEnabled = live.enabled
                 // Clear only a message about a moment that has passed. "macOS is
                 // holding this for your approval" outlived the approval — the user
                 // went to System Settings, granted it, came back, which is what
@@ -1034,9 +1040,18 @@ struct SettingsView: View {
                 // "Dezhban has to live in Applications to open at login" a moment
                 // after the switch snapped back, leaving exactly the unexplained
                 // snap-back this message exists to prevent.
-                if loginMessageIsTransient || loginMessageForEnabled != enabled {
+                // Three ways a message stops being worth showing: it described a
+                // moment that has passed; it was waiting on an approval that has now
+                // been granted (or the registration is gone) — which the switch
+                // cannot show, so only this can clear it; or the switch has since
+                // moved away from the state it was written about.
+                let approvalSettled = loginMessageAwaitsApproval && !live.awaitingApproval
+                if loginMessageIsTransient
+                    || approvalSettled
+                    || (!loginMessageAwaitsApproval && loginMessageForEnabled != live.enabled) {
                     loginMessage = nil
                     loginMessageForEnabled = nil
+                    loginMessageAwaitsApproval = false
                 }
             }
         }

@@ -111,11 +111,25 @@ enum LoginItem {
         /// indistinguishable from a bug and is the thing this type exists to prevent.
         var isTransient: Bool {
             switch self {
-            case .enabled, .disabled, .awaitingApproval: return true
-            case .legacyStuck, .agentStuck, .blockedByLegacy, .unstableLocation, .failed:
+            case .enabled, .disabled: return true
+            case .awaitingApproval, .legacyStuck, .agentStuck, .blockedByLegacy,
+                 .unstableLocation, .failed:
                 return false
             }
         }
+
+        /// Whether this outcome is waiting on the user approving it in System
+        /// Settings, so its message stops being true the moment they do.
+        ///
+        /// `.awaitingApproval` was classed transient on the grounds that a fresh
+        /// status read lets the switch speak for itself — but the switch cannot
+        /// express this state: `isEnabled` counts an awaiting-approval registration,
+        /// so it reads ON while nothing actually starts the app at login. Clearing
+        /// the message on the next activation therefore left exactly the
+        /// switch-versus-reality lie this type exists to prevent, and it is the
+        /// activation the *approval prompt itself* causes. It expires on the status
+        /// changing, not on a refresh.
+        var awaitsApproval: Bool { self == .awaitingApproval }
 
         /// Whether anything starts the app at login — what the Settings switch
         /// shows.
@@ -192,6 +206,16 @@ enum LoginItem {
     /// because a pre-upgrade user never set it.
     private static var legacyEnabled: Bool { SMAppService.mainApp.status == .enabled }
 
+    /// The agent's plist cannot be resolved, so nothing can be asserted about a
+    /// registration an earlier, valid copy of the bundle may have left in launchd.
+    ///
+    /// `registered()` reads `.notFound` as "not registered", which is the honest
+    /// answer about *this* bundle's plist and the wrong one for "is there anything
+    /// to retract" — `retractAll()` returned true on it, so the uninstall errand
+    /// exited 0 and the script printed a clean removal over precisely the orphan it
+    /// exists to remove.
+    private static var agentUnresolvable: Bool { service.status == .notFound }
+
     /// Whether a registration exists at all, as opposed to one that will start
     /// the app *right now*.
     ///
@@ -233,15 +257,28 @@ enum LoginItem {
     /// launches nothing, and reporting it as ON contradicted the migration's own
     /// reading of that exact state ("their 'off' is the answer") and showed a
     /// switch that was on while nothing started the app.
-    static var isEnabled: Bool {
-        // On the mutation queue, so a read can never observe a change half-applied.
-        // `disable()` retracts the legacy item and then the agent; a read landing
-        // between those two saw the agent still registered and reported ON, and if
-        // its main-queue hop was enqueued after the mutation's own completion it
-        // overwrote the correct answer with that one — the switch reading ON with
-        // nothing starting the app at login, which is the failure the revision
-        // stamp in SettingsView was added for and could not close on its own.
-        queue.sync { registered(service) || legacyEnabled }
+    ///
+    /// Read together with `awaitingApproval`, in one call, because they must describe
+    /// the same instant. The pane keeps an `.awaitingApproval` message on screen
+    /// until this says the wait is over: `enabled` cannot express that difference,
+    /// since an awaiting-approval registration counts as registered.
+    ///
+    /// On the mutation queue, so a read can never observe a change half-applied.
+    /// `disable()` retracts the legacy item and then the agent; a read landing
+    /// between those two saw the agent still registered and reported ON, and if its
+    /// main-queue hop was enqueued after the mutation's own completion it overwrote
+    /// the correct answer with that one — the switch reading ON with nothing starting
+    /// the app at login, which is the failure the revision stamp in `SettingsView`
+    /// was added for and could not close on its own.
+    ///
+    /// This replaced a lone `isEnabled`, which had no callers left once the pane
+    /// needed the approval fact beside it — and a spare `queue.sync` accessor on this
+    /// type is an invitation to reintroduce the main-thread beachball it was moved
+    /// off for.
+    static var state: (enabled: Bool, awaitingApproval: Bool) {
+        queue.sync {
+            (registered(service) || legacyEnabled, service.status == .requiresApproval)
+        }
     }
 
     /// Sets login-at-launch to `enabled` and reports what actually happened.
@@ -402,7 +439,14 @@ enum LoginItem {
             // on was refused, permanently, with nothing having warned them.
             return liveOutcome(.disabling, fallback: .blockedByLegacy)
         }
-        return registered(service) ? .agentStuck : .disabled
+        if registered(service) || agentUnresolvable {
+            // `agentUnresolvable` too: reporting "App will not open at login" when
+            // the plist could not even be resolved claims a retraction that was
+            // never attempted, over a registration an earlier copy of the bundle may
+            // still hold.
+            return .agentStuck
+        }
+        return .disabled
     }
 
     /// Retracts everything that could start this app at login, best effort.
@@ -427,6 +471,12 @@ enum LoginItem {
             // unreachable afterwards, while the script printed "service
             // unregistered, files deleted". The orphan the errand exists to remove,
             // now silent. The exit status is what makes it visible.
+            //
+            // An unresolvable plist counts as a failure, not a success: it means
+            // nothing could be asserted either way, and claiming a clean retraction
+            // over a registration that may well survive is the one direction this
+            // must not err in.
+            if agentUnresolvable { return false }
             return !registered(service) && !registered(.mainApp)
         }
     }

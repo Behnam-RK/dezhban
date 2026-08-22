@@ -191,9 +191,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // every tick), but this handler is a one-shot event tied to a real
                 // user launch: standing down here would make that launch the silent
                 // no-op the mechanism exists to prevent, and every launch after it.
-                // Debounced as indefinite, since the backstop may have acted too.
+                // Definite, not indefinite. There is no other claimant to pair
+                // with — the backstop stands down on `.blocked` — so treating it as
+                // ambiguous only meant the debounce dropped the *second* of two
+                // launches inside three seconds, and, since a request that cannot be
+                // removed stays that way, every later pair too.
                 NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
-                DispatchQueue.main.async { self?.openForHandoff(definite: false) }
+                DispatchQueue.main.async { self?.openForHandoff(definite: true) }
             }
         }
     }
