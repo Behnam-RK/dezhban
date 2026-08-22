@@ -69,6 +69,13 @@ CONSOLE_UID=""
 CONSOLE_HOME=""
 if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
 	CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")
+	if [ -z "$CONSOLE_UID" ]; then
+		# Somebody IS at this Mac; their uid just could not be looked up (an
+		# unreachable network/AD directory, a damaged local record). Telling them
+		# "nobody is logged in — re-run from a graphical session" is both false and
+		# useless advice, since re-running fails the same way.
+		LOGIN_ITEM_STUCK=no-console-uid
+	fi
 	# /Search, not the local node. `dscl .` reads only local records, so for a
 	# network/LDAP/AD account it returns nothing — leaving the cleanup below to be
 	# skipped for precisely the accounts this lookup exists to serve.
@@ -190,7 +197,10 @@ if [ -n "$CONSOLE_UID" ]; then
 			# bundle out from under it — the thing the `pkill` above exists to avoid,
 			# reintroduced on the one path this timeout is here for.
 			kill -9 "$errand" >/dev/null 2>&1 || true
-			pkill -x DezhbanMenu >/dev/null 2>&1 || true
+			# Scoped to the user the errand ran as. Unscoped, this reached every
+			# logged-in account's menubar app on a Mac using fast user switching —
+			# other people's sessions, over a timeout in this one.
+			pkill -x -U "$CONSOLE_UID" DezhbanMenu >/dev/null 2>&1 || true
 		elif [ "$(cat "$errand_done" 2>/dev/null)" = "failed" ]; then
 			# The status matters. The app only logs a refused unregister, and this
 			# script discards its output — so without checking, a login item macOS
@@ -232,7 +242,13 @@ else
 	# entry that fails to load at every subsequent login, and a migration flag that
 	# makes a LATER reinstall skip the migration. The same silent-clean-report the
 	# other states were introduced to end.
-	LOGIN_ITEM_STUCK=no-console-user
+	#
+	# Only if nothing more specific was recorded: a console user whose uid could not
+	# be looked up also lands here, and "nobody is logged in" is the wrong thing to
+	# tell somebody sitting at the machine.
+	if [ "$LOGIN_ITEM_STUCK" = "none" ]; then
+		LOGIN_ITEM_STUCK=no-console-user
+	fi
 fi
 
 rm -rf "$APP"
@@ -278,10 +294,14 @@ none) ;;
 		echo "         be retracted — only the app itself can do that."
 		;;
 	no-home)
-		echo "warning: $CONSOLE_USER's home directory could not be resolved, so"
-		echo "         Dezhban's per-user leftovers were not removed — the session"
-		echo "         lock, and the saved preferences that would make a later"
-		echo "         reinstall skip the login-item migration."
+		echo "warning: $CONSOLE_USER's home directory could not be resolved, so the"
+		echo "         session lock under ~/Library/Application Support was left"
+		echo "         behind. (The saved preferences were still removed.)"
+		;;
+	no-console-uid)
+		echo "warning: could not look up $CONSOLE_USER's user id, so Dezhban's"
+		echo "         per-user leftovers were not removed. This usually means the"
+		echo "         directory service is unreachable; re-run once it is back."
 		;;
 	no-console-user)
 		echo "warning: nobody is logged in, so Dezhban's per-user leftovers could not"

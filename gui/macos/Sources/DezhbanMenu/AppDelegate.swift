@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// When a hand-off last opened the window, so two signals for one request
     /// cannot open it twice — see `openForHandoff`.
     private var lastHandoffOpenAt: Date?
+    /// Whether that open came from a definitive claim. See `openForHandoff`.
+    private var lastHandoffOpenWasDefinite = false
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
@@ -184,10 +186,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // The backstop got there first and is opening the window.
                 break
             case .blocked(let why):
-                // Not a race — the request cannot be removed, so acting on it would
-                // repeat on every check. Logged because this is permanent: the
-                // hand-off is dead for every future launch until it is fixed.
+                // The request cannot be removed — a delete-denying ACL, `chflags
+                // uchg`. Permanent, so the *backstop* stands down (it would repeat
+                // every tick), but this handler is a one-shot event tied to a real
+                // user launch: standing down here would make that launch the silent
+                // no-op the mechanism exists to prevent, and every launch after it.
+                // Debounced as indefinite, since the backstop may have acted too.
                 NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
+                DispatchQueue.main.async { self?.openForHandoff(definite: false) }
             }
         }
     }
@@ -211,12 +217,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// may be describing a request another caller already handled, are debounced.
     private func openForHandoff(definite: Bool) {
         let now = Date()
-        if !definite,
-           let last = lastHandoffOpenAt,
-           now.timeIntervalSince(last) < Self.handoffDebounce {
-            return
+        if let last = lastHandoffOpenAt, now.timeIntervalSince(last) < Self.handoffDebounce {
+            // An indefinite open never repeats inside the window.
+            if !definite { return }
+            // A definitive one is suppressed only when the open it would follow was
+            // *indefinite* — that pairing is the two signals for a single request
+            // (the backstop claimed `.fresh` while the notification saw `.absent`,
+            // and the `.absent` hop reached main first). Two genuine double-clicks
+            // both claim `.fresh`, so a definite open never suppresses another
+            // definite one, which is what keeps a real second request from being
+            // swallowed.
+            if !lastHandoffOpenWasDefinite { return }
         }
         lastHandoffOpenAt = now
+        lastHandoffOpenWasDefinite = definite
         MainWindow.shared.open()
     }
 

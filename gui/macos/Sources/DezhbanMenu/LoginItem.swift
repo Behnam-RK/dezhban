@@ -310,7 +310,7 @@ enum LoginItem {
             // re-reading. Re-approving the "Dezhban" row in System Settings arms the
             // legacy registration behind a switch showing OFF, and clicking it then
             // reported "left off" over a live login launch.
-            return legacyEnabled ? .legacyStuck : .blockedByLegacy
+            return liveOutcome(fallback: .blockedByLegacy)
         }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
         // Flushed, like every other write to these three coupled flags. This pane
@@ -375,13 +375,12 @@ enum LoginItem {
             // whether the window appeared. `Outcome.legacyStuck` tells the user
             // the one thing that does clear it.
             NSLog("DezhbanMenu: the legacy login item could not be retracted")
-            // Same derivation as `enable()`: an *enabled* survivor is still starting
-            // the app, a dormant one is not. Testing only `legacyEnabled` here while
-            // `enable()` tested presence made the two directions disagree about one
-            // state — a `.requiresApproval` leftover that would not retract reported
-            // a clean "App will not open at login", and then every future click to
-            // turn it on was refused, permanently, with nothing having warned them.
-            return legacyEnabled ? .legacyStuck : .blockedByLegacy
+            // Same derivation as `enable()`, and via the same helper so the two
+            // directions cannot drift apart again: they once disagreed about a
+            // `.requiresApproval` leftover that would not retract — disable reported
+            // a clean "App will not open at login" and every later click to turn it
+            // on was refused, permanently, with nothing having warned them.
+            return liveOutcome(fallback: .blockedByLegacy)
         }
         return registered(service) ? .agentStuck : .disabled
     }
@@ -434,8 +433,9 @@ enum LoginItem {
         // the app zip before moving it, or a dev build — would point the login
         // agent at a bundle that is about to move or be deleted, and mark the
         // account done forever. The symptom is an SMAppService status nobody
-        // reads. This runs unattended, so it has to be the conservative one; an
-        // explicit toggle from Settings is the user's own call and is not gated.
+        // reads. `enable()` gates on the same thing, for the reason given there —
+        // the consequence is not the user's to undo, so an explicit toggle is no
+        // more entitled to claim the login item from a doomed bundle than this is.
         guard isInStableInstallLocation else {
             NSLog("DezhbanMenu: not migrating the login item from a non-standard location "
                 + "(\(Bundle.main.bundleURL.path)); the copy in /Applications will do it")
@@ -613,6 +613,26 @@ enum LoginItem {
     /// `CustomStringConvertible`, so interpolating it put
     /// `SMAppService.Status(rawValue: 3)` in front of the user — in the very type
     /// that exists so the UI can say something true.
+    /// The truthful outcome for whatever is live right now.
+    ///
+    /// Both "the legacy item survived" branches used to answer from their own
+    /// branch — `legacyEnabled ? .legacyStuck : .blockedByLegacy` — which ignored
+    /// the agent. With a dormant `.requiresApproval` legacy item that will not
+    /// retract AND a live agent registration, that returned `.blockedByLegacy`:
+    /// `isOn == false`, a message asserting "it has been left off", and a switch
+    /// snapping OFF while `isEnabled` said true and the next `seed()` flipped it
+    /// back. Deriving from the live state instead makes `isOn` agree with
+    /// `isEnabled` by construction, which is what `isEnabled`'s docstring demands.
+    ///
+    /// `fallback` is used only when nothing is live at all.
+    private static func liveOutcome(fallback: Outcome) -> Outcome {
+        if legacyEnabled { return .legacyStuck }
+        if agentEnabled { return .enabled }
+        if service.status == .requiresApproval { return .awaitingApproval }
+        if registered(service) { return .agentStuck }
+        return fallback
+    }
+
     private static func describe(_ status: SMAppService.Status) -> String {
         switch status {
         case .notRegistered: return "macOS did not keep the registration."
