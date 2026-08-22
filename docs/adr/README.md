@@ -25,6 +25,7 @@ New records use [template.md](template.md) and take the next free number.
 | [0011](0011-biometric-enrollment-requires-a-signed-build.md) | Biometric token enrollment requires a signed build, so unsigned builds must refuse it | accepted, implemented (Alternative 3 superseded by 0012) |
 | [0012](0012-app-checked-biometrics-on-unsigned-builds.md) | App-checked biometrics on unsigned builds, rather than no biometrics | accepted, implemented |
 | [0013](0013-geo-provider-pass-opt-out.md) | The geo-provider pass gets an opt-out, not a redesign | accepted, implemented |
+| [0014](0014-login-item-launch-marker.md) | The login item carries an explicit launch marker | accepted, implemented |
 
 > **0006 is the one to read first if you are touching the geo lookup.** It records why
 > the obvious implementation silently defeats the exit-country check, and it exists

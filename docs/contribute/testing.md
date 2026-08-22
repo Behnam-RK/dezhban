@@ -757,8 +757,231 @@ task gui:build && open dist/Dezhban.app
       still works with the daemon stopped and with the main window unable to
       open.
 - [ ] **Window opening.** "Open Dezhban…" and a Dock-icon click both open/focus
-      the main window; a fresh app launch opens **no** window (menubar + Dock
-      only); closing the window (⌘W) leaves the app and icon running.
+      the main window; closing the window (⌘W) leaves the app and icon running.
+      Both work in **every** "Open minimized" mode — the preference governs the
+      launch only and must never make the window unreachable.
+- [ ] **"Open minimized" honours the setting**
+      ([ADR-0014](../adr/0014-login-item-launch-marker.md)). With "Open this app
+      at login" on, for each mode: **Only at login** (the default) → log out and
+      back in, **no** window; then launch from Finder, window opens.
+      **Always** → no window either way. **Never** → window both ways. The
+      marker is what makes this work, so also confirm the login launch carries
+      it: `ps -o args= -p "$(pgrep -x DezhbanMenu)"` ends in `--background`
+      after a login launch and does not after a Finder launch.
+- [ ] **Login-item migration is one-way and never opts you in.** On an install
+      that predates the agent: with login-at-launch **on**, launch once, then
+      confirm `SMAppService.mainApp` is no longer registered while the agent is
+      (`launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` succeeds) and
+      the Settings toggle still reads on. Repeat with login-at-launch **off**:
+      it must still be off, and the agent must not be registered.
+- [ ] **State restoration cannot reopen the window.** With the window open and
+      "Close windows when quitting an application" *unchecked* in System
+      Settings → Desktop & Dock, quit and relaunch in a mode that should open no
+      window — it must stay closed.
+- [ ] **Registering the login item does not leave two apps running.** With the
+      app up, switch Settings → "Open this app at login" **off then on**. The
+      agent's `RunAtLoad` execs a second copy the moment it registers, and
+      launchd does not dedupe the way LaunchServices did, so this is the check
+      that the session lock works: exactly **one** menubar item and one Dock
+      tile afterwards, and `pgrep -x DezhbanMenu | wc -l` is 1. Repeat
+      immediately after an upgrade that runs the migration.
+- [ ] **Launching a fully-started app again just reopens its window.** With the
+      app already running from a `--background` login launch, launch it from
+      Finder. LaunchServices will not start a second copy of a running bundle, so
+      this never reaches the session lock — it is
+      `applicationShouldHandleReopen`, which opens the window in **every** "Open
+      minimized" mode, on purpose: the preference governs the launch, and must
+      never make the window unreachable. Do not expect "Always" to suppress it
+      here; the hand-off path is exercised by the startup-race check below, which
+      is the only way to reach it.
+- [ ] **The first logout after upgrading may open the window once — and only
+      once.** Expected, not a regression:
+      [ADR-0014](../adr/0014-login-item-launch-marker.md) records why
+      `NSApp.disableRelaunchOnLogin()` cannot cover the logout that happened before
+      the new build ever ran. Upgrade, log out, log back in: a window here is
+      acceptable. Log out and back in a *second* time — there must be none, and
+      `pgrep -x DezhbanMenu | wc -l` must be 1.
+- [ ] **"Reopen windows when logging back in" does not start a second, unmarked
+      copy.** Check that box in System Settings → Desktop & Dock, leave the app
+      running, log out and back in. Exactly one copy must be running and it must
+      have come from the login agent, not the resume: `ps -o args= -p "$(pgrep -x
+      DezhbanMenu)"` ends in `--background`, and under the default "Only at
+      login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
+      it, LaunchServices relaunches the app with no arguments and races the agent
+      for the lock.
+- [ ] **A refusal's explanation survives switching away and back — and expires
+      when it stops being true.** Run `dist/Dezhban.app`, click "Open this app at
+      login" — it refuses and says why. Click another app and click back: the
+      explanation must still be there. Only messages about a moment that has passed
+      ("macOS is holding this for your approval") may be cleared by that refresh; a
+      switch that snapped back with the reason erased is indistinguishable from a
+      bug. Then clear the condition and return — once the switch moves, the stale
+      refusal must go with it rather than sit there contradicting it.
+- [ ] **The login toggle's result has its own line.** Start the service toggle
+      ("Start the guard at boot"), and while its privileged sequence is running flip
+      "Open this app at login". Both messages must be readable at once — the install's
+      progress on the pane's status line, the login result underneath the toggle —
+      and neither may erase the other.
+- [ ] **Two hand-offs in quick succession both open the window.** Only reachable
+      while the incumbent is still starting — once it is up, LaunchServices reopens
+      rather than launching a duplicate, so there is no hand-off to debounce. Log
+      out and back in, then double-click the app twice in quick succession as early
+      as you can, closing the window (⌘W) in between. Both must open. Best-effort
+      by nature: the deterministic coverage is
+      `HandoffRequestTests.anOverlappingClaimerIsToldItLost` and
+      `theClaimCarriesThePostedToken`, since it is the token — not any timing rule —
+      that tells the two signals for one request from two requests.
+- [ ] **A hand-off that arrives before the app is observing still works.** The
+      race the `HandoffRequest` file exists for: log out and back in and
+      double-click the app in `/Applications` as early as you can, while it is
+      still starting from the login agent. The window must open — within about
+      half a second if the notification missed it, from the bounded backstop that
+      runs for the first few seconds. This must hold on a *slow* login too: the
+      request is honoured however long the incumbent took to finish starting,
+      because the file can only have been written after it took the lock. It must
+      open **once**: no second activation a moment later, and a window you close
+      right after must stay closed. Then
+      confirm no `.handoff` file is left in `~/Library/Application
+      Support/com.behnam-rk.dezhban.app/`.
+- [ ] **An app filed into a subfolder of /Applications still migrates.** Move
+      `Dezhban.app` into `/Applications/Utilities/`, launch it on a pre-agent
+      install with login-at-launch on: it must migrate. Anywhere under an
+      Applications directory counts as a place the app will stay; comparing only the
+      immediate parent left that user's legacy item running with no marker
+      permanently, reported nowhere.
+- [ ] **A copy run from outside /Applications cannot claim *or release* the login
+      item.** Run `dist/Dezhban.app` and switch "Open this app at login" on: it must
+      refuse, with the line naming where it is running from, and
+      `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` must still fail.
+      Only the registering bundle can ever retract a registration, so a dev build
+      that claimed it would leave an orphan nothing can remove once `dist` is
+      rebuilt.
+
+      Then the other direction, which matters more because it is silent: with the
+      *installed* copy's login item **on**, run `dist/Dezhban.app` — the switch reads
+      ON, since the agent is registered under a label every copy shares — and click
+      it **off**. It must refuse, and `launchctl print
+      gui/$UID/com.behnam-rk.dezhban.app.login` must still succeed afterwards. A dev
+      build retracting the installed app's registration is bad enough; doing it
+      without even recording the user's "off" is worse.
+- [ ] **A copy run from outside /Applications does not migrate the login item.**
+      Unzip `Dezhban-macos.app.zip` to `~/Downloads` on a Mac with a pre-agent
+      install and login-at-launch on, run it once, quit. The legacy login item
+      must still be there and `defaults read com.behnam-rk.dezhban.app
+      dezhban.loginItemMigratedToAgent` must be absent — otherwise the account is
+      marked done with the agent pointing into `~/Downloads`. Then run the copy in
+      `/Applications`: that one must migrate.
+- [ ] **A login item the user turned off in System Settings stays off across an
+      upgrade — and is cleared, not left dormant.** With a pre-agent build, switch
+      Dezhban off under System Settings → General → Login Items (this leaves
+      `mainApp` at `.requiresApproval`, not unregistered), then upgrade and launch.
+      Login-at-launch must still be off and no agent registered — *and* the entry
+      must be gone from Login Items. A dormant `.requiresApproval` item is live:
+      re-approving it there would start the app at login with no marker, and the
+      migration will not run again to fix it.
+- [ ] **Two quick clicks on the login switch settle on the second one.** Click it
+      off then immediately on (and the reverse). The final switch state must match
+      the last click *and* the actual registration —
+      `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` agreeing with what
+      the switch shows. Then reopen the pane to confirm it still agrees.
+- [ ] **Switching login-at-launch off from a login-started session.** Log out
+      and back in so the agent starts the app, then switch Settings → "Open this
+      app at login" **off**. `SMAppService.unregister()` unloads the launchd job
+      and launchd terminates a loaded job's process — which here is the app — so
+      watch for the app quitting instead of showing the status line. Recorded as
+      an open risk in [ADR-0014](../adr/0014-login-item-launch-marker.md); if it
+      reproduces, note whether the registration was still retracted.
+- [ ] **The migration retries a failed agent registration.** Hard to provoke
+      honestly: with a pre-agent install and login-at-launch on, make
+      `register()` fail once (an unsigned bundle is the easiest way), launch, and
+      confirm the log says it will retry. Then fix the bundle and launch again —
+      the agent must register. `defaults read com.behnam-rk.dezhban.app
+      dezhban.loginItemMigratedToAgent` must be absent or 0 between the two.
+- [ ] **An awaiting-approval registration is explained on a fresh pane open.** With
+      the agent registered but switched off under System Settings → General → Login
+      Items, quit Dezhban and reopen Settings *without touching the switch*. It reads
+      ON (an awaiting-approval registration counts as registered), so the line
+      explaining that must be there unprompted — nothing else can express the
+      difference.
+- [ ] **The uninstall errand does not cry wolf.** On an install where
+      login-at-launch was never switched on, run
+      `Dezhban.app/Contents/MacOS/DezhbanMenu --unregister-login-item; echo $?` — it
+      must be **0**. `SMAppService` reports `.notFound` for an agent that was never
+      registered, not only for a plist it cannot resolve, so anything treating that
+      status as "cannot tell" warns on every ordinary uninstall.
+- [ ] **The approval prompt's own guidance survives it.** Turn the login item off
+      *in System Settings*, then switch Dezhban's "Open this app at login" on: the
+      line says macOS is holding it for your approval. Click away and back **without
+      approving** — the line must still be there, because the switch reads ON either
+      way and cannot show the difference. Then approve it and return: the line must
+      go.
+- [ ] **An awaiting-approval registration can still be switched off.** Turn the
+      login item off *in System Settings* (not in Dezhban), then switch Dezhban's
+      "Open this app at login" on: the status line must say macOS is holding it
+      for approval, and the switch must then turn **off** again on the next click
+      rather than re-registering. `launchctl print
+      gui/$UID/com.behnam-rk.dezhban.app.login` must fail afterwards.
+- [ ] **The dev build is not deduped against the installed one.** With
+      `/Applications/Dezhban.app` running, `task gui:build && open
+      dist/Dezhban.app`. Both must run — the lock is keyed on the bundle path
+      precisely so every other manual check on this list tests the build you just
+      made rather than silently testing the installed copy.
+- [ ] **The login item is attributable.** System Settings → General → Login
+      Items shows the entry as **Dezhban**, not as
+      `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
+      doing its job — this is the switch a user reaches for to stop the app
+      starting at login, and it is useless if nobody can tell what it governs).
+- [ ] **No `.claiming-*` files accumulate.** After exercising hand-offs, and after a
+      forced quit during one, `ls -a ~/Library/Application Support/com.behnam-rk.dezhban.app/`
+      must show no `.claiming-*` leftovers — a process killed between the rename and
+      the read leaves one, and only the next session owner's sweep removes it.
+- [ ] **Uninstall handles two installs.** Put a copy in `/Applications` *and* one in
+      `~/Applications`, let the second register the login agent, then run the
+      uninstaller. Both bundles must be gone, the agent registration must be
+      retracted (`launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` fails,
+      still after a reboot), and no clean-removal message may print over a survivor.
+      Only the registering bundle can retract, so each copy's errand has to run from
+      that copy while it still exists.
+- [ ] **Uninstall finds the app where it actually is.** Move `Dezhban.app` into
+      `/Applications/Utilities/`, let it register the login agent, then run the
+      uninstaller. It must locate the bundle there, retract the agent, delete it,
+      and print **no** "app bundle was already gone" warning — the app is allowed to
+      register from anywhere under an Applications directory, so the uninstaller has
+      to look in the same places.
+- [ ] **Uninstall with nobody logged in says so.** From an ssh session on a Mac
+      sitting at the login window, run the uninstaller. It must finish *and* warn
+      that the per-user leftovers could not be removed — every step of that
+      teardown needs the user's own launchd session, and reporting a clean removal
+      would hide both a surviving login item and the migration flag that makes a
+      later reinstall skip the migration.
+- [ ] **Uninstall over an already-trashed app says so.** Drag
+      `/Applications/Dezhban.app` to the Trash, then run the uninstaller. It must
+      finish *and* print the warning naming System Settings — only the app can
+      retract its own registration, so with the bundle gone the entry cannot be
+      removed by anything and reporting a clean uninstall would hide it.
+- [ ] **Uninstall retracts the registration, not just the running job.** With
+      login-at-launch on, run `sudo sh /usr/local/share/dezhban/uninstall.sh`,
+      then confirm `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login`
+      fails **and** the System Settings → General → Login Items entry is gone,
+      **and** that it is still gone after a reboot. A per-user launchd agent does
+      not go away with its bundle the way a LaunchServices login item did, and
+      `launchctl bootout` alone only unloads it for the current boot — the
+      reboot is what distinguishes a real retraction (the
+      `--unregister-login-item` errand the script runs as the console user) from
+      an unload that comes back. `defaults read com.behnam-rk.dezhban.app` must
+      also fail afterwards: a surviving migration flag means a later install is
+      never moved onto the agent. And if macOS *does* refuse the retraction, the
+      script must say so — the closing warning naming System Settings, not a clean
+      "files deleted".
+- [ ] **The login agent registers from an ad-hoc-signed build.** Only reachable
+      on a real install: `build-app.sh` signs with `codesign -s -`, and
+      `SMAppService.agent` registration goes through launchd's validation of the
+      bundle, which `SMAppService.mainApp` never needed. If ad-hoc does not
+      satisfy it, login-at-launch fails as a silent `.notFound`/`.requiresApproval`
+      status rather than a crash — so check
+      `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` on a build
+      installed the way users get it (`.pkg` or the app zip), not on
+      `dist/Dezhban.app` run in place.
 - [ ] **Posture tracking.** Drive the daemon with `--simulate-country IR` / `US`
       and confirm the menu bar icon *and* the Dock tile flip red/teal and the
       window's Overview updates within ~1 s.
@@ -846,8 +1069,10 @@ end up typing a password.
 - [ ] **Start at boot** reflects whether the service is registered, flips after
       install/uninstall (one prompt each, uninstall confirms first), and the
       uninstall tears rules down before unload.
-- [ ] **Launch at login** toggles `SMAppService.mainApp.status` to `.enabled`, and
-      the app relaunches after a logout/login cycle.
+- [ ] **Launch at login** — the login-item checks live with the launch-marker
+      block earlier in this file, since they are the same mechanism; the switch
+      registers the *agent* and a correct run leaves `SMAppService.mainApp`
+      unregistered.
 - [ ] Guard fields seed from `dezhban config show` values; Apply raises the
       restart-warning choice; "Save only" writes without restarting.
 - [ ] **Restart dezhban…** works with nothing else pending: a plain "are you

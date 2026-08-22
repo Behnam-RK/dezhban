@@ -72,6 +72,91 @@ install -m 0755 "$HERE/askpass.sh" "$APP/Contents/Resources/askpass.sh"
 # ad-hoc codesign below, so the seal covers it.
 install -m 0644 "$REPO_ROOT/LICENSE" "$APP/Contents/Resources/LICENSE"
 
+# Login-item LaunchAgent. SMAppService.agent(plistName:) reads it from exactly
+# this directory, and it is the only thing that tells a login launch apart from
+# a user launch: it passes --background, which LaunchVisibility keys on. A
+# bundle assembled without it registers nothing and the app silently stops
+# starting at login, so its absence is a build failure rather than a note.
+# See docs/adr/0014-login-item-launch-marker.md.
+AGENT_LABEL="com.behnam-rk.dezhban.app.login"
+AGENT_PLIST="$APP/Contents/Library/LaunchAgents/$AGENT_LABEL.plist"
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+install -m 0644 "$HERE/LoginAgent.plist" "$AGENT_PLIST"
+
+# The two facts that make the feature work, asserted rather than commented.
+# `install` under `set -e` already aborts if the file does not land, so its
+# existence needs no test — but deleting --background from LoginAgent.plist, or
+# renaming its Label, passes go test, swift test and this build while silently
+# restoring the original bug (or killing login-at-launch outright, reported only
+# as an SMAppService status nobody reads).
+#
+# 1. Label must equal the filename SMAppService.agent(plistName:) is given
+#    (LoginItem.plistName) — launchd rejects a mismatch.
+plist_label="$(plutil -extract Label raw -o - "$AGENT_PLIST")"
+if [[ "$plist_label" != "$AGENT_LABEL" ]]; then
+	echo "build-app.sh: LoginAgent.plist Label is '$plist_label', but it is installed as '$AGENT_LABEL.plist' — launchd would reject the job and the app would not start at login" >&2
+	exit 1
+fi
+# 2. ProgramArguments must still carry the launch marker LaunchVisibility keys on
+#    (LaunchVisibility.backgroundArgument), or every login looks like a user
+#    launch and "Open minimized" silently stops working.
+agent_argc="$(plutil -extract ProgramArguments raw -o - "$AGENT_PLIST")"
+agent_marker=0
+for ((i = 0; i < agent_argc; i++)); do
+	if [[ "$(plutil -extract "ProgramArguments.$i" raw -o - "$AGENT_PLIST")" == "--background" ]]; then
+		agent_marker=1
+	fi
+done
+if [[ "$agent_marker" -ne 1 ]]; then
+	echo "build-app.sh: LoginAgent.plist ProgramArguments no longer pass --background — a login launch would be indistinguishable from a user launch" >&2
+	exit 1
+fi
+# 3. The label must be spelled the same in the three places that must agree:
+#    the plist, LoginItem.plistName (what SMAppService.agent is given), and
+#    uninstall.sh (what retracts it). Renaming it consistently in the plist AND
+#    here would otherwise satisfy check 1 while SMAppService named a file that
+#    does not exist — reported only as the .notFound status nobody reads.
+#
+# Matched against the exact declaration in each consumer, not merely "the label
+# appears somewhere in the file". Two reasons, both learned the hard way: without
+# -F the pattern is a regex, so `.` is a wildcard and "…app-login" satisfied a
+# check for "…app.login"; and a bare substring search for the label also matched
+# LoginItem's dispatch-queue label, "…app.loginitem", which contains it — so the
+# check could not fail for that file no matter what plistName said.
+swift_decl="private static let plistName = \"$AGENT_LABEL.plist\""
+if ! grep -qF "$swift_decl" "$HERE/Sources/DezhbanMenu/LoginItem.swift"; then
+	echo "build-app.sh: LoginItem.swift does not declare plistName as '$AGENT_LABEL.plist' — SMAppService would name a plist that does not exist, reported only as the .notFound status nobody reads" >&2
+	exit 1
+fi
+if ! grep -qxF "LOGIN_AGENT=$AGENT_LABEL" "$REPO_ROOT/packaging/macos/uninstall.sh"; then
+	echo "build-app.sh: uninstall.sh does not set LOGIN_AGENT to '$AGENT_LABEL' — it would fail to retract the registration it is meant to remove" >&2
+	exit 1
+fi
+# 4. BundleProgram must name the executable this script actually installs. It is
+#    bundle-relative and launchd resolves it at load time, so renaming the SwiftPM
+#    executable target passes go test, swift test and this build while the login job
+#    fails to load — surfacing only as a status nobody reads.
+agent_program="$(plutil -extract BundleProgram raw -o - "$AGENT_PLIST")"
+if [[ ! -x "$APP/$agent_program" ]]; then
+	echo "build-app.sh: LoginAgent.plist BundleProgram is '$agent_program', which is not an executable in the assembled bundle — launchd would fail to load the login job" >&2
+	exit 1
+fi
+# 5. The bundle identifier has to agree in three places: Info.plist (what macOS
+#    knows the app as), the agent's AssociatedBundleIdentifiers (what makes the
+#    Login Items row read "Dezhban" rather than a raw job label), and uninstall.sh's
+#    APP_BUNDLE_ID (what removes the per-user leftovers, including the flag that
+#    would otherwise make a later reinstall skip the login-item migration).
+bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist")"
+agent_assoc="$(plutil -extract AssociatedBundleIdentifiers.0 raw -o - "$AGENT_PLIST")"
+if [[ "$agent_assoc" != "$bundle_id" ]]; then
+	echo "build-app.sh: LoginAgent.plist AssociatedBundleIdentifiers is '$agent_assoc' but the bundle identifier is '$bundle_id' — the Login Items entry would not be attributed to Dezhban" >&2
+	exit 1
+fi
+if ! grep -qxF "APP_BUNDLE_ID=$bundle_id" "$REPO_ROOT/packaging/macos/uninstall.sh"; then
+	echo "build-app.sh: uninstall.sh does not set APP_BUNDLE_ID to '$bundle_id' — it would leave the per-user preferences behind, and a later reinstall would skip the login-item migration" >&2
+	exit 1
+fi
+
 # Documentation, rendered from the repo's own markdown into the bundle. Shipping
 # it means the help pane works with every byte of egress cut — which is exactly
 # when someone needs it — and that the docs always match the version they

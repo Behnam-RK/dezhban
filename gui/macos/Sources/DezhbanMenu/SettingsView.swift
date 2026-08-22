@@ -18,6 +18,53 @@ struct SettingsView: View {
     @EnvironmentObject var state: AppState
 
     @State private var loginEnabled = false
+    /// Bumped by every login-item click, so an asynchronous status read that was
+    /// already in flight cannot land afterwards and overwrite the result.
+    ///
+    /// Both readers of `LoginItem` are off the main thread now, and `seed()` runs
+    /// on every `didBecomeActiveNotification` — which macOS delivers *during* a
+    /// login-item change, since it surfaces System Settings or an approval prompt.
+    /// So the ordering was really available: click off, `seed()` starts a read that
+    /// still sees the registration, the click's own completion writes `false`, then
+    /// the stale read writes `true`. The switch then reads ON with nothing starting
+    /// the app at login until the next activation.
+    @State private var loginRevision = 0
+    /// True while a login-item change is in flight.
+    ///
+    /// The revision alone was not enough: `seed()` captures the current revision
+    /// without bumping it, so a status read *started after* a click shares that
+    /// click's revision and passes the equality check. This is the other half —
+    /// while a mutation is outstanding, no read may write the switch, whichever
+    /// order the two happen to complete in.
+    @State private var loginPending = false
+    /// The login item's own result line.
+    ///
+    /// Separate from the pane's shared `status` because the two are different facts
+    /// with different lifetimes: `seed()` rewrites `status` on every
+    /// `didBecomeActiveNotification` — which macOS delivers *during* a login-item
+    /// change, since it surfaces System Settings or an approval prompt — and the
+    /// service toggle owns it for the length of a privileged sequence. Sharing the
+    /// line meant the `awaitingApproval` and `legacyStuck` guidance, the entire
+    /// reason `Outcome` carries a message, could be wiped before it was read; and
+    /// guarding it in one direction only moved the loss to the other.
+    @State private var loginMessage: String?
+    /// True while `loginMessage` explains a refusal the user has to act on.
+    ///
+    /// A refresh may clear a message about a moment that has passed; it must not
+    /// clear one that is the only account of why a click did not take. See
+    /// `LoginItem.Outcome.isTransient`.
+    @State private var loginMessageIsTransient = true
+    /// What the switch read when `loginMessage` was written.
+    ///
+    /// A message that explains a refusal has to survive a refresh, but not forever:
+    /// once the user clears the condition in System Settings and comes back, the
+    /// switch moves and the refusal is false. Without this, that text stayed on
+    /// screen contradicting the switch, clearable only by another click.
+    @State private var loginMessageForEnabled: Bool?
+    /// True while `loginMessage` is waiting on the user approving Dezhban in System
+    /// Settings — a condition the switch cannot show, so only the status changing
+    /// may clear it. See `LoginItem.Outcome.awaitsApproval`.
+    @State private var loginMessageAwaitsApproval = false
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -168,6 +215,19 @@ struct SettingsView: View {
                     Toggle("Open this app at login", isOn: loginBinding)
                         .help("Registers the app as a login item (System Settings → General → Login Items). "
                             + "This is only the status display — the guard itself is the system service above.")
+                    // Its own line, not the pane's shared `status`. The login item is
+                    // the one control here whose result can be a several-second
+                    // round-trip AND can need the user to go and do something in
+                    // System Settings, so it was competing with the service toggle's
+                    // progress message for a single line: each clobbered the other,
+                    // and a guard against one direction only moved the loss to the
+                    // other. Two facts, two lines.
+                    if let loginMessage {
+                        Text(loginMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Picker("Open minimized", selection: launchVisibilityBinding) {
                         ForEach(LaunchVisibility.allCases) { choice in
                             Text(choice.label).tag(choice)
@@ -780,11 +840,74 @@ struct SettingsView: View {
     private var loginBinding: Binding<Bool> {
         Binding(
             get: { loginEnabled },
-            set: { _ in
-                loginEnabled = LoginItem.toggle()
-                status = loginEnabled
-                    ? "App will open at login."
-                    : "App will not open at login."
+            set: { wanted in
+                // `wanted`, not a re-read of live state: the switch can be stale
+                // (the login item is also removable in System Settings), and
+                // deciding from a fresh read then inverted the click.
+                //
+                // The outcome, not a bool: macOS can accept the registration and
+                // still hold it for the user's approval, and there is one path
+                // where only they can clear the old login item. A switch that
+                // snaps back with no explanation reads as a bug.
+                //
+                // Off the main thread: `set(enabled:)` is six to eight blocking
+                // SMAppService round-trips over XPC plus an unregister, and this
+                // runs from a SwiftUI setter, so doing it inline beachballs the
+                // Settings window. It is the same cost that had the migration moved
+                // off-main in AppDelegate. The switch moves immediately to where the
+                // user put it and is corrected from the outcome when it lands — and
+                // on the disable path launchd may terminate the app partway
+                // through (ADR-0014's known risk), which is one more reason not to
+                // be holding the main thread while it happens.
+                loginRevision += 1
+                let revision = loginRevision
+                loginPending = true
+                loginEnabled = wanted
+                loginMessage = wanted ? "Registering the login item…" : "Removing the login item…"
+                // A progress line is transient by nature. Left inheriting the
+                // previous outcome's value, a refusal's `false` made it un-clearable
+                // if this click's completion was then superseded.
+                loginMessageIsTransient = true
+                loginMessageForEnabled = wanted
+                loginMessageAwaitsApproval = false
+                // The enqueueing form, so two quick clicks are applied in the order
+                // they were made — dispatching each to a concurrent queue let them
+                // race into LoginItem's serial queue and land out of order.
+                LoginItem.set(enabled: wanted) { outcome in
+                    // A newer click supersedes this one's result.
+                    guard revision == loginRevision else { return }
+                    loginPending = false
+                    // Only an outcome that describes the switch's own state may move
+                    // it. `.unstableLocation` refuses the click and changes nothing,
+                    // so asserting its `isOn == false` painted the switch OFF while
+                    // login-at-launch was still live through the installed copy —
+                    // the switch reading the opposite of reality, which is the one
+                    // thing `Outcome` exists to prevent.
+                    if outcome.describesSwitchState { loginEnabled = outcome.isOn }
+                    // Written unconditionally: this is the login item's own line,
+                    // so there is nothing else to collide with. That is the point of
+                    // having split it from the pane's shared status.
+                    loginMessage = outcome.message
+                    loginMessageIsTransient = outcome.isTransient
+                    // Only for outcomes that describe the switch's own state. A
+                    // refusal that has nothing to do with it — this copy may not
+                    // touch the login item at all — is not invalidated by the switch
+                    // moving, and tying it to `isOn == false` had it wiped on the
+                    // next activation: a dev build beside an installed copy reads the
+                    // switch ON permanently, so the disagreement never resolves and
+                    // the explanation went every time, leaving the unexplained
+                    // snap-back the message exists to prevent.
+                    loginMessageForEnabled = outcome.describesSwitchState ? outcome.isOn : nil
+                    loginMessageAwaitsApproval = outcome.awaitsApproval
+                    // And bumped, so any status read that was already in flight
+                    // cannot land afterwards and clear this. `loginPending` cannot
+                    // cover it: seed()'s read is a queue.sync behind this very
+                    // mutation, so it is *guaranteed* to complete after it, by which
+                    // time pending is already false — and it then nils the one line
+                    // that tells the user to go to System Settings, a moment after it
+                    // appeared.
+                    loginRevision += 1
+                }
             })
     }
 
@@ -909,7 +1032,56 @@ struct SettingsView: View {
         refreshTokenCapability()
         status = "Loading…"
         canApply = false
-        loginEnabled = LoginItem.isEnabled
+        // Off-main for the same reason `set(enabled:)` is: this is two blocking
+        // SMAppService status reads over XPC (it was one before the agent), and
+        // opening the Settings pane should not hitch on them. Stamped with the
+        // click revision so a read started before a click cannot land after it —
+        // see `loginRevision`.
+        let revision = loginRevision
+        DispatchQueue.global(qos: .userInitiated).async {
+            let live = LoginItem.state
+            DispatchQueue.main.async {
+                guard revision == loginRevision, !loginPending else { return }
+                loginEnabled = live.enabled
+                // Clear only a message about a moment that has passed. "macOS is
+                // holding this for your approval" outlived the approval — the user
+                // went to System Settings, granted it, came back, which is what
+                // fires this seed — and a fresh status read makes the switch speak
+                // for itself there.
+                //
+                // But not the ones explaining a refusal. Clicking away from the app
+                // and back is enough to fire this, so clearing unconditionally erased
+                // "Dezhban has to live in Applications to open at login" a moment
+                // after the switch snapped back, leaving exactly the unexplained
+                // snap-back this message exists to prevent.
+                // Three ways a message stops being worth showing: it described a
+                // moment that has passed; it was waiting on an approval that has now
+                // been granted (or the registration is gone) — which the switch
+                // cannot show, so only this can clear it; or the switch has since
+                // moved away from the state it was written about.
+                let approvalSettled = loginMessageAwaitsApproval && !live.awaitingApproval
+                let switchMoved = !loginMessageAwaitsApproval
+                    && (loginMessageForEnabled.map { $0 != live.enabled } ?? false)
+                if loginMessageIsTransient || approvalSettled || switchMoved {
+                    loginMessage = nil
+                    loginMessageForEnabled = nil
+                    loginMessageAwaitsApproval = false
+                }
+                // And *state* it, not only preserve it. This read was only ever
+                // consulted to decide whether to clear a message a click had left
+                // behind — so opening the pane with no preceding click, on an install
+                // whose agent the user had switched off under Login Items, painted the
+                // switch ON with nothing said, while nothing started the app at login.
+                // `enabled` counts an awaiting-approval registration, so the switch
+                // cannot express it; this is the only thing that can.
+                if live.awaitingApproval, loginMessage == nil {
+                    loginMessage = LoginItem.Outcome.awaitingApproval.message
+                    loginMessageIsTransient = false
+                    loginMessageAwaitsApproval = true
+                    loginMessageForEnabled = live.enabled
+                }
+            }
+        }
         notifyPrefs = NotificationManager.prefs
         checkUpdatesEnabled = UpdateChecker.isEnabled
         launchVisibility = LaunchPreference.current

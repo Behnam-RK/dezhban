@@ -20,6 +20,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let menu = NSMenu()
     private var timer: Timer?
     private var updateTimer: Timer?
+    /// Runs only for a few seconds after launch — see `startHandoffBackstop`.
+    private var handoffTimer: Timer?
+    /// Requests already answered, most recent last — see `openForHandoff`.
+    ///
+    /// A set rather than a single slot. Two duplicates launching inside the backstop
+    /// window put *three* signals in flight — D2's `post()` atomically replaces D1's
+    /// file, so a backstop tick can claim T2 while both notifications still arrive —
+    /// and with one slot the sequence T2, T1, T2 answered T2 twice: the second
+    /// activation half a second later that the token design was introduced to
+    /// prevent, on the exact gesture the checklist asks testers to perform.
+    private var answeredHandoffTokens: [String] = []
+    /// Enough for any plausible burst of interleaved signals, small enough to stay a
+    /// linear scan of nothing.
+    private static let answeredHandoffTokenLimit = 16
     private var snapshot: Snapshot?
     private var lastMtime: Date?
     private var lastIconKey: String?
@@ -32,7 +46,48 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// a thing to hammer GitHub with. See UpdateChecker's doc comment.
     private static let updateCheckInterval: TimeInterval = 24 * 60 * 60
 
-    func applicationDidFinishLaunching(_ notification: Notification) {
+    /// Posted by a duplicate copy of the app as it exits, when the user started
+    /// it themselves (see `acquireSessionOwnership` in main.swift). Without it a
+    /// user-initiated launch that loses the session lock would do visibly
+    /// nothing at all — and the copy that owns the session may be a
+    /// `--background` login launch with no window to be handed over to.
+    static let openWindowNotification = "com.behnam-rk.dezhban.app.openWindow"
+
+    /// Set by a poster whose hand-off file could not be written, so it is the only
+    /// signal there will be. Only the poster knows that, which is why it is carried
+    /// here rather than inferred by the receiver from a timer.
+    static let handoffFilelessKey = "dezhban.handoffFileless"
+
+    /// Identifies the request, so the notification and the file-watcher can tell
+    /// "the other signal for the request I already handled" from "a new launch".
+    static let handoffTokenKey = "dezhban.handoffToken"
+
+    func applicationDidFinishLaunching(_: Notification) {
+        // FIRST, and only for the session owner. A duplicate posts its hand-off as
+        // it exits and then dies; the notification is delivered immediately and
+        // never queued, so anything ahead of this is time in which a user-initiated
+        // launch is silently dropped — the one outcome `acquireSessionOwnership`
+        // exists to prevent.
+        //
+        // A copy that could not take the lock and started anyway (the `.unavailable`
+        // path, for a broken support directory) is running beside the real owner. If
+        // both answered, one double-click would open two windows, each with its own
+        // debounce, so neither could suppress the other.
+        if sessionOwnsLock {
+            installHandoffHandling()
+        }
+        // macOS has a second way to start this app at login, and it does not pass
+        // the launch marker: "Reopen windows when logging back in" relaunches
+        // whatever was running at logout, through LaunchServices, with no
+        // arguments. `SMAppService.mainApp` used to be reconciled with that path
+        // because it went through LaunchServices too; a launchd agent is not, so
+        // both would start at login and race for the session lock — and if the
+        // resume copy won, the window opened at login under the default "Only at
+        // login", the exact defect this replaced, now intermittent instead of
+        // absent. This is the API for saying "the login item is the only way I
+        // start at login". MainWindow's isRestorable = false covers window
+        // restoration; this covers app relaunch, which is a different thing.
+        NSApp.disableRelaunchOnLogin()
         NotificationManager.requestAuthorizationIfNeeded()
         // Resolve the config path once, off the main thread, before any pane asks for
         // it — every later read is then a memoized lookup rather than a shell-out on
@@ -55,21 +110,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.menu = menu
         watchdog.start()
         refresh()
+        // Move any pre-agent install onto the login LaunchAgent. Off the main
+        // thread: it is up to five blocking SMAppService round-trips over XPC plus
+        // a register() that forks a process, and the moment it runs is a
+        // slow-to-start login — the exact situation this whole feature is tuned
+        // around, and the one where a frozen launch is most visible. It only
+        // affects the NEXT login, so nothing here waits on it.
+        DispatchQueue.global(qos: .utility).async {
+            LoginItem.migrateFromMainAppRegistration()
+        }
         // Launching the app shows the app: reaching the main window only through
         // the menubar dropdown made opening it a two-step discovery problem, and
         // the menubar item stays available either way.
         //
-        // Except when the launch wasn't the user's doing. AppKit clears this flag
-        // for launches it performed on their behalf rather than at their request —
-        // a login item, a state restoration, opening a file — and a window
-        // appearing unbidden at every boot is exactly the noise a menubar app
-        // should not make. A missing flag reads as an ordinary launch, so the
-        // window still opens if AppKit ever stops reporting this.
-        let deliberateLaunch = (notification.userInfo?[NSApplication.launchIsDefaultUserInfoKey] as? Bool) ?? true
+        // Except when the launch wasn't the user's doing. The login LaunchAgent
+        // passes --background and nothing else does, so this is an explicit
+        // marker rather than an inference. It replaces
+        // `NSApplication.launchIsDefaultUserInfoKey`, which was the sole input
+        // here and read wrong in both directions — the window appeared at login
+        // and failed to appear on a manual launch. See
+        // docs/adr/0014-login-item-launch-marker.md.
+        let backgroundLaunch = LaunchVisibility.isBackgroundLaunch(arguments: CommandLine.arguments)
         // The Settings "Open minimized" choice decides what to do with that.
-        // Its default, .bootOnly, is exactly the behaviour described above, so
-        // anyone who never touches the setting sees no change.
-        if LaunchPreference.current.opensWindow(deliberateLaunch: deliberateLaunch) {
+        // Its default, .bootOnly, is the long-standing behaviour — quiet at
+        // login, visible when you start it yourself.
+        if LaunchPreference.current.opensWindow(backgroundLaunch: backgroundLaunch) {
             MainWindow.shared.open()
         }
         AppState.shared.refreshServiceState()
@@ -80,6 +145,175 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         updateTimer = Timer.scheduledTimer(withTimeInterval: Self.updateCheckInterval, repeats: true) { _ in
             AppState.shared.checkForUpdates()
+        }
+    }
+
+    /// A second copy of the app was started by the user and found this one
+    /// already owning the session. Opening the window is the whole reason it
+    /// bothered to tell us — it is standing in for the launch the user performed.
+    @objc private func openWindowRequested(_ note: Notification) {
+        // The claim goes off the main thread, like the backstop's: it is a stat and
+        // an unlink, and on a network or relocated home — the case `uninstall.sh`
+        // reads NFSHomeDirectory to accommodate — that blocks the run loop on the
+        // one path that is supposed to feel instant.
+        //
+        // Whether the fileless fallback is allowed has to be read here though,
+        // since it is main-thread state.
+        // Either the launch window, or the poster telling us its file never landed.
+        let fileless = (note.userInfo?[Self.handoffFilelessKey] as? String) == "1"
+        let acceptWithoutFile = handoffTimer != nil || fileless
+        // The poster's token, so a signal with no file to read still identifies its
+        // request and cannot be mistaken for a second launch — or for the same one.
+        let postedToken = note.userInfo?[Self.handoffTokenKey] as? String
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            switch sessionHandoff?.claim() ?? .absent {
+            case .fresh(let token):
+                // A file, taken by us. The session owner discards whatever it finds
+                // when it takes the lock, so a file seen afterwards was written by a
+                // live duplicate however long ago — which is what makes a slow
+                // launch work rather than being thrown away for being slow.
+                DispatchQueue.main.async { self?.openForHandoff(token: token ?? postedToken) }
+            case .absent:
+                // No file to point at, so nothing here proves a duplicate of this
+                // app wrote it. Accepted only while the launch-time backstop is
+                // armed, which is the only window in which it can legitimately
+                // happen: the duplicate writes the file and *then* posts, so a
+                // backstop tick landing between those two calls leaves this with
+                // nothing to find.
+                //
+                // Outside that window a file is required, because
+                // `DistributedNotificationCenter` is a system-wide bus with no
+                // sender authentication and both the name and the object are
+                // derivable. Unbounded, any process running as this user could call
+                // `MainWindow.open()` — which activates the app — once per debounce
+                // interval forever, reopening a window the moment it was closed.
+                //
+                // The one exemption is a poster that says its file could not be
+                // written: it is then the only signal there will be, and only the
+                // poster can know that. It weakens nothing that was not already
+                // reachable — anything able to forge this could equally run
+                // `open -a Dezhban` — and without it a full or read-only home turned
+                // the hand-off into the silent no-op it exists to prevent.
+                guard acceptWithoutFile else { return }
+                DispatchQueue.main.async { self?.openForHandoff(token: postedToken) }
+            case .lost:
+                // The backstop got there first and is opening the window.
+                break
+            case .blocked(let why):
+                // A request that cannot be claimed proves nothing, so it is held to
+                // the same rule as no request at all.
+                //
+                // Since the claim is a rename, `.blocked` means the directory is
+                // unwritable — which is also why no *poster* could have written this
+                // file. It is a leftover, and `discard()` cannot clear it either, so
+                // acting on it unconditionally turned every later notification into
+                // an activation: fresh token each time, never matching, window
+                // reopened indefinitely with no in-product recovery. A real launch in
+                // that state cannot write its file either, so it arrives with the
+                // fileless marker and is accepted on that basis instead.
+                NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
+                guard acceptWithoutFile else { return }
+                DispatchQueue.main.async { self?.openForHandoff(token: postedToken) }
+            }
+        }
+    }
+
+    /// Opens the window for a hand-off, once per request.
+    ///
+    /// `token` identifies the request. The two signals for one request — the
+    /// notification and the launch-time backstop — carry the same one, so whichever
+    /// arrives second is recognised and dropped; a genuinely new launch carries a
+    /// new token and always opens. That distinction has to be exact, because the
+    /// effect is what the user notices: `MainWindow.open()` activates the app, so a
+    /// duplicate is a second focus steal or a window reopening just after they
+    /// closed it, while a dropped one is the silent no-op the whole mechanism exists
+    /// to prevent.
+    ///
+    /// Identity rather than timing, after three attempts at timing. A debounce with
+    /// a definite/indefinite flag could not tell a paired signal from a new request
+    /// — elapsed time does not carry that information — so every version of it both
+    /// let a duplicate window through in one ordering and swallowed a real second
+    /// launch in another.
+    ///
+    /// A `nil` token cannot be matched (a request from an older build, or a poster
+    /// whose file never landed), so it is always acted on: an extra window is the
+    /// lesser failure.
+    private func openForHandoff(token: String?) {
+        if let token {
+            if answeredHandoffTokens.contains(token) { return }
+            answeredHandoffTokens.append(token)
+            if answeredHandoffTokens.count > Self.answeredHandoffTokenLimit {
+                answeredHandoffTokens.removeFirst(
+                    answeredHandoffTokens.count - Self.answeredHandoffTokenLimit)
+            }
+        }
+        MainWindow.shared.open()
+    }
+
+
+    /// Installs both hand-off consumers. Called only by the session owner.
+    ///
+    /// Scoped to the bundle path, which is what the poster sends: the name comes
+    /// from the bundle id, and two installs of the app may legitimately run side by
+    /// side (see `SessionLock`).
+    private func installHandoffHandling() {
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(openWindowRequested),
+            name: NSNotification.Name(Self.openWindowNotification),
+            object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path)
+        // And the file the notification cannot cover: a duplicate that posted while
+        // this process was still starting up found no observer, so its request is on
+        // disk. Checked now and for a few seconds more — see startHandoffBackstop for
+        // why it is bounded rather than on every tick.
+        startHandoffBackstop()
+    }
+
+    /// The notification's backstop, for the gap before the observer above exists.
+    ///
+    /// Bounded on purpose. The window it covers is a launch-time one — the lock is
+    /// taken before `NSApplication` — and once the observer is installed the
+    /// notification carries every later hand-off. Polling the file forever would
+    /// put a synchronous stat on the main thread on every tick, which is the exact
+    /// hazard `pollStateFile` below was restructured to remove, for a feature that
+    /// is cosmetic. So it runs for a few seconds after launch and then stops, and
+    /// even then it does its filesystem work off the main thread.
+    private func startHandoffBackstop() {
+        checkHandoffRequest()
+        var remaining = 10
+        handoffTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] timer in
+            remaining -= 1
+            if remaining <= 0 {
+                timer.invalidate()
+                self?.handoffTimer = nil
+            }
+            self?.checkHandoffRequest()
+        }
+    }
+
+    private func checkHandoffRequest() {
+        guard let handoff = sessionHandoff else { return }
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            // Only `.fresh`. `.lost` means the notification handler claimed it and
+            // is already opening the window; `.absent` is the ordinary case of
+            // there being no request at all, which is what almost every tick sees.
+            var claimed: String?
+            switch handoff.claim() {
+            case .fresh(let token):
+                claimed = token
+            case .blocked(let why):
+                // Stand down for real: the comment used to say the backstop stops on
+                // this while only returning from the one tick, so a 0.5s timer over a
+                // 5s window logged the same permanent condition eleven times.
+                NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
+                DispatchQueue.main.async {
+                    self?.handoffTimer?.invalidate()
+                    self?.handoffTimer = nil
+                }
+                return
+            case .absent, .lost:
+                return
+            }
+            DispatchQueue.main.async { self?.openForHandoff(token: claimed) }
         }
     }
 

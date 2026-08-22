@@ -12,6 +12,54 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **"Open minimized" now actually decides whether the window opens.** The app
+  used to infer a login launch from `NSApplication.launchIsDefaultUserInfoKey`,
+  which reported wrong in both directions — the window appeared at login with
+  the setting on, and stayed hidden on a manual launch. The login item is now a
+  LaunchAgent shipped inside the bundle that passes `--background`, so the app
+  reads the launch kind instead of guessing it
+  ([ADR-0014](docs/adr/0014-login-item-launch-marker.md)). The main window also
+  opted out of AppKit state restoration, which could reopen it at launch without
+  consulting the setting at all. Existing installs are migrated once, on first
+  launch; if you had login-at-launch switched off, it stays off.
+
+  Three consequences of the mechanism, handled in the same change. A launchd
+  agent starts the moment it is registered and — unlike the LaunchServices login
+  item it replaces — does not check whether the app is already running, so
+  turning "Open this app at login" on could leave you with two menubar icons; a
+  duplicate copy now exits at startup, and if you started it yourself it brings
+  the running copy forward with its window open rather than appearing to do
+  nothing. A launchd registration also does not disappear with the app bundle
+  the way a login item did, so `uninstall.sh` now has the app retract it before
+  deleting anything, instead of leaving an entry that fails to load at every
+  subsequent login; the Login Items entry reads "Dezhban" now instead of a raw
+  job label. And the login toggle says what actually happened — including when
+  macOS is holding the registration for your approval, and when it refuses to
+  remove the old login item and only you can clear it in System Settings; either
+  state can still be switched back off, which an earlier build could not do.
+
+  Dezhban also stops relying on macOS's "Reopen windows when logging back in" to
+  leave it alone: that path relaunches the app at login without the marker, so it
+  is now opted out of explicitly, leaving the login item as the only thing that
+  starts the app at login. And clicking the login switch acts on the state you
+  clicked, not on a re-read a moment later — with the Settings window open,
+  removing the login item in System Settings and coming back used to make the
+  next click turn login-at-launch *on*. If you had switched Dezhban off under
+  System Settings → General → Login Items, upgrading leaves it off; and a copy of
+  the app run from somewhere other than `/Applications` no longer claims the
+  login item for a location it is about to be moved out of — and neither does the
+  Settings switch, which now says so rather than registering a login item that would
+  break the moment the copy moves. The login switch also
+  no longer freezes the Settings window while macOS thinks about it, and reads OFF
+  rather than ON when the item you see is one you had already switched off in
+  System Settings. Uninstalling clears Dezhban's saved app preferences too —
+  leaving them behind meant a later install silently skipped the login-item
+  migration. If macOS refuses to retract the login item — or the app bundle was
+  already in the Trash, so nothing can — the uninstaller now says so instead of
+  reporting a clean removal.
+
 ## [0.11.0] - 2026-08-21
 
 ### Added

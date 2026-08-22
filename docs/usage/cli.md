@@ -646,7 +646,10 @@ The main window's sidebar sections:
   (Install service… / Guard up).
 - **Settings** — startup ("Start the guard at boot" installs the launchd
   system service so enforcement survives reboots; "Open this app at login" via
-  `SMAppService`; **"Open minimized"** — Never / Always / Only at login, an
+  `SMAppService`, registering a LaunchAgent inside the bundle that starts the
+  app with `--background` so it can tell a login launch from one you asked for
+  ([ADR-0014](../adr/0014-login-item-launch-marker.md)); **"Open minimized"** —
+  Never / Always / Only at login, an
   app-local preference that decides whether the main window opens when Dezhban
   starts, defaulting to "Only at login", which is what the app always did; the
   Dock icon and the menubar's "Open Dezhban…" open it regardless;
