@@ -106,6 +106,24 @@ public struct HandoffRequest {
         try? FileManager.default.removeItem(at: url)
     }
 
+    /// Removes `.claiming-*` files abandoned by a process that died mid-claim.
+    ///
+    /// `claim()` renames the request aside and then reads it, so a kill in between —
+    /// which this app documents as a real possibility, since retracting a login item
+    /// can have launchd terminate it — leaves a file `discard()` will never touch,
+    /// because that only knows the `.handoff` path. Swept by whoever takes the
+    /// session lock, alongside the discard, since anything found then belongs to a
+    /// predecessor.
+    public func sweepAbandonedClaims() {
+        let dir = url.deletingLastPathComponent()
+        guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
+            return
+        }
+        for name in names where name.hasPrefix(".claiming-") {
+            try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
+        }
+    }
+
     /// Tries to take the request, and reports whether this caller owns it.
     ///
     /// The removal is what makes it a claim: exactly one `removeItem` can succeed

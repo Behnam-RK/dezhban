@@ -877,7 +877,13 @@ struct SettingsView: View {
                     // A newer click supersedes this one's result.
                     guard revision == loginRevision else { return }
                     loginPending = false
-                    loginEnabled = outcome.isOn
+                    // Only an outcome that describes the switch's own state may move
+                    // it. `.unstableLocation` refuses the click and changes nothing,
+                    // so asserting its `isOn == false` painted the switch OFF while
+                    // login-at-launch was still live through the installed copy —
+                    // the switch reading the opposite of reality, which is the one
+                    // thing `Outcome` exists to prevent.
+                    if outcome.describesSwitchState { loginEnabled = outcome.isOn }
                     // Written unconditionally: this is the login item's own line,
                     // so there is nothing else to collide with. That is the point of
                     // having split it from the pane's shared status.

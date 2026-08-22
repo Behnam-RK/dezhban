@@ -117,8 +117,10 @@ func acquireSessionOwnership() -> SessionLock? {
     switch lock.acquire() {
     case .acquired:
         sessionOwnsLock = true
-        // Anything already on disk was meant for a predecessor, not for us.
+        // Anything already on disk was meant for a predecessor, not for us — and so
+        // is any `.claiming-*` file a predecessor died in the middle of.
         sessionHandoff?.discard()
+        sessionHandoff?.sweepAbandonedClaims()
         return lock
     case .unavailable(let why):
         // Never refuse to start over this. A duplicate icon is a smaller failure
@@ -141,26 +143,38 @@ func acquireSessionOwnership() -> SessionLock? {
         // how every other failure here degrades ("refusing to start because a support
         // directory is broken would be a worse bug").
         //
-        // Retried rather than decided on one read: at login the incumbent is often
-        // launchd-exec'd and not yet registered with LaunchServices, which is the
-        // ordinary reason to find nobody and exactly the case that must still yield.
+        // Decided on where the lock lives, not on a timer. Waiting for the incumbent
+        // to appear in LaunchServices was the wrong shape: at login it is
+        // launchd-exec'd and often not registered yet, so a bounded probe times out
+        // on a *live* incumbent — and then started a second copy of the app, the
+        // failure this lock exists to prevent, on the common path. It also discarded
+        // the hand-off it had just posted, which the `.unavailable` case thirty lines
+        // up refuses to do for exactly the reason stated there.
+        //
+        // Locally, `flock` is the kernel's: held means alive, so this yields whether
+        // or not anyone has shown up in LaunchServices yet, and the request it posts
+        // is claimed by the incumbent's own backstop. Only on a network home, where
+        // the lock can outlive its holder, may "nobody there" mean the lock is stale.
         let mePID = ProcessInfo.processInfo.processIdentifier
         let ownBundle = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
-        var incumbent: NSRunningApplication?
-        for attempt in 0 ..< 3 {
-            incumbent = NSRunningApplication
-                .runningApplications(withBundleIdentifier: id)
-                .first {
-                    $0.processIdentifier != mePID && !$0.isTerminated
-                        && $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL == ownBundle
-                }
-            if incumbent != nil { break }
-            if attempt < 2 { usleep(200_000) }
-        }
-        guard incumbent != nil else {
-            NSLog("DezhbanMenu: the session lock is held but no live copy of this install "
-                + "owns it (a stale lock on a network home?); starting anyway")
-            sessionHandoff?.discard()
+        let incumbent = NSRunningApplication
+            .runningApplications(withBundleIdentifier: id)
+            .first {
+                $0.processIdentifier != mePID && !$0.isTerminated
+                    && $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL == ownBundle
+            }
+        if incumbent == nil, !lock.isOnLocalVolume {
+            NSLog("DezhbanMenu: the session lock is held on a network home but no live copy "
+                + "of this install owns it; treating it as stale and starting anyway")
+            // Not discarded: a request on disk may belong to a launch the real owner
+            // is about to answer, and this process took nothing.
+            //
+            // Owner enough to answer hand-offs, though. Without this the app started,
+            // became the incumbent, and then every later launch found it, posted a
+            // request and exited while nobody was listening — the silent no-op again,
+            // permanently, for that install.
+            sessionOwnsLock = true
+            sessionHandoff?.sweepAbandonedClaims()
             return lock
         }
         // A background launch loses silently — that copy was never going to show

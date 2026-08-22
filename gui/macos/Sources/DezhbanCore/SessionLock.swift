@@ -123,6 +123,25 @@ public final class SessionLock {
         return .acquired
     }
 
+    /// Whether the lock file sits on a local volume, where `flock` is the kernel's
+    /// and is therefore released when its holder dies.
+    ///
+    /// The distinction decides what "held by another" is allowed to mean. Locally it
+    /// means a live holder, full stop — so a launch that finds the lock taken must
+    /// yield even when LaunchServices has not yet registered the incumbent, which at
+    /// login is the ordinary case. On a network home the server emulates the lock and
+    /// it can outlive the process that took it, and there yielding forever would make
+    /// the app permanently unstartable.
+    ///
+    /// Unknown counts as local: trusting the lock risks a launch that hands off
+    /// instead of opening, while distrusting it risks two copies of a kill switch's
+    /// UI, and the first is the smaller failure.
+    public var isOnLocalVolume: Bool {
+        let values = try? url.deletingLastPathComponent()
+            .resourceValues(forKeys: [.volumeIsLocalKey])
+        return values?.volumeIsLocal ?? true
+    }
+
     /// Drops the lock. Only tests need this: a real process holds the lock until
     /// it exits, and the kernel releases it then — including on a crash, which is
     /// the whole reason for using a lock rather than a pid file.

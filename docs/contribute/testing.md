@@ -931,6 +931,10 @@ task gui:build && open dist/Dezhban.app
       `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
       doing its job — this is the switch a user reaches for to stop the app
       starting at login, and it is useless if nobody can tell what it governs).
+- [ ] **No `.claiming-*` files accumulate.** After exercising hand-offs, and after a
+      forced quit during one, `ls -a ~/Library/Application Support/com.behnam-rk.dezhban.app/`
+      must show no `.claiming-*` leftovers — a process killed between the rename and
+      the read leaves one, and only the next session owner's sweep removes it.
 - [ ] **Uninstall handles two installs.** Put a copy in `/Applications` *and* one in
       `~/Applications`, let the second register the login agent, then run the
       uninstaller. Both bundles must be gone, the agent registration must be

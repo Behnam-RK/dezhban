@@ -126,6 +126,15 @@ with an argument, the pre-`SMAppService` pattern.
   purged lock file while the incumbent holds its descriptor means the next launch
   creates a fresh inode, locks *that*, and runs a second copy undetectably.
 
+  What "held by another" is allowed to mean depends on where the lock lives. Locally
+  `flock` is the kernel's, so held means alive and a launch that finds it taken yields
+  even before LaunchServices has registered the incumbent — which at login it usually
+  has not, that being the ordinary case rather than an error. Only on a network home,
+  where the server emulates the lock and it can outlive its holder, may "nobody is
+  there" mean the lock is stale and the app start anyway; a timer cannot make that
+  distinction, and a bounded probe that tried started a second copy on the common
+  path.
+
   Only the session owner answers hand-offs. A copy that could not take the lock and
   started anyway — the `.unavailable` path, which exists so a broken support
   directory cannot stop the app launching — runs beside the real owner, and if both

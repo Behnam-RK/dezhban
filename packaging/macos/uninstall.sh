@@ -349,6 +349,16 @@ fi
 
 # The daemon's own directory: state.json, learned.json, the command file and the
 # control socket. All machine-derived and safe to discard — none of it is the user's.
+# Every account's support directory, not only the console user's. The search above
+# deliberately finds and deletes bundles in any account's ~/Applications, so scoping
+# the cleanup to the console user left those users' session lock and hand-off file
+# behind — under a closing message that says everything was removed. Root can reach
+# these; the preferences and the login item cannot be, and are named in the warning.
+for home in /Users/*; do
+	[ -d "$home/Library/Application Support/$APP_BUNDLE_ID" ] || continue
+	rm -rf "$home/Library/Application Support/$APP_BUNDLE_ID"
+done
+
 echo "removing daemon state at $STATE_DIR ..."
 rm -rf "$STATE_DIR"
 
@@ -413,7 +423,10 @@ if [ "$SUPPORT_DIR_KEPT" = "1" ]; then
 	echo "         were removed.)"
 fi
 echo
-echo "If any OTHER account on this Mac ran the app, its login agent is still"
-echo "registered there — root cannot reach another user's launchd session. Nothing"
-echo "will start Dezhban (the bundle is gone), but the entry lingers under System"
-echo "Settings → General → Login Items until that user removes it there."
+echo "If any OTHER account on this Mac ran the app, two things remain there that"
+echo "root cannot reach: its login agent registration — nothing will start Dezhban,"
+echo "since the bundle is gone, but the entry lingers under System Settings >"
+echo "General > Login Items until that user removes it — and Dezhban's saved"
+echo "preferences, which record that the login-item migration has run, so a later"
+echo "reinstall for that account would skip it. From that account:"
+echo "    defaults delete $APP_BUNDLE_ID"
