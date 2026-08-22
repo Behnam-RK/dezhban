@@ -19,16 +19,15 @@ struct SetupQuestionsTests {
        "options":[{"label":"Iran (IR)","value":"IR"},{"label":"Russia (RU)","value":"RU"}],
        "selected":["IR"],"group":1},
       {"id":"otherCountries","kind":"list","title":"Other country codes","default":"AQ","group":1},
-      {"id":"configureVPN","kind":"bool","title":"Configure your VPN now?","default":"true","group":1},
       {"id":"autoMode","kind":"bool","title":"Use automatic VPN detection? (recommended)",
-       "default":"true","group":2,"requiresId":"configureVPN","requiresValue":"true"},
+       "default":"true","group":2},
       {"id":"tunnels","key":"vpn.tunnelInterfaces","kind":"multiselect","title":"Tunnel interface(s)",
        "options":[{"label":"utun4","value":"utun4"},{"label":"utun7","value":"utun7"}],
-       "selected":["utun4"],"group":3,"requiresId":"autoMode","requiresValue":"false"},
-      {"id":"profileFiles","kind":"list","title":"Self-hosted VPN config files","group":4,
-       "requiresId":"configureVPN","requiresValue":"true"},
+       "selected":["utun4"],"group":2,"requiresId":"autoMode","requiresValue":"false"},
+      {"id":"profileFiles","kind":"list","title":"Self-hosted VPN config files","group":2,
+       "requiresId":"autoMode","requiresValue":"false"},
       {"id":"endpoints","key":"vpn.endpoints","kind":"list","title":"VPN endpoint(s)",
-       "default":"203.0.113.7","group":4,"requiresId":"configureVPN","requiresValue":"true"}
+       "default":"203.0.113.7","group":2,"requiresId":"autoMode","requiresValue":"false"}
     ]
     """
 
@@ -38,13 +37,16 @@ struct SetupQuestionsTests {
 
     @Test func decodesTheDaemonsQuestions() throws {
         let qs = try Self.questions()
-        #expect(qs.count == 8)
+        #expect(qs.count == 7)
         let countries = try #require(qs.first { $0.id == "blockedCountries" })
         #expect(countries.selected == ["IR"])
         #expect(countries.options.map(\.value) == ["IR", "RU"])
         // Absent `key` decodes as "no config key", not as a decode failure.
         #expect(try #require(qs.first { $0.id == "otherCountries" }).key.isEmpty)
-        #expect(try #require(qs.first { $0.id == "autoMode" }).isGated)
+        // autoMode is the gate now, not a gated question — everything manual
+        // hangs off it, and it hangs off nothing.
+        #expect(!(try #require(qs.first { $0.id == "autoMode" }).isGated))
+        #expect(try #require(qs.first { $0.id == "endpoints" }).isGated)
         #expect(!(try #require(qs.first { $0.id == "pollInterval" }).isGated))
     }
 
@@ -52,23 +54,46 @@ struct SetupQuestionsTests {
         let a = SetupAnswers(questions: try Self.questions())
         #expect(a["pollInterval"] == "15s")
         #expect(a.list("blockedCountries") == ["IR"])
-        #expect(a.bool("configureVPN"))
+        #expect(a.bool("autoMode"))
     }
 
+    /// Two steps, matching Go's TestTheWizardIsTwoGroups. The app renders one
+    /// group per step, so a third group is a third screen.
+    @Test func theWizardIsTwoSteps() throws {
+        #expect(Set(try Self.questions().map(\.group)) == [1, 2])
+    }
+
+    /// Step 2 is one automatic-detection tickbox with every manual field hanging
+    /// off it — the reveal-in-place the app renders, and the same gate the CLI
+    /// evaluates.
     @Test func gatingMatchesTheCLI() throws {
         let qs = try Self.questions()
         var a = SetupAnswers(questions: qs)
 
-        a["configureVPN"] = "false"
-        for q in qs where q.requiresID == "configureVPN" {
-            #expect(!a.shouldAsk(q), "\(q.id) should be hidden when the VPN branch is declined")
+        a["autoMode"] = "true"
+        for q in qs where q.requiresID == "autoMode" {
+            #expect(!a.shouldAsk(q), "\(q.id) should be hidden under automatic detection")
         }
 
-        a["configureVPN"] = "true"
-        a["autoMode"] = "true"
-        #expect(!a.shouldAsk(try #require(qs.first { $0.id == "tunnels" })))
         a["autoMode"] = "false"
-        #expect(a.shouldAsk(try #require(qs.first { $0.id == "tunnels" })))
+        for id in ["tunnels", "profileFiles", "endpoints"] {
+            #expect(a.shouldAsk(try #require(qs.first { $0.id == id })),
+                    "\(id) should be asked once automatic detection is unticked")
+        }
+    }
+
+    /// The rule that replaced "configure your VPN now?": a question that was
+    /// never shown writes no key. Under automatic detection on macOS the
+    /// endpoint question is hidden, so a re-run must produce no
+    /// `vpn.endpoints=` pair — writing an empty one would delete a configured
+    /// server. Mirrors Go's TestAnUnaskedEndpointListTouchesNoEndpoint.
+    @Test func anUnaskedQuestionWritesNoKey() throws {
+        let qs = try Self.questions()
+        var a = SetupAnswers(questions: qs)
+        a["autoMode"] = "true"
+
+        let pairs = a.configPairs(for: qs)
+        #expect(!pairs.contains { $0.hasPrefix("vpn.endpoints=") })
     }
 
     /// The free-text codes fold into the same key as the checkboxes — they are
@@ -91,7 +116,6 @@ struct SetupQuestionsTests {
     @Test func automaticDetectionClearsPinnedInterfaces() throws {
         let qs = try Self.questions()
         var a = SetupAnswers(questions: qs)
-        a["configureVPN"] = "true"
         a["autoMode"] = "true"
 
         let pairs = a.configPairs(for: qs)
@@ -101,7 +125,6 @@ struct SetupQuestionsTests {
     @Test func pinningWritesTheChosenInterfaces() throws {
         let qs = try Self.questions()
         var a = SetupAnswers(questions: qs)
-        a["configureVPN"] = "true"
         a["autoMode"] = "false"
         a["tunnels"] = "utun4,utun7"
 
@@ -111,17 +134,26 @@ struct SetupQuestionsTests {
                 "a pinned config must not also be cleared")
     }
 
-    /// Declining the VPN branch writes none of its keys, so a VPN somebody
-    /// already configured is left alone — the same rule as Go's setup.Apply.
-    @Test func decliningTheVPNBranchWritesNoVPNKey() throws {
-        let qs = try Self.questions()
-        var a = SetupAnswers(questions: qs)
-        a["configureVPN"] = "false"
+    /// A wizard seeded with `autoMode: false` — which the daemon does whenever
+    /// vpn.tunnelInterfaces is pinned — and clicked straight through must write
+    /// those pins back, not clear them. This is the consumer side of Go's
+    /// TestAutoModeSeedsFalseWhenInterfacesArePinned: the app renders whatever
+    /// default arrives, so the guard only holds if seeding drives it.
+    @Test func aSeededManualModeReWritesItsPins() throws {
+        let qs = try Self.questions().map { q -> SetupQuestion in
+            guard q.id == "autoMode" else { return q }
+            return SetupQuestion(questionID: q.questionID, key: q.key, kind: q.kind,
+                                 title: q.title, description: q.description,
+                                 options: q.options, defaultValue: "false",
+                                 selected: q.selected, group: q.group,
+                                 requiresID: q.requiresID, requiresValue: q.requiresValue)
+        }
+        let a = SetupAnswers(questions: qs)
+        #expect(!a.bool("autoMode"), "the seeded default must drive the answer")
 
         let pairs = a.configPairs(for: qs)
-        #expect(!pairs.contains { $0.hasPrefix("vpn.") })
-        // The answers that were given still apply.
-        #expect(pairs.contains { $0.hasPrefix("pollInterval=") })
+        #expect(pairs.contains("vpn.tunnelInterfaces=utun4"))
+        #expect(!pairs.contains("vpn.tunnelInterfaces="))
     }
 
     /// Profile files are not a config key: they become profiles through
@@ -147,8 +179,7 @@ struct SetupQuestionsTests {
     // MARK: - the shrunk wizard
 
     /// The daemon's question list after the 2026-08 shrink: blocked countries,
-    /// configure-VPN?, auto-vs-manual, and the gated VPN details — nothing
-    /// else. Everything above must keep working with this list, because the
+    /// auto-vs-manual and the gated VPN details — nothing else. Everything above must keep working with this list, because the
     /// view renders whatever arrives, and the id-keyed special cases
     /// (blockedCountries+otherCountries fold, autoMode's tunnel clearing) must
     /// hold with the surrounding questions gone.
@@ -158,16 +189,15 @@ struct SetupQuestionsTests {
        "options":[{"label":"Iran (IR)","value":"IR"},{"label":"Russia (RU)","value":"RU"}],
        "selected":["IR"],"group":1},
       {"id":"otherCountries","kind":"list","title":"Other country codes","default":"AQ","group":1},
-      {"id":"configureVPN","kind":"bool","title":"Configure your VPN now?","default":"true","group":1},
       {"id":"autoMode","kind":"bool","title":"Use automatic VPN detection? (recommended)",
-       "default":"true","group":2,"requiresId":"configureVPN","requiresValue":"true"},
+       "default":"true","group":2},
       {"id":"tunnels","key":"vpn.tunnelInterfaces","kind":"multiselect","title":"Tunnel interface(s)",
-       "options":[{"label":"utun4","value":"utun4"}],"selected":[],"group":3,
+       "options":[{"label":"utun4","value":"utun4"}],"selected":[],"group":2,
        "requiresId":"autoMode","requiresValue":"false"},
-      {"id":"profileFiles","kind":"list","title":"Self-hosted VPN config files","group":4,
-       "requiresId":"configureVPN","requiresValue":"true"},
-      {"id":"endpoints","key":"vpn.endpoints","kind":"list","title":"VPN endpoint(s)","group":4,
-       "requiresId":"configureVPN","requiresValue":"true"}
+      {"id":"profileFiles","kind":"list","title":"Self-hosted VPN config files","group":2,
+       "requiresId":"autoMode","requiresValue":"false"},
+      {"id":"endpoints","key":"vpn.endpoints","kind":"list","title":"VPN endpoint(s)","group":2,
+       "requiresId":"autoMode","requiresValue":"false"}
     ]
     """
 
@@ -177,10 +207,10 @@ struct SetupQuestionsTests {
 
     @Test func shrunkListDecodesAndGates() throws {
         let qs = try Self.shrunkQuestions()
-        #expect(qs.count == 7)
+        #expect(qs.count == 6)
         var a = SetupAnswers(questions: qs)
-        // Default flow: configure yes, automatic yes — the tunnel question is
-        // never asked.
+        // Default flow: automatic detection on — the tunnel question is never
+        // asked.
         let tunnels = try #require(qs.first { $0.id == "tunnels" })
         #expect(!a.shouldAsk(tunnels))
         a["autoMode"] = "false"
@@ -205,9 +235,15 @@ struct SetupQuestionsTests {
         let qs = try Self.shrunkQuestions()
         var a = SetupAnswers(questions: qs)
         a["endpoints"] = "203.0.113.7"
-        let pairs = a.configPairs(for: qs)
-        // configureVPN + autoMode both default true → pinned interfaces cleared.
+        var pairs = a.configPairs(for: qs)
+        // autoMode defaults true → pinned interfaces cleared, and the endpoint
+        // question is not asked, so its answer is not written even though one
+        // was set.
         #expect(pairs.contains("vpn.tunnelInterfaces="))
+        #expect(!pairs.contains { $0.hasPrefix("vpn.endpoints=") })
+
+        a["autoMode"] = "false"
+        pairs = a.configPairs(for: qs)
         #expect(pairs.contains("vpn.endpoints=203.0.113.7"))
     }
 }
