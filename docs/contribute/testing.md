@@ -1007,7 +1007,10 @@ task gui:build && open dist/Dezhban.app
       control's sentence — in particular, hovering **Pause** must say it uses
       your real ISP IP, which is the warning its old title carried — and the whole
       sentence must be readable, including the password expectation at its tail,
-      which is what a single truncated line used to cut. Moving off the row leaves a
+      which is what a single truncated line used to cut. Narrow the window until the
+      action row wraps and check it again there: two reserved lines were enough at a
+      comfortable width and put the ellipsis back on the password clause at a small
+      one, which is why the caption reserves three. Moving off the row leaves a
       prompt ("Point at a button to see what it does."), *not* the posture headline —
       the status hero already shows that a few lines above, and the caption used to
       repeat it verbatim.

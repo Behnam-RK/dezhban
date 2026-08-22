@@ -29,12 +29,36 @@ var firstCellKey = regexp.MustCompile("^\\|\\s*`([^`]+)`\\s*\\|")
 
 var sectionHeading = regexp.MustCompile(`^#{2,6}\s+(.*)$`)
 
-// A table's separator row, and a header whose first column is "Field" — the pair
-// help.renderTable uses to decide that a table documents config keys.
+// A table's separator row, and the first cell of a header row.
 var (
-	tableSeparator     = regexp.MustCompile(`^\|[\s:|-]+\|$`)
-	firstColumnIsField = regexp.MustCompile(`^\|\s*[Ff]ield\s*\|`)
+	tableSeparator  = regexp.MustCompile(`^\|[\s:|-]+\|$`)
+	firstHeaderCell = regexp.MustCompile(`^\|([^|]*)\|`)
 )
+
+// headsAKeyTable mirrors help.renderTable's gate: inline markup stripped, then a
+// case-insensitive compare against "Field".
+//
+// A literal regex on the raw cell did not mirror it. `| `Field` |`, `| **Field** |`
+// and `| FIELD |` all make the *renderer* mint row anchors from that table while a
+// pattern matching bare "Field" stops treating it as a key table — so the guarantee
+// this file exists to pin would silently stop covering it, and the `checked == 0`
+// fatal does not help because it only fires when *every* key falls out, not a
+// subset. Copied rather than called: internal/help's own tests import this package,
+// so importing help from here would close an import cycle.
+func headsAKeyTable(headerLine string) bool {
+	m := firstHeaderCell.FindStringSubmatch(headerLine)
+	if m == nil {
+		return false
+	}
+	cell := strings.Map(func(r rune) rune {
+		switch r {
+		case '`', '*', '_':
+			return -1
+		}
+		return r
+	}, m[1])
+	return strings.EqualFold(strings.TrimSpace(cell), "Field")
+}
 
 // TestKeyRowsAnchorToTheirDefinitionSection pins the document arrangement that
 // help.claimKey depends on.
@@ -134,7 +158,7 @@ func firstRowSections(markdown string) map[string]string {
 		}
 		// A header row is one followed by a separator; that is what starts a table.
 		if i+1 < len(lines) && tableSeparator.MatchString(strings.TrimSpace(lines[i+1])) {
-			inFieldTable = firstColumnIsField.MatchString(line)
+			inFieldTable = headsAKeyTable(line)
 			continue
 		}
 		if tableSeparator.MatchString(line) || !inFieldTable {

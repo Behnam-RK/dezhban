@@ -454,14 +454,20 @@ struct OverviewView: View {
                                 fallback: "Point at a button to see what it does."))
             .font(.callout)
             .foregroundStyle(.secondary)
-            // Two lines, always reserved. One line truncated the tail of every long
+            // Three lines, always reserved. One line truncated the tail of every long
             // caption, and the tail is where `routineHint` appends the password
             // expectation — so Pause read "…Will ask for your pass…" and dropped the
-            // clause warning that a prompt is coming. Reserving the space keeps the
-            // row from reflowing as the pointer crosses it, which is why this was
-            // one line to begin with; the panic caption twelve lines below already
-            // made the same trade for the same reason.
-            .lineLimit(2, reservesSpace: true)
+            // clause warning that a prompt is coming. Two was enough at a comfortable
+            // width and not at a narrow one: the pane is resizable, ActionRow is built
+            // to wrap, and the longest caption is ~137 characters, so the ellipsis
+            // landed back on the password clause exactly when the window was small.
+            //
+            // Reserving the space is what keeps the row from reflowing as the pointer
+            // crosses it, which is why this was capped at all; the cost of the third
+            // line is a little whitespace at wide widths, against a safety clause
+            // disappearing at narrow ones. The panic caption below makes the same
+            // trade by wrapping freely.
+            .lineLimit(3, reservesSpace: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityHidden(true)
     }
@@ -621,9 +627,14 @@ struct OverviewView: View {
 
 /// Applies `.focused(_:equals:)` only when there is an id to bind.
 ///
-/// A modifier rather than an `if` in the view builder, so the branch does not change
-/// the view's identity — which is the whole point of `captioned` wrapping its content
-/// once (see `switchMenu`).
+/// This does *not* make the branch identity-stable: `if let id { … } else { … }` in a
+/// `ViewModifier.body` produces `_ConditionalContent` exactly as an inline `if`
+/// would. It is safe because `focusable:` is a compile-time constant at every call
+/// site, so `id` never flips for a given view.
+///
+/// Which is the constraint to keep. Make `focusable` depend on state and the branch
+/// swap destroys the wrapper's `onHover`/`onDisappear` state — the caption loss that
+/// `switchMenu` was restructured to fix by wrapping both shapes once.
 private struct FocusBinding: ViewModifier {
     let id: String?
     let focus: FocusState<String?>.Binding
