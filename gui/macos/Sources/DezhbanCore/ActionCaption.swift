@@ -26,7 +26,9 @@ public enum ActionCaption {
     /// so tabbing moved the focus ring and the Space key while the caption kept
     /// describing something else.
     ///
-    /// With neither, the posture headline stands in. Never empty and never a
+    /// With neither, `fallback` stands in — a prompt, in the app's case, not the
+    /// posture headline: the hero already renders that string in title2 just above,
+    /// so echoing it here said the same thing twice. Never empty and never a
     /// placeholder like "—": the line must not collapse and reflow the row every
     /// time the pointer crosses a gap between two buttons.
     public static func text(hovered: String?, focused: String?, fallback: String) -> String {

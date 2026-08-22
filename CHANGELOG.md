@@ -30,7 +30,8 @@ current as you land changes.
   "Resume now", and one **Cancel** in place of "Cancel redial window" and "Cancel
   VPN switch" (which window it closes is in the caption). The sentence each title
   used to carry inline moved to a caption line beneath the row that follows the
-  pointer and the keyboard focus, falling back to the posture headline. The same
+  pointer and the keyboard focus, and reads "Point at a button to see what it
+  does." when neither is on the row. The same
   sentence remains the tooltip, and the caption wraps to a second line rather than
   truncating, since its tail is where the password expectation is stated. The
   menubar's items are unchanged: a menu has no caption line to delegate to, and

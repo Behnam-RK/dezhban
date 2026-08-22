@@ -621,12 +621,14 @@ promise. Build it with `task gui:build` (see [development.md](../contribute/deve
 Two surfaces, split by urgency:
 
 - **Menubar dropdown — the safety/glance core.** One status line (posture, exit
-  country/provider), **Open Dezhban…**, **Block now/Unblock**, the VPN switch
-  window (Switching VPN… / Cancel VPN switch, with a live countdown) when in VPN
-  mode,
-  **Panic — force unblock…**, Quit. These are the time-critical and
-  lockout-recovery actions; they never depend on the main window opening. Items
-  enable/disable from the current state.
+  country/provider), **Open Dezhban…**, the VPN switch window (Switching VPN… /
+  Cancel VPN switch / Resume now, with a live countdown), **Pause — use my real
+  IP**, hold-the-line, **Panic — force unblock…**, Quit. These are the
+  time-critical and lockout-recovery actions; they never depend on the main window
+  opening. Items enable/disable from the current state. Manual **Block** and
+  **Unblock** are deliberately *not* here — somebody who wants to cut their own
+  internet can turn off Wi-Fi, so blocking by hand is a power-user affordance and
+  lives in the window's Overview (`AppDelegate` says so at the menu's top).
 - **Main window — everything else**, opened from the dropdown or by clicking the
   Dock icon (never automatically at launch).
 
@@ -646,7 +648,8 @@ The main window's sidebar sections:
   Pause, Guard down, Panic…, and Resume / Cancel while a window is open) with a
   **caption line beneath the row**
   carrying the sentence each one used to hold inline — it follows the pointer
-  and the keyboard focus, and falls back to the posture headline. The same
+  and the keyboard focus, and reads a prompt when neither is on the row (not the
+  posture headline, which the status hero already shows just above). The same
   sentence is also the control's tooltip, so the two can never disagree. The
   menubar's items keep their long, self-explaining titles: a menu has no caption
   line to delegate to.

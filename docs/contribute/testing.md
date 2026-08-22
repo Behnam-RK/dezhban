@@ -1007,8 +1007,12 @@ task gui:build && open dist/Dezhban.app
       control's sentence — in particular, hovering **Pause** must say it uses
       your real ISP IP, which is the warning its old title carried — and the whole
       sentence must be readable, including the password expectation at its tail,
-      which is what a single truncated line used to cut. Moving off the row restores
-      the posture headline.
+      which is what a single truncated line used to cut. Moving off the row leaves a
+      prompt ("Point at a button to see what it does."), *not* the posture headline —
+      the status hero already shows that a few lines above, and the caption used to
+      repeat it verbatim.
+      A disabled Block or Unblock says why it is disabled rather than describing the
+      action it will not perform.
 
       Tab through the row with Full Keyboard Access on and confirm focus drives the
       caption too, **including with the pointer left resting on a different

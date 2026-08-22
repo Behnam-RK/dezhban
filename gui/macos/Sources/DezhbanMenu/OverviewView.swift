@@ -13,8 +13,8 @@ struct OverviewView: View {
     /// there — see `captioned`.
     @State private var hoveredAction: (id: String, hint: String)?
     /// Last hint handed over by keyboard focus. Read only while
-    /// `focusedAction != nil`, so blurring the row falls back to the posture
-    /// headline instead of stranding the caption on a control nobody is on.
+    /// `focusedAction != nil`, so blurring the row falls back to the resting
+    /// prompt instead of stranding the caption on a control nobody is on.
     @State private var focusedHint = ""
     @FocusState private var focusedAction: String?
 
@@ -452,11 +452,19 @@ struct OverviewView: View {
     /// learned endpoint is attributed to it (`switch --no-wait --name <profile>`).
     /// Plain button when there are no profiles to pick from — a menu with a
     /// single "Any known VPN" entry would just be a worse button.
-    @ViewBuilder
+    /// One `captioned` wrapper around both shapes, not one per branch.
+    ///
+    /// Both used the id "switch", and `state.profiles` arrives asynchronously — so
+    /// the Button→Menu swap happens after launch, the outgoing branch's
+    /// `onDisappear` cleared the caption state for an id the incoming branch owns,
+    /// and the incoming one gets no hover-enter under a stationary pointer. Pointing
+    /// at "Switch VPN…" while profiles loaded therefore dropped the caption to the
+    /// resting prompt until the mouse moved. Wrapping once means the modifiers never
+    /// disappear, only their content changes.
     private var switchMenu: some View {
         let hint = state.routineHint("Briefly relaxes the guard so a new VPN can connect.")
-        if let profiles = state.profiles, !profiles.profiles.isEmpty {
-            captioned("switch", hint) {
+        return captioned("switch", hint) {
+            if let profiles = state.profiles, !profiles.profiles.isEmpty {
                 Menu("Switch VPN…") {
                     Button("Any known VPN") {
                         AppActions.routine(["switch", "--no-wait"], "open a switch window")
@@ -469,10 +477,10 @@ struct OverviewView: View {
                         }
                     }
                 }
-            }
-        } else {
-            captioned("switch", hint) {
-                Button("Switch VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
+            } else {
+                Button("Switch VPN…") {
+                    AppActions.routine(["switch", "--no-wait"], "open a switch window")
+                }
             }
         }
     }

@@ -525,16 +525,24 @@ func Tunables() []Tunable {
 // names the exceptions, and TestEveryTunableDocAnchorResolves fails the build
 // naming any key whose derived anchor does not exist — so a key that loses its
 // row cannot silently fall back to landing somewhere plausible and wrong.
-func docKeyAnchorFor(key, declared string) string {
+func docKeyAnchorFor(key, _ string) string {
 	if keysDocumentedInProse[key] {
 		return ""
 	}
-	page, _, ok := strings.Cut(declared, "#")
-	if !ok || page == "" {
-		return ""
-	}
-	return page + "#key-" + anchorSlug(key)
+	return keyReferencePage + "#key-" + anchorSlug(key)
 }
+
+// keyReferencePage is where the key *rows* live — the one page whose Field-headed
+// tables the help renderer anchors (help.renderTable).
+//
+// Named here rather than taken from a key's section anchor, which is what this used
+// to do. That coupled two things which need not agree: point one key's DocAnchor at
+// a section on another page — a concept-heavy key at concepts/modes.md, say — and
+// its derived row anchor named that page too, so the resolution test failed saying
+// nothing there carries the anchor, even though the key does have a row, in
+// config.md. The only escape was to declare the key "documented in prose", which is
+// the wrong statement about it.
+const keyReferencePage = "usage/config.md"
 
 // keysDocumentedInProse are the keys docs/usage/config.md covers outside a table
 // row, which therefore have no row anchor to land on. They get an empty
