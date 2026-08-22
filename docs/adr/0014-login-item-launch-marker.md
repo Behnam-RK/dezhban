@@ -376,7 +376,15 @@ with an argument, the pre-`SMAppService` pattern.
   been one, marked the account migrated and returned. Nothing starting the app at
   login, permanently, which is the hole the flag exists to close. Recording the
   attempt also keeps a failed retraction re-attemptable, since the caller re-reads
-  the live status either way.
+  the live status either way — and every read taken *after* an unregister is a
+  retried one. `SMAppService.status` is not documented to keep up with
+  `unregister()`, and a single read microseconds later is what every "the retraction
+  failed" report rests on: a lagging status on an upgrading account with
+  login-at-launch on logged "could not be retracted", marked the account migrated
+  and returned, so the agent was never registered and the register-retry that exists
+  for precisely that outcome could never run. The pre-checks — "is there anything to
+  retract at all" — stay single reads, since nothing has happened yet for a status
+  to lag behind.
 
   The same discipline applies to the fact that *decides* what happens next. A
   pre-upgrade user who switched Dezhban off under System Settings leaves `mainApp` at
@@ -406,6 +414,14 @@ with an argument, the pre-`SMAppService` pattern.
   help because a pre-upgrade user never set it. The unregister *guards* keep
   asking the presence question, because a `.requiresApproval` registration is
   still a registration to retract.
+
+  Disabling it is gated the same way, and for the sharper version of the reason: the
+  agent is registered under a *label* that every copy of the app shares along with
+  the bundle identifier, so a dev build shows the switch ON because the installed
+  copy registered the agent, and a click off would retract the installed copy's
+  registration — silently, since the account-wide "off" is not recorded from an
+  unstable location either. No legitimate registration originates outside an
+  Applications directory, so such a copy has nothing there to turn off.
 
   Enabling the login item from Settings is gated on the install location too, not
   only the migration. The waiver it used to carry — "an explicit toggle is the user's

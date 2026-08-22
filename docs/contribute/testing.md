@@ -849,13 +849,21 @@ task gui:build && open dist/Dezhban.app
       Applications directory counts as a place the app will stay; comparing only the
       immediate parent left that user's legacy item running with no marker
       permanently, reported nowhere.
-- [ ] **A copy run from outside /Applications cannot claim the login item at all.**
-      Run `dist/Dezhban.app` and switch "Open this app at login" on: it must refuse,
-      with the line naming where it is running from, and
+- [ ] **A copy run from outside /Applications cannot claim *or release* the login
+      item.** Run `dist/Dezhban.app` and switch "Open this app at login" on: it must
+      refuse, with the line naming where it is running from, and
       `launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` must still fail.
       Only the registering bundle can ever retract a registration, so a dev build
       that claimed it would leave an orphan nothing can remove once `dist` is
       rebuilt.
+
+      Then the other direction, which matters more because it is silent: with the
+      *installed* copy's login item **on**, run `dist/Dezhban.app` — the switch reads
+      ON, since the agent is registered under a label every copy shares — and click
+      it **off**. It must refuse, and `launchctl print
+      gui/$UID/com.behnam-rk.dezhban.app.login` must still succeed afterwards. A dev
+      build retracting the installed app's registration is bad enough; doing it
+      without even recording the user's "off" is worse.
 - [ ] **A copy run from outside /Applications does not migrate the login item.**
       Unzip `Dezhban-macos.app.zip` to `~/Downloads` on a Mac with a pre-agent
       install and login-at-launch on, run it once, quit. The legacy login item

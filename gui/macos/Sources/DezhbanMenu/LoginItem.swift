@@ -372,7 +372,7 @@ enum LoginItem {
         // nothing the app can do will make enabling this safe. See
         // `Outcome.legacyStuck`.
         retractLegacy()
-        if registered(.mainApp) {
+        if stillRegistered(.mainApp) {
             // Which outcome depends on what actually survived, not on the direction
             // clicked. A legacy item still *enabled* is starting the app at login,
             // so `.legacyStuck` (isOn true) is the true report; only a dormant
@@ -426,16 +426,22 @@ enum LoginItem {
     }
 
     private static func disable() -> Outcome {
-        // The flag is account-wide (a shared UserDefaults domain), so only a copy
-        // that will still be here may set it. A dev build or a ~/Downloads copy
-        // switching login-at-launch off would otherwise record "the user turned this
-        // off" for the *installed* app, whose migration then skips its retraction
-        // forever — while this bundle's own `retractLegacy()` acted on something
-        // else entirely. Retracting from anywhere is fine; speaking for the account
-        // is not.
-        if isInStableInstallLocation {
-            UserDefaults.standard.set(true, forKey: userDisabledKey)
+        // Gated exactly as `enable()` is, and for the sharper version of the same
+        // reason. The agent is registered under a *label*, and every copy of the app
+        // shares it along with the bundle identifier — so a dev build shows the
+        // switch ON because the installed copy registered the agent, and one click
+        // off would retract the *installed* copy's registration. Worse than the
+        // enable case: it was silent, since the account-wide "off" is not recorded
+        // from an unstable location either, so the installed app's migration would
+        // not even see that the user had asked for this.
+        //
+        // No legitimate registration originates outside an Applications directory —
+        // `enable()` and the migration both refuse — so there is nothing here for
+        // such a copy to legitimately turn off.
+        guard isInStableInstallLocation else {
+            return .unstableLocation(Bundle.main.bundleURL.deletingLastPathComponent().path)
         }
+        UserDefaults.standard.set(true, forKey: userDisabledKey)
         // Flushed before the unregister below, because that unregister may get
         // this process killed: launchd terminates a loaded job's running process,
         // and in a login-started session that process is the app (recorded as an
@@ -453,7 +459,7 @@ enum LoginItem {
         // marker, which is the state this function exists to clear.
         retractLegacy()
         if registered(service) { unregister(service, what: "login agent") }
-        if registered(.mainApp) {
+        if stillRegistered(.mainApp) {
             // The stuck path. Reported rather than worked around: registering the
             // agent alongside it would mean two launches at login, one with the
             // marker and one without, and whichever won the race would decide
@@ -565,7 +571,15 @@ enum LoginItem {
                 UserDefaults.standard.synchronize()
             }
             retractLegacy()
-            if registered(.mainApp) {
+            // The retried read, like every other post-unregister check. A single one
+            // taken microseconds after the unload — which `SMAppService.status` is
+            // not documented to keep up with — was the worst placement of this bug
+            // in the file: a lagging status on an upgrading account with
+            // login-at-launch ON logged "could not be retracted", marked the account
+            // migrated and returned, so the agent was never registered AND the
+            // register-retry that exists for exactly that outcome could never run.
+            // Nothing starting the app at login, permanently, in an NSLog.
+            if stillRegistered(.mainApp) {
                 // Stuck. The agent is left unregistered rather than stacked on top
                 // of a live legacy item — two launches at login, one with the marker
                 // and one without. Only the user can clear it now.
