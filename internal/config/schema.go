@@ -499,7 +499,7 @@ func Tunables() []Tunable {
 	for i, t := range tunables {
 		t.Default = defaults[t.Key]
 		t.RestartReason = restartReasonFor(t.Key)
-		t.DocKeyAnchor = docKeyAnchorFor(t.Key, t.DocAnchor)
+		t.DocKeyAnchor = docKeyAnchorFor(t.Key)
 		out[i] = t
 	}
 	return out
@@ -525,7 +525,7 @@ func Tunables() []Tunable {
 // names the exceptions, and TestEveryTunableDocAnchorResolves fails the build
 // naming any key whose derived anchor does not exist — so a key that loses its
 // row cannot silently fall back to landing somewhere plausible and wrong.
-func docKeyAnchorFor(key, _ string) string {
+func docKeyAnchorFor(key string) string {
 	if keysDocumentedInProse[key] {
 		return ""
 	}
@@ -542,6 +542,10 @@ func docKeyAnchorFor(key, _ string) string {
 // nothing there carries the anchor, even though the key does have a row, in
 // config.md. The only escape was to declare the key "documented in prose", which is
 // the wrong statement about it.
+//
+// docKeyAnchorFor takes no anchor argument at all, for the same reason: threading
+// the section anchor in only to ignore it leaves the next edit one `_` away from
+// reintroducing the coupling this constant exists to remove.
 const keyReferencePage = "usage/config.md"
 
 // keysDocumentedInProse are the keys docs/usage/config.md covers outside a table

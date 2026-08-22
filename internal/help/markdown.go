@@ -129,31 +129,28 @@ func Render(source, markdown string) Rendered {
 	}
 
 	// claimKey hands out the anchor for a key row, the FIRST time that key is seen
-	// on this page. A key documented in more than one table — several are, e.g.
-	// `pollInterval` in both the field reference and the presets comparison — can
-	// only have one id, since duplicates are invalid HTML and a browser jumps to
-	// whichever came first; the choice is made here rather than left to chance.
+	// on this page. A key documented in more than one Field-headed table can only
+	// have one id, since duplicates are invalid HTML and a browser jumps to whichever
+	// came first; the choice is made here rather than left to chance.
 	//
-	// "First" is the whole rule, and it is not the same claim as "its definition".
-	// It lands on the definition because docs/usage/config.md is ordered that way,
-	// which is an assumption about the document, not something this function can
-	// check — a duplicate is refused silently, because refusing loudly would fail
-	// the build on every legitimately repeated key. Reorder the reference so the
-	// Presets comparison precedes the field tables and every `?` for those keys
-	// would quietly deep-link to the presets row instead, with the resolution test
-	// still green because *some* row carries the anchor. TestKeyRowsAnchorToTheir
-	// DefinitionSection pins the ordering this relies on.
-	// anchor -> the key that claimed it, not merely "claimed". The distinction is
-	// the whole point: refusing a *repeat* of the same key is benign and therefore
-	// silent (config.md documents several keys in more than one table, and failing
-	// the build on that would be absurd), but two *different* keys landing on one
-	// anchor is a silently wrong deep link. `Anchor` lowercases and strips `.`, `[`
-	// and `]`, so `vpn.pauseMax` and `vpn.pause-max` — or any rename that changes
-	// only punctuation or case — slug identically. The "Renamed keys" table precedes
-	// the definition tables and its first cell is the OLD name, so such a rename
-	// would hand the anchor to the old-name row and send every `?` for the live key
-	// there, with a green build: the resolution test only asks whether *some* row
-	// carries the fragment. Reported the same way a heading collision is.
+	// The map is anchor -> the key that claimed it, not merely "claimed", because
+	// those are two different situations. Refusing a *repeat of the same key* is
+	// benign and therefore silent: config.md documents several keys in more than one
+	// table and failing the build on that would be absurd. Two *different* keys
+	// landing on one anchor is a silently wrong deep link, and is reported the way a
+	// heading collision is.
+	//
+	// They can meet because `Anchor` lowercases and drops `.` (hyphens survive, so
+	// `vpn.pause-max` is not an example — checked). The real pairs are a case-only
+	// rename, `vpn.armAtBoot` against `vpn.armatboot`, and one that removes a dot,
+	// `vpn.pauseMax` against `vpnpauseMax`.
+	//
+	// What this cannot judge is which of two *Field* tables is the definition: it
+	// takes the first, and that is the definition because the reference is arranged
+	// that way. config.md's presets and retired tables are headed "Key" and its
+	// rename table "Old name", so none of them can claim an anchor at all —
+	// renderTable's header gate settles that. Two Field tables naming one key is the
+	// remaining case, and config.TestKeyRowsAnchorToTheirDefinitionSection pins it.
 	claimedKeys := map[string]string{}
 	// Heading anchors are collected up front, because a heading can appear *after*
 	// the row that would collide with it while r.Headings is filled in the same
@@ -168,12 +165,13 @@ func Render(source, markdown string) Rendered {
 	// written links depend on, and the row is *noted* rather than quietly skipped:
 	// Unsupported fails the bundle build (bundle.go), so this becomes a build error
 	// naming the page instead of a link that misses.
-	// Through headingRe and outside code fences, so the pre-scan sees exactly what
-	// the main pass will call a heading. Accepting "any trimmed line starting with
-	// #" was looser: `#nospace`, seven hashes, and — worst — a shell comment inside a
-	// fenced block all registered as phantom headings, and one that happened to slug
-	// to a real row's anchor would refuse that row and fail the whole app build
-	// naming a heading nobody can find.
+	//
+	// The scan goes through headingRe and skips code fences, so it sees exactly what
+	// the main pass will call a heading. "Any trimmed line starting with #" was
+	// looser: `#nospace`, seven hashes, and — worst — a shell comment inside a fenced
+	// block all registered as phantom headings, and one that happened to slug onto a
+	// real row's anchor would refuse that row and fail the whole app build naming a
+	// heading nobody can find.
 	headingAnchors := map[string]bool{}
 	scanInCode := false
 	for _, line := range strings.Split(markdown, "\n") {

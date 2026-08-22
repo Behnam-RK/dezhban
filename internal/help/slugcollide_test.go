@@ -14,9 +14,10 @@ import (
 // a dot (`vpn.pauseMax` / `vpnpauseMax`). Hyphens survive, so `vpn.pause-max` is
 // *not* one of them — checked, rather than assumed, when this test was written.
 //
-// The "Renamed keys" table lists the OLD name and precedes the definition tables,
-// so the old row would take the anchor and every contextual link for the live key
-// would land there.
+// Both have to be inside a Field-headed table to arise at all: renderTable's header
+// gate means config.md's presets ("Key"), retired ("Key") and rename ("Old name")
+// tables cannot claim an anchor however early they appear. So the live hazard is a
+// rename or addition *within* the field reference itself.
 func TestTwoKeysCollidingOnOneAnchorIsReported(t *testing.T) {
 	md := "## Fields\n\n| Field | Default |\n|---|---|\n" +
 		"| `vpn.armatboot` | old |\n| `vpn.armAtBoot` | new |\n"

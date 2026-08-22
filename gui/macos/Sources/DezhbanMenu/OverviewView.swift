@@ -16,6 +16,9 @@ struct OverviewView: View {
     /// `focusedAction != nil`, so blurring the row falls back to the resting
     /// prompt instead of stranding the caption on a control nobody is on.
     @State private var focusedHint = ""
+    /// Which input the user reached for last, so focus can outrank a parked pointer
+    /// without the pointer's position being thrown away. See `ActionCaption.Aim`.
+    @State private var aim: ActionCaption.Aim = .pointer
     @FocusState private var focusedAction: String?
 
     var body: some View {
@@ -69,7 +72,7 @@ struct OverviewView: View {
 
                 VStack(alignment: .leading, spacing: 6) {
                     actionButtons(s)
-                    actionCaption(s)
+                    actionCaption()
                 }
 
                 Spacer(minLength: 12)
@@ -378,6 +381,7 @@ struct OverviewView: View {
             .onHover { inside in
                 if inside {
                     hoveredAction = (id, hint)
+                    aim = .pointer
                 } else if hoveredAction?.id == id {
                     hoveredAction = nil
                 }
@@ -385,22 +389,24 @@ struct OverviewView: View {
             .onChange(of: focusedAction) { _ in
                 guard focusedAction == id else { return }
                 focusedHint = hint
-                // Focus supersedes a parked pointer. Hover used to win
-                // unconditionally, so tabbing with the pointer resting on another
-                // button moved the focus ring and the Space key while the caption went
-                // on describing whatever the mouse happened to be over.
+                // Focus outranks a parked pointer, and does it by ranking rather
+                // than by clearing: `hoveredAction` used to be set to nil here, which
+                // threw the pointer's position away instead of deprioritising it — tab
+                // into the row and back out to anything outside it and both were empty,
+                // so the caption fell to the resting prompt while the pointer sat on a
+                // button, until it moved off and back on.
                 //
-                // The pointer takes it back by *entering* a control — the same one or
-                // another. There is deliberately no "the mouse moved a little" re-arm:
-                // every version of it read a proxy for movement rather than movement.
-                // `onContinuousHover`'s `.active` fires when a tracking area is merely
-                // established, and these controls re-measure constantly (a window's
-                // countdown retitles "Cancel (m:ss left)" every second); comparing the
-                // reported point did not help either, being in local space, so a banner
-                // appearing above the row moved the control under a stationary mouse
-                // and read as movement. Jiggling inside the control you are already on
-                // aims at nothing new, so nothing is lost.
-                hoveredAction = nil
+                // The pointer takes the caption back by *entering* a control, the same
+                // one or another. There is deliberately no "the mouse moved a little"
+                // re-arm: every version of it read a proxy for movement rather than
+                // movement. `onContinuousHover`'s `.active` fires when a tracking area
+                // is merely established, and these controls re-measure constantly (a
+                // window's countdown retitles "Cancel (m:ss left)" every second);
+                // comparing the reported point did not help either, being in local
+                // space, so a banner appearing above the row moved the control under a
+                // stationary mouse and read as movement. Jiggling inside the control
+                // you are already on aims at nothing new, so nothing is lost.
+                aim = .keyboard
             }
             .onChange(of: hint) { newHint in
                 // The captured string has to track the live one. `state.routineHint`
@@ -425,7 +431,7 @@ struct OverviewView: View {
     /// The one line that explains whatever the user is pointing at. Always
     /// present and always one line high — a caption that vanished between two
     /// buttons would reflow the row under the pointer.
-    private func actionCaption(_ s: Snapshot) -> some View {
+    private func actionCaption() -> some View {
         // The resting text is a prompt, not the posture. `PostureUI.humanPosture` is
         // exactly `display.headline`, which the hero already renders in title2 a
         // hundred points above — so with the pointer off the row, which is the normal
@@ -433,6 +439,7 @@ struct OverviewView: View {
         // fallback is that the line never collapses and reflows the row.
         Text(ActionCaption.text(hovered: hoveredAction?.hint,
                                 focused: focusedAction == nil ? nil : focusedHint,
+                                aim: aim,
                                 fallback: "Point at a button to see what it does."))
             .font(.callout)
             .foregroundStyle(.secondary)
