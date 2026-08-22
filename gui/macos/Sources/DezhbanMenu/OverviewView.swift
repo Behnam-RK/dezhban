@@ -364,10 +364,22 @@ struct OverviewView: View {
     /// shown. Hover is cleared only by the control that owns the current hint,
     /// so the pointer leaving A after it has already entered B does not blank
     /// out B's caption.
+    /// `focusable: false` skips the `.focused` binding, for a caller whose content is
+    /// a branch rather than a control.
+    ///
+    /// `.focused(_:equals:)` binds focus for a *focusable view*. Every slot but one
+    /// passes its Button straight through, so the binding lands on the control; the
+    /// switch slot passes an if/else, and a `_ConditionalContent` wrapper is not
+    /// something focus is defined to attach to. Rather than depend on whether it
+    /// happens to work, that caller applies the binding to the concrete Menu and
+    /// Button inside each branch and turns this off — the rest of the wrapper, which
+    /// is what must not disappear across the branch swap, is unaffected.
     @ViewBuilder
     private func captioned<Content: View>(_ id: String, _ hint: String,
+                                          focusable: Bool = true,
                                           @ViewBuilder content: () -> Content) -> some View {
         content()
+            .modifier(FocusBinding(id: focusable ? id : nil, focus: $focusedAction))
             .help(hint)
             // And as an accessibility hint, not only as `help`. Shortening the titles
             // moved the explanation into a caption line that is
@@ -377,7 +389,6 @@ struct OverviewView: View {
             // redial window or one the user opened. A hint is where a control's
             // consequence belongs, and it is announced after the label.
             .accessibilityHint(hint)
-            .focused($focusedAction, equals: id)
             .onHover { inside in
                 if inside {
                     hoveredAction = (id, hint)
@@ -470,7 +481,7 @@ struct OverviewView: View {
     /// disappear, only their content changes.
     private var switchMenu: some View {
         let hint = state.routineHint("Briefly relaxes the guard so a new VPN can connect.")
-        return captioned("switch", hint) {
+        return captioned(Self.switchID, hint, focusable: false) {
             if let profiles = state.profiles, !profiles.profiles.isEmpty {
                 Menu("Switch VPN…") {
                     Button("Any known VPN") {
@@ -484,13 +495,19 @@ struct OverviewView: View {
                         }
                     }
                 }
+                .focused($focusedAction, equals: Self.switchID)
             } else {
                 Button("Switch VPN…") {
                     AppActions.routine(["switch", "--no-wait"], "open a switch window")
                 }
+                .focused($focusedAction, equals: Self.switchID)
             }
         }
     }
+
+    /// Shared by both switch shapes and by the caption wrapper around them, so the
+    /// two cannot drift apart.
+    private static let switchID = "switch"
 
     private var panicRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: PaneMetrics.controlSpacing) {
@@ -599,5 +616,23 @@ struct OverviewView: View {
             .padding(.top, 12)
         }
         .padding(24)
+    }
+}
+
+/// Applies `.focused(_:equals:)` only when there is an id to bind.
+///
+/// A modifier rather than an `if` in the view builder, so the branch does not change
+/// the view's identity — which is the whole point of `captioned` wrapping its content
+/// once (see `switchMenu`).
+private struct FocusBinding: ViewModifier {
+    let id: String?
+    let focus: FocusState<String?>.Binding
+
+    func body(content: Content) -> some View {
+        if let id {
+            content.focused(focus, equals: id)
+        } else {
+            content
+        }
     }
 }

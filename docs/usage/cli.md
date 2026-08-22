@@ -645,12 +645,14 @@ The main window's sidebar sections:
   *expected* unknown exit stays a plain row. With profiles configured,
   "Switch VPN…" becomes a menu so a switch window can target one by name.
   The action row's titles are deliberately short (Block, Unblock, Switch VPN…,
-  Pause, Guard down, Panic…, and Resume / Cancel while a window is open) with a
+  Pause, Guard down, and Resume / Cancel while a window is open) with a
   **caption line beneath the row**
   carrying the sentence each one used to hold inline — it follows the pointer
   and the keyboard focus, and reads a prompt when neither is on the row (not the
   posture headline, which the status hero already shows just above). The same
-  sentence is also the control's tooltip, so the two can never disagree. The
+  sentence is also the control's tooltip, so the two can never disagree. **Panic…**
+  is not in that row — it sits below with its own fixed caption, so hovering it
+  leaves the row's caption alone. The
   menubar's items keep their long, self-explaining titles: a menu has no caption
   line to delegate to.
   Degraded states are guided: CLI missing, service not installed, and daemon
