@@ -55,7 +55,7 @@ enum LoginItem {
     /// itself migrated and returns — never reaching `register()` again. The user
     /// is then left with nothing starting the app at login, permanently, which is
     /// the exact outcome the unmarked flag exists to prevent.
-    private static let legacyRetractedKey = "dezhban.loginItemLegacyRetracted"
+    private static let legacyRetractionAttemptedKey = "dezhban.loginItemLegacyRetractionAttempted"
 
     /// What a `set(enabled:)` actually achieved, so the UI can say something
     /// true.
@@ -368,14 +368,20 @@ enum LoginItem {
         // marker, which is the state this function exists to clear.
         retractLegacy()
         if registered(service) { unregister(service, what: "login agent") }
-        if legacyEnabled {
+        if registered(.mainApp) {
             // The stuck path. Reported rather than worked around: registering the
             // agent alongside it would mean two launches at login, one with the
             // marker and one without, and whichever won the race would decide
             // whether the window appeared. `Outcome.legacyStuck` tells the user
             // the one thing that does clear it.
             NSLog("DezhbanMenu: the legacy login item could not be retracted")
-            return .legacyStuck
+            // Same derivation as `enable()`: an *enabled* survivor is still starting
+            // the app, a dormant one is not. Testing only `legacyEnabled` here while
+            // `enable()` tested presence made the two directions disagree about one
+            // state — a `.requiresApproval` leftover that would not retract reported
+            // a clean "App will not open at login", and then every future click to
+            // turn it on was refused, permanently, with nothing having warned them.
+            return legacyEnabled ? .legacyStuck : .blockedByLegacy
         }
         return registered(service) ? .agentStuck : .disabled
     }
@@ -477,13 +483,16 @@ enum LoginItem {
                 markMigrated()
                 return
             }
-        } else if !UserDefaults.standard.bool(forKey: legacyRetractedKey) {
-            // Nothing was ever registered the old way on this account, so there is
-            // nothing to move onto the agent. Turning login-at-launch on is the
-            // user's call, via Settings.
+        } else if !UserDefaults.standard.bool(forKey: legacyRetractionAttemptedKey) {
+            // Nothing was ever registered the old way on this account, and no
+            // retraction was ever attempted, so there is nothing to move onto the
+            // agent. Turning login-at-launch on is the user's call, via Settings.
             markMigrated()
             return
         }
+        // Falling through means a retraction was attempted and the legacy item is
+        // gone — this launch, or an earlier one that was killed by the unload before
+        // it could finish.
 
         // Reached with the legacy item confirmed gone — now, or on an earlier
         // launch whose register() failed.
@@ -507,7 +516,7 @@ enum LoginItem {
 
     /// Retracts the legacy item and records the fact if it worked.
     ///
-    /// The recording is the point. `legacyRetractedKey` is what tells "this
+    /// The recording is the point. `legacyRetractionAttemptedKey` is what tells "this
     /// account had a login item and the agent is not up yet" from "this account
     /// never had one", and while only the migration wrote it, retracting through
     /// the Settings switch destroyed the fact without recording it — reopening the
@@ -517,19 +526,32 @@ enum LoginItem {
     /// and marks the account done with nothing starting the app at login.
     private static func retractLegacy() {
         guard registered(.mainApp) else { return }
-        unregister(.mainApp, what: "legacy login item")
-        guard !registered(.mainApp) else { return }
-        UserDefaults.standard.set(true, forKey: legacyRetractedKey)
+        // Recorded and flushed BEFORE the unregister, not after. `SMAppService.mainApp`
+        // is itself a launchd job, and the migration's main case is a pre-agent
+        // install with login-at-launch ON — so the running app *is* that job's
+        // process, and launchd may terminate it as the job is unloaded. Written
+        // afterwards, that kill left the legacy item retracted with nothing recorded:
+        // the next launch saw no legacy item and no flag, concluded there had never
+        // been one, marked the account migrated and returned. Nothing starting the
+        // app at login, permanently — the exact hole this flag was added to close.
+        //
+        // So it records the *attempt*, not the success. A retraction that fails is
+        // then re-attempted on the next launch (the caller re-reads `registered`
+        // either way), while one that succeeded without being recorded is no longer
+        // mistaken for "there was never anything here". `disable()` already flushes
+        // before this same call for the same reason.
+        UserDefaults.standard.set(true, forKey: legacyRetractionAttemptedKey)
         UserDefaults.standard.synchronize()
+        unregister(.mainApp, what: "legacy login item")
     }
 
     private static func markMigrated() {
         UserDefaults.standard.set(true, forKey: migratedKey)
-        // Flushed, because `legacyRetractedKey` is. Those two flags are read
+        // Flushed, because `legacyRetractionAttemptedKey` is. Those two flags are read
         // together and one outliving the other inverts the decision they encode:
         // this runs seconds into a login, and if the session ended before cfprefsd
         // wrote it, a legacy item retracted for a user who had login-at-launch OFF
-        // left `legacyRetractedKey` durable and `migratedKey` gone — so the next
+        // left `legacyRetractionAttemptedKey` durable and `migratedKey` gone — so the next
         // launch fell through to `register()` and turned it back on, which ADR-0014
         // says must never happen. The mirror loss strands the account with nothing
         // starting the app at login. `disable()` already flushes before the call

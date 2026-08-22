@@ -116,16 +116,22 @@ fi
 #    uninstall.sh (what retracts it). Renaming it consistently in the plist AND
 #    here would otherwise satisfy check 1 while SMAppService named a file that
 #    does not exist — reported only as the .notFound status nobody reads.
-for consumer in "$HERE/Sources/DezhbanMenu/LoginItem.swift" "$REPO_ROOT/packaging/macos/uninstall.sh"; do
-	# -F: a fixed string, not a regex. Unanchored, `.` is a wildcard, so a label
-	# renamed to "…app-login" in one consumer still matched the pattern "…app.login"
-	# — the drift check passing over exactly the drift it exists to catch, leaving
-	# SMAppService naming a plist that does not exist.
-	if ! grep -qF "$AGENT_LABEL" "$consumer"; then
-		echo "build-app.sh: $consumer does not mention '$AGENT_LABEL' — the label, LoginItem.plistName and the uninstaller have drifted apart, and login-at-launch would fail silently" >&2
-		exit 1
-	fi
-done
+#
+# Matched against the exact declaration in each consumer, not merely "the label
+# appears somewhere in the file". Two reasons, both learned the hard way: without
+# -F the pattern is a regex, so `.` is a wildcard and "…app-login" satisfied a
+# check for "…app.login"; and a bare substring search for the label also matched
+# LoginItem's dispatch-queue label, "…app.loginitem", which contains it — so the
+# check could not fail for that file no matter what plistName said.
+swift_decl="private static let plistName = \"$AGENT_LABEL.plist\""
+if ! grep -qF "$swift_decl" "$HERE/Sources/DezhbanMenu/LoginItem.swift"; then
+	echo "build-app.sh: LoginItem.swift does not declare plistName as '$AGENT_LABEL.plist' — SMAppService would name a plist that does not exist, reported only as the .notFound status nobody reads" >&2
+	exit 1
+fi
+if ! grep -qxF "LOGIN_AGENT=$AGENT_LABEL" "$REPO_ROOT/packaging/macos/uninstall.sh"; then
+	echo "build-app.sh: uninstall.sh does not set LOGIN_AGENT to '$AGENT_LABEL' — it would fail to retract the registration it is meant to remove" >&2
+	exit 1
+fi
 
 # Documentation, rendered from the repo's own markdown into the bundle. Shipping
 # it means the help pane works with every byte of egress cut — which is exactly

@@ -350,6 +350,17 @@ with an argument, the pre-`SMAppService` pattern.
   switches login-at-launch off themselves: an explicit "off" outlives every
   retry, so a retry can only restore what was already on.
 
+  That third flag records the *attempt*, not the success, and is flushed before the
+  unregister rather than after it. `SMAppService.mainApp` is itself a launchd job and
+  the migration's main case is a pre-agent install with login-at-launch on, so the
+  running app is that job's process and launchd may kill it as the job unloads.
+  Written afterwards, that kill left the legacy item retracted with nothing recorded
+  — and the next launch, seeing no legacy item and no flag, concluded there had never
+  been one, marked the account migrated and returned. Nothing starting the app at
+  login, permanently, which is the hole the flag exists to close. Recording the
+  attempt also keeps a failed retraction re-attemptable, since the caller re-reads
+  the live status either way.
+
   That retry needs a third flag to exist at all, which is not obvious and was
   got wrong first: by the time `register()` is reached the legacy item is already
   confirmed gone, so a retry launch that asks "is there a legacy item to

@@ -859,6 +859,14 @@ struct SettingsView: View {
                     // so there is nothing else to collide with. That is the point of
                     // having split it from the pane's shared status.
                     loginMessage = outcome.message
+                    // And bumped, so any status read that was already in flight
+                    // cannot land afterwards and clear this. `loginPending` cannot
+                    // cover it: seed()'s read is a queue.sync behind this very
+                    // mutation, so it is *guaranteed* to complete after it, by which
+                    // time pending is already false — and it then nils the one line
+                    // that tells the user to go to System Settings, a moment after it
+                    // appeared.
+                    loginRevision += 1
                 }
             })
     }
