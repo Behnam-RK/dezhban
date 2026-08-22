@@ -1256,6 +1256,39 @@ end up typing a password.
       `dezhban doctor` prints in a terminal.
 - [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
 
+### Problems and the diagnostic bundle
+
+- [ ] **Problems reads the real log.** Diagnostics → Recent problems lists the
+      same records as `dezhban logs --level warn --limit 100`, newest first, with
+      each record's attrs beside it in the order dezhban wrote them.
+- [ ] **"None" is shown as the good answer.** On a host with a clean log the
+      section reads "Nothing logged as a warning or an error" in green — not an
+      empty list, and not the "couldn't read" message.
+- [ ] **Rotation is covered.** Force a rotation (or rename `dezhban.log` to
+      `dezhban.log.1` and restart), then confirm `dezhban logs` still shows the
+      archived records, oldest first.
+- [ ] **The bundle collects.** Export… → pick a folder → Finder reveals
+      `dezhban-report-<stamp>.zip`. Open it: README.txt, config.json, state.json,
+      learned.json, armed.json, applied-rules.json, doctor.json,
+      rules-preview.txt, log.txt. Anything absent is named under "Not included"
+      in the README rather than missing silently.
+- [ ] **The redaction actually holds.** This is the check that matters — a
+      redactor that misses a field advertises a safety it did not deliver.
+      Unzip a default (redacted) bundle and grep every file for your real VPN
+      server address, your provider's hostname, and your public exit IP from
+      `dezhban status`. **None may appear.** Then confirm the structure survived:
+      `utun*` names, ports, `127.0.0.1`, and your private subnets are still
+      there, and the same server is the same `ip-N` token in config.json,
+      learned.json and rules-preview.txt.
+- [ ] **The README never leaks.** Its legend reports counts
+      ("23 distinct IP addresses → ip-1 … ip-23") and no originals.
+- [ ] **The opt-out is loud.** With "Include my real VPN server addresses and
+      exit IP" ticked, the bundle contains them AND says so at the top of its
+      README; the CLI prints the same warning on stderr.
+- [ ] **A bundle collects on a bare host.** With dezhban installed but never
+      started, `dezhban report` still writes a zip — the missing state files are
+      notes, not failures.
+
 ### Firewall rules (Diagnostics)
 
 - [ ] **Applied appears without a password.** With the guard up, open

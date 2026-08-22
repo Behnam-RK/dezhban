@@ -70,6 +70,8 @@ Commands:
   monitor     Live read-only view: IP, country, tunnel state, endpoints, verdict
   print-rules Print the firewall ruleset a block/guard would apply (--applied: what is applied now)
   doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
+  logs        Print recent records from dezhban's own log (--level warn for problems)
+  report      Write a diagnostic bundle to a file (redacted by default; sent nowhere)
   panic       Force-remove dezhban's rules even if nothing is running
   install     Register dezhban as a boot-persistent OS service
   uninstall   Remove the OS service
@@ -136,6 +138,10 @@ func run(args []string) int {
 		return cmdMonitor(rest)
 	case "print-rules":
 		return cmdPrintRules(rest)
+	case "report":
+		return cmdReport(rest)
+	case "logs":
+		return cmdLogs(rest)
 	case "doctor":
 		return cmdDoctor(rest)
 	case "panic":

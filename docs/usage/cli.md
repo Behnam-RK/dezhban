@@ -10,6 +10,8 @@ Commands:
   status       Show version, config, service, and block state (--json for tooling)
   validate     Load + validate a config file (no root, no effects)
   print-rules  Print the ruleset a block/guard would apply (--applied/--installed: what is live)
+  logs         Print recent records from dezhban's own log
+  report       Write a diagnostic bundle to a file (redacted; sent nowhere)
   doctor       Diagnose VPN guard config (tunnels, endpoints, lockout risks)
   monitor      Live read-only view: IP, country, tunnel state, endpoints, verdict
   panic        Force-remove dezhban's rules even with no daemon   (root)
@@ -51,7 +53,7 @@ daemon** over its control socket and need no password at all — provided
 | Command | Needs a password? |
 |---|---|
 | `block`, `unblock`, `switch`, `pause`, `resume` | **No** — the running daemon performs them (see [config.md](config.md#control-block)). Only if no daemon is listening do they fall back — `block`/`unblock` act on the firewall directly; `switch`/`pause`/`resume` write the root-owned command file, which itself needs a running daemon to consume it. Either way, root. |
-| `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn` | **No** — read-only, no root, no firewall effects. The one exception is `print-rules --installed`, which reads the firewall itself and therefore needs root; it still installs and changes nothing. |
+| `status`, `validate`, `print-rules`, `doctor`, `monitor`, `detect-vpn`, `logs`, `report` | **No** — read-only, no root, no firewall effects. The one exception is `print-rules --installed`, which reads the firewall itself and therefore needs root; it still installs and changes nothing. |
 | `install`, `uninstall`, `start`, `stop`, `restart` | Yes — a daemon can't install, start, or stop itself. Rare (install-time). |
 | `panic` | Yes — deliberately independent of the daemon, so the lockout escape hatch works when nothing else does. |
 | `run` | Yes — it *is* the daemon. |
@@ -245,6 +247,8 @@ dezhban doctor      --config <config>                 # tunnels, subnets, endpoi
 dezhban doctor --discover --config <config>           # macOS: find the VPN's real server IP
 dezhban doctor --json --config <config>               # the same checks as structured JSON
 dezhban monitor     --config <config>                 # live: IP, country, tunnels, endpoints, verdict
+dezhban logs --level warn                             # recent problems from dezhban's own log
+dezhban report --out ~/Desktop                        # one zip for a bug report, redacted
 ```
 
 `monitor` streams the live state the decision rests on; add `--once` for a single
@@ -392,6 +396,56 @@ gets the question set instead of keeping a second copy of it.
 dezhban setup --questions          # what would you ask me?
 dezhban setup --questions --json   # the same, for another surface to render
 ```
+
+### Looking at what already happened
+
+```sh
+dezhban logs                          # recent records from dezhban's own log
+dezhban logs --level warn --since 1h  # just the problems, from the last hour
+dezhban logs --json                   # structured, for another surface to render
+```
+
+dezhban writes its own log to `<state dir>/logs/dezhban.log`, size-rotated
+across two archives. The file is `0644` — the same call `state.json` makes —
+so reading history needs no root, and `logs` reads the archives too: the
+interesting failure is often the one that pushed the file over its rotation
+threshold. `--limit` keeps the most recent N (200 by default, `0` for all).
+Nothing matched exits **0**; "no errors" is an answer, usually the good one.
+
+### Collecting a bug report
+
+```sh
+dezhban report                     # writes ./dezhban-report-<stamp>.zip
+dezhban report --out ~/Desktop     # somewhere else
+dezhban report --include-network   # keep the real addresses (do not post publicly)
+```
+
+One zip with everything someone would otherwise ask for a file at a time: your
+config, `state.json`, `learned.json`, `armed.json`, the ruleset dezhban last
+applied, `doctor`'s findings, what each posture would apply, and recent log
+records. A file that is missing is noted **inside** the bundle rather than
+failing the whole thing — a host that never ran dezhban has no state, and that
+must not be why you cannot collect a report.
+
+**Nothing is sent anywhere.** The bundle is a local file, and whether it is
+shared is your decision. That is not a gap to close later: this is a tool whose
+job is that traffic does not leave the machine, and the same reasoning already
+denies `dezhban upgrade` its own firewall pass
+([modes.md](../concepts/modes.md)).
+
+**Redaction is on by default.** IP addresses and hostnames are replaced with
+*stable* placeholders — the same address is the same token everywhere it
+appears, so "the rules pass `ip-1` but the endpoint is `ip-2`" is still a
+finding you can read. Loopback, private, link-local and multicast addresses are
+kept as-is: they identify nobody and hiding them would make a ruleset
+unreadable, and the geo-provider hostnames dezhban ships are kept for the same
+reason. Hostname redaction works from an **allow-list**, so a name nobody
+anticipated is redacted rather than leaked. `--include-network` produces the
+full-fidelity version through the same code path, and says so on stderr and in
+the bundle's own README.
+
+The macOS app's Diagnostics pane has both: a **Recent problems** list, and an
+**Export…** button with the same redaction choice as a checkbox.
 
 ### Asking what a key is
 

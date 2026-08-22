@@ -14,6 +14,28 @@ current as you land changes.
 
 ### Added
 
+- **Recent problems, in Diagnostics.** Warn-and-worse records from dezhban's own
+  log, newest first, with the evidence dezhban logged beside each one. "Nothing
+  logged as a warning or an error" is shown as the good answer it is, and kept
+  distinct from "couldn't read the log".
+- **`dezhban logs`** — recent records from `<state dir>/logs/dezhban.log`, the
+  rotated archives included (the interesting failure is often the one that
+  pushed the file over its rotation threshold). `--level warn` for just the
+  problems, plus `--since`, `--limit` and `--json`. No root: the log is `0644`
+  by design. Nothing matched exits 0.
+- **`dezhban report`, and Diagnostics → Export…** — one zip with everything
+  someone would otherwise ask for a file at a time: config, `state.json`,
+  `learned.json`, `armed.json`, the ruleset dezhban last applied, `doctor`'s
+  findings, what each posture would apply, and recent log records. A missing
+  file is noted *inside* the bundle rather than failing the whole collection.
+  **Nothing is sent anywhere** — it is a local file, and sharing it is your
+  decision. **Redacted by default**: addresses and hostnames become *stable*
+  placeholders, so the same server is the same token everywhere and the bundle
+  stays diagnosable; loopback, private, link-local and multicast addresses stay
+  as-is because they identify nobody and hiding them would make a ruleset
+  unreadable. Hostname redaction works from an allow-list, so an unanticipated
+  name is redacted rather than leaked. `--include-network` (a checkbox in the
+  app) produces the full-fidelity version and says so in three places.
 - **The firewall rules are visible in Diagnostics.** Three things, because they
   answer three different questions: what dezhban **recorded installing** (and
   when), what the **kernel actually holds** (read back on demand, needs your
