@@ -1000,8 +1000,10 @@ task gui:build && open dist/Dezhban.app
 ### Actions
 
 - [ ] **The action row explains itself before the click.** Titles are short
-      (Block / Unblock / Switch VPN… / Pause / Guard down / Panic…). Move the
-      pointer across the row: the caption line beneath it changes to that
+      (Block / Unblock / Switch VPN… / Pause / Guard down). Panic… is *not* part of
+      this row — it sits below with its own fixed caption, so hovering it changes
+      nothing, which is correct rather than a failure. Move the pointer across the
+      row: the caption line beneath it changes to that
       control's sentence — in particular, hovering **Pause** must say it uses
       your real ISP IP, which is the warning its old title carried — and the whole
       sentence must be readable, including the password expectation at its tail,

@@ -216,6 +216,10 @@ final class AppState: ObservableObject {
         }
     }
 
+    /// Decoded lazily on the first contextual help click and kept thereafter — see
+    /// `openHelp(preferring:)`.
+    private var cachedHelpBundle: HelpBundle?
+
     /// Opens the first of `targets` whose anchor actually exists in the bundle.
     ///
     /// The only entry point, deliberately. A second `openHelp(docAnchor:)` taking a
@@ -228,10 +232,6 @@ final class AppState: ObservableObject {
     /// fallback a *section* rather than the top of the page — the pane's own
     /// resolve() drops an unknown fragment and keeps the page, which for a
     /// forty-key reference is not a useful place to land.
-    /// Decoded lazily on the first contextual help click and kept thereafter — see
-    /// `openHelp(preferring:)`.
-    private var cachedHelpBundle: HelpBundle?
-
     func openHelp(preferring targets: [HelpTarget]) {
         guard !targets.isEmpty else { return }
         // Decoded once and kept. `bundled()` reads the payload off disk and JSON-

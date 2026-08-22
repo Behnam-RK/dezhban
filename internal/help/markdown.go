@@ -128,12 +128,21 @@ func Render(source, markdown string) Rendered {
 		return rendered
 	}
 
-	// claimKey hands out the anchor for a key row, the FIRST time that key is
-	// seen on this page. A key documented in more than one table — several are,
-	// e.g. `pollInterval` in both the field reference and the presets
-	// comparison — must anchor to its definition, and duplicate ids are invalid
-	// HTML besides: a browser jumps to whichever came first, so the choice is
-	// made here rather than left to chance.
+	// claimKey hands out the anchor for a key row, the FIRST time that key is seen
+	// on this page. A key documented in more than one table — several are, e.g.
+	// `pollInterval` in both the field reference and the presets comparison — can
+	// only have one id, since duplicates are invalid HTML and a browser jumps to
+	// whichever came first; the choice is made here rather than left to chance.
+	//
+	// "First" is the whole rule, and it is not the same claim as "its definition".
+	// It lands on the definition because docs/usage/config.md is ordered that way,
+	// which is an assumption about the document, not something this function can
+	// check — a duplicate is refused silently, because refusing loudly would fail
+	// the build on every legitimately repeated key. Reorder the reference so the
+	// Presets comparison precedes the field tables and every `?` for those keys
+	// would quietly deep-link to the presets row instead, with the resolution test
+	// still green because *some* row carries the anchor. TestKeyRowsAnchorToTheir
+	// DefinitionSection pins the ordering this relies on.
 	claimedKeys := map[string]bool{}
 	// Heading anchors are collected up front, because a heading can appear *after*
 	// the row that would collide with it while r.Headings is filled in the same
@@ -164,7 +173,13 @@ func Render(source, markdown string) Rendered {
 		if scanInCode {
 			continue
 		}
-		if m := headingRe.FindStringSubmatch(line); m != nil {
+		// The TRIMMED line, exactly as the main pass matches it. Markdown allows up
+		// to three leading spaces on an ATX heading, and this renderer honours that
+		// — so matching the raw line here let "  ## Key flags" render as a heading
+		// that the pre-scan never saw, and a colliding row was then claimed anyway.
+		// Two elements with one id, the browser jumping to the heading, and a green
+		// build: precisely the failure the guard was added to turn into an error.
+		if m := headingRe.FindStringSubmatch(strings.TrimSpace(line)); m != nil {
 			if title := strings.TrimSpace(m[2]); title != "" {
 				headingAnchors[Anchor(title)] = true
 			}

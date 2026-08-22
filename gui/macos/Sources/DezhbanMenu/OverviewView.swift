@@ -378,23 +378,21 @@ struct OverviewView: View {
             .onChange(of: focusedAction) { _ in
                 guard focusedAction == id else { return }
                 focusedHint = hint
-                // Focus supersedes a parked pointer, and the pointer takes the caption
-                // back by *entering* a control — the same one or another. There is
-                // deliberately no "the mouse moved a little" re-arm: it was tried, and
+                // Focus supersedes a parked pointer. Hover used to win
+                // unconditionally, so tabbing with the pointer resting on another
+                // button moved the focus ring and the Space key while the caption went
+                // on describing whatever the mouse happened to be over.
+                //
+                // The pointer takes it back by *entering* a control — the same one or
+                // another. There is deliberately no "the mouse moved a little" re-arm:
                 // every version of it read a proxy for movement rather than movement.
                 // `onContinuousHover`'s `.active` fires when a tracking area is merely
                 // established, and these controls re-measure constantly (a window's
                 // countdown retitles "Cancel (m:ss left)" every second); comparing the
-                // reported point did not help either, since it is in local space, so a
-                // banner appearing above the row moves the control under a stationary
-                // mouse and reads as movement. Jiggling the pointer inside the control
-                // you are already on aims at nothing new, so nothing is lost.
-                // Focus supersedes a parked pointer. `.help` is recomputed every
-                // body pass while the captured hint is not, and hover used to win
-                // unconditionally — so tabbing with the pointer resting on another
-                // button moved the focus ring and the Space key while the caption
-                // went on describing whatever the mouse happened to be over. Most
-                // recent interaction wins; moving the pointer takes it straight back.
+                // reported point did not help either, being in local space, so a banner
+                // appearing above the row moved the control under a stationary mouse
+                // and read as movement. Jiggling inside the control you are already on
+                // aims at nothing new, so nothing is lost.
                 hoveredAction = nil
             }
             .onChange(of: hint) { newHint in
