@@ -131,6 +131,22 @@ enum LoginItem {
         /// changing, not on a refresh.
         var awaitsApproval: Bool { self == .awaitingApproval }
 
+        /// Whether this outcome is a statement about the switch's own state, so that
+        /// the switch later moving away from it makes the message false.
+        ///
+        /// `.unstableLocation` is not: it says this copy of the app may not touch the
+        /// login item, which stays true however the switch reads — and on a dev build
+        /// beside an installed copy the switch reads ON permanently, so treating it
+        /// as switch-describing wiped the explanation on the very next activation.
+        var describesSwitchState: Bool {
+            switch self {
+            case .unstableLocation, .failed: return false
+            case .enabled, .disabled, .awaitingApproval, .legacyStuck, .agentStuck,
+                 .blockedByLegacy:
+                return true
+            }
+        }
+
         /// Whether anything starts the app at login — what the Settings switch
         /// shows.
         var isOn: Bool {
@@ -412,17 +428,19 @@ enum LoginItem {
             // told a user who had just asked to turn login-at-launch ON to go and
             // remove the login item — the opposite of what they wanted, in the case
             // the comment above names as the main way here.
-            switch service.status {
+            switch settledStatus() {
             case .enabled: return .enabled
             case .requiresApproval: return .awaitingApproval
             default: return .failed(error.localizedDescription)
             }
         }
-        // Checked, not assumed: `register()` returns without throwing when macOS
-        // is going to make the user approve it, and the switch snapping back with
-        // no explanation is indistinguishable from a bug.
-        if service.status == .requiresApproval { return .awaitingApproval }
-        return agentEnabled ? .enabled : .failed(describe(service.status))
+        // One settled read, then every branch from it. `register()` returns without
+        // throwing when macOS is going to make the user approve it, so the status is
+        // the only place that shows up — and the switch snapping back with no
+        // explanation is indistinguishable from a bug.
+        let status = settledStatus()
+        if status == .requiresApproval { return .awaitingApproval }
+        return status == .enabled ? .enabled : .failed(describe(status))
     }
 
     private static func disable() -> Outcome {
@@ -798,6 +816,29 @@ enum LoginItem {
             usleep(50_000)
         }
         return registered(target)
+    }
+
+    /// The agent's status once it has had a moment to catch up with a `register()`.
+    ///
+    /// The mirror of `stillRegistered`, for the other direction, and it was missing:
+    /// the register tail took three separate status reads with no settle, so a status
+    /// that had not yet caught up gave `.failed` — `isOn == false` — and the switch
+    /// snapped OFF saying "macOS did not keep the registration" while the agent *was*
+    /// registered and the app would start at login. That is the same switch-versus-
+    /// reality lie `stillRegistered` was introduced to kill, on the register side.
+    /// Three reads also let the status change *between* them, which produced the
+    /// self-contradicting "Could not change the login item: the login item is
+    /// enabled."
+    ///
+    /// Returns on the first read that shows a registration; only the failing path
+    /// waits, and never on the main thread.
+    private static func settledStatus() -> SMAppService.Status {
+        for _ in 0 ..< 3 {
+            let status = service.status
+            if isRegistered(status) { return status }
+            usleep(50_000)
+        }
+        return service.status
     }
 
     private static func unregister(_ target: SMAppService, what: String) {

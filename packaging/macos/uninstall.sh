@@ -109,7 +109,22 @@ fi
 # agent, an `rm -rf` that deleted nothing, and a bundle that kept launching at
 # every subsequent login while the script said everything was removed.
 if [ ! -d "$APP" ]; then
-	for root in /Applications "${CONSOLE_HOME:+$CONSOLE_HOME/Applications}"; do
+	# Every account's ~/Applications, not only the console user's. CONSOLE_HOME is
+	# resolved only when somebody is logged in at the console, so run over ssh or at
+	# the login window this searched /Applications alone — and an install in a
+	# ~/Applications was never found, `rm -rf "$APP"` deleted nothing, and the script
+	# still printed "files deleted" and, on the no-console-user branch, "Nothing will
+	# start Dezhban (the app is gone)". The same false clean report the unbounded
+	# search was added to prevent, reached from the other side.
+	set -- /Applications
+	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME/Applications" ]; then
+		set -- "$@" "$CONSOLE_HOME/Applications"
+	fi
+	for home_apps in /Users/*/Applications; do
+		[ -d "$home_apps" ] || continue
+		set -- "$@" "$home_apps"
+	done
+	for root in "$@"; do
 		[ -d "$root" ] || continue
 		# Unbounded depth, to match LoginItem.isInStableInstallLocation, which accepts
 		# anything *under* an Applications directory. A depth limit here meant an

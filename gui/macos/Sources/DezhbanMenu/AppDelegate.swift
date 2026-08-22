@@ -191,12 +191,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // The backstop got there first and is opening the window.
                 break
             case .blocked(let why):
-                // The request cannot be removed — a delete-denying ACL, `chflags
-                // uchg`. Permanent, so the *backstop* stands down (it would repeat
-                // every tick), but this handler is a one-shot event tied to a real
-                // user launch: standing down here would make that launch the silent
-                // no-op the mechanism exists to prevent, and every launch after it.
+                // A request that cannot be claimed proves nothing, so it is held to
+                // the same rule as no request at all.
+                //
+                // Since the claim is a rename, `.blocked` means the directory is
+                // unwritable — which is also why no *poster* could have written this
+                // file. It is a leftover, and `discard()` cannot clear it either, so
+                // acting on it unconditionally turned every later notification into
+                // an activation: fresh token each time, never matching, window
+                // reopened indefinitely with no in-product recovery. A real launch in
+                // that state cannot write its file either, so it arrives with the
+                // fileless marker and is accepted on that basis instead.
                 NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
+                guard acceptWithoutFile else { return }
                 DispatchQueue.main.async { self?.openForHandoff(token: postedToken) }
             }
         }
@@ -279,7 +286,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case .fresh(let token):
                 claimed = token
             case .blocked(let why):
+                // Stand down for real: the comment used to say the backstop stops on
+                // this while only returning from the one tick, so a 0.5s timer over a
+                // 5s window logged the same permanent condition eleven times.
                 NSLog("DezhbanMenu: hand-off request could not be claimed: \(why)")
+                DispatchQueue.main.async {
+                    self?.handoffTimer?.invalidate()
+                    self?.handoffTimer = nil
+                }
                 return
             case .absent, .lost:
                 return

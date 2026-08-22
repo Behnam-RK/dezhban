@@ -883,7 +883,15 @@ struct SettingsView: View {
                     // having split it from the pane's shared status.
                     loginMessage = outcome.message
                     loginMessageIsTransient = outcome.isTransient
-                    loginMessageForEnabled = outcome.isOn
+                    // Only for outcomes that describe the switch's own state. A
+                    // refusal that has nothing to do with it — this copy may not
+                    // touch the login item at all — is not invalidated by the switch
+                    // moving, and tying it to `isOn == false` had it wiped on the
+                    // next activation: a dev build beside an installed copy reads the
+                    // switch ON permanently, so the disagreement never resolves and
+                    // the explanation went every time, leaving the unexplained
+                    // snap-back the message exists to prevent.
+                    loginMessageForEnabled = outcome.describesSwitchState ? outcome.isOn : nil
                     loginMessageAwaitsApproval = outcome.awaitsApproval
                     // And bumped, so any status read that was already in flight
                     // cannot land afterwards and clear this. `loginPending` cannot
@@ -1046,9 +1054,9 @@ struct SettingsView: View {
                 // cannot show, so only this can clear it; or the switch has since
                 // moved away from the state it was written about.
                 let approvalSettled = loginMessageAwaitsApproval && !live.awaitingApproval
-                if loginMessageIsTransient
-                    || approvalSettled
-                    || (!loginMessageAwaitsApproval && loginMessageForEnabled != live.enabled) {
+                let switchMoved = !loginMessageAwaitsApproval
+                    && (loginMessageForEnabled.map { $0 != live.enabled } ?? false)
+                if loginMessageIsTransient || approvalSettled || switchMoved {
                     loginMessage = nil
                     loginMessageForEnabled = nil
                     loginMessageAwaitsApproval = false
