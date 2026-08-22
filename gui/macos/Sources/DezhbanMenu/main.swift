@@ -52,7 +52,7 @@ func makeMainMenu() -> NSMenu {
     return main
 }
 
-/// The hand-off request beside this install's instance lock, once known.
+/// The hand-off request beside this install's session lock, once known.
 ///
 /// A global because both ends of the launch need it: `acquireSessionOwnership()`
 /// writes it from a losing copy, and `AppDelegate` claims it — from the
@@ -70,7 +70,7 @@ var sessionHandoff: HandoffRequest?
 /// app can call it, so `packaging/macos/uninstall.sh` runs the binary this way
 /// (as the console user, in their GUI session) before deleting anything.
 ///
-/// Handled before the instance lock, deliberately: this is not a second copy of
+/// Handled before the session lock, deliberately: this is not a second copy of
 /// the app competing for the session, it is a one-shot errand, and it must work
 /// while the app is running — which is exactly when the uninstaller finds it.
 func retractLoginRegistrationsAndExit() {
@@ -90,11 +90,11 @@ func retractLoginRegistrationsAndExit() {
 /// LaunchServices, so nothing else dedupes it. Without this the user gets two
 /// menubar items, and the duplicate carries `--background`, so under the default
 /// "Only at login" it opens no window and there is no way to tell which icon is
-/// which. See `InstanceLock` and docs/adr/0014-login-item-launch-marker.md.
+/// which. See `SessionLock` and docs/adr/0014-login-item-launch-marker.md.
 ///
 /// Returns the lock on success. The caller must keep it alive for the lifetime of
 /// the process — the lock IS the open file descriptor.
-func acquireSessionOwnership() -> InstanceLock? {
+func acquireSessionOwnership() -> SessionLock? {
     // No bundle identifier means a bare `swift run` binary: no agent could have
     // spawned it, and nothing to scope a lock to.
     guard let id = Bundle.main.bundleIdentifier,
@@ -102,7 +102,7 @@ func acquireSessionOwnership() -> InstanceLock? {
               .urls(for: .applicationSupportDirectory, in: .userDomainMask).first
     else { return nil }
 
-    let lock = InstanceLock.forBundle(
+    let lock = SessionLock.forBundle(
         path: Bundle.main.bundleURL.path, identifier: id, supportDirectory: support)
     sessionHandoff = HandoffRequest.beside(lock: lock.url)
     switch lock.acquire() {
@@ -113,7 +113,7 @@ func acquireSessionOwnership() -> InstanceLock? {
     case .unavailable(let why):
         // Never refuse to start over this. A duplicate icon is a smaller failure
         // than an app that will not launch because a support directory is broken.
-        NSLog("DezhbanMenu: instance lock unavailable, starting anyway: \(why)")
+        NSLog("DezhbanMenu: session lock unavailable, starting anyway: \(why)")
         // No discard here. `discard()` is for a process that has just *taken* the
         // lock, on the grounds that anything on disk was meant for a predecessor —
         // and this process took nothing. A transient open() failure in a third

@@ -208,7 +208,7 @@ with an argument, the pre-`SMAppService` pattern.
   "Reopen windows when logging back in" relaunches whatever was running at
   logout, through LaunchServices, with no arguments. `SMAppService.mainApp` was
   reconciled with that path because it went through LaunchServices too; a launchd
-  agent is not, so both would start at login and race for the instance lock, and
+  agent is not, so both would start at login and race for the session lock, and
   a resume copy that won made the window open at login under the default
   `bootOnly` — this very defect, intermittent instead of absent.
   `NSApp.disableRelaunchOnLogin()` is the API for "the login item is the only way
@@ -222,13 +222,19 @@ with an argument, the pre-`SMAppService` pattern.
   pointing at a plist inside a bundle that has been deleted, which is exactly the
   orphan being avoided. `SMAppService.unregister()` is the only real retraction
   and it can only be called by the app, so `DezhbanMenu` takes a
-  `--unregister-login-item` errand flag — handled before the instance lock, since
+  `--unregister-login-item` errand flag — handled before the session lock, since
   it is not a second copy competing for the session — and
   `packaging/macos/uninstall.sh` runs it as the console user inside their GUI
   session before deleting the bundle. Root cannot reach another account's launchd
   session, so other users' entries are named in the closing message instead — as is
   the case where there is no logged-in user at all (run at the login window, or
   over ssh), where none of the per-user teardown can happen.
+
+  The uninstaller also *looks* for the bundle rather than assuming
+  `/Applications/Dezhban.app`. The migration is allowed to run from anywhere under
+  an Applications directory, so a copy filed into `/Applications/Utilities` would
+  otherwise be told its bundle was already gone — while it went on launching at
+  every login and the script reported everything removed.
 
   The errand's exit status is load-bearing: `unregister()` only logs a refusal and
   the script discards the output, so without it a login item macOS would not

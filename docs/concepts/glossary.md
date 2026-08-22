@@ -261,6 +261,33 @@ available, root-only, and independent of the socket.
 root, **with no daemon running**. Deliberately not a socket operation, because the escape
 hatch must never depend on the thing it is escaping from.
 
+**Launch marker** — the `--background` argument the macOS app's login LaunchAgent
+passes and nothing else does, so the app knows macOS started it at login rather
+than the user starting it. What the "Open minimized" setting decides on; before
+it, the app inferred the launch kind from an AppKit key that read wrong in both
+directions ([ADR-0014](../adr/0014-login-item-launch-marker.md)).
+
+**Login agent** — `Contents/Library/LaunchAgents/com.behnam-rk.dezhban.app.login.plist`
+inside `Dezhban.app`, registered with `SMAppService.agent(plistName:)`. It is what
+starts the app at login, and it exists in place of `SMAppService.mainApp` solely
+because a LaunchAgent can pass the **launch marker**. Unlike the login item it
+replaced it does not disappear with the bundle, so `uninstall.sh` has the app
+retract it.
+
+**Session lock** — an exclusive `flock` the **macOS app** holds for its lifetime,
+one per install, so a second copy of the same bundle exits at startup instead of
+running a second menubar item, Dock tile and state-file timer. Needed because
+registering the login agent starts the app immediately and launchd, unlike
+LaunchServices, does not care that it is already running. Distinct from the
+**single-instance lock** below, which is the daemon's and guards `Backend.Apply`;
+this one guards nothing but the app's own uniqueness.
+
+**Hand-off request** — a file beside the **session lock** by which a copy of the
+app that is exiting asks the copy that owns the session to show its window, so a
+launch the user performed is never a silent no-op. A file rather than only a
+notification because the notification is never queued and the owner may not be
+observing yet.
+
 **Single-instance lock** — an exclusive lock `run` holds over the state directory
 for its entire lifetime, so a second `run` — with or without `--no-daemon` —
 refuses outright instead of racing the first to call `Backend.Apply`. Released

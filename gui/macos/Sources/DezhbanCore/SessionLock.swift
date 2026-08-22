@@ -31,7 +31,7 @@ import Foundation
 /// against an installed `/Applications/Dezhban.app` is the documented GUI dev loop
 /// (docs/contribute/testing.md), and an identifier-scoped lock would have made the
 /// freshly built copy exit on launch and silently test the installed one instead.
-public final class InstanceLock {
+public final class SessionLock {
     public enum Acquisition: Equatable {
         /// This process now owns the session and holds the lock until it exits.
         case acquired
@@ -77,12 +77,12 @@ public final class InstanceLock {
     /// same way, for the same reason.
     public static func forBundle(path bundlePath: String,
                                  identifier: String,
-                                 supportDirectory: URL) -> InstanceLock {
+                                 supportDirectory: URL) -> SessionLock {
         let dir = supportDirectory.appendingPathComponent(identifier, isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let key = URL(fileURLWithPath: bundlePath).resolvingSymlinksInPath().standardizedFileURL.path
         let name = "instance-" + String(fnv1a(key), radix: 16) + ".lock"
-        return InstanceLock(url: dir.appendingPathComponent(name))
+        return SessionLock(url: dir.appendingPathComponent(name))
     }
 
     /// FNV-1a, 64-bit. Deterministic across processes and OS versions, which is

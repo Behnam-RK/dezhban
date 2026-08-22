@@ -117,7 +117,11 @@ fi
 #    here would otherwise satisfy check 1 while SMAppService named a file that
 #    does not exist — reported only as the .notFound status nobody reads.
 for consumer in "$HERE/Sources/DezhbanMenu/LoginItem.swift" "$REPO_ROOT/packaging/macos/uninstall.sh"; do
-	if ! grep -q "$AGENT_LABEL" "$consumer"; then
+	# -F: a fixed string, not a regex. Unanchored, `.` is a wildcard, so a label
+	# renamed to "…app-login" in one consumer still matched the pattern "…app.login"
+	# — the drift check passing over exactly the drift it exists to catch, leaving
+	# SMAppService naming a plist that does not exist.
+	if ! grep -qF "$AGENT_LABEL" "$consumer"; then
 		echo "build-app.sh: $consumer does not mention '$AGENT_LABEL' — the label, LoginItem.plistName and the uninstaller have drifted apart, and login-at-launch would fail silently" >&2
 		exit 1
 	fi

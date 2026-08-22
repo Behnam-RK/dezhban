@@ -66,8 +66,39 @@ pkill -x DezhbanMenu >/dev/null 2>&1 || true
 # console user; other accounts get the one command they need, printed at the end.
 CONSOLE_USER=$(stat -f %Su /dev/console 2>/dev/null || echo "")
 CONSOLE_UID=""
+CONSOLE_HOME=""
 if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
 	CONSOLE_UID=$(id -u "$CONSOLE_USER" 2>/dev/null || echo "")
+	# /Search, not the local node. `dscl .` reads only local records, so for a
+	# network/LDAP/AD account it returns nothing — leaving the cleanup below to be
+	# skipped for precisely the accounts this lookup exists to serve.
+	#
+	# And read as a plist, not scraped with sed. `dscl`'s plain output puts a value
+	# containing a space on a *continuation* line ("NFSHomeDirectory:\n /Volumes/Home
+	# Dirs/jsmith"), so the obvious `s/^NFSHomeDirectory: //p` came back empty — for
+	# a home with a space in it, which is what network and relocated homes tend to
+	# have.
+	CONSOLE_HOME=$(dscl -plist /Search -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
+		plutil -extract 'dsAttrTypeStandard:NFSHomeDirectory.0' raw -o - -- - 2>/dev/null)
+fi
+
+# The bundle is looked for, not assumed. The app is allowed to register the login
+# agent from anywhere under /Applications or ~/Applications (LoginItem's
+# isInStableInstallLocation), so filing it into /Applications/Utilities is a
+# supported thing to have done — and with APP fixed at /Applications/Dezhban.app
+# that install got "the app bundle was already gone", an unloaded-for-this-boot
+# agent, an `rm -rf` that deleted nothing, and a bundle that kept launching at
+# every subsequent login while the script said everything was removed.
+if [ ! -d "$APP" ]; then
+	for root in /Applications "${CONSOLE_HOME:+$CONSOLE_HOME/Applications}"; do
+		[ -d "$root" ] || continue
+		found=$(find "$root" -maxdepth 3 -name Dezhban.app -type d -print 2>/dev/null | head -1)
+		if [ -n "$found" ]; then
+			APP="$found"
+			echo "note: found the app at $APP" >&2
+			break
+		fi
+	done
 fi
 if [ -n "$CONSOLE_UID" ]; then
 	echo "unregistering the login agent for $CONSOLE_USER ..."
@@ -163,27 +194,13 @@ if [ -n "$CONSOLE_UID" ]; then
 		wait "$errand" >/dev/null 2>&1 || true
 	fi
 	launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
-	# The app's own per-user directory: the instance lock the GUI takes at startup
+	# The app's own per-user directory: the session lock the GUI takes at startup
 	# to keep a second copy of itself from running, and the hand-off file beside
 	# it. Machine-derived, none of it the user's — and files this version creates
 	# that no earlier one did, so leaving them would make this script's own
 	# promise false.
 	#
-	# The home directory is asked for, not assumed: a network or mobile account,
-	# or a relocated home, is not under /Users, and hardcoding that path made the
-	# closing "files deleted" line untrue for exactly those users.
-	#
-	# /Search, not the local node. `dscl .` reads only local records, so for a
-	# network/LDAP/AD account it returns nothing — leaving this to skip the delete
-	# for precisely the accounts the lookup exists to serve.
-	#
-	# And read as a plist, not scraped with sed. `dscl`'s plain output puts a value
-	# containing a space on a *continuation* line ("NFSHomeDirectory:\n /Volumes/Home
-	# Dirs/jsmith"), so the obvious `s/^NFSHomeDirectory: //p` came back empty and
-	# skipped the cleanup — for a home with a space in it, which is exactly what the
-	# network and relocated homes this lookup exists for tend to have.
-	CONSOLE_HOME=$(dscl -plist /Search -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
-		plutil -extract 'dsAttrTypeStandard:NFSHomeDirectory.0' raw -o - -- - 2>/dev/null)
+	# CONSOLE_HOME is resolved up top, where the bundle search needs it too.
 	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
 		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
 	fi

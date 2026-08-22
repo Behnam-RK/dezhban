@@ -1,10 +1,10 @@
 import Foundation
 
-/// A file beside the instance lock saying "a user tried to launch this app;
+/// A file beside the session lock saying "a user tried to launch this app;
 /// please show yourself".
 ///
 /// The distributed notification that normally carries this is delivered
-/// immediately and never queued, and the incumbent takes the instance lock
+/// immediately and never queued, and the incumbent takes the session lock
 /// *before* `NSApplication` exists — so between acquiring the lock and installing
 /// its observer there is a window in which a hand-off is posted to nobody. It is
 /// short, but it lands exactly at login, when a user impatient with a slow start
@@ -31,7 +31,7 @@ public struct HandoffRequest {
     }
 
     /// Derived from the lock's own URL, so it is scoped per install for exactly
-    /// the reasons the lock is (see `InstanceLock.forBundle`).
+    /// the reasons the lock is (see `SessionLock.forBundle`).
     public static func beside(lock: URL) -> HandoffRequest {
         HandoffRequest(url: lock.deletingPathExtension().appendingPathExtension("handoff"))
     }

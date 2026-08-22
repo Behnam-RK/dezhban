@@ -39,7 +39,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     /// Posted by a duplicate copy of the app as it exits, when the user started
     /// it themselves (see `acquireSessionOwnership` in main.swift). Without it a
-    /// user-initiated launch that loses the instance lock would do visibly
+    /// user-initiated launch that loses the session lock would do visibly
     /// nothing at all — and the copy that owns the session may be a
     /// `--background` login launch with no window to be handed over to.
     static let openWindowNotification = "com.behnam-rk.dezhban.app.openWindow"
@@ -51,7 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // dropped — the one outcome `acquireSessionOwnership` exists to prevent.
         // Scoped to the bundle path, which is what the poster sends: the name
         // comes from the bundle id, and two installs of the app may legitimately
-        // run side by side (see InstanceLock).
+        // run side by side (see SessionLock).
         DistributedNotificationCenter.default().addObserver(
             self, selector: #selector(openWindowRequested),
             name: NSNotification.Name(Self.openWindowNotification),
@@ -66,7 +66,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // whatever was running at logout, through LaunchServices, with no
         // arguments. `SMAppService.mainApp` used to be reconciled with that path
         // because it went through LaunchServices too; a launchd agent is not, so
-        // both would start at login and race for the instance lock — and if the
+        // both would start at login and race for the session lock — and if the
         // resume copy won, the window opened at login under the default "Only at
         // login", the exact defect this replaced, now intermittent instead of
         // absent. This is the API for saying "the login item is the only way I

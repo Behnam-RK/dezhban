@@ -15,7 +15,7 @@ import ServiceManagement
 /// Registering an agent `exec`s the app immediately (`RunAtLoad`), so both
 /// `set(enabled:)` and the migration below can spawn a second copy of a running
 /// app.
-/// That is caught at startup by the instance lock in main.swift, not here — the
+/// That is caught at startup by the session lock in main.swift, not here — the
 /// duplicate is a *process* problem and this type has no way to see it.
 enum LoginItem {
     /// Must match `LoginAgent.plist`'s `Label` and the filename build-app.sh
@@ -251,7 +251,7 @@ enum LoginItem {
     private static func enable() -> Outcome {
         // The agent must never be registered beside a live legacy item — that is
         // two launches at login, one with the marker and one without, and
-        // whichever won the instance lock would decide whether the window opened.
+        // whichever won the session lock would decide whether the window opened.
         // `disable()` and the migration both refuse it; this refused nothing, and
         // the stuck-migration path led straight here: switch reads ON, user clicks
         // it off, clicks it on again, and both are registered.
@@ -264,7 +264,7 @@ enum LoginItem {
         // `AssociatedBundleIdentifiers` makes ONE "Dezhban" row in Login Items
         // govern both registrations, so approving that row arms both — and then the
         // agent and the legacy item both start the app, one with the marker and one
-        // without, racing the instance lock to decide whether the window opens.
+        // without, racing the session lock to decide whether the window opens.
         // That is the defect this whole branch exists to remove, so it cannot be
         // traded for a better error message.
         //
@@ -275,6 +275,12 @@ enum LoginItem {
         retractLegacy()
         if registered(.mainApp) { return .blockedByLegacy }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
+        // Flushed, like every other write to these three coupled flags. This pane
+        // can have its process killed by launchd mid-operation, and clearing the
+        // explicit-off only in memory meant the next launch still read it as true —
+        // marking the account migrated and permanently cancelling the register()
+        // retry that exists so nobody is stranded with nothing starting the app.
+        UserDefaults.standard.synchronize()
         do {
             try service.register()
         } catch {
@@ -502,7 +508,7 @@ enum LoginItem {
     /// the login agent from it would point launchd at a bundle that stops
     /// existing.
     ///
-    /// Symlinks are resolved for the same reason `InstanceLock` resolves them: an
+    /// Symlinks are resolved for the same reason `SessionLock` resolves them: an
     /// install reached through a symlinked directory is still that install, and a
     /// literal string comparison silently answered "no" and left the migration
     /// undone forever, reported only in a log line.

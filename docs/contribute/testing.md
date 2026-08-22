@@ -782,13 +782,13 @@ task gui:build && open dist/Dezhban.app
       app up, switch Settings → "Open this app at login" **off then on**. The
       agent's `RunAtLoad` execs a second copy the moment it registers, and
       launchd does not dedupe the way LaunchServices did, so this is the check
-      that the instance lock works: exactly **one** menubar item and one Dock
+      that the session lock works: exactly **one** menubar item and one Dock
       tile afterwards, and `pgrep -x DezhbanMenu | wc -l` is 1. Repeat
       immediately after an upgrade that runs the migration.
 - [ ] **Launching a fully-started app again just reopens its window.** With the
       app already running from a `--background` login launch, launch it from
       Finder. LaunchServices will not start a second copy of a running bundle, so
-      this never reaches the instance lock — it is
+      this never reaches the session lock — it is
       `applicationShouldHandleReopen`, which opens the window in **every** "Open
       minimized" mode, on purpose: the preference governs the launch, and must
       never make the window unreachable. Do not expect "Always" to suppress it
@@ -885,6 +885,12 @@ task gui:build && open dist/Dezhban.app
       `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
       doing its job — this is the switch a user reaches for to stop the app
       starting at login, and it is useless if nobody can tell what it governs).
+- [ ] **Uninstall finds the app where it actually is.** Move `Dezhban.app` into
+      `/Applications/Utilities/`, let it register the login agent, then run the
+      uninstaller. It must locate the bundle there, retract the agent, delete it,
+      and print **no** "app bundle was already gone" warning — the app is allowed to
+      register from anywhere under an Applications directory, so the uninstaller has
+      to look in the same places.
 - [ ] **Uninstall with nobody logged in says so.** From an ssh session on a Mac
       sitting at the login window, run the uninstaller. It must finish *and* warn
       that the per-user leftovers could not be removed — every step of that

@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import DezhbanCore
 
-struct InstanceLockTests {
+struct SessionLockTests {
     private func tempDir() throws -> URL {
         let dir = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("dezhban-instancelock-\(UUID().uuidString)", isDirectory: true)
@@ -19,8 +19,8 @@ struct InstanceLockTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let path = dir.appendingPathComponent("a.lock")
 
-        let first = InstanceLock(url: path)
-        let second = InstanceLock(url: path)
+        let first = SessionLock(url: path)
+        let second = SessionLock(url: path)
         defer { first.release(); second.release() }
 
         #expect(first.acquire() == .acquired)
@@ -35,7 +35,7 @@ struct InstanceLockTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let path = dir.appendingPathComponent("b.lock")
 
-        let contenders = (0 ..< 5).map { _ in InstanceLock(url: path) }
+        let contenders = (0 ..< 5).map { _ in SessionLock(url: path) }
         defer { contenders.forEach { $0.release() } }
 
         let winners = contenders.filter { $0.acquire() == .acquired }
@@ -50,8 +50,8 @@ struct InstanceLockTests {
         defer { try? FileManager.default.removeItem(at: dir) }
         let path = dir.appendingPathComponent("c.lock")
 
-        let first = InstanceLock(url: path)
-        let second = InstanceLock(url: path)
+        let first = SessionLock(url: path)
+        let second = SessionLock(url: path)
         defer { second.release() }
 
         #expect(first.acquire() == .acquired)
@@ -65,7 +65,7 @@ struct InstanceLockTests {
     @Test func reacquiringTheSameLockIsIdempotent() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let lock = InstanceLock(url: dir.appendingPathComponent("d.lock"))
+        let lock = SessionLock(url: dir.appendingPathComponent("d.lock"))
         defer { lock.release() }
 
         #expect(lock.acquire() == .acquired)
@@ -76,7 +76,7 @@ struct InstanceLockTests {
     /// support directory is a worse thing to fail a launch on than a duplicate
     /// icon.
     @Test func anUnopenableLockPathIsReportedRatherThanBlocking() {
-        let lock = InstanceLock(url: URL(fileURLWithPath: "/dev/null/nope/e.lock"))
+        let lock = SessionLock(url: URL(fileURLWithPath: "/dev/null/nope/e.lock"))
         defer { lock.release() }
         guard case .unavailable = lock.acquire() else {
             Issue.record("expected .unavailable for an unopenable path")
@@ -91,9 +91,9 @@ struct InstanceLockTests {
     @Test func differentInstallPathsGetDifferentLocks() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let installed = InstanceLock.forBundle(
+        let installed = SessionLock.forBundle(
             path: "/Applications/Dezhban.app", identifier: "com.example.app", supportDirectory: dir)
-        let built = InstanceLock.forBundle(
+        let built = SessionLock.forBundle(
             path: "/Users/x/dev/dezhban/dist/Dezhban.app", identifier: "com.example.app",
             supportDirectory: dir)
         defer { installed.release(); built.release() }
@@ -124,9 +124,9 @@ struct InstanceLockTests {
         let link = root.appendingPathComponent("link", isDirectory: true)
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
 
-        let viaReal = InstanceLock.forBundle(
+        let viaReal = SessionLock.forBundle(
             path: bundle.path, identifier: "com.example.app", supportDirectory: locks)
-        let viaLink = InstanceLock.forBundle(
+        let viaLink = SessionLock.forBundle(
             path: link.appendingPathComponent("Dezhban.app").path,
             identifier: "com.example.app", supportDirectory: locks)
         defer { viaReal.release(); viaLink.release() }
@@ -142,15 +142,15 @@ struct InstanceLockTests {
     @Test func theLockNameIsStableAcrossProcesses() throws {
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
-        let a = InstanceLock.forBundle(
+        let a = SessionLock.forBundle(
             path: "/Applications/Dezhban.app", identifier: "com.example.app", supportDirectory: dir)
-        let b = InstanceLock.forBundle(
+        let b = SessionLock.forBundle(
             path: "/Applications/Dezhban.app", identifier: "com.example.app", supportDirectory: dir)
         #expect(a.url == b.url)
         // FNV-1a of the empty string is its offset basis; a seeded hash would not
         // reproduce it.
-        #expect(InstanceLock.fnv1a("") == 0xcbf2_9ce4_8422_2325)
-        #expect(InstanceLock.fnv1a("a") == InstanceLock.fnv1a("a"))
-        #expect(InstanceLock.fnv1a("a") != InstanceLock.fnv1a("b"))
+        #expect(SessionLock.fnv1a("") == 0xcbf2_9ce4_8422_2325)
+        #expect(SessionLock.fnv1a("a") == SessionLock.fnv1a("a"))
+        #expect(SessionLock.fnv1a("a") != SessionLock.fnv1a("b"))
     }
 }
