@@ -10,15 +10,24 @@
 # same; that needs a $99/yr Apple Developer ID (see
 # packaging/macos/build-pkg.sh's dormant INSTALLER_SIGN_IDENTITY seam).
 #
-#   curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
+# The DOCUMENTED path is two lines, and that is deliberate — see
+# docs/usage/install.md. Run from a file, this script can ask; piped, it cannot,
+# because stdin is then the script text itself and there is nowhere to read an
+# answer from:
+#
+#   curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh -o /tmp/dezhban-install.sh
+#   sudo bash /tmp/dezhban-install.sh
+#
+# The piped form remains supported and unchanged, for provisioners and CI:
+#
+#   curl -fsSL .../install.sh | sudo bash
 #   curl -fsSL .../install.sh | sudo VERSION=0.2.0 bash    # pin an exact version
 #
-# On a real terminal (curl saved to a file, then run — NOT piped, since piping
-# makes stdin the script text itself) this asks a few questions: which
-# components to install on a fresh machine, and upgrade/reinstall/uninstall on
-# a machine that already has dezhban. Piped or non-interactive, it takes
-# today's exact defaults with no prompt at all — DEZHBAN_ASSUME_YES=1 forces
-# that behavior even on a real terminal.
+# On a real terminal this asks a few questions: which components to install on a
+# fresh machine, upgrade/reinstall/uninstall on a machine that already has
+# dezhban, and whether to run the setup wizard. Piped or non-interactive, it
+# takes today's exact defaults with no prompt at all — DEZHBAN_ASSUME_YES=1
+# forces that behavior even on a real terminal.
 #
 # Must run as root: it installs to /usr/local and /etc, and registers a system
 # service. Written for bash 3.2 — that is what macOS ships at /bin/bash with no
@@ -32,7 +41,14 @@ GH="https://github.com/$REPO"
 die()  { echo "error: $*" >&2; exit 1; }
 note() { echo "==> $*"; }
 
-[ "$(id -u)" -eq 0 ] || die "run as root — e.g. curl -fsSL .../install.sh | sudo bash"
+# $0 is "bash" when this was piped, so name the actual file only when there is
+# one. A hint that reads "sudo bash bash" is worse than no hint.
+if [ "$(id -u)" -ne 0 ]; then
+	if [ -f "$0" ]; then
+		die "run as root — e.g. sudo bash $0"
+	fi
+	die "run as root — e.g. curl -fsSL .../install.sh | sudo bash"
+fi
 
 # --- interactive discipline -----------------------------------------------
 # stdin IS the script text itself when piped (`curl | sudo bash`), so any

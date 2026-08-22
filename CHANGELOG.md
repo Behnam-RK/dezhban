@@ -65,6 +65,17 @@ current as you land changes.
 
 ### Changed
 
+- **The documented install is two lines, not a pipe.** `scripts/install.sh` has
+  always been interactive — components on a fresh machine,
+  upgrade/reinstall/uninstall on one that already has dezhban, and an offer to
+  run the setup wizard — but it can only ask when it is run from a file. Piped
+  into `bash`, stdin *is* the script text, so nobody following the README had
+  ever seen a prompt. The docs now lead with `curl … -o /tmp/dezhban-install.sh`
+  then `sudo bash /tmp/dezhban-install.sh`, which also lets you read the script
+  before running it as root. The piped one-liner is unchanged, still supported,
+  and still documented for unattended installs — its "never prompts" guarantee
+  is untouched. The script's "run as root" hint now names the actual file when
+  there is one instead of always suggesting the pipe.
 - **The setup wizard is two steps.** Blocked countries, then one "Use automatic
   VPN detection?" tickbox with the manual fields — tunnel interfaces, self-hosted
   config files, endpoints — revealed underneath it when you untick it. The

@@ -5,7 +5,8 @@
 **macOS or Linux:**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh -o /tmp/dezhban-install.sh
+sudo bash /tmp/dezhban-install.sh
 ```
 
 **Windows** (elevated PowerShell):
@@ -15,21 +16,45 @@ irm https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.ps1
 ```
 
 Either installs the CLI, the menubar app on macOS, and registers the
-background service — **without starting it**. Finish with:
+background service — **without starting it**.
+
+### Why two lines instead of a pipe
+
+Because run from a file, the installer can **ask**, and piped it cannot.
+
+At a real terminal it walks you through it: which components to install on a
+fresh machine (CLI, the menubar app, the service); on a machine that already
+has dezhban, whether to upgrade, reinstall, or **uninstall** — the last with a
+typed confirmation and a "keep your config?" question before anything is
+removed; and finally whether to run `dezhban setup` there and then, so you
+finish with a configured guard rather than a set of instructions.
+
+Piped into `bash`, none of that can happen: stdin *is* the script text, so
+there is nowhere to read an answer from. It takes today's defaults silently —
+which is exactly right for a provisioner or a CI job, and exactly wrong for
+someone installing this for the first time.
+
+The two-line form also lets you read the script before running it as root.
+That is the right habit for anything that installs a kill switch, and this
+one is worth the thirty seconds.
+
+**Unattended** is still one line, and still supported:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
+```
+
+`DEZHBAN_ASSUME_YES=1` forces that same no-prompt behaviour even at a real
+terminal, for a script that wants the defaults deliberately.
+
+### Finishing by hand
+
+If you skipped the wizard (or used the unattended form):
 
 ```sh
 sudo dezhban setup     # choose your settings
 sudo dezhban start     # arm it
 ```
-
-Piped like that, `scripts/install.sh` never prompts — stdin is the script
-text itself, so there's nowhere to read a question from, and it takes exactly
-the defaults above. Save it to a file and run it directly at a real terminal
-(`sudo bash install.sh`, not piped) and it asks a few questions instead: which
-components to install on a fresh machine, and — on a machine that already has
-dezhban — upgrade, reinstall, or **uninstall**, with a typed confirmation
-before anything is removed. `DEZHBAN_ASSUME_YES=1` forces the non-interactive
-defaults even at a real terminal.
 
 Everything below is why this is the recommended path, what else exists, and
 how to verify what you downloaded.
