@@ -830,6 +830,12 @@ task gui:build && open dist/Dezhban.app
       right after must stay closed. Then
       confirm no `.handoff` file is left in `~/Library/Application
       Support/com.behnam-rk.dezhban.app/`.
+- [ ] **An app filed into a subfolder of /Applications still migrates.** Move
+      `Dezhban.app` into `/Applications/Utilities/`, launch it on a pre-agent
+      install with login-at-launch on: it must migrate. Anywhere under an
+      Applications directory counts as a place the app will stay; comparing only the
+      immediate parent left that user's legacy item running with no marker
+      permanently, reported nowhere.
 - [ ] **A copy run from outside /Applications does not migrate the login item.**
       Unzip `Dezhban-macos.app.zip` to `~/Downloads` on a Mac with a pre-agent
       install and login-at-launch on, run it once, quit. The legacy login item

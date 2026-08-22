@@ -799,7 +799,11 @@ struct SettingsView: View {
         AppActions.capturedSequence(wantInstalled ? AppActions.installCommands
                                                   : AppActions.uninstallCommands) { result in
             bootBusy = false
-            status = ""
+            // Not while a login-item message is owed. The login toggle is not
+            // disabled during this sequence, so a user can flip it mid-install, get
+            // `awaitingApproval` guidance — the one message they must act on for the
+            // switch not to be lying — and have this clear it a moment later.
+            if !holdingLoginStatus { status = "" }
             if !result.ok {
                 state.showInLogs(title: "\(title) — failed", text: result.output)
             }

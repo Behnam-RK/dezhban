@@ -127,9 +127,9 @@ with an argument, the pre-`SMAppService` pattern.
   creates a fresh inode, locks *that*, and runs a second copy undetectably.
 
   A launch the *user* performed must never become a silent no-op, so the copy
-  that loses the lock focuses the winner and — when this launch would have opened
-  a window at all — posts a distributed notification asking it to open its own,
-  since the incumbent may be a `--background` login launch with none.
+  that loses the lock focuses the winner and posts a distributed notification
+  asking it to open its own, since the incumbent may be a `--background` login
+  launch with none.
 
   Not gated on "Open minimized". It was, on the reasoning that "Always" has to mean
   always — but the preference governs the *launch*, and a user-initiated launch of

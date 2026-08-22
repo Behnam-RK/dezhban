@@ -507,16 +507,22 @@ enum LoginItem {
     /// literal string comparison silently answered "no" and left the migration
     /// undone forever, reported only in a log line.
     private static var isInStableInstallLocation: Bool {
-        let parent = Bundle.main.bundleURL
+        let bundle = Bundle.main.bundleURL
             .resolvingSymlinksInPath()
             .standardizedFileURL
             .deletingLastPathComponent()
-        let candidates = [URL(fileURLWithPath: "/Applications")]
-            + FileManager.default
-            .urls(for: .applicationDirectory, in: .userDomainMask)
-        return candidates.contains {
-            $0.resolvingSymlinksInPath().standardizedFileURL.path == parent.path
-        }
+            .path
+        let roots = ([URL(fileURLWithPath: "/Applications")]
+            + FileManager.default.urls(for: .applicationDirectory, in: .userDomainMask))
+            .map { $0.resolvingSymlinksInPath().standardizedFileURL.path }
+        // Anywhere *under* an Applications directory, not only directly in one.
+        // Comparing just the immediate parent excluded
+        // /Applications/Utilities/Dezhban.app — an ordinary thing for someone to do
+        // with an app, and certainly a location it is going to stay in. That user
+        // never migrated, so the legacy item kept starting the app with no marker
+        // and "Open minimized" stayed broken for them permanently, reported only in
+        // a log line nobody reads.
+        return roots.contains { bundle == $0 || bundle.hasPrefix($0 + "/") }
     }
 
     /// Words, not a raw `SMAppService.Status`. It is an imported `NS_ENUM` with no

@@ -176,8 +176,14 @@ if [ -n "$CONSOLE_UID" ]; then
 	# /Search, not the local node. `dscl .` reads only local records, so for a
 	# network/LDAP/AD account it returns nothing — leaving this to skip the delete
 	# for precisely the accounts the lookup exists to serve.
-	CONSOLE_HOME=$(dscl /Search -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
-		sed -n 's/^NFSHomeDirectory: //p')
+	#
+	# And read as a plist, not scraped with sed. `dscl`'s plain output puts a value
+	# containing a space on a *continuation* line ("NFSHomeDirectory:\n /Volumes/Home
+	# Dirs/jsmith"), so the obvious `s/^NFSHomeDirectory: //p` came back empty and
+	# skipped the cleanup — for a home with a space in it, which is exactly what the
+	# network and relocated homes this lookup exists for tend to have.
+	CONSOLE_HOME=$(dscl -plist /Search -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
+		plutil -extract 'dsAttrTypeStandard:NFSHomeDirectory.0' raw -o - -- - 2>/dev/null)
 	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
 		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
 	fi
