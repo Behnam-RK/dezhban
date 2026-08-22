@@ -225,6 +225,24 @@ final class AppState: ObservableObject {
         selectedSection = .help
     }
 
+    /// Opens the first of `targets` whose anchor actually exists in the bundle.
+    ///
+    /// Preference order, not alternatives: a key's own row first, then its
+    /// section. Resolving here rather than in the Help pane is what makes the
+    /// fallback a *section* rather than the top of the page — the pane's own
+    /// resolve() drops an unknown fragment and keeps the page, which for a
+    /// forty-key reference is not a useful place to land.
+    func openHelp(preferring targets: [HelpTarget]) {
+        guard !targets.isEmpty else { return }
+        // Loaded on demand rather than held: this runs on a click, and the pane
+        // keeps its own copy. `bundled()` returning nil (a bare SwiftPM binary with
+        // no help payload) leaves the preferred target, which is the right guess
+        // when nothing can be checked.
+        let index = HelpBundle.bundled()
+        helpTarget = targets.first { index?.resolve($0)?.anchor != nil } ?? targets[0]
+        selectedSection = .help
+    }
+
     /// Routes a finished transcript into the Logs pane and
     /// navigates there — the window-side output surface for long actions.
     func showInLogs(title: String, text: String) {

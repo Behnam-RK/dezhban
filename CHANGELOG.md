@@ -20,13 +20,19 @@ current as you land changes.
   The help renderer gives each documented key a row anchor, and each key's
   anchor is derived from the key rather than hand-written, so the two cannot
   drift — a key that loses its documentation row now fails the build by name.
-  The **?** tooltip is the key's own one-line help instead of "Read about X in
-  the documentation".
+  The **?** button now says what it does on hover ("Open the documentation for
+  …"), which is the affordance a pointer user was missing — the key's own one-line
+  help is already on the control beside it, and visible under the toggles that
+  carry a caption.
 - **Shorter action buttons, with one caption line under the row.** The Overview's
   controls are now Block / Unblock / Switch VPN… / Pause / Guard down / Panic…,
-  and the sentence each title used to carry inline moved to a single caption
-  line beneath the row that follows the pointer and the keyboard focus (falling
-  back to the posture headline). The same sentence remains the tooltip. The
+  with the window controls shortened to match — **Resume (m:ss left)** rather than
+  "Resume now", and one **Cancel** in place of "Cancel redial window" and "Cancel
+  VPN switch" (which window it closes is in the caption). The sentence each title
+  used to carry inline moved to a caption line beneath the row that follows the
+  pointer and the keyboard focus, falling back to the posture headline. The same
+  sentence remains the tooltip, and the caption wraps to a second line rather than
+  truncating, since its tail is where the password expectation is stated. The
   menubar's items are unchanged: a menu has no caption line to delegate to, and
   a guided empty state's panic button keeps its full title for the same reason.
 - **The advanced tunables table names its keys in full** (`vpn.advanced.redialBudget`

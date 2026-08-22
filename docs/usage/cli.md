@@ -643,7 +643,8 @@ The main window's sidebar sections:
   *expected* unknown exit stays a plain row. With profiles configured,
   "Switch VPN…" becomes a menu so a switch window can target one by name.
   The action row's titles are deliberately short (Block, Unblock, Switch VPN…,
-  Pause, Guard down, Panic…) with a **single caption line beneath the row**
+  Pause, Guard down, Panic…, and Resume / Cancel while a window is open) with a
+  **caption line beneath the row**
   carrying the sentence each one used to hold inline — it follows the pointer
   and the keyboard focus, and falls back to the posture headline. The same
   sentence is also the control's tooltip, so the two can never disagree. The

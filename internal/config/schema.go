@@ -88,11 +88,24 @@ type Tunable struct {
 	// Help is one line explaining what the key does and what it costs.
 	Help string `json:"help"`
 
-	// DocAnchor points at the section of the bundled documentation that covers
-	// this key, as "<page>#<anchor>". Section-level rather than per-key because
-	// that is the granularity docs/usage/config.md actually has; a test asserts
-	// every anchor resolves in the generated help bundle.
+	// DocAnchor points at the *section* of the documentation that covers this
+	// key, as "<page>#<anchor>". A heading anchor, so it resolves everywhere
+	// markdown does — on GitHub, in an editor's preview, and in the app's bundled
+	// help. This is what a CLI surface prints, because it is the only one a reader
+	// outside the app can follow.
 	DocAnchor string `json:"docAnchor"`
+
+	// DocKeyAnchor points at the key's own table row, as "<page>#<anchor>", or is
+	// empty for a key documented in prose rather than a row.
+	//
+	// Additional to DocAnchor, never a replacement for it. Row ids exist only in
+	// the HTML tools/helpgen renders; markdown viewers generate heading anchors
+	// only. Overwriting DocAnchor with this therefore handed every CLI user a
+	// fragment that resolves nowhere, to fix a granularity problem only the app
+	// had — and it removed the app's own middle step on version skew, where a CLI
+	// newer than the bundled help finds no row id and would otherwise fall all the
+	// way back to the top of a forty-key reference instead of to the section.
+	DocKeyAnchor string `json:"docKeyAnchor,omitempty"`
 
 	// RestartReason is why a running daemon cannot adopt this key in place, or ""
 	// when it can. Derived from restartReasonFor — never restated here, so a key
@@ -479,14 +492,14 @@ func Tunables() []Tunable {
 	for i, t := range tunables {
 		t.Default = defaults[t.Key]
 		t.RestartReason = restartReasonFor(t.Key)
-		t.DocAnchor = docAnchorFor(t.Key, t.DocAnchor)
+		t.DocKeyAnchor = docKeyAnchorFor(t.Key, t.DocAnchor)
 		out[i] = t
 	}
 	return out
 }
 
-// docAnchorFor upgrades a key's declared section anchor to the anchor of its own
-// row in the reference.
+// docKeyAnchorFor derives the anchor of a key's own row in the reference, to sit
+// alongside its declared section anchor rather than in place of it.
 //
 // The reference documents each key as a table row opening with the key in a code
 // span, and the help renderer gives every such row an id (help.KeyAnchor). So a
@@ -494,26 +507,32 @@ func Tunables() []Tunable {
 // section heading that four dozen keys share, which is what the four constants
 // above delivered on their own.
 //
+// Alongside, because a row id is not a markdown anchor: it exists only in the HTML
+// tools/helpgen renders. Replacing the section anchor with it therefore broke every
+// reader outside the app — `config schema` prints the anchor for someone who will
+// open the file on GitHub — and cost the app its middle step when a CLI is newer
+// than the bundled help.
+//
 // Derived rather than hand-written, for the same reason defaults are: forty-odd
 // anchors restated by hand is forty-odd chances to drift. keysDocumentedInProse
 // names the exceptions, and TestEveryTunableDocAnchorResolves fails the build
 // naming any key whose derived anchor does not exist — so a key that loses its
 // row cannot silently fall back to landing somewhere plausible and wrong.
-func docAnchorFor(key, declared string) string {
+func docKeyAnchorFor(key, declared string) string {
 	if keysDocumentedInProse[key] {
-		return declared
+		return ""
 	}
 	page, _, ok := strings.Cut(declared, "#")
 	if !ok || page == "" {
-		return declared
+		return ""
 	}
 	return page + "#key-" + anchorSlug(key)
 }
 
 // keysDocumentedInProse are the keys docs/usage/config.md covers outside a table
-// row, which therefore have no row anchor to land on. They keep their section
-// anchor. Adding a row for one of these is an improvement — delete it from here
-// when you do.
+// row, which therefore have no row anchor to land on. They get an empty
+// DocKeyAnchor and are reached through their section anchor alone. Adding a row
+// for one of these is an improvement — delete it from here when you do.
 var keysDocumentedInProse = map[string]bool{}
 
 // anchorSlug mirrors help.Anchor's rule (GitHub's), applied to a config key.

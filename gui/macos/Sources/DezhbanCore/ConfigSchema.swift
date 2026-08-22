@@ -37,8 +37,14 @@ public struct ConfigTunable: Codable, Identifiable, Hashable {
     /// the config to Custom.
     public let preset: Bool
     public let help: String
-    /// Where this key is documented, as "<page>#<anchor>".
+    /// The *section* of the documentation covering this key, as "<page>#<anchor>".
+    /// A heading anchor, so it resolves in any markdown viewer as well as here.
     public let docAnchor: String
+    /// The key's own table row, as "<page>#<anchor>", or nil for a key documented
+    /// in prose. Row ids exist only in the rendered help, which is why this is
+    /// additional to `docAnchor` rather than a replacement — and why an older
+    /// bundle that predates row ids still lands the reader on the section.
+    public let docKeyAnchor: String?
     /// Why a running daemon cannot adopt this key in place; nil when it can.
     public let restartReason: String?
 
@@ -46,17 +52,28 @@ public struct ConfigTunable: Codable, Identifiable, Hashable {
     private enum CodingKeys: String, CodingKey {
         case key, label, kind
         case defaultValue = "default"
-        case capKey, unit, disablable, advanced, preset, help, docAnchor, restartReason
+        case capKey, unit, disablable, advanced, preset, help, docAnchor, docKeyAnchor
+        case restartReason
     }
 
     /// True when a change to this key takes effect without restarting the daemon.
     public var appliesLive: Bool { (restartReason ?? "").isEmpty }
 
-    /// Where the Help pane should land for this key. Nil only if the schema
-    /// carried no anchor at all — Go's TestEveryTunableDocAnchorResolves keeps
-    /// that from shipping, and a control simply offers no link rather than a
-    /// dead one.
-    public var docTarget: HelpTarget? { HelpTarget(docAnchor: docAnchor) }
+    /// Where the Help pane should land for this key, best first.
+    ///
+    /// The key's row, then its section. Two entries rather than one because the
+    /// grain the app wants and the grain that always exists are different things:
+    /// a row id is present only in help rendered by a build that emits them, so a
+    /// CLI newer than the bundle would otherwise drop the reader at the top of a
+    /// forty-key reference. Falling back to the section is the middle step that
+    /// case needs.
+    ///
+    /// Empty only if the schema carried no anchor at all — Go's
+    /// TestEveryTunableDocAnchorResolves keeps that from shipping, and a control
+    /// then offers no link rather than a dead one.
+    public var docTargets: [HelpTarget] {
+        [docKeyAnchor, docAnchor].compactMap { $0.flatMap(HelpTarget.init(docAnchor:)) }
+    }
 
     /// Placeholder text for a text field: the label, then the real default.
     ///

@@ -20,6 +20,12 @@ public enum ActionCaption {
     /// the pointer is the thing the user is currently aiming, and focus often
     /// lingers on whatever was last clicked.
     ///
+    /// That order is only safe because the caller clears `hovered` when focus
+    /// moves — most-recent-interaction wins. Preferring hover *unconditionally*
+    /// meant a pointer parked on one button outranked the keyboard indefinitely,
+    /// so tabbing moved the focus ring and the Space key while the caption kept
+    /// describing something else.
+    ///
     /// With neither, the posture headline stands in. Never empty and never a
     /// placeholder like "—": the line must not collapse and reflow the row every
     /// time the pointer crosses a gap between two buttons.

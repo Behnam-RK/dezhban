@@ -1003,11 +1003,23 @@ task gui:build && open dist/Dezhban.app
       (Block / Unblock / Switch VPN… / Pause / Guard down / Panic…). Move the
       pointer across the row: the caption line beneath it changes to that
       control's sentence — in particular, hovering **Pause** must say it uses
-      your real ISP IP, which is the warning its old title carried. Moving off
-      the row restores the posture headline. Tab through the row with Full
-      Keyboard Access on and confirm focus drives the caption too. The line must
-      never go blank or change height, which would reflow the row under the
-      pointer.
+      your real ISP IP, which is the warning its old title carried — and the whole
+      sentence must be readable, including the password expectation at its tail,
+      which is what a single truncated line used to cut. Moving off the row restores
+      the posture headline.
+
+      Tab through the row with Full Keyboard Access on and confirm focus drives the
+      caption too, **including with the pointer left resting on a different
+      button** — focus is meant to supersede a parked pointer; then move the pointer
+      and confirm it takes over again. The line must never go blank or change
+      height, which would reflow the row under the pointer.
+
+      Two more, both about a caption outliving what it described. With the pointer
+      parked on **Pause**, open a switch window from the menubar: the button under
+      the pointer becomes **Cancel**, and the caption must stop describing Pause
+      without waiting for the mouse to move. And with the pointer parked on
+      **Block**, stop the daemon: the caption's password clause must follow the
+      tooltip's rather than keeping the answer it was given at hover-enter.
 - [ ] **The degraded states keep their long panic title.** With the CLI missing
       or the service not installed, the panic button still reads "Panic — force
       unblock…" — there is no caption line there to carry the explanation.
@@ -1016,15 +1028,15 @@ task gui:build && open dist/Dezhban.app
       the menubar and Overview; the switch countdown ticks in both surfaces and
       matches.
 - [ ] **Pause and Resume, from both surfaces.** Pause opens with no password
-      (`control.allowPauseOps` default true); the app shows "Resume now (m:ss
-      left)" in place of the switch-window Cancel item, and the countdown agrees
-      between menubar and Overview. Resuming early re-arms the guard immediately.
+      (`control.allowPauseOps` default true); Overview shows "Resume (m:ss left)"
+      and the menubar "Resume now (m:ss left)" in place of the switch-window
+      Cancel item, and the countdown agrees between the two. Resuming early re-arms the guard immediately.
       Letting a pause expire re-arms it with no action needed. With
       `vpn.pauseMax: "0"`, Pause is disabled in both surfaces with a reason
       ("vpn.pauseMax is \"0\""), not just a silent no-op.
 - [ ] **Profile picker.** With `configs/dezhban.profiles.json`, Overview's
       details grid lists every configured profile and marks the one that
-      matched (`(active)`), matching `dezhban vpn list`; "Switching VPN…"
+      matched (`(active)`), matching `dezhban vpn list`; "Switch VPN…"
       becomes a menu with "Any known VPN" plus one item per profile, and
       picking a profile passes `--name <profile>` (`dezhban vpn list` shows the
       learned endpoint attributed to it afterward). With no profiles

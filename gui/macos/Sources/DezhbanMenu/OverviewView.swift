@@ -316,8 +316,15 @@ struct OverviewView: View {
                     }
                 }
             } else if let sw = s.switch, sw.open {
+                // Which window, not just "the window". Hovering this button replaces
+                // the posture headline — the only other place the distinction
+                // appears — so a caption that says neither leaves the user cancelling
+                // something unnamed, and the three triggers being distinct is most of
+                // what the guard's rules rest on.
                 captioned("cancel-window",
-                          state.routineHint("Closes the window and restores the guard.")) {
+                          state.routineHint(sw.isAutoRedial
+                              ? "Closes the automatic redial window and restores the guard."
+                              : "Closes the switch window you opened and restores the guard.")) {
                     Button("Cancel" + sw.leftSuffix(asOf: state.now)) {
                         AppActions.routine(["switch", "--cancel"], "cancel the switch window")
                     }
@@ -360,7 +367,35 @@ struct OverviewView: View {
                     hoveredAction = nil
                 }
             }
-            .onChange(of: focusedAction) { _ in focusedHint = focusedAction == id ? hint : focusedHint }
+            .onChange(of: focusedAction) { _ in
+                guard focusedAction == id else { return }
+                focusedHint = hint
+                // Focus supersedes a parked pointer. `.help` is recomputed every
+                // body pass while the captured hint is not, and hover used to win
+                // unconditionally — so tabbing with the pointer resting on another
+                // button moved the focus ring and the Space key while the caption
+                // went on describing whatever the mouse happened to be over. Most
+                // recent interaction wins; moving the pointer takes it straight back.
+                hoveredAction = nil
+            }
+            .onChange(of: hint) { newHint in
+                // The captured string has to track the live one. `state.routineHint`
+                // flips on `controlIsReachable`, which a poll updates — so a hint
+                // captured at hover-enter went stale under a stationary pointer and
+                // the caption said "No password needed" while the tooltip, recomputed
+                // each pass, said the opposite. That disagreement is the one thing
+                // this wrapper exists to prevent.
+                if hoveredAction?.id == id { hoveredAction = (id, newHint) }
+                if focusedAction == id { focusedHint = newHint }
+            }
+            .onDisappear {
+                // A control can be replaced under a stationary pointer — Pause
+                // becomes Cancel the moment a window opens — and the removed view
+                // never receives a hover-exit, so its caption described a button that
+                // no longer exists until the mouse next moved.
+                if hoveredAction?.id == id { hoveredAction = nil }
+                if focusedAction == id { focusedHint = "" }
+            }
     }
 
     /// The one line that explains whatever the user is pointing at. Always
@@ -372,8 +407,14 @@ struct OverviewView: View {
                                 fallback: PostureUI.humanPosture(s)))
             .font(.callout)
             .foregroundStyle(.secondary)
-            .lineLimit(1)
-            .truncationMode(.tail)
+            // Two lines, always reserved. One line truncated the tail of every long
+            // caption, and the tail is where `routineHint` appends the password
+            // expectation — so Pause read "…Will ask for your pass…" and dropped the
+            // clause warning that a prompt is coming. Reserving the space keeps the
+            // row from reflowing as the pointer crosses it, which is why this was
+            // one line to begin with; the panic caption twelve lines below already
+            // made the same trade for the same reason.
+            .lineLimit(2, reservesSpace: true)
             .frame(maxWidth: .infinity, alignment: .leading)
             .accessibilityHidden(true)
     }

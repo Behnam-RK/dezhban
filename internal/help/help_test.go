@@ -55,10 +55,13 @@ func TestBundleBuilds(t *testing.T) {
 // contextual help link is a promise that the section exists; a stale anchor
 // silently lands the reader at the top of a long reference page instead.
 //
-// Key anchors count alongside headings: a Tunable's DocAnchor names the key's
-// own row (config.docAnchorFor), which is the whole point of the per-key grain.
-// A key that loses its documentation row fails here by name rather than
-// degrading into a link to the top of the section.
+// Both anchors a Tunable carries are checked, because they are load-bearing for
+// different readers. DocAnchor is a *heading* anchor and must resolve everywhere
+// markdown does, since a CLI prints it for someone reading the file on GitHub.
+// DocKeyAnchor names the key's own row (config.docKeyAnchorFor) and exists only in
+// the rendered HTML; it is what gives the app's contextual help its per-key grain,
+// and a key that loses its documentation row fails here by name rather than
+// degrading into a link to the top of a long reference.
 func TestEveryTunableDocAnchorResolves(t *testing.T) {
 	index := buildInto(t)
 
@@ -74,19 +77,38 @@ func TestEveryTunableDocAnchorResolves(t *testing.T) {
 		anchors[e.Source] = set
 	}
 
-	for _, tun := range config.Tunables() {
-		page, frag, found := strings.Cut(tun.DocAnchor, "#")
-		if !found {
-			t.Errorf("%s: DocAnchor %q has no fragment", tun.Key, tun.DocAnchor)
-			continue
+	headings := map[string]map[string]bool{}
+	for _, e := range index {
+		set := map[string]bool{}
+		for _, h := range e.Headings {
+			set[h.Anchor] = true
 		}
-		set, ok := anchors[page]
+		headings[e.Source] = set
+	}
+
+	check := func(t *testing.T, key, field, value string, in map[string]map[string]bool) {
+		t.Helper()
+		page, frag, found := strings.Cut(value, "#")
+		if !found {
+			t.Errorf("%s: %s %q has no fragment", key, field, value)
+			return
+		}
+		set, ok := in[page]
 		if !ok {
-			t.Errorf("%s: DocAnchor names %q, which is not a bundled page", tun.Key, page)
-			continue
+			t.Errorf("%s: %s names %q, which is not a bundled page", key, field, page)
+			return
 		}
 		if !set[frag] {
-			t.Errorf("%s: no heading in %s has the anchor %q", tun.Key, page, frag)
+			t.Errorf("%s: nothing in %s has the anchor %q (%s)", key, page, frag, field)
+		}
+	}
+
+	for _, tun := range config.Tunables() {
+		// A heading, specifically: this is the one a CLI prints for a reader who
+		// will open the file on GitHub, where row ids do not exist.
+		check(t, tun.Key, "DocAnchor", tun.DocAnchor, headings)
+		if tun.DocKeyAnchor != "" {
+			check(t, tun.Key, "DocKeyAnchor", tun.DocKeyAnchor, anchors)
 		}
 	}
 }
