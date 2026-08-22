@@ -889,6 +889,18 @@ task gui:build && open dist/Dezhban.app
       confirm the log says it will retry. Then fix the bundle and launch again —
       the agent must register. `defaults read com.behnam-rk.dezhban.app
       dezhban.loginItemMigratedToAgent` must be absent or 0 between the two.
+- [ ] **An awaiting-approval registration is explained on a fresh pane open.** With
+      the agent registered but switched off under System Settings → General → Login
+      Items, quit Dezhban and reopen Settings *without touching the switch*. It reads
+      ON (an awaiting-approval registration counts as registered), so the line
+      explaining that must be there unprompted — nothing else can express the
+      difference.
+- [ ] **The uninstall errand does not cry wolf.** On an install where
+      login-at-launch was never switched on, run
+      `Dezhban.app/Contents/MacOS/DezhbanMenu --unregister-login-item; echo $?` — it
+      must be **0**. `SMAppService` reports `.notFound` for an agent that was never
+      registered, not only for a plist it cannot resolve, so anything treating that
+      status as "cannot tell" warns on every ordinary uninstall.
 - [ ] **The approval prompt's own guidance survives it.** Turn the login item off
       *in System Settings*, then switch Dezhban's "Open this app at login" on: the
       line says macOS is holding it for your approval. Click away and back **without

@@ -247,6 +247,15 @@ with an argument, the pre-`SMAppService` pattern.
   otherwise be told its bundle was already gone — while it went on launching at
   every login and the script reported everything removed.
 
+  One thing the app cannot tell the script: whether a registration exists that this
+  bundle's plist can no longer describe. `SMAppService`'s `.notFound` looks like it
+  carries that, and on this OS it is simply what an agent that was never registered
+  reports — verified against the shipped ad-hoc bundle. Treating it as "cannot tell"
+  made every uninstall of an install where login-at-launch had never been switched on
+  warn that macOS refused to retract it, and had `disable()` snap the switch back on
+  over a retraction that had just succeeded. So nothing infers it, and the honest
+  signal is narrower: an unregister that actually fails.
+
   The errand's exit status is load-bearing: `unregister()` only logs a refusal and
   the script discards the output, so without it a login item macOS would not
   retract stayed behind — pointing at a bundle deleted moments later, unreachable

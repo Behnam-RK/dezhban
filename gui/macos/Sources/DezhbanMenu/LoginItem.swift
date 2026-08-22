@@ -206,15 +206,20 @@ enum LoginItem {
     /// because a pre-upgrade user never set it.
     private static var legacyEnabled: Bool { SMAppService.mainApp.status == .enabled }
 
-    /// The agent's plist cannot be resolved, so nothing can be asserted about a
-    /// registration an earlier, valid copy of the bundle may have left in launchd.
-    ///
-    /// `registered()` reads `.notFound` as "not registered", which is the honest
-    /// answer about *this* bundle's plist and the wrong one for "is there anything
-    /// to retract" — `retractAll()` returned true on it, so the uninstall errand
-    /// exited 0 and the script printed a clean removal over precisely the orphan it
-    /// exists to remove.
-    private static var agentUnresolvable: Bool { service.status == .notFound }
+    // There is deliberately no "the plist could not be resolved" predicate, and one
+    // was tried and removed. `.notFound` looks like it carries that meaning, and on
+    // this OS it is simply what an agent that was never registered reports —
+    // verified against the shipped ad-hoc bundle, which exits the retraction errand
+    // as a failure with nothing registered at all. Treating it as "cannot tell"
+    // therefore fired on the common path: `disable()` snapped the switch back ON with
+    // "macOS would not remove the login item" over a retraction that had just
+    // succeeded, and every uninstall of an install where login-at-launch was never
+    // switched on warned that macOS had refused to retract it — crying wolf on the
+    // ordinary path and eroding the signal on the one the warning was written for.
+    //
+    // So the distinction is not available from a status read, and nothing pretends
+    // otherwise. What remains truthful is an unregister that actually fails, which is
+    // what `registered()` reports afterwards.
 
     /// Whether a registration exists at all, as opposed to one that will start
     /// the app *right now*.
@@ -439,14 +444,7 @@ enum LoginItem {
             // on was refused, permanently, with nothing having warned them.
             return liveOutcome(.disabling, fallback: .blockedByLegacy)
         }
-        if registered(service) || agentUnresolvable {
-            // `agentUnresolvable` too: reporting "App will not open at login" when
-            // the plist could not even be resolved claims a retraction that was
-            // never attempted, over a registration an earlier copy of the bundle may
-            // still hold.
-            return .agentStuck
-        }
-        return .disabled
+        return registered(service) ? .agentStuck : .disabled
     }
 
     /// Retracts everything that could start this app at login, best effort.
@@ -472,11 +470,6 @@ enum LoginItem {
             // unregistered, files deleted". The orphan the errand exists to remove,
             // now silent. The exit status is what makes it visible.
             //
-            // An unresolvable plist counts as a failure, not a success: it means
-            // nothing could be asserted either way, and claiming a clean retraction
-            // over a registration that may well survive is the one direction this
-            // must not err in.
-            if agentUnresolvable { return false }
             return !registered(service) && !registered(.mainApp)
         }
     }

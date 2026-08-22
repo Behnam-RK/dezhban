@@ -1053,6 +1053,19 @@ struct SettingsView: View {
                     loginMessageForEnabled = nil
                     loginMessageAwaitsApproval = false
                 }
+                // And *state* it, not only preserve it. This read was only ever
+                // consulted to decide whether to clear a message a click had left
+                // behind — so opening the pane with no preceding click, on an install
+                // whose agent the user had switched off under Login Items, painted the
+                // switch ON with nothing said, while nothing started the app at login.
+                // `enabled` counts an awaiting-approval registration, so the switch
+                // cannot express it; this is the only thing that can.
+                if live.awaitingApproval, loginMessage == nil {
+                    loginMessage = LoginItem.Outcome.awaitingApproval.message
+                    loginMessageIsTransient = false
+                    loginMessageAwaitsApproval = true
+                    loginMessageForEnabled = live.enabled
+                }
             }
         }
         notifyPrefs = NotificationManager.prefs
