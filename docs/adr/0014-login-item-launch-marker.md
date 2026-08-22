@@ -190,8 +190,13 @@ with an argument, the pre-`SMAppService` pattern.
   app — once per debounce interval indefinitely, reopening a window the moment it
   was closed. Requiring a file outside the launch window costs nothing real (the
   file is written before the post, so only the microsecond gap between the two
-  needs the exemption) and removes the channel. The debounce is a rate limit, not a
-  gate. Both consumers do their claim off the main thread, since it is a stat and an
+  needs the exemption) and removes the channel — with one addition: a poster whose
+  file could not be written says so in the notification, because it is then the only
+  signal there will be and only the poster can know that. Requiring a file
+  unconditionally turned a full or read-only home into the silent no-op the
+  mechanism exists to prevent, and the exemption weakens nothing that was not
+  already reachable, since anything able to forge the notification could equally run
+  `open -a Dezhban`. The debounce is a rate limit, not a gate. Both consumers do their claim off the main thread, since it is a stat and an
   unlink and a network or relocated home would otherwise block the run loop on the
   one path meant to feel instant.
 

@@ -44,6 +44,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// `--background` login launch with no window to be handed over to.
     static let openWindowNotification = "com.behnam-rk.dezhban.app.openWindow"
 
+    /// Set by a poster whose hand-off file could not be written, so it is the only
+    /// signal there will be. Only the poster knows that, which is why it is carried
+    /// here rather than inferred by the receiver from a timer.
+    static let handoffFilelessKey = "dezhban.handoffFileless"
+
     func applicationDidFinishLaunching(_: Notification) {
         // FIRST. A duplicate copy of the app posts this as it exits and then dies;
         // the notification is delivered immediately and never queued, so anything
@@ -136,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// A second copy of the app was started by the user and found this one
     /// already owning the session. Opening the window is the whole reason it
     /// bothered to tell us — it is standing in for the launch the user performed.
-    @objc private func openWindowRequested() {
+    @objc private func openWindowRequested(_ note: Notification) {
         // The claim goes off the main thread, like the backstop's: it is a stat and
         // an unlink, and on a network or relocated home — the case `uninstall.sh`
         // reads NFSHomeDirectory to accommodate — that blocks the run loop on the
@@ -144,7 +149,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         //
         // Whether the fileless fallback is allowed has to be read here though,
         // since it is main-thread state.
-        let backstopArmed = handoffTimer != nil
+        // Either the launch window, or the poster telling us its file never landed.
+        let fileless = (note.userInfo?[Self.handoffFilelessKey] as? String) == "1"
+        let acceptWithoutFile = handoffTimer != nil || fileless
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             switch sessionHandoff?.claim() ?? .absent {
             case .fresh:
@@ -167,7 +174,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 // derivable. Unbounded, any process running as this user could call
                 // `MainWindow.open()` — which activates the app — once per debounce
                 // interval forever, reopening a window the moment it was closed.
-                guard backstopArmed else { return }
+                //
+                // The one exemption is a poster that says its file could not be
+                // written: it is then the only signal there will be, and only the
+                // poster can know that. It weakens nothing that was not already
+                // reachable — anything able to forge this could equally run
+                // `open -a Dezhban` — and without it a full or read-only home turned
+                // the hand-off into the silent no-op it exists to prevent.
+                guard acceptWithoutFile else { return }
                 DispatchQueue.main.async { self?.openForHandoff(definite: false) }
             case .lost:
                 // The backstop got there first and is opening the window.

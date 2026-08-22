@@ -164,13 +164,25 @@ func acquireSessionOwnership() -> SessionLock? {
             // with no observer installed — the file is the one that waits, and the
             // incumbent's launch-time backstop finds it. Whichever of the two gets
             // there claims it, so the window opens once (see HandoffRequest).
+            var fileLanded = true
             if case .failure(let error) = sessionHandoff?.post() ?? .success(()) {
                 NSLog("DezhbanMenu: could not record the hand-off request: \(error)")
+                fileLanded = false
             }
+            // Whether the file landed travels WITH the notification, because this
+            // process is the only one that knows. The incumbent requires a file
+            // outside its launch-time backstop window — that is what keeps an
+            // unauthenticated notification from being an activate-on-demand channel
+            // — so without this, a failed write (read-only or full home, wrong
+            // permissions on the support directory: the same conditions the session
+            // lock is written to tolerate) turned a launch the notification alone
+            // used to handle into a visible no-op, which is the one outcome this
+            // whole mechanism exists to prevent.
             DistributedNotificationCenter.default().postNotificationName(
                 NSNotification.Name(AppDelegate.openWindowNotification),
                 object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path,
-                userInfo: nil, deliverImmediately: true)
+                userInfo: fileLanded ? nil : [AppDelegate.handoffFilelessKey: "1"],
+                deliverImmediately: true)
         }
         NSLog("DezhbanMenu: another copy of this install owns the session; exiting")
         exit(0)

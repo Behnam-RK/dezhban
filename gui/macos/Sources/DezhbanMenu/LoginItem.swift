@@ -273,7 +273,22 @@ enum LoginItem {
         // nothing the app can do will make enabling this safe. See
         // `Outcome.legacyStuck`.
         retractLegacy()
-        if registered(.mainApp) { return .blockedByLegacy }
+        if registered(.mainApp) {
+            // Which outcome depends on what actually survived, not on the direction
+            // clicked. A legacy item still *enabled* is starting the app at login,
+            // so `.legacyStuck` (isOn true) is the true report; only a dormant
+            // `.requiresApproval` leftover means nothing is starting it.
+            //
+            // `.blockedByLegacy` used to be returned for both, on the argument that
+            // `enable()` is only entered when the switch read OFF so `isEnabled` must
+            // have been false. That assumes a fresh switch — and the rest of this
+            // code deliberately treats it as stale, which is exactly why
+            // `set(enabled:)` takes the state the user asked for instead of
+            // re-reading. Re-approving the "Dezhban" row in System Settings arms the
+            // legacy registration behind a switch showing OFF, and clicking it then
+            // reported "left off" over a live login launch.
+            return legacyEnabled ? .legacyStuck : .blockedByLegacy
+        }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
         // Flushed, like every other write to these three coupled flags. This pane
         // can have its process killed by launchd mid-operation, and clearing the

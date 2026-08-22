@@ -496,7 +496,7 @@ current as you land changes.
   unwarranted repair; it is now treated as an unreadable check, the same
   discipline already applied to a fully failed query.
 - **A local, unprivileged process could block the Windows kill switch from
-  ever starting.** The single-session lock's mutex lived under a predictable
+  ever starting.** The single-instance lock's mutex lived under a predictable
   `Global\` name, so anyone could pre-create it first and either get treated
   as the legitimate "already running" holder or deny the daemon's own
   `CreateMutexW` with a hostile DACL. It now lives inside a boundary-restricted

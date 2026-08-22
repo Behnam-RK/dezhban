@@ -809,6 +809,11 @@ task gui:build && open dist/Dezhban.app
       login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
       it, LaunchServices relaunches the app with no arguments and races the agent
       for the lock.
+- [ ] **The login toggle's result has its own line.** Start the service toggle
+      ("Start the guard at boot"), and while its privileged sequence is running flip
+      "Open this app at login". Both messages must be readable at once — the install's
+      progress on the pane's status line, the login result underneath the toggle —
+      and neither may erase the other.
 - [ ] **Two hand-offs in quick succession both open the window.** Only reachable
       while the incumbent is still starting — once it is up, LaunchServices reopens
       rather than launching a duplicate, so there is no hand-off to debounce. Log

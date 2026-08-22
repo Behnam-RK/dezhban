@@ -37,16 +37,17 @@ struct SettingsView: View {
     /// while a mutation is outstanding, no read may write the switch, whichever
     /// order the two happen to complete in.
     @State private var loginPending = false
-    /// Until when `seed()` must leave the status line alone.
+    /// The login item's own result line.
     ///
-    /// `seed()` runs on every `didBecomeActiveNotification`, and macOS delivers one
-    /// *during* a login-item change because it surfaces System Settings or an
-    /// approval prompt. So the user came back from that prompt and `seed()` promptly
-    /// overwrote the line with "Loading…" and then "Seeded from …" — swallowing the
-    /// `awaitingApproval` and `legacyStuck` guidance, which is the entire reason
-    /// `Outcome` carries a message. `loginPending` already protects `loginEnabled`
-    /// from this same race; the status line needed its own.
-    @State private var loginStatusHoldUntil: Date?
+    /// Separate from the pane's shared `status` because the two are different facts
+    /// with different lifetimes: `seed()` rewrites `status` on every
+    /// `didBecomeActiveNotification` — which macOS delivers *during* a login-item
+    /// change, since it surfaces System Settings or an approval prompt — and the
+    /// service toggle owns it for the length of a privileged sequence. Sharing the
+    /// line meant the `awaitingApproval` and `legacyStuck` guidance, the entire
+    /// reason `Outcome` carries a message, could be wiped before it was read; and
+    /// guarding it in one direction only moved the loss to the other.
+    @State private var loginMessage: String?
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -197,6 +198,19 @@ struct SettingsView: View {
                     Toggle("Open this app at login", isOn: loginBinding)
                         .help("Registers the app as a login item (System Settings → General → Login Items). "
                             + "This is only the status display — the guard itself is the system service above.")
+                    // Its own line, not the pane's shared `status`. The login item is
+                    // the one control here whose result can be a several-second
+                    // round-trip AND can need the user to go and do something in
+                    // System Settings, so it was competing with the service toggle's
+                    // progress message for a single line: each clobbered the other,
+                    // and a guard against one direction only moved the loss to the
+                    // other. Two facts, two lines.
+                    if let loginMessage {
+                        Text(loginMessage)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Picker("Open minimized", selection: launchVisibilityBinding) {
                         ForEach(LaunchVisibility.allCases) { choice in
                             Text(choice.label).tag(choice)
@@ -799,20 +813,11 @@ struct SettingsView: View {
         AppActions.capturedSequence(wantInstalled ? AppActions.installCommands
                                                   : AppActions.uninstallCommands) { result in
             bootBusy = false
-            // Not while a login-item message is owed. The login toggle is not
-            // disabled during this sequence, so a user can flip it mid-install, get
-            // `awaitingApproval` guidance — the one message they must act on for the
-            // switch not to be lying — and have this clear it a moment later.
-            if !holdingLoginStatus { status = "" }
+            status = ""
             if !result.ok {
                 state.showInLogs(title: "\(title) — failed", text: result.output)
             }
         }
-    }
-
-    /// Whether a login-item message is still owed the user's attention.
-    private var holdingLoginStatus: Bool {
-        loginPending || (loginStatusHoldUntil.map { $0 > Date() } ?? false)
     }
 
     private var loginBinding: Binding<Bool> {
@@ -841,8 +846,7 @@ struct SettingsView: View {
                 let revision = loginRevision
                 loginPending = true
                 loginEnabled = wanted
-                let inProgress = wanted ? "Registering the login item…" : "Removing the login item…"
-                status = inProgress
+                loginMessage = wanted ? "Registering the login item…" : "Removing the login item…"
                 // The enqueueing form, so two quick clicks are applied in the order
                 // they were made — dispatching each to a concurrent queue let them
                 // race into LoginItem's serial queue and land out of order.
@@ -855,14 +859,7 @@ struct SettingsView: View {
                     // seconds later, so it is only written if nothing else has
                     // claimed it since — otherwise a login result overwrites, say,
                     // "Installing service…" while that install is still running.
-                    // The hold exists to protect a message that is on screen, so
-                    // it is only taken when one was actually written. Setting it
-                    // unconditionally suppressed seed()'s status updates for ten
-                    // seconds to defend a line that had been declined.
-                    if status == inProgress {
-                        status = outcome.message
-                        loginStatusHoldUntil = Date().addingTimeInterval(10)
-                    }
+                    loginMessage = outcome.message
                 }
             })
     }
@@ -986,7 +983,7 @@ struct SettingsView: View {
         // stale `true` is also what keeps the control enabled.
         tokenEnrolled = ControlToken.isStored
         refreshTokenCapability()
-        if !holdingLoginStatus { status = "Loading…" }
+        status = "Loading…"
         canApply = false
         // Off-main for the same reason `set(enabled:)` is: this is two blocking
         // SMAppService status reads over XPC (it was one before the agent), and
@@ -1031,7 +1028,7 @@ struct SettingsView: View {
                 // seeded snapshot are the same thing at this instant and the pane
                 // starts out clean.
                 seededValues = fields.currentValues
-                if !holdingLoginStatus { status = "Seeded from \(path)" }
+                status = "Seeded from \(path)"
                 canApply = true
             }
         }

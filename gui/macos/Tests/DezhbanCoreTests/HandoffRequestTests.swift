@@ -65,6 +65,12 @@ struct HandoffRequestTests {
     /// Folded together, a permanent failure made every claimer stand down forever
     /// and killed the mechanism silently.
     @Test func anUnremovableRequestIsBlockedNotLost() throws {
+        // Root ignores directory permissions, so the mechanism this test uses to
+        // make a file unremovable does not work for it — the unlink succeeds,
+        // `claim()` returns `.fresh`, and the test would fail for a reason that has
+        // nothing to do with the code. testing.md routinely asks contributors to run
+        // privileged checks on this machine, so skip rather than lie.
+        try #require(getuid() != 0, "cannot make a file unremovable for root")
         let dir = try tempDir()
         defer { try? FileManager.default.removeItem(at: dir) }
         let request = HandoffRequest(url: dir.appendingPathComponent("h.handoff"))
