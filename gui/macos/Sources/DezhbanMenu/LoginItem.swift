@@ -96,6 +96,9 @@ enum LoginItem {
         /// switch OFF while the registration was live and the app kept starting
         /// at login. Exactly what `isEnabled`'s docstring says it exists to stop.
         case agentStuck
+        /// This copy of the app is not somewhere it will stay, so it must not claim
+        /// the login item.
+        case unstableLocation(String)
         /// Registration failed outright, and nothing is registered.
         case failed(String)
 
@@ -104,7 +107,7 @@ enum LoginItem {
         var isOn: Bool {
             switch self {
             case .enabled, .awaitingApproval, .legacyStuck, .agentStuck: return true
-            case .disabled, .failed, .blockedByLegacy: return false
+            case .disabled, .failed, .blockedByLegacy, .unstableLocation: return false
             }
         }
 
@@ -130,6 +133,10 @@ enum LoginItem {
             case .agentStuck:
                 return "macOS would not remove the login item, so Dezhban will still open at "
                     + "login. Remove \"Dezhban\" under System Settings → General → Login Items."
+            case .unstableLocation(let where_):
+                return "Dezhban has to live in Applications to open at login. This copy is "
+                    + "running from \(where_), and a login item pointing there would break the "
+                    + "moment it moves."
             case .failed(let why):
                 return "Could not change the login item: \(why)"
             }
@@ -249,6 +256,22 @@ enum LoginItem {
     }
 
     private static func enable() -> Outcome {
+        // Gated on the install location, exactly as the migration is. The waiver
+        // this used to carry — "an explicit toggle from Settings is the user's own
+        // call" — ignored that the consequence is not the user's to undo:
+        // `register()` records the *calling* bundle (`BundleProgram` is
+        // bundle-relative), and only the registering bundle can ever call
+        // `unregister()`. So toggling this on from `dist/Dezhban.app` — the
+        // documented dev loop, which `SessionLock` is path-keyed specifically to
+        // allow — leaves a launchd registration pointing into a bundle that the next
+        // build deletes: it fails to load at every login, leaves an orphan row in
+        // Login Items, and *nothing in the product can retract it*, since
+        // uninstall.sh only searches the Applications directories. Same for a zip
+        // copy run once from ~/Downloads, which is the case the migration's own gate
+        // exists to avoid.
+        guard isInStableInstallLocation else {
+            return .unstableLocation(Bundle.main.bundleURL.deletingLastPathComponent().path)
+        }
         // The agent must never be registered beside a live legacy item — that is
         // two launches at login, one with the marker and one without, and
         // whichever won the session lock would decide whether the window opened.

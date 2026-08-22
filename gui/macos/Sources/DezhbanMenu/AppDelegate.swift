@@ -50,22 +50,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     static let handoffFilelessKey = "dezhban.handoffFileless"
 
     func applicationDidFinishLaunching(_: Notification) {
-        // FIRST. A duplicate copy of the app posts this as it exits and then dies;
-        // the notification is delivered immediately and never queued, so anything
-        // ahead of this line is time in which a user-initiated launch is silently
-        // dropped — the one outcome `acquireSessionOwnership` exists to prevent.
-        // Scoped to the bundle path, which is what the poster sends: the name
-        // comes from the bundle id, and two installs of the app may legitimately
-        // run side by side (see SessionLock).
-        DistributedNotificationCenter.default().addObserver(
-            self, selector: #selector(openWindowRequested),
-            name: NSNotification.Name(Self.openWindowNotification),
-            object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path)
-        // And the file the notification cannot cover: a duplicate that posted
-        // while this process was still starting up found no observer, so its
-        // request is on disk. Checked now and for a few seconds more — see
-        // startHandoffBackstop for why it is bounded rather than on every tick.
-        startHandoffBackstop()
+        // FIRST, and only for the session owner. A duplicate posts its hand-off as
+        // it exits and then dies; the notification is delivered immediately and
+        // never queued, so anything ahead of this is time in which a user-initiated
+        // launch is silently dropped — the one outcome `acquireSessionOwnership`
+        // exists to prevent.
+        //
+        // A copy that could not take the lock and started anyway (the `.unavailable`
+        // path, for a broken support directory) is running beside the real owner. If
+        // both answered, one double-click would open two windows, each with its own
+        // debounce, so neither could suppress the other.
+        if sessionOwnsLock {
+            installHandoffHandling()
+        }
         // macOS has a second way to start this app at login, and it does not pass
         // the launch marker: "Reopen windows when logging back in" relaunches
         // whatever was running at logout, through LaunchServices, with no
@@ -226,6 +223,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// Long enough to cover the gap between a notification and a backstop tick
     /// (0.5s), short enough that two genuinely separate launches both get a window.
     private static let handoffDebounce: TimeInterval = 3
+
+    /// Installs both hand-off consumers. Called only by the session owner.
+    ///
+    /// Scoped to the bundle path, which is what the poster sends: the name comes
+    /// from the bundle id, and two installs of the app may legitimately run side by
+    /// side (see `SessionLock`).
+    private func installHandoffHandling() {
+        DistributedNotificationCenter.default().addObserver(
+            self, selector: #selector(openWindowRequested),
+            name: NSNotification.Name(Self.openWindowNotification),
+            object: Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL.path)
+        // And the file the notification cannot cover: a duplicate that posted while
+        // this process was still starting up found no observer, so its request is on
+        // disk. Checked now and for a few seconds more — see startHandoffBackstop for
+        // why it is bounded rather than on every tick.
+        startHandoffBackstop()
+    }
 
     /// The notification's backstop, for the gap before the observer above exists.
     ///

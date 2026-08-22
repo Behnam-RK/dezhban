@@ -60,6 +60,15 @@ func makeMainMenu() -> NSMenu {
 /// makes a request that arrived before the observer existed still get honoured.
 var sessionHandoff: HandoffRequest?
 
+/// Whether this process actually holds the session lock.
+///
+/// False on the `.unavailable` path, where the app deliberately starts anyway
+/// rather than refuse to launch over a broken support directory. Such a copy is
+/// running alongside the real owner, and must not also answer hand-offs: both would
+/// open a window for one double-click, each with its own debounce, so the debounce
+/// cannot suppress the second.
+var sessionOwnsLock = false
+
 /// Retracts every login registration and exits, without starting the app.
 ///
 /// The uninstaller needs this. A LaunchServices login item disappeared with its
@@ -107,6 +116,7 @@ func acquireSessionOwnership() -> SessionLock? {
     sessionHandoff = HandoffRequest.beside(lock: lock.url)
     switch lock.acquire() {
     case .acquired:
+        sessionOwnsLock = true
         // Anything already on disk was meant for a predecessor, not for us.
         sessionHandoff?.discard()
         return lock

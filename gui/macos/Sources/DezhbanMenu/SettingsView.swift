@@ -855,10 +855,9 @@ struct SettingsView: View {
                     guard revision == loginRevision else { return }
                     loginPending = false
                     loginEnabled = outcome.isOn
-                    // `status` is the whole pane's line and this completion can land
-                    // seconds later, so it is only written if nothing else has
-                    // claimed it since — otherwise a login result overwrites, say,
-                    // "Installing service…" while that install is still running.
+                    // Written unconditionally: this is the login item's own line,
+                    // so there is nothing else to collide with. That is the point of
+                    // having split it from the pane's shared status.
                     loginMessage = outcome.message
                 }
             })
@@ -996,6 +995,12 @@ struct SettingsView: View {
             DispatchQueue.main.async {
                 guard revision == loginRevision, !loginPending else { return }
                 loginEnabled = enabled
+                // And clear the message, which described a moment that has passed.
+                // "macOS is holding this for your approval" outlived the approval:
+                // the user went to System Settings, granted it, came back — which is
+                // what fires this seed — and the pane still told them to go and do
+                // it. A fresh status read makes the switch speak for itself.
+                loginMessage = nil
             }
         }
         notifyPrefs = NotificationManager.prefs

@@ -126,6 +126,12 @@ with an argument, the pre-`SMAppService` pattern.
   purged lock file while the incumbent holds its descriptor means the next launch
   creates a fresh inode, locks *that*, and runs a second copy undetectably.
 
+  Only the session owner answers hand-offs. A copy that could not take the lock and
+  started anyway — the `.unavailable` path, which exists so a broken support
+  directory cannot stop the app launching — runs beside the real owner, and if both
+  answered, one double-click would open two windows, each with its own debounce, so
+  neither could suppress the other.
+
   A launch the *user* performed must never become a silent no-op, so the copy
   that loses the lock focuses the winner and posts a distributed notification
   asking it to open its own, since the incumbent may be a `--background` login
@@ -363,6 +369,16 @@ with an argument, the pre-`SMAppService` pattern.
   help because a pre-upgrade user never set it. The unregister *guards* keep
   asking the presence question, because a `.requiresApproval` registration is
   still a registration to retract.
+
+  Enabling the login item from Settings is gated on the install location too, not
+  only the migration. The waiver it used to carry — "an explicit toggle is the user's
+  own call" — missed that the consequence is not the user's to undo: `register()`
+  records the calling bundle, and only that bundle can ever `unregister()`. So
+  toggling it on from `dist/Dezhban.app`, the dev loop `SessionLock` is path-keyed
+  specifically to allow, leaves a registration pointing into a bundle the next build
+  deletes — failing to load at every login, orphaning a row in Login Items, and
+  retractable by nothing, since the uninstaller only searches the Applications
+  directories.
 
   And the migration runs only from `/Applications`, without marking the account
   migrated otherwise. `register()` records the plist of the *calling* bundle
