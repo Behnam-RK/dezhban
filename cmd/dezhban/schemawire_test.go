@@ -44,8 +44,7 @@ func TestSchemaWireNamesTheAppDecodes(t *testing.T) {
 		t.Fatalf("unmarshal: %v", err)
 	}
 
-	// Every name in ConfigSchema.swift's CodingKeys, so a Go-side rename of any of
-	// them fails here rather than degrading the app in silence.
+	// The names every tunable carries unconditionally.
 	required := []string{
 		"key", "label", "kind", "default", "disablable", "advanced", "preset",
 		"help", "docAnchor",
@@ -55,6 +54,39 @@ func TestSchemaWireNamesTheAppDecodes(t *testing.T) {
 			if _, ok := obj[name]; !ok {
 				t.Errorf("%s: no %q field on the wire", tunables[i].Key, name)
 			}
+		}
+	}
+
+	// And the `omitempty` ones, asserted per tunable that actually has a value.
+	//
+	// Listing only the unconditional names and calling that "every CodingKey" was
+	// the first shape of this test, and it left the most consequential field
+	// unpinned: rename `restartReason` and `ConfigTunable.appliesLive` — which is
+	// `(restartReason ?? "").isEmpty` — returns true for every key, so Settings
+	// tells the user a restart-required key applies live. Nothing would have failed.
+	optional := map[string]func(config.Tunable) string{
+		"capKey":        func(t config.Tunable) string { return t.CapKey },
+		"unit":          func(t config.Tunable) string { return t.Unit },
+		"restartReason": func(t config.Tunable) string { return t.RestartReason },
+	}
+	covered := map[string]int{}
+	for i, obj := range decoded {
+		for name, value := range optional {
+			has := value(tunables[i]) != ""
+			_, onWire := obj[name]
+			switch {
+			case has && !onWire:
+				t.Errorf("%s: %q has a value but is missing from the wire", tunables[i].Key, name)
+			case !has && onWire:
+				t.Errorf("%s: %q is empty but present on the wire", tunables[i].Key, name)
+			case has:
+				covered[name]++
+			}
+		}
+	}
+	for name := range optional {
+		if covered[name] == 0 {
+			t.Errorf("no tunable carries %q, so its wire name is not being pinned", name)
 		}
 	}
 

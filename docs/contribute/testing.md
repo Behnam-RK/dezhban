@@ -1030,20 +1030,33 @@ task gui:build && open dist/Dezhban.app
       row; it does not erase where the pointer is. The line must never go blank or
       change height either, which would reflow the row under the pointer.
 
-      Two more, both about a caption outliving what it described. With the pointer
-      parked on **Pause**, open a switch window from the menubar: the button under
-      the pointer becomes **Cancel**, and the caption must stop describing Pause
-      without waiting for the mouse to move. And with the pointer parked on
-      **Block**, make the control socket unreachable *without* stopping the daemon —
-      `dezhban config set control.enabled=false` then `dezhban restart` — and the
-      caption's password clause must follow the tooltip's rather than keeping the
-      answer it was given at hover-enter.
+      Two more, both about a caption outliving what it described, and both needing
+      the pointer to stay put — so trigger them from a terminal that already has
+      focus, with the command pre-typed. Reaching for the menubar moves the pointer
+      off the control, which fires a hover-exit and clears the state the step is
+      trying to observe.
 
-      Not by stopping the daemon: `state.isLive` goes false, Overview renders its
-      guided "stopped" layout, and the action row and its caption line are gone
-      before any of this could be observed. `routineHint` keys on
-      `controlIsReachable`, which is the socket, not the posture — so the socket has
-      to be the thing that changes.
+      With the pointer parked on **Pause**, press Return on a waiting
+      `sudo dezhban switch --no-wait`: the button under the pointer becomes
+      **Cancel**, and the caption must stop describing Pause without waiting for the
+      mouse to move. Leave the pointer there through the next few countdown ticks —
+      the caption must stay on Cancel, and must not be handed back to the pointer if
+      you had tabbed elsewhere first, since retitling re-establishes the tracking area
+      under a stationary mouse.
+
+      Then, with the pointer parked on **Block**, run a pre-typed action that ends in
+      a `refreshServiceState()` — any Overview action will do — with the control
+      socket having gone away underneath (`control.enabled=false` plus a restart
+      beforehand). The caption's password clause must follow the tooltip's rather
+      than keeping the answer it was given at hover-enter. It has to be an action
+      rather than simply waiting: the 1-second timer polls the state file and
+      repaints only, so `controlIsReachable` changes at launch, when either surface
+      opens, and after an action sequence — not on a tick.
+
+      Do not reach for either by stopping the daemon: `state.isLive` goes false,
+      Overview renders its guided "stopped" layout, and the action row and its
+      caption line are gone before any of this could be observed. `routineHint` keys
+      on `controlIsReachable`, which is the socket, not the posture.
 - [ ] **VoiceOver still hears what each button does.** With VoiceOver on, move
       through the action row: each control announces its short title *and* its
       consequence as a hint — Cancel in particular must say whether it closes the
@@ -1052,10 +1065,10 @@ task gui:build && open dist/Dezhban.app
 - [ ] **The degraded states keep their long panic title.** With the CLI missing
       or the service not installed, the panic button still reads "Panic — force
       unblock…" — there is no caption line there to carry the explanation.
-- [ ] **Routine ops are passwordless with a live daemon.** Block/Unblock and the
-      switch window complete over the control socket with **no** prompt, from both
-      the menubar and Overview; the switch countdown ticks in both surfaces and
-      matches.
+- [ ] **Routine ops are passwordless with a live daemon.** Block/Unblock (Overview
+      only — they are deliberately not in the menubar) and the switch window (both
+      surfaces) complete over the control socket with **no** prompt; the switch
+      countdown ticks in both surfaces and matches.
 - [ ] **Pause and Resume, from both surfaces.** Pause opens with no password
       (`control.allowPauseOps` default true); Overview shows "Resume (m:ss left)"
       and the menubar "Resume now (m:ss left)" in place of the switch-window

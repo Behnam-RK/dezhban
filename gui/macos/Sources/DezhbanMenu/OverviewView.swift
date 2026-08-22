@@ -392,8 +392,18 @@ struct OverviewView: View {
             .accessibilityHint(hint)
             .onHover { inside in
                 if inside {
+                    // `aim` moves only on an actual transition — this control was not
+                    // the hovered one a moment ago. `onHover(true)` also fires when a
+                    // tracking area is re-established under a stationary pointer, and
+                    // these controls re-measure constantly: a window's countdown
+                    // retitles "Cancel (m:ss left)" every second. Setting `aim`
+                    // unconditionally therefore handed the caption back to a parked
+                    // pointer about a second after the keyboard took it — the focus
+                    // ring and the Space key on one button, the caption describing
+                    // another. Exactly the layout churn the movement re-arm was
+                    // deleted for, arriving through the other door.
+                    if hoveredAction?.id != id { aim = .pointer }
                     hoveredAction = (id, hint)
-                    aim = .pointer
                 } else if hoveredAction?.id == id {
                     hoveredAction = nil
                 }
@@ -422,11 +432,16 @@ struct OverviewView: View {
             }
             .onChange(of: hint) { newHint in
                 // The captured string has to track the live one. `state.routineHint`
-                // flips on `controlIsReachable`, which a poll updates — so a hint
-                // captured at hover-enter went stale under a stationary pointer and
-                // the caption said "No password needed" while the tooltip, recomputed
-                // each pass, said the opposite. That disagreement is the one thing
-                // this wrapper exists to prevent.
+                // flips on `controlIsReachable`, and `.help` is recomputed every body
+                // pass while a hint captured at hover-enter is not — so the caption
+                // could say "No password needed" while the tooltip said the opposite,
+                // which is the one disagreement this wrapper exists to prevent.
+                //
+                // Not from the 1-second timer, which only polls the state file and
+                // repaints: `refreshServiceState()` runs at launch, when either
+                // surface opens, and after an action sequence. So the reachable
+                // window is narrower than "any moment" — an action completing while
+                // a control is hovered or focused is the realistic one.
                 if hoveredAction?.id == id { hoveredAction = (id, newHint) }
                 if focusedAction == id { focusedHint = newHint }
             }
