@@ -148,10 +148,24 @@ func Render(source, markdown string) Rendered {
 	// written links depend on, and the row is *noted* rather than quietly skipped:
 	// Unsupported fails the bundle build (bundle.go), so this becomes a build error
 	// naming the page instead of a link that misses.
+	// Through headingRe and outside code fences, so the pre-scan sees exactly what
+	// the main pass will call a heading. Accepting "any trimmed line starting with
+	// #" was looser: `#nospace`, seven hashes, and — worst — a shell comment inside a
+	// fenced block all registered as phantom headings, and one that happened to slug
+	// to a real row's anchor would refuse that row and fail the whole app build
+	// naming a heading nobody can find.
 	headingAnchors := map[string]bool{}
+	scanInCode := false
 	for _, line := range strings.Split(markdown, "\n") {
-		if t := strings.TrimSpace(line); strings.HasPrefix(t, "#") {
-			if title := strings.TrimSpace(strings.TrimLeft(t, "#")); title != "" {
+		if strings.HasPrefix(strings.TrimSpace(line), "```") {
+			scanInCode = !scanInCode
+			continue
+		}
+		if scanInCode {
+			continue
+		}
+		if m := headingRe.FindStringSubmatch(line); m != nil {
+			if title := strings.TrimSpace(m[2]); title != "" {
 				headingAnchors[Anchor(title)] = true
 			}
 		}

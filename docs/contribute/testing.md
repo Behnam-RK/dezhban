@@ -1010,8 +1010,10 @@ task gui:build && open dist/Dezhban.app
 
       Tab through the row with Full Keyboard Access on and confirm focus drives the
       caption too, **including with the pointer left resting on a different
-      button** — focus is meant to supersede a parked pointer; then move the pointer
-      and confirm it takes over again. The line must never go blank or change
+      button** — focus is meant to supersede a parked pointer. Then move the pointer
+      onto a control (the same one or another) and confirm it takes over again:
+      re-entering is what hands it back, deliberately, since jiggling inside the
+      control you are already on aims at nothing new. The line must never go blank or change
       height, which would reflow the row under the pointer.
 
       Two more, both about a caption outliving what it described. With the pointer
@@ -1020,6 +1022,11 @@ task gui:build && open dist/Dezhban.app
       without waiting for the mouse to move. And with the pointer parked on
       **Block**, stop the daemon: the caption's password clause must follow the
       tooltip's rather than keeping the answer it was given at hover-enter.
+- [ ] **VoiceOver still hears what each button does.** With VoiceOver on, move
+      through the action row: each control announces its short title *and* its
+      consequence as a hint — Cancel in particular must say whether it closes the
+      automatic redial window or one you opened, since the titles no longer carry
+      that and the caption line is hidden from VoiceOver to avoid reading it twice.
 - [ ] **The degraded states keep their long panic title.** With the CLI missing
       or the service not installed, the panic button still reads "Panic — force
       unblock…" — there is no caption line there to carry the explanation.

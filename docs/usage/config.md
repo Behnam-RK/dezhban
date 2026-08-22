@@ -342,7 +342,7 @@ were on. Turning it off is fine; turning it off by accident is not.
 | Field | Default | What it controls |
 |---|---|---|
 | `vpn.advanced.switchWindowMax` | `3m` | Hard cap on any MANUAL switch window (incl. `--for`). |
-| `vpn.advanced.redialWindowMax` | `10m` | Hard cap on the AUTOMATIC redial window — kept independent of `switchWindowMax` so one trigger's budget never truncates the other's. |
+| `vpn.advanced.redialWindowMax` | `10m` | Hard cap on the AUTOMATIC redial window — kept independent of `vpn.advanced.switchWindowMax` so one trigger's budget never truncates the other's. |
 | `vpn.advanced.commandFreshness` | `30s` | How recent a control command must be to be acted on (replay guard). |
 | `vpn.advanced.windowDiscoveryInterval` | `1s` | How often the new server is looked for while a window is open. |
 | `vpn.advanced.tunnelPruneAfter` | `60s` | How long a dynamically-detected tunnel must be gone before it's dropped. |

@@ -216,10 +216,6 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Opens the Help pane at a specific place in the documentation, named the
-    /// way a `Tunable`'s docAnchor writes it ("usage/config.md#fields").
-    /// A docAnchor that names nothing bundled still opens the pane — better a
-    /// reader lands in the documentation than on a dead control.
     /// Opens the first of `targets` whose anchor actually exists in the bundle.
     ///
     /// The only entry point, deliberately. A second `openHelp(docAnchor:)` taking a
@@ -232,13 +228,19 @@ final class AppState: ObservableObject {
     /// fallback a *section* rather than the top of the page — the pane's own
     /// resolve() drops an unknown fragment and keeps the page, which for a
     /// forty-key reference is not a useful place to land.
+    /// Decoded lazily on the first contextual help click and kept thereafter — see
+    /// `openHelp(preferring:)`.
+    private var cachedHelpBundle: HelpBundle?
+
     func openHelp(preferring targets: [HelpTarget]) {
         guard !targets.isEmpty else { return }
-        // Loaded on demand rather than held: this runs on a click, and the pane
-        // keeps its own copy. `bundled()` returning nil (a bare SwiftPM binary with
-        // no help payload) leaves the preferred target, which is the right guess
-        // when nothing can be checked.
-        let index = HelpBundle.bundled()
+        // Decoded once and kept. `bundled()` reads the payload off disk and JSON-
+        // decodes every page's full text plus its per-row key list, which is not a
+        // thing to do synchronously on the main thread on every click of a `?`.
+        // Nil (a bare SwiftPM binary with no help payload) leaves the preferred
+        // target, which is the right guess when nothing can be checked.
+        if cachedHelpBundle == nil { cachedHelpBundle = HelpBundle.bundled() }
+        let index = cachedHelpBundle
         helpTarget = targets.first { index?.resolve($0)?.anchor != nil } ?? targets[0]
         selectedSection = .help
     }

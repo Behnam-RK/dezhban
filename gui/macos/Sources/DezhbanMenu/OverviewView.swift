@@ -16,9 +16,6 @@ struct OverviewView: View {
     /// `focusedAction != nil`, so blurring the row falls back to the posture
     /// headline instead of stranding the caption on a control nobody is on.
     @State private var focusedHint = ""
-    /// The last pointer position reported for each control, so `.active` phases
-    /// caused by a tracking area being rebuilt can be told from real movement.
-    @State private var lastHoverPoint: [String: CGPoint?] = [:]
     @FocusState private var focusedAction: String?
 
     var body: some View {
@@ -362,6 +359,14 @@ struct OverviewView: View {
                                           @ViewBuilder content: () -> Content) -> some View {
         content()
             .help(hint)
+            // And as an accessibility hint, not only as `help`. Shortening the titles
+            // moved the explanation into a caption line that is
+            // `accessibilityHidden` (it would otherwise be read twice), so VoiceOver
+            // was left with "Cancel", "Pause", "Guard down" and no disambiguation —
+            // worst for Cancel, which no longer says whether it closes an automatic
+            // redial window or one the user opened. A hint is where a control's
+            // consequence belongs, and it is announced after the label.
+            .accessibilityHint(hint)
             .focused($focusedAction, equals: id)
             .onHover { inside in
                 if inside {
@@ -370,33 +375,20 @@ struct OverviewView: View {
                     hoveredAction = nil
                 }
             }
-            // Re-arms hover on actual mouse *movement*, not merely on being hovered.
-            // `onHover` fires on enter and exit alone, so once focus cleared the hover
-            // state (see below) a pointer already sitting on this control could not
-            // take the caption back until it left and re-entered — which is not what
-            // "move the pointer and it takes over again" means, and is the step the
-            // checklist asks a tester to perform.
-            //
-            // The location is compared, because `.active` is also reported when a
-            // tracking area is (re)established — and these controls re-measure
-            // constantly: a window's countdown retitles "Cancel (m:ss left)" every
-            // second, which re-places the row. Acting on any `.active` therefore let
-            // a parked pointer silently reclaim the caption a second after the
-            // keyboard took it, defeating "most recent interaction wins" in exactly
-            // the scenario the checklist step describes.
-            .onContinuousHover { phase in
-                guard case .active(let point) = phase else {
-                    lastHoverPoint[id] = nil
-                    return
-                }
-                defer { lastHoverPoint[id] = point }
-                guard let previous = lastHoverPoint[id] ?? nil else { return }
-                guard previous != point else { return }
-                if hoveredAction?.id != id { hoveredAction = (id, hint) }
-            }
             .onChange(of: focusedAction) { _ in
                 guard focusedAction == id else { return }
                 focusedHint = hint
+                // Focus supersedes a parked pointer, and the pointer takes the caption
+                // back by *entering* a control — the same one or another. There is
+                // deliberately no "the mouse moved a little" re-arm: it was tried, and
+                // every version of it read a proxy for movement rather than movement.
+                // `onContinuousHover`'s `.active` fires when a tracking area is merely
+                // established, and these controls re-measure constantly (a window's
+                // countdown retitles "Cancel (m:ss left)" every second); comparing the
+                // reported point did not help either, since it is in local space, so a
+                // banner appearing above the row moves the control under a stationary
+                // mouse and reads as movement. Jiggling the pointer inside the control
+                // you are already on aims at nothing new, so nothing is lost.
                 // Focus supersedes a parked pointer. `.help` is recomputed every
                 // body pass while the captured hint is not, and hover used to win
                 // unconditionally — so tabbing with the pointer resting on another

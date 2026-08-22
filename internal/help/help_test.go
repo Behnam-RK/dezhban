@@ -65,18 +65,6 @@ func TestBundleBuilds(t *testing.T) {
 func TestEveryTunableDocAnchorResolves(t *testing.T) {
 	index := buildInto(t)
 
-	anchors := map[string]map[string]bool{}
-	for _, e := range index {
-		set := map[string]bool{}
-		for _, h := range e.Headings {
-			set[h.Anchor] = true
-		}
-		for _, k := range e.Keys {
-			set[k.Anchor] = true
-		}
-		anchors[e.Source] = set
-	}
-
 	headings := map[string]map[string]bool{}
 	keyRows := map[string]map[string]bool{}
 	for _, e := range index {
