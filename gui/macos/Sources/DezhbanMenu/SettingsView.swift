@@ -54,6 +54,13 @@ struct SettingsView: View {
     /// clear one that is the only account of why a click did not take. See
     /// `LoginItem.Outcome.isTransient`.
     @State private var loginMessageIsTransient = true
+    /// What the switch read when `loginMessage` was written.
+    ///
+    /// A message that explains a refusal has to survive a refresh, but not forever:
+    /// once the user clears the condition in System Settings and comes back, the
+    /// switch moves and the refusal is false. Without this, that text stayed on
+    /// screen contradicting the switch, clearable only by another click.
+    @State private var loginMessageForEnabled: Bool?
     @State private var notifyPrefs = NotificationManager.prefs
     @State private var checkUpdatesEnabled = true
     @State private var launchVisibility: LaunchVisibility = .bootOnly
@@ -853,6 +860,11 @@ struct SettingsView: View {
                 loginPending = true
                 loginEnabled = wanted
                 loginMessage = wanted ? "Registering the login item…" : "Removing the login item…"
+                // A progress line is transient by nature. Left inheriting the
+                // previous outcome's value, a refusal's `false` made it un-clearable
+                // if this click's completion was then superseded.
+                loginMessageIsTransient = true
+                loginMessageForEnabled = wanted
                 // The enqueueing form, so two quick clicks are applied in the order
                 // they were made — dispatching each to a concurrent queue let them
                 // race into LoginItem's serial queue and land out of order.
@@ -866,6 +878,7 @@ struct SettingsView: View {
                     // having split it from the pane's shared status.
                     loginMessage = outcome.message
                     loginMessageIsTransient = outcome.isTransient
+                    loginMessageForEnabled = outcome.isOn
                     // And bumped, so any status read that was already in flight
                     // cannot land afterwards and clear this. `loginPending` cannot
                     // cover it: seed()'s read is a queue.sync behind this very
@@ -1021,7 +1034,10 @@ struct SettingsView: View {
                 // "Dezhban has to live in Applications to open at login" a moment
                 // after the switch snapped back, leaving exactly the unexplained
                 // snap-back this message exists to prevent.
-                if loginMessageIsTransient { loginMessage = nil }
+                if loginMessageIsTransient || loginMessageForEnabled != enabled {
+                    loginMessage = nil
+                    loginMessageForEnabled = nil
+                }
             }
         }
         notifyPrefs = NotificationManager.prefs

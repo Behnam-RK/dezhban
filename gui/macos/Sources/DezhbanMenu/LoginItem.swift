@@ -330,7 +330,7 @@ enum LoginItem {
             // re-reading. Re-approving the "Dezhban" row in System Settings arms the
             // legacy registration behind a switch showing OFF, and clicking it then
             // reported "left off" over a live login launch.
-            return liveOutcome(fallback: .blockedByLegacy)
+            return liveOutcome(.enabling, fallback: .blockedByLegacy)
         }
         UserDefaults.standard.set(false, forKey: userDisabledKey)
         // Flushed, like every other write to these three coupled flags. This pane
@@ -400,7 +400,7 @@ enum LoginItem {
             // `.requiresApproval` leftover that would not retract — disable reported
             // a clean "App will not open at login" and every later click to turn it
             // on was refused, permanently, with nothing having warned them.
-            return liveOutcome(fallback: .blockedByLegacy)
+            return liveOutcome(.disabling, fallback: .blockedByLegacy)
         }
         return registered(service) ? .agentStuck : .disabled
     }
@@ -644,12 +644,33 @@ enum LoginItem {
     /// back. Deriving from the live state instead makes `isOn` agree with
     /// `isEnabled` by construction, which is what `isEnabled`'s docstring demands.
     ///
+    /// Which way the user was moving the switch.
+    ///
+    /// The live state alone is not enough: a registered agent means "on, as asked"
+    /// to somebody enabling and "the unregister failed" to somebody disabling, and
+    /// those need different outcomes. Deriving without it reported `.enabled` —
+    /// "App will open at login." — to a user who had just clicked *off*, which made
+    /// `.agentStuck` unreachable from `disable()` whenever a legacy registration
+    /// also survived. `.agentStuck` is the only outcome carrying the line telling
+    /// them to clear it in System Settings, and the only non-transient one, so the
+    /// message was then wiped by the next refresh and the switch sat back ON with no
+    /// explanation.
+    enum Direction { case enabling, disabling }
+
     /// `fallback` is used only when nothing is live at all.
-    private static func liveOutcome(fallback: Outcome) -> Outcome {
+    private static func liveOutcome(_ direction: Direction, fallback: Outcome) -> Outcome {
         if legacyEnabled { return .legacyStuck }
-        if agentEnabled { return .enabled }
-        if service.status == .requiresApproval { return .awaitingApproval }
-        if registered(service) { return .agentStuck }
+        switch direction {
+        case .enabling:
+            if agentEnabled { return .enabled }
+            if service.status == .requiresApproval { return .awaitingApproval }
+            if registered(service) { return .agentStuck }
+        case .disabling:
+            // Anything still registered after a disable is a retraction that failed,
+            // whatever status it wears. `.awaitingApproval` in particular would tell
+            // someone who clicked *off* to go and enable Dezhban.
+            if registered(service) { return .agentStuck }
+        }
         return fallback
     }
 

@@ -809,12 +809,14 @@ task gui:build && open dist/Dezhban.app
       login" there is no window. This is `NSApp.disableRelaunchOnLogin()`; without
       it, LaunchServices relaunches the app with no arguments and races the agent
       for the lock.
-- [ ] **A refusal's explanation survives switching away and back.** Run
-      `dist/Dezhban.app`, click "Open this app at login" — it refuses and says why.
-      Now click another app and click back to Dezhban: the explanation must still be
-      there. Only messages about a moment that has passed ("macOS is holding this
-      for your approval") may be cleared by that refresh; a switch that snapped
-      back with the reason erased is indistinguishable from a bug.
+- [ ] **A refusal's explanation survives switching away and back — and expires
+      when it stops being true.** Run `dist/Dezhban.app`, click "Open this app at
+      login" — it refuses and says why. Click another app and click back: the
+      explanation must still be there. Only messages about a moment that has passed
+      ("macOS is holding this for your approval") may be cleared by that refresh; a
+      switch that snapped back with the reason erased is indistinguishable from a
+      bug. Then clear the condition and return — once the switch moves, the stale
+      refusal must go with it rather than sit there contradicting it.
 - [ ] **The login toggle's result has its own line.** Start the service toggle
       ("Start the guard at boot"), and while its privileged sequence is running flip
       "Open this app at login". Both messages must be readable at once — the install's

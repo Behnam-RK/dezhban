@@ -227,7 +227,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // both claim `.fresh`, so a definite open never suppresses another
             // definite one, which is what keeps a real second request from being
             // swallowed.
-            if !lastHandoffOpenWasDefinite { return }
+            if !lastHandoffOpenWasDefinite {
+                // And that pair is now closed. Leaving the flag false meant the rest
+                // of the 3s window kept swallowing definite opens, so a genuine
+                // second double-click a second later was dropped — the no-op this
+                // exists to prevent, reached through the machinery preventing it.
+                lastHandoffOpenWasDefinite = true
+                return
+            }
         }
         lastHandoffOpenAt = now
         lastHandoffOpenWasDefinite = definite
