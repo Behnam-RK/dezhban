@@ -80,6 +80,15 @@ if [ -n "$CONSOLE_USER" ] && [ "$CONSOLE_USER" != "root" ]; then
 	# have.
 	CONSOLE_HOME=$(dscl -plist /Search -read "/Users/$CONSOLE_USER" NFSHomeDirectory 2>/dev/null |
 		plutil -extract 'dsAttrTypeStandard:NFSHomeDirectory.0' raw -o - -- - 2>/dev/null)
+	# The lookup is best-effort — a directory record without NFSHomeDirectory, or any
+	# change in dscl/plutil output shape, yields nothing — and every consumer below
+	# degrades quietly: the ~/Applications half of the bundle search is skipped, and
+	# so is the per-user cleanup, under a closing message that says "files deleted".
+	# The conventional path is a better guess than no guess, and if even that is not
+	# there the script says so rather than reporting a clean removal.
+	if [ -z "$CONSOLE_HOME" ] && [ -d "/Users/$CONSOLE_USER" ]; then
+		CONSOLE_HOME="/Users/$CONSOLE_USER"
+	fi
 fi
 
 # The bundle is looked for, not assumed. The app is allowed to register the login
@@ -203,6 +212,8 @@ if [ -n "$CONSOLE_UID" ]; then
 	# CONSOLE_HOME is resolved up top, where the bundle search needs it too.
 	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME" ]; then
 		rm -rf "$CONSOLE_HOME/Library/Application Support/$APP_BUNDLE_ID"
+	elif [ "$LOGIN_ITEM_STUCK" = "none" ]; then
+		LOGIN_ITEM_STUCK=no-home
 	fi
 	# The app's preferences, for the same reason. These are not cosmetic: the
 	# migration that moves an old LaunchServices login item onto the login agent
@@ -265,6 +276,12 @@ none) ;;
 	no-app)
 		echo "warning: the app bundle was already gone, so its login item could not"
 		echo "         be retracted — only the app itself can do that."
+		;;
+	no-home)
+		echo "warning: $CONSOLE_USER's home directory could not be resolved, so"
+		echo "         Dezhban's per-user leftovers were not removed — the session"
+		echo "         lock, and the saved preferences that would make a later"
+		echo "         reinstall skip the login-item migration."
 		;;
 	no-console-user)
 		echo "warning: nobody is logged in, so Dezhban's per-user leftovers could not"

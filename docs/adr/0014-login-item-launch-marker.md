@@ -361,6 +361,15 @@ with an argument, the pre-`SMAppService` pattern.
   attempt also keeps a failed retraction re-attemptable, since the caller re-reads
   the live status either way.
 
+  The same discipline applies to the fact that *decides* what happens next. A
+  pre-upgrade user who switched Dezhban off under System Settings leaves `mainApp` at
+  `.requiresApproval` and never touched Dezhban's own switch, so nothing records
+  their intent — and while "was it enabled" lived only in a local, an interruption
+  between the retraction and `markMigrated()` left the next launch seeing no legacy
+  item, seeing the attempt flag, falling through, and registering the agent:
+  login-at-launch back on for someone who had deliberately turned it off. Their off
+  is now persisted before anything is retracted.
+
   That retry needs a third flag to exist at all, which is not obvious and was
   got wrong first: by the time `register()` is reached the legacy item is already
   confirmed gone, so a retry launch that asks "is there a legacy item to

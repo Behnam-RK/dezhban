@@ -466,6 +466,24 @@ enum LoginItem {
             // `disable()` the old comment pointed at. Retracting it honours the same
             // "off" while removing the way back to the defect.
             let wasEnabled = legacyEnabled
+            if !wasEnabled {
+                // Their "off" is recorded durably BEFORE anything is retracted, for
+                // the same reason `retractLegacy` flushes before its unregister —
+                // except that this is the fact which decides what happens next, and
+                // it lived only in the local above.
+                //
+                // A pre-upgrade user who switched Dezhban off under System Settings
+                // leaves `mainApp` at `.requiresApproval` and never touched Dezhban's
+                // own switch, so `userDisabledKey` is unset. If the process ended
+                // after the retraction was recorded but before `markMigrated()` — a
+                // quit or a logout during the status read that follows — the next
+                // launch saw no legacy item, saw the attempt flag set, fell through,
+                // and registered the agent: login-at-launch switched back ON for
+                // someone who had deliberately turned it off, which ADR-0014 says
+                // must never happen.
+                UserDefaults.standard.set(true, forKey: userDisabledKey)
+                UserDefaults.standard.synchronize()
+            }
             retractLegacy()
             if registered(.mainApp) {
                 // Stuck. The agent is left unregistered rather than stacked on top
