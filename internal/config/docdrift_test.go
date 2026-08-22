@@ -169,9 +169,13 @@ func parseDocDefaults(t *testing.T, path string) map[string]string {
 	for rawLine := range strings.SplitSeq(string(data), "\n") {
 		line := strings.TrimSpace(rawLine)
 		if !strings.HasPrefix(line, "|") {
-			// A heading sets the key prefix for the tables under it: the
-			// advanced table lists bare field names (`switchWindowMax`) because
-			// its heading already says which block they live in.
+			// A heading sets the key prefix for the tables under it. The advanced
+			// table now names its keys in full (`vpn.advanced.switchWindowMax`),
+			// which is what lets its rows carry anchors — so this prefix is
+			// currently unused by every table in the reference. Kept because it is
+			// the mechanism that makes a bare-name table legal at all, and a
+			// future block may want one; a table that reverted to bare names
+			// would otherwise fail the drift check for the wrong reason.
 			if strings.HasPrefix(line, "#") {
 				prefix = ""
 				if strings.Contains(line, "vpn.advanced") {

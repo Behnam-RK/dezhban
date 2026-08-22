@@ -8,6 +8,18 @@ import DezhbanCore
 struct OverviewView: View {
     @EnvironmentObject var state: AppState
     @State private var busy = false
+    /// The action control the pointer is over, and the sentence it explains.
+    /// Carried together so a control can only clear the caption it actually put
+    /// there — see `captioned`.
+    @State private var hoveredAction: (id: String, hint: String)?
+    /// Last hint handed over by keyboard focus. Read only while
+    /// `focusedAction != nil`, so blurring the row falls back to the resting
+    /// prompt instead of stranding the caption on a control nobody is on.
+    @State private var focusedHint = ""
+    /// Which input the user reached for last, so focus can outrank a parked pointer
+    /// without the pointer's position being thrown away. See `ActionCaption.Aim`.
+    @State private var aim: ActionCaption.Aim = .pointer
+    @FocusState private var focusedAction: String?
 
     var body: some View {
         Group {
@@ -58,7 +70,10 @@ struct OverviewView: View {
 
                 Divider()
 
-                actionButtons(s)
+                VStack(alignment: .leading, spacing: 6) {
+                    actionButtons(s)
+                    actionCaption()
+                }
 
                 Spacer(minLength: 12)
 
@@ -272,6 +287,11 @@ struct OverviewView: View {
     private func actionButtons(_ s: Snapshot) -> some View {
         let blocked = s.blocked
         let guardHolds = PostureUI.guardHoldsDownedTunnel(s)
+        // Titles are one or two words; the sentence each one used to carry
+        // inline ("Pause — use my real IP") is now the caption line below, fed
+        // by hover and keyboard focus. Same strings still go to `.help`, so the
+        // tooltip and the caption can never say different things.
+        //
         // ActionRow, not HStack: an HStack given less width than its children's
         // ideal sum compresses every one of them, so at a narrow window all
         // five labels truncated at once ("Block n…", "Switchin…", "Guard…").
@@ -279,64 +299,239 @@ struct OverviewView: View {
         // of whatever line it lands on — which is also why the Spacer that used
         // to sit before it is gone.
         return ActionRow(trailingCount: 1) {
-            Button("Block now") { AppActions.routine(["block"], "block") }
-                .disabled(blocked)
-                .help(state.routineHint("Cuts all traffic and holds it until you unblock."))
-            Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
-                .disabled(!(blocked || guardHolds))
-                .help(state.routineHint("Releases a manual block and resumes monitoring."))
+            // A disabled control says why, rather than describing an action it will
+            // not perform. This text was tooltip-only before the row's titles were
+            // shortened; promoting it to the primary visible explanation is what makes
+            // "Releases a manual block…" under a greyed-out button worth fixing. The
+            // Pause branch below already worked this way.
+            captioned("block", blocked
+                ? "Disabled — traffic is already blocked."
+                : state.routineHint("Cuts all traffic and holds it until you unblock.")) {
+                Button("Block") { AppActions.routine(["block"], "block") }
+                    .disabled(blocked)
+            }
+            captioned("unblock", !(blocked || guardHolds)
+                ? "Disabled — there is no manual block or guard hold to release."
+                : state.routineHint("Releases a manual block and resumes monitoring.")) {
+                Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
+                    .disabled(!(blocked || guardHolds))
+            }
             if let sw = s.switch, sw.open, sw.isPause {
                 // `switch --cancel` deliberately refuses to touch a pause (see the
                 // glossary's Pause entry) — `resume` is the only way to end one early.
-                Button("Resume now" + sw.leftSuffix(asOf: state.now)) {
-                    AppActions.routine(["resume"], "resume the guard")
+                captioned("resume",
+                          state.routineHint("Ends the pause early and re-arms the guard.")) {
+                    Button("Resume" + sw.leftSuffix(asOf: state.now)) {
+                        AppActions.routine(["resume"], "resume the guard")
+                    }
                 }
-                .help(state.routineHint("Ends the pause early and re-arms the guard."))
             } else if let sw = s.switch, sw.open {
-                Button("\(sw.isAutoRedial ? "Cancel redial window" : "Cancel VPN switch")"
-                       + sw.leftSuffix(asOf: state.now)) {
-                    AppActions.routine(["switch", "--cancel"], "cancel the switch window")
+                // Which window, not just "the window". Hovering this button replaces
+                // the posture headline — the only other place the distinction
+                // appears — so a caption that says neither leaves the user cancelling
+                // something unnamed, and the three triggers being distinct is most of
+                // what the guard's rules rest on.
+                captioned("cancel-window",
+                          state.routineHint(sw.isAutoRedial
+                              ? "Closes the automatic redial window and restores the guard."
+                              : "Closes the switch window you opened and restores the guard.")) {
+                    Button("Cancel" + sw.leftSuffix(asOf: state.now)) {
+                        AppActions.routine(["switch", "--cancel"], "cancel the switch window")
+                    }
                 }
-                .help(state.routineHint("Closes the window and restores the guard."))
             } else {
                 switchMenu
-                Button("Pause — use my real IP") { AppActions.routine(["pause"], "pause the guard") }
-                    .disabled(!state.pauseIsEnabled)
-                    .help(state.pauseIsEnabled
-                        ? state.routineHint("Deliberately drops to your real ISP IP, then re-arms the guard automatically.")
-                        : "Disabled — vpn.pauseMax is \"0\" in your config.")
+                captioned("pause", state.pauseIsEnabled
+                            ? state.routineHint("Uses your real ISP IP instead of the VPN, then re-arms the guard automatically.")
+                            : "Disabled — vpn.pauseMax is \"0\" in your config.") {
+                    Button("Pause") { AppActions.routine(["pause"], "pause the guard") }
+                        .disabled(!state.pauseIsEnabled)
+                }
             }
-            Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
-                .help("Stops dezhban. Asks for your password — it can’t stop itself while running.")
+            captioned("stop",
+                      "Stops dezhban. Asks for your password — it can’t stop itself while running.") {
+                Button("Guard down") { AppActions.privileged(["stop"], "take the guard down") }
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Wraps one action control so pointing at it, or focusing it with the
+    /// keyboard, puts `hint` in the caption line — and puts the same string in
+    /// the tooltip, so the two surfaces cannot drift apart.
+    ///
+    /// `id` is what distinguishes controls in the hover/focus state; it is never
+    /// shown. Hover is cleared only by the control that owns the current hint,
+    /// so the pointer leaving A after it has already entered B does not blank
+    /// out B's caption.
+    ///
+    /// `focusable: false` skips the `.focused` binding, for a caller whose content is
+    /// a branch rather than a control.
+    ///
+    /// `.focused(_:equals:)` binds focus for a *focusable view*. Every slot but one
+    /// passes its Button straight through, so the binding lands on the control; the
+    /// switch slot passes an if/else, and a `_ConditionalContent` wrapper is not
+    /// something focus is defined to attach to. Rather than depend on whether it
+    /// happens to work, that caller applies the binding to the concrete Menu and
+    /// Button inside each branch and turns this off — the rest of the wrapper, which
+    /// is what must not disappear across the branch swap, is unaffected.
+    @ViewBuilder
+    private func captioned<Content: View>(_ id: String, _ hint: String,
+                                          focusable: Bool = true,
+                                          @ViewBuilder content: () -> Content) -> some View {
+        content()
+            .modifier(FocusBinding(id: focusable ? id : nil, focus: $focusedAction))
+            .help(hint)
+            // And as an accessibility hint, not only as `help`. Shortening the titles
+            // moved the explanation into a caption line that is
+            // `accessibilityHidden` (it would otherwise be read twice), so VoiceOver
+            // was left with "Cancel", "Pause", "Guard down" and no disambiguation —
+            // worst for Cancel, which no longer says whether it closes an automatic
+            // redial window or one the user opened. A hint is where a control's
+            // consequence belongs, and it is announced after the label.
+            .accessibilityHint(hint)
+            .onHover { inside in
+                if inside {
+                    // `aim` moves only on an actual transition — this control was not
+                    // the hovered one a moment ago. `onHover(true)` also fires when a
+                    // tracking area is re-established under a stationary pointer, and
+                    // these controls re-measure constantly: a window's countdown
+                    // retitles "Cancel (m:ss left)" every second. Setting `aim`
+                    // unconditionally therefore handed the caption back to a parked
+                    // pointer about a second after the keyboard took it — the focus
+                    // ring and the Space key on one button, the caption describing
+                    // another. Exactly the layout churn the movement re-arm was
+                    // deleted for, arriving through the other door.
+                    if hoveredAction?.id != id { aim = .pointer }
+                    hoveredAction = (id, hint)
+                } else if hoveredAction?.id == id {
+                    hoveredAction = nil
+                }
+            }
+            .onChange(of: focusedAction) { _ in
+                guard focusedAction == id else { return }
+                focusedHint = hint
+                // Focus outranks a parked pointer, and does it by ranking rather
+                // than by clearing: `hoveredAction` used to be set to nil here, which
+                // threw the pointer's position away instead of deprioritising it — tab
+                // into the row and back out to anything outside it and both were empty,
+                // so the caption fell to the resting prompt while the pointer sat on a
+                // button, until it moved off and back on.
+                //
+                // The pointer takes the caption back by *entering* a control, the same
+                // one or another. There is deliberately no "the mouse moved a little"
+                // re-arm: every version of it read a proxy for movement rather than
+                // movement. `onContinuousHover`'s `.active` fires when a tracking area
+                // is merely established, and these controls re-measure constantly (a
+                // window's countdown retitles "Cancel (m:ss left)" every second);
+                // comparing the reported point did not help either, being in local
+                // space, so a banner appearing above the row moved the control under a
+                // stationary mouse and read as movement. Jiggling inside the control
+                // you are already on aims at nothing new, so nothing is lost.
+                aim = .keyboard
+            }
+            .onChange(of: hint) { newHint in
+                // The captured string has to track the live one. `state.routineHint`
+                // flips on `controlIsReachable`, and `.help` is recomputed every body
+                // pass while a hint captured at hover-enter is not — so the caption
+                // could say "No password needed" while the tooltip said the opposite,
+                // which is the one disagreement this wrapper exists to prevent.
+                //
+                // Not from the 1-second timer, which only polls the state file and
+                // repaints: `refreshServiceState()` runs at launch, when either
+                // surface opens, and after an action sequence. So the reachable
+                // window is narrower than "any moment" — an action completing while
+                // a control is hovered or focused is the realistic one.
+                if hoveredAction?.id == id { hoveredAction = (id, newHint) }
+                if focusedAction == id { focusedHint = newHint }
+            }
+            .onDisappear {
+                // A control can be replaced under a stationary pointer — Pause
+                // becomes Cancel the moment a window opens — and the removed view
+                // never receives a hover-exit, so its caption described a button that
+                // no longer exists until the mouse next moved.
+                if hoveredAction?.id == id { hoveredAction = nil }
+                if focusedAction == id { focusedHint = "" }
+            }
+    }
+
+    /// The line that explains whatever the user is pointing at or has focused.
+    ///
+    /// Always present and always the same height — three reserved lines, see below.
+    /// A caption that collapsed between two buttons would reflow the row under the
+    /// pointer, which is the one thing it may never do.
+    private func actionCaption() -> some View {
+        // The resting text is a prompt, not the posture. `PostureUI.humanPosture` is
+        // exactly `display.headline`, which the hero already renders in title2 a
+        // hundred points above — so with the pointer off the row, which is the normal
+        // state, the pane said "Traffic cut" twice. The only requirement on the
+        // fallback is that the line never collapses and reflows the row.
+        Text(ActionCaption.text(hovered: hoveredAction?.hint,
+                                focused: focusedAction == nil ? nil : focusedHint,
+                                aim: aim,
+                                fallback: "Point at a button to see what it does."))
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            // Three lines, always reserved. One line truncated the tail of every long
+            // caption, and the tail is where `routineHint` appends the password
+            // expectation — so Pause read "…Will ask for your pass…" and dropped the
+            // clause warning that a prompt is coming. Two was enough at a comfortable
+            // width and not at a narrow one: the pane is resizable, ActionRow is built
+            // to wrap, and the longest caption is ~137 characters, so the ellipsis
+            // landed back on the password clause exactly when the window was small.
+            //
+            // Reserving the space is what keeps the row from reflowing as the pointer
+            // crosses it, which is why this was capped at all; the cost of the third
+            // line is a little whitespace at wide widths, against a safety clause
+            // disappearing at narrow ones. The panic caption below makes the same
+            // trade by wrapping freely.
+            .lineLimit(3, reservesSpace: true)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .accessibilityHidden(true)
     }
 
     /// Opens a switch window, optionally targeted at a known VPN profile so the
     /// learned endpoint is attributed to it (`switch --no-wait --name <profile>`).
     /// Plain button when there are no profiles to pick from — a menu with a
     /// single "Any known VPN" entry would just be a worse button.
-    @ViewBuilder
+    /// One `captioned` wrapper around both shapes, not one per branch.
+    ///
+    /// Both used the id "switch", and `state.profiles` arrives asynchronously — so
+    /// the Button→Menu swap happens after launch, the outgoing branch's
+    /// `onDisappear` cleared the caption state for an id the incoming branch owns,
+    /// and the incoming one gets no hover-enter under a stationary pointer. Pointing
+    /// at "Switch VPN…" while profiles loaded therefore dropped the caption to the
+    /// resting prompt until the mouse moved. Wrapping once means the modifiers never
+    /// disappear, only their content changes.
     private var switchMenu: some View {
-        if let profiles = state.profiles, !profiles.profiles.isEmpty {
-            Menu("Switching VPN…") {
-                Button("Any known VPN") {
-                    AppActions.routine(["switch", "--no-wait"], "open a switch window")
-                }
-                Divider()
-                ForEach(profiles.profiles) { p in
-                    Button(p.name) {
-                        AppActions.routine(["switch", "--no-wait", "--name", p.name],
-                                           "open a switch window for \(p.name)")
+        let hint = state.routineHint("Briefly relaxes the guard so a new VPN can connect.")
+        return captioned(Self.switchID, hint, focusable: false) {
+            if let profiles = state.profiles, !profiles.profiles.isEmpty {
+                Menu("Switch VPN…") {
+                    Button("Any known VPN") {
+                        AppActions.routine(["switch", "--no-wait"], "open a switch window")
+                    }
+                    Divider()
+                    ForEach(profiles.profiles) { p in
+                        Button(p.name) {
+                            AppActions.routine(["switch", "--no-wait", "--name", p.name],
+                                               "open a switch window for \(p.name)")
+                        }
                     }
                 }
+                .focused($focusedAction, equals: Self.switchID)
+            } else {
+                Button("Switch VPN…") {
+                    AppActions.routine(["switch", "--no-wait"], "open a switch window")
+                }
+                .focused($focusedAction, equals: Self.switchID)
             }
-            .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
-        } else {
-            Button("Switching VPN…") { AppActions.routine(["switch", "--no-wait"], "open a switch window") }
-                .help(state.routineHint("Briefly relaxes the guard so a new VPN can connect."))
         }
     }
+
+    /// Shared by both switch shapes and by the caption wrapper around them, so the
+    /// two cannot drift apart.
+    private static let switchID = "switch"
 
     private var panicRow: some View {
         HStack(alignment: .firstTextBaseline, spacing: PaneMetrics.controlSpacing) {
@@ -346,11 +541,11 @@ struct OverviewView: View {
                     state.showInLogs(title: "dezhban — panic", text: result.output)
                 }
             } label: {
-                Label("Panic — force unblock…", systemImage: "exclamationmark.octagon.fill")
+                Label("Panic…", systemImage: "exclamationmark.octagon.fill")
             }
             .tint(.red)
             .fixedSize()
-            Text("Removes every dezhban firewall rule, even with dezhban not running.")
+            Text("Force unblock: removes every dezhban firewall rule, even with dezhban not running.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 // Wrap to a second line rather than truncate: this caption is
@@ -429,6 +624,12 @@ struct OverviewView: View {
                 .padding(.top, 4)
             // Panic stays reachable even from a degraded state — stale rules with
             // no daemon are exactly when the escape hatch matters.
+            //
+            // This one keeps its full title while the Overview's own panic
+            // button is just "Panic…": the rule is that a title may shed its
+            // explanation only where the explanation has somewhere else to
+            // live. Here there is no caption line and no action row — a lone
+            // "Panic…" in a guided empty state would explain itself to nobody.
             Button("Panic — force unblock…") {
                 guard AppActions.confirmPanic() else { return }
                 AppActions.capturedPrivileged(["panic"]) { result in
@@ -439,5 +640,28 @@ struct OverviewView: View {
             .padding(.top, 12)
         }
         .padding(24)
+    }
+}
+
+/// Applies `.focused(_:equals:)` only when there is an id to bind.
+///
+/// This does *not* make the branch identity-stable: `if let id { … } else { … }` in a
+/// `ViewModifier.body` produces `_ConditionalContent` exactly as an inline `if`
+/// would. It is safe because `focusable:` is a compile-time constant at every call
+/// site, so `id` never flips for a given view.
+///
+/// Which is the constraint to keep. Make `focusable` depend on state and the branch
+/// swap destroys the wrapper's `onHover`/`onDisappear` state — the caption loss that
+/// `switchMenu` was restructured to fix by wrapping both shapes once.
+private struct FocusBinding: ViewModifier {
+    let id: String?
+    let focus: FocusState<String?>.Binding
+
+    func body(content: Content) -> some View {
+        if let id {
+            content.focused(focus, equals: id)
+        } else {
+            content
+        }
     }
 }

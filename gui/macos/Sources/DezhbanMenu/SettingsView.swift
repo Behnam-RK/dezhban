@@ -742,23 +742,30 @@ struct SettingsView: View {
     ///
     /// A tooltip has room for one sentence; the reason a setting exists, what it
     /// costs, and what happens when it is off often needs a page. This is the
-    /// bridge between the two — and it lands on the *heading*, from the key's
-    /// own `docAnchor`, so the answer is on screen rather than somewhere in a
-    /// long reference page.
+    /// bridge between the two — and it lands on the key's own table *row*, falling
+    /// back to its section, so the answer is on screen rather than somewhere in a
+    /// forty-key reference (`ConfigTunable.docTargets`).
     ///
     /// Absent when the schema is unavailable (a CLI too old to know
     /// `config schema`): a button that could only apologise is worse than none.
     @ViewBuilder
     private func docLink(_ key: String) -> some View {
-        if let tunable = schema?[key], !tunable.docAnchor.isEmpty {
+        if let tunable = schema?[key], !tunable.docTargets.isEmpty {
             Button {
-                state.openHelp(docAnchor: tunable.docAnchor)
+                state.openHelp(preferring: tunable.docTargets)
             } label: {
                 Image(systemName: "questionmark.circle")
             }
             .buttonStyle(.borderless)
             .foregroundStyle(.secondary)
-            .help("Read about \(tunable.label) in the documentation")
+            // What the button does, because the key's own one-liner is already
+            // here: `schemaField`/`schemaToggle` put it on the control itself, and
+            // `schemaToggleWithCaption` shows it visibly underneath. Putting it on
+            // this button too hovered the same sentence twice and left nothing
+            // telling a pointer user that the control navigates — the only "opens
+            // the documentation" wording was the accessibility label, which a
+            // mouse never reaches.
+            .help("Open the documentation for \(tunable.label)")
             .accessibilityLabel("Documentation for \(tunable.label)")
         }
     }

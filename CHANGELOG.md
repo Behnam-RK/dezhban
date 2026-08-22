@@ -12,6 +12,35 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Contextual help lands on the key you asked about.** The **?** beside a
+  setting used to open one of four section anchors shared by every key in that
+  section; it now scrolls to that key's own row in the configuration reference.
+  The help renderer gives each documented key a row anchor, and each key's
+  anchor is derived from the key rather than hand-written, so the two cannot
+  drift — a key that loses its documentation row now fails the build by name.
+  The **?** button now says what it does on hover ("Open the documentation for
+  …"), which is the affordance a pointer user was missing — the key's own one-line
+  help is already on the control beside it, and visible under the toggles that
+  carry a caption.
+- **Shorter action buttons, with one caption line under the row.** The Overview's
+  controls are now Block / Unblock / Switch VPN… / Pause / Guard down / Panic…,
+  with the window controls shortened to match — **Resume (m:ss left)** rather than
+  "Resume now", and one **Cancel** in place of "Cancel redial window" and "Cancel
+  VPN switch" (which window it closes is in the caption). The sentence each title
+  used to carry inline moved to a caption line beneath the row that follows the
+  pointer and the keyboard focus, and reads "Point at a button to see what it
+  does." when neither is on the row. Whichever of the two you used last wins, so
+  tabbing takes the caption from a resting pointer and moving the pointer takes it
+  back. The same sentence remains the tooltip and is also announced by VoiceOver as
+  the control's hint, and the caption wraps rather than truncating — its tail is
+  where the password expectation is stated, and that has to survive a narrow window.
+  The menubar's items are unchanged: a menu has no caption line to delegate to, and
+  a guided empty state's panic button keeps its full title for the same reason.
+- **The advanced tunables table names its keys in full** (`vpn.advanced.redialBudget`
+  rather than `redialBudget`), matching every other table in the reference.
+
 ### Fixed
 
 - **"Open minimized" now actually decides whether the window opens.** The app
