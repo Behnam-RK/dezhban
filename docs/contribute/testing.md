@@ -931,6 +931,13 @@ task gui:build && open dist/Dezhban.app
       `com.behnam-rk.dezhban.app.login` (that is `AssociatedBundleIdentifiers`
       doing its job — this is the switch a user reaches for to stop the app
       starting at login, and it is useless if nobody can tell what it governs).
+- [ ] **Uninstall handles two installs.** Put a copy in `/Applications` *and* one in
+      `~/Applications`, let the second register the login agent, then run the
+      uninstaller. Both bundles must be gone, the agent registration must be
+      retracted (`launchctl print gui/$UID/com.behnam-rk.dezhban.app.login` fails,
+      still after a reboot), and no clean-removal message may print over a survivor.
+      Only the registering bundle can retract, so each copy's errand has to run from
+      that copy while it still exists.
 - [ ] **Uninstall finds the app where it actually is.** Move `Dezhban.app` into
       `/Applications/Utilities/`, let it register the login agent, then run the
       uninstaller. It must locate the bundle there, retract the agent, delete it,

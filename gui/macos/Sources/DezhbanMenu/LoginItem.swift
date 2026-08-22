@@ -387,6 +387,16 @@ enum LoginItem {
         // engineered around: if macOS will not retract the old registration,
         // nothing the app can do will make enabling this safe. See
         // `Outcome.legacyStuck`.
+        // The user's intent is recorded and flushed BEFORE the retraction, which is
+        // the rule the rest of this file follows and this path inverted.
+        // `retractLegacy()` unloads a launchd job, and in a login-started session
+        // that job's process is this app — so a kill between the retraction and the
+        // write left `userDisabledKey` still reading true with the attempt flag now
+        // set, and the next launch's migration fell straight through to
+        // `markMigrated()`: the account retired with nothing registered, moments
+        // after the user asked for login-at-launch on.
+        UserDefaults.standard.set(false, forKey: userDisabledKey)
+        UserDefaults.standard.synchronize()
         retractLegacy()
         if stillRegistered(.mainApp) {
             // Which outcome depends on what actually survived, not on the direction
@@ -404,13 +414,6 @@ enum LoginItem {
             // reported "left off" over a live login launch.
             return liveOutcome(.enabling, fallback: .blockedByLegacy)
         }
-        UserDefaults.standard.set(false, forKey: userDisabledKey)
-        // Flushed, like every other write to these three coupled flags. This pane
-        // can have its process killed by launchd mid-operation, and clearing the
-        // explicit-off only in memory meant the next launch still read it as true —
-        // marking the account migrated and permanently cancelling the register()
-        // retry that exists so nobody is stranded with nothing starting the app.
-        UserDefaults.standard.synchronize()
         do {
             try service.register()
         } catch {

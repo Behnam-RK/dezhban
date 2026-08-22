@@ -131,18 +131,42 @@ func acquireSessionOwnership() -> SessionLock? {
         // to claim, losing that user's double-click.
         return lock
     case .heldByAnother:
+        // Somebody holds the lock — but only a *live* somebody may be handed the
+        // launch. `flock` is released by the kernel when its holder dies, so locally
+        // "held" implies "alive"; over a network home, where the server emulates it,
+        // an advisory lock can outlive the process that took it. Every launch then
+        // finds the lock taken, posts a hand-off nobody will ever claim, and exits —
+        // the app becomes permanently unstartable with nothing said, which is worse
+        // than the duplicate icon this guard exists to avoid, and is the opposite of
+        // how every other failure here degrades ("refusing to start because a support
+        // directory is broken would be a worse bug").
+        //
+        // Retried rather than decided on one read: at login the incumbent is often
+        // launchd-exec'd and not yet registered with LaunchServices, which is the
+        // ordinary reason to find nobody and exactly the case that must still yield.
+        let mePID = ProcessInfo.processInfo.processIdentifier
+        let ownBundle = Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
+        var incumbent: NSRunningApplication?
+        for attempt in 0 ..< 3 {
+            incumbent = NSRunningApplication
+                .runningApplications(withBundleIdentifier: id)
+                .first {
+                    $0.processIdentifier != mePID && !$0.isTerminated
+                        && $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL == ownBundle
+                }
+            if incumbent != nil { break }
+            if attempt < 2 { usleep(200_000) }
+        }
+        guard incumbent != nil else {
+            NSLog("DezhbanMenu: the session lock is held but no live copy of this install "
+                + "owns it (a stale lock on a network home?); starting anyway")
+            sessionHandoff?.discard()
+            return lock
+        }
         // A background launch loses silently — that copy was never going to show
         // the user anything. A launch the user performed must not be a no-op, so
         // hand them over to the instance that owns the session.
         if !LaunchVisibility.isBackgroundLaunch(arguments: CommandLine.arguments) {
-            let mePID = ProcessInfo.processInfo.processIdentifier
-            let incumbent = NSRunningApplication
-                .runningApplications(withBundleIdentifier: id)
-                .first {
-                    $0.processIdentifier != mePID && !$0.isTerminated
-                        && $0.bundleURL?.resolvingSymlinksInPath().standardizedFileURL
-                        == Bundle.main.bundleURL.resolvingSymlinksInPath().standardizedFileURL
-                }
             incumbent?.activate()
             // Ask it to open its window — which it may not currently have, since
             // the incumbent may be a --background login launch.

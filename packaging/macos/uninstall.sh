@@ -108,12 +108,20 @@ fi
 # that install got "the app bundle was already gone", an unloaded-for-this-boot
 # agent, an `rm -rf` that deleted nothing, and a bundle that kept launching at
 # every subsequent login while the script said everything was removed.
-if [ ! -d "$APP" ]; then
+# Unconditionally, and recording *every* match rather than stopping at the first.
+# Gating this on /Applications/Dezhban.app being absent left a second install
+# elsewhere untouched: `SessionLock` is path-keyed and `isInStableInstallLocation`
+# accepts any Applications directory precisely so two can coexist, so the copy
+# holding the agent registration may not be the one at the default path. The errand
+# then ran from a bundle that had never registered — where the status is `.notFound`
+# and `retractAll()` truthfully reports nothing to do — `rm -rf` deleted the wrong
+# copy, and the script closed with an unqualified "files deleted" while the surviving
+# bundle went on starting the app at every login.
+if true; then
 	# Root-owned, mode 700, for the same reason the errand's marker directory is:
 	# this runs as root and a predictable name in a world-writable directory is a
 	# symlink-plant away from a root write.
 	search_dir=$(mktemp -d "${TMPDIR:-/tmp}/dezhban-search.XXXXXX") || search_dir=""
-	search_out="$search_dir/found"
 	# Every account's ~/Applications, not only the console user's. CONSOLE_HOME is
 	# resolved only when somebody is logged in at the console, so run over ssh or at
 	# the login window this searched /Applications alone — and an install in a
@@ -122,9 +130,12 @@ if [ ! -d "$APP" ]; then
 	# start Dezhban (the app is gone)". The same false clean report the unbounded
 	# search was added to prevent, reached from the other side.
 	set -- /Applications
-	if [ -n "$CONSOLE_HOME" ] && [ -d "$CONSOLE_HOME/Applications" ]; then
-		set -- "$@" "$CONSOLE_HOME/Applications"
-	fi
+	case "$CONSOLE_HOME" in
+	/Users/*) ;; # already covered by the glob below
+	?*)
+		[ -d "$CONSOLE_HOME/Applications" ] && set -- "$@" "$CONSOLE_HOME/Applications"
+		;;
+	esac
 	for home_apps in /Users/*/Applications; do
 		[ -d "$home_apps" ] || continue
 		set -- "$@" "$home_apps"
@@ -145,19 +156,36 @@ if [ ! -d "$APP" ]; then
 		# exec the retraction errand. `-quit` stops at the first match, and printf
 		# without a trailing newline means the command substitution below reproduces
 		# the path exactly, embedded newlines included.
-		: >"$search_out"
-		find "$root" -name Dezhban.app -type d \
-			-exec sh -c 'printf "%s" "$1" >"$2"' _ {} "$search_out" \; -quit 2>/dev/null
-		found=$(cat "$search_out")
-		if [ -n "$found" ]; then
-			APP="$found"
-			echo "note: found the app at $APP" >&2
-			break
-		fi
+		# One file per match, named by mktemp so nothing has to be counted, and each
+		# path written with printf so `$(cat …)` reproduces it byte for byte. Piping
+		# through `head -1` truncated at the first newline — legal in a macOS
+		# directory name — and the result is handed to `rm -rf` as root.
+		find "$root" -name Dezhban.app -type d -exec sh -c '
+			out=$(mktemp "$2/bundle.XXXXXX") || exit 0
+			printf "%s" "$1" >"$out"' _ {} "$search_dir" \; 2>/dev/null
 	done
-	[ -n "$search_dir" ] && rm -rf "$search_dir"
 fi
-if [ -n "$CONSOLE_UID" ]; then
+# The default path counts as a candidate even if the search could not run.
+if [ -n "$search_dir" ]; then
+	for f in "$search_dir"/bundle.*; do
+		[ -f "$f" ] || continue
+		APP=$(cat "$f")
+		echo "note: found the app at $APP" >&2
+		break
+	done
+fi
+# Every bundle found, each retracting its own registration: only the registering
+# bundle can call SMAppService.unregister(), so a second copy's agent is retractable
+# by nothing else.
+retract_and_remove_bundle() {
+	APP="$1"
+	if [ -n "$CONSOLE_UID" ]; then
+		run_retraction_errand
+	fi
+	rm -rf "$APP"
+}
+
+run_retraction_errand() {
 	echo "unregistering the login agent for $CONSOLE_USER ..."
 	if [ ! -x "$APP/Contents/MacOS/DezhbanMenu" ]; then
 		# Only the app can call SMAppService.unregister(), so with the bundle already
@@ -253,6 +281,25 @@ if [ -n "$CONSOLE_UID" ]; then
 		rm -rf "$errand_dir"
 		wait "$errand" >/dev/null 2>&1 || true
 	fi
+}
+
+echo "removing the app bundle(s) ..."
+bundles_handled=0
+if [ -n "$search_dir" ]; then
+	for f in "$search_dir"/bundle.*; do
+		[ -f "$f" ] || continue
+		retract_and_remove_bundle "$(cat "$f")"
+		bundles_handled=$((bundles_handled + 1))
+	done
+	rm -rf "$search_dir"
+fi
+if [ "$bundles_handled" -eq 0 ]; then
+	# Nothing found anywhere: still run the errand so the "the bundle is gone, and
+	# only the app could have retracted this" warning is reached.
+	retract_and_remove_bundle "$APP"
+fi
+
+if [ -n "$CONSOLE_UID" ]; then
 	launchctl bootout "gui/$CONSOLE_UID/$LOGIN_AGENT" >/dev/null 2>&1 || true
 	# The app's own per-user directory: the session lock the GUI takes at startup
 	# to keep a second copy of itself from running, and the hand-off file beside
@@ -296,7 +343,9 @@ else
 	fi
 fi
 
-rm -rf "$APP"
+# The bundles are removed by `retract_and_remove_bundle` above, each after its own
+# registration has been retracted — the removal cannot be hoisted here, because only
+# the registering bundle can retract, so it has to still exist when its errand runs.
 
 # The daemon's own directory: state.json, learned.json, the command file and the
 # control socket. All machine-derived and safe to discard — none of it is the user's.
