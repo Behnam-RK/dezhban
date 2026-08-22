@@ -25,6 +25,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/behnam-rk/dezhban/internal/applied"
 	"github.com/behnam-rk/dezhban/internal/armed"
 	"github.com/behnam-rk/dezhban/internal/command"
 	"github.com/behnam-rk/dezhban/internal/config"
@@ -67,7 +68,7 @@ Commands:
   status      Show version, config, and current state
   validate    Load and validate a config file (no root, no side effects)
   monitor     Live read-only view: IP, country, tunnel state, endpoints, verdict
-  print-rules Print the firewall ruleset a block/guard would apply, without applying it
+  print-rules Print the firewall ruleset a block/guard would apply (--applied: what is applied now)
   doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
   panic       Force-remove dezhban's rules even if nothing is running
   install     Register dezhban as a boot-persistent OS service
@@ -795,6 +796,7 @@ func assembleOptions(cfg *config.Config, cfgPath string, log *slog.Logger, ov ru
 		PollCommand:             pollCommand,
 		Publish:                 publish,
 		BlockedCountries:        cfg.BlockedCountries,
+		AppliedRulesPath:        applied.Path(stateDir()),
 		ReloadConfig:            reload,
 		WriteConfig:             writeConfigKeysAt,
 		AllowConfigOps:          cfg.Control.AllowConfigOps,
@@ -1810,7 +1812,22 @@ func cmdPrintRules(args []string) int {
 	fs := flag.NewFlagSet("print-rules", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	mode := fs.String("mode", "guard", "policy to render: guard, fullblock, or switch")
+	appliedOnly := fs.Bool("applied", false, "print the ruleset dezhban last applied, instead of rendering one")
+	installed := fs.Bool("installed", false, "read dezhban's rules back out of the kernel (needs root)")
+	asJSON := fs.Bool("json", false, "machine-readable output (with --applied or --installed)")
 	_ = fs.Parse(args)
+
+	if *appliedOnly && *installed {
+		fmt.Fprintln(os.Stderr, "--applied and --installed are two different sources; pick one.")
+		fmt.Fprintln(os.Stderr, "--applied is what dezhban recorded installing; --installed is what the kernel holds now.")
+		return 2
+	}
+	if *appliedOnly {
+		return printAppliedRules(*asJSON)
+	}
+	if *installed {
+		return printInstalledRules(*asJSON)
+	}
 
 	cfg, err := loadConfig(*cfgPath)
 	if err != nil {
@@ -1828,6 +1845,138 @@ func cmdPrintRules(args []string) int {
 		return 1
 	}
 	fmt.Print(rules)
+	return 0
+}
+
+// printAppliedRules prints what the daemon recorded applying, as opposed to what
+// a posture WOULD apply (which the rest of print-rules renders, purely).
+//
+// This is dezhban's own account, not a reading of the kernel: it is what the run
+// loop handed the backend, timestamped, and it is the half that works
+// unprivileged and identically on every platform. The label says so, because
+// "the current rules" would be a claim this cannot make.
+//
+// Nothing recorded is an ordinary answer, not a failure — a daemon in standby
+// has applied nothing, and neither has one that was never started. It exits 0
+// and says so, so a caller can tell that apart from an error.
+func printAppliedRules(asJSON bool) int {
+	path := applied.Path(stateDir())
+	rec, ok, err := applied.Load(path)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "could not read the applied-ruleset record:", err)
+		return 1
+	}
+	if asJSON {
+		if !ok {
+			fmt.Println("null")
+			return 0
+		}
+		out, err := json.MarshalIndent(rec, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "encode failed:", err)
+			return 1
+		}
+		fmt.Println(string(out))
+		return 0
+	}
+	if !ok {
+		fmt.Fprintf(os.Stderr, "no ruleset recorded at %s.\n", path)
+		fmt.Fprintln(os.Stderr, "dezhban records one on every apply; in standby it has applied nothing.")
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "# %s ruleset dezhban applied at %s (mode %s)\n",
+		rec.Backend, rec.At.Local().Format(time.RFC3339), rec.Mode)
+	fmt.Fprintln(os.Stderr, "# This is what dezhban installed, not a reading of the kernel.")
+	fmt.Print(rec.Rules)
+	return 0
+}
+
+// installedRules is the machine shape of a kernel readback, paired with the
+// record of what dezhban believes it applied so a consumer does not have to
+// fetch and correlate the two itself. `Drift` is the finding.
+type installedRules struct {
+	// Installed is the rule text read out of the kernel, empty when dezhban has
+	// no rules loaded.
+	Installed string `json:"installed"`
+	// Loaded is false when dezhban has no rules in the kernel at all — an
+	// ordinary answer (standby, nothing running), never an error.
+	Loaded bool `json:"loaded"`
+	// Applied is what the daemon recorded installing, absent when nothing was
+	// recorded.
+	Applied *applied.Record `json:"applied,omitempty"`
+	// Drift is true when dezhban has a record of what it applied and the kernel
+	// disagrees about whether rules are loaded at all. It deliberately does NOT
+	// diff the two texts: `pfctl -s rules` renders a normalised form of what was
+	// loaded, so a byte comparison would report drift on every healthy host. The
+	// text is shown to a human for that reason.
+	Drift bool `json:"drift"`
+	// Backend names the syntax of Installed.
+	Backend string `json:"backend"`
+}
+
+// printInstalledRules reads dezhban's rules back out of the kernel — the other
+// half of the picture from --applied, which is only dezhban's own account.
+//
+// A READ: it installs nothing and changes nothing, so it does not touch the
+// single-writer rule that governs Apply. It does need root, which is why it is
+// on demand rather than on a tick — and why nothing in the daemon calls it.
+// Repairing a discrepancy is not this command's job either: the run loop's
+// verify tick already owns that, and a second repairer would be a second writer.
+func printInstalledRules(asJSON bool) int {
+	rec, hasRecord, recErr := applied.Load(applied.Path(stateDir()))
+	if recErr != nil {
+		fmt.Fprintln(os.Stderr, "note: could not read the applied-ruleset record:", recErr)
+	}
+	backend, err := firewall.New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "firewall backend unavailable:", err)
+		return 1
+	}
+	text, loaded, err := backend.InstalledRules()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "could not read the installed rules:", err)
+		if !privilege.IsPrivileged() {
+			fmt.Fprintln(os.Stderr, "reading the firewall back needs root — try: sudo dezhban print-rules --installed")
+		}
+		return 1
+	}
+
+	out := installedRules{
+		Installed: text,
+		Loaded:    loaded,
+		Backend:   firewall.RulesetKind,
+		Drift:     hasRecord && !loaded,
+	}
+	if hasRecord {
+		out.Applied = &rec
+	}
+	if asJSON {
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "encode failed:", err)
+			return 1
+		}
+		fmt.Println(string(data))
+		return 0
+	}
+
+	if out.Drift {
+		fmt.Fprintf(os.Stderr, "WARNING: dezhban recorded applying a %q ruleset at %s,\n",
+			rec.Mode, rec.At.Local().Format(time.RFC3339))
+		fmt.Fprintln(os.Stderr, "but the kernel holds no dezhban rules. Something removed them.")
+		fmt.Fprintln(os.Stderr, "dezhban's own verification re-applies on its next tick; `dezhban status` will say.")
+		return 0
+	}
+	if !loaded {
+		fmt.Fprintln(os.Stderr, "no dezhban rules are loaded (standby, or nothing running).")
+		return 0
+	}
+	fmt.Fprintf(os.Stderr, "# %s rules currently loaded, read from the kernel\n", out.Backend)
+	if hasRecord {
+		fmt.Fprintf(os.Stderr, "# dezhban applied a %q ruleset at %s\n",
+			rec.Mode, rec.At.Local().Format(time.RFC3339))
+	}
+	fmt.Print(text)
 	return 0
 }
 

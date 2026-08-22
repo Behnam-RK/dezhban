@@ -204,6 +204,34 @@ func (b *wfpBackend) IsBlocked() (bool, error) {
 	return true, nil
 }
 
+// InstalledRules renders dezhban's own firewall rules back out of Windows, plus
+// each profile's default outbound action — which is where the actual blocking
+// lives on this platform (see the Model note above renderBlockScript), so a list
+// of allow rules without it would be a misleading half of the picture.
+//
+// Scoped to `-Group dezhban`, exactly like Remove-NetFirewallRule, so it reports
+// our rules and nothing else. A read: it changes nothing and is safe from any
+// goroutine or process. It does need an elevated shell, which is why nothing
+// calls it on a tick.
+func (b *wfpBackend) InstalledRules() (string, bool, error) {
+	script := strings.Join([]string{
+		"$g = Get-NetFirewallRule -Group " + groupName + " -ErrorAction SilentlyContinue",
+		"if ($null -eq $g) { 'NONE'; exit 0 }",
+		"'# default outbound action per profile'",
+		"Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction | Format-Table -AutoSize | Out-String",
+		"'# dezhban rules'",
+		"$g | Select-Object DisplayName,Direction,Action,Enabled | Format-Table -AutoSize | Out-String",
+	}, "\n")
+	out, err := powershell(script)
+	if err != nil {
+		return "", false, fmt.Errorf("read the dezhban firewall group: %w", err)
+	}
+	if strings.TrimSpace(out) == "NONE" {
+		return "", false, nil
+	}
+	return out, true, nil
+}
+
 // queryBlockedAndDefaults combines the group-existence check and the
 // per-profile DefaultOutboundAction query into a single PowerShell
 // invocation. IsBlocked is called synchronously from the run loop's verifyC

@@ -444,3 +444,36 @@ dezhban print-rules --mode switch    --config <config>
 > Note these previews are static config, not the runtime posture: a config with
 > no tunnel previews as a full block here, while the running daemon idles
 > rule-free in STANDBY until a tunnel is actually observed up.
+
+## What is enforcing right now
+
+The previews above answer "what would this posture do?". Two other flags answer
+"what is happening?", and they are deliberately different sources:
+
+```sh
+dezhban print-rules --applied      # what dezhban recorded installing, and when
+sudo dezhban print-rules --installed   # what the firewall itself holds
+```
+
+`--applied` reads a record the daemon writes on every successful apply, beside
+the state file. It is dezhban's **own account** — the exact text it handed the
+firewall, with the tunnel interfaces and endpoint addresses resolved at that
+moment, which is why it can be more accurate than re-rendering the config after
+the fact. It needs no root and works the same on every platform. It says nothing
+about the kernel, and its label says so.
+
+`--installed` asks the firewall. It is scoped to dezhban's own
+anchor/table/group, never a dump of unrelated firewall state, and it is a **read**
+— it installs nothing and repairs nothing. It needs root, which is why nothing
+runs it on a timer.
+
+When dezhban has a record of applying rules and the firewall holds none,
+`--installed` reports it. That is the case something outside dezhban flushed the
+firewall, and it is reported rather than repaired: the run loop's own
+verification tick already re-applies missing rules, and a second repairer would
+be a second writer.
+
+The two texts will **not** match byte for byte on a healthy host — the firewall
+renders its own normalised form of what was loaded — so neither surface diffs
+them. The macOS app shows all three (applied, in the kernel, and the per-posture
+previews) in Diagnostics › Firewall rules.
