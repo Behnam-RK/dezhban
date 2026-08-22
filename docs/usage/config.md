@@ -308,7 +308,10 @@ An optional block for behaviors that are otherwise recommended defaults. Omit it
 entirely to keep the defaults; set only the knobs you need. Every field below is
 reachable with `dezhban config set vpn.advanced.<field>=<value>` — the same
 validated write-and-reload path as any other key — not just by hand-editing the
-file. `switchWindowMax`, `redialWindowMax`, `redialMinUptime`, `redialBudget`,
+file. Prose in this section drops the `vpn.advanced.` prefix once it is
+established; the table below always writes it in full, because that is what its
+row anchors are derived from.
+`switchWindowMax`, `redialWindowMax`, `redialMinUptime`, `redialBudget`,
 `redialBudgetWindow`, `verifyInterval`, `livenessRedial`, and
 `windowDiscoveryInterval` apply live; the rest (built into something the run
 loop constructs once at startup, or — for `windowProtocols`/`windowPorts` —

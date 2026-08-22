@@ -29,19 +29,27 @@ var firstCellKey = regexp.MustCompile("^\\|\\s*`([^`]+)`\\s*\\|")
 
 var sectionHeading = regexp.MustCompile(`^#{2,6}\s+(.*)$`)
 
-// TestKeyRowsAnchorToTheirDefinitionSection pins the document ordering that
-// help.claimKey silently depends on.
+// A table's separator row, and a header whose first column is "Field" — the pair
+// help.renderTable uses to decide that a table documents config keys.
+var (
+	tableSeparator     = regexp.MustCompile(`^\|[\s:|-]+\|$`)
+	firstColumnIsField = regexp.MustCompile(`^\|\s*[Ff]ield\s*\|`)
+)
+
+// TestKeyRowsAnchorToTheirDefinitionSection pins the document arrangement that
+// help.claimKey depends on.
 //
-// claimKey gives a key's row anchor to the FIRST table row naming that key on the
-// page — it cannot tell a definition from a summary, and refusing a duplicate
-// loudly would fail the build on every legitimately repeated key. So the guarantee
-// that a contextual help link lands on the definition rather than on the Presets
-// comparison is a property of how the reference is *arranged*. Nothing in the
-// renderer or the resolution test notices if that changes: both stay green as long
-// as some row carries the anchor.
+// The renderer settles most of this itself now: only a table heading its first
+// column "Field" defines keys, so config.md's presets and retired tables — headed
+// "Key" — cannot claim an anchor however early they appear. What it still cannot
+// settle is *two* Field-headed tables naming the same key, where the first one
+// wins; refusing a duplicate loudly is not an option, since several keys are
+// legitimately repeated.
 //
-// This is the test that notices. For every settable key, the first table row naming
-// it must fall under one of the reference's definition headings.
+// So this is the remaining guard, and it is a second line rather than the only one.
+// For every settable key, the first Field-table row naming it must fall under one of
+// the reference's definition headings. Nothing else notices if that changes: the
+// resolution test stays green as long as some row carries the anchor.
 func TestKeyRowsAnchorToTheirDefinitionSection(t *testing.T) {
 	// The pages come from the anchors themselves rather than being hardcoded, so a
 	// tunable documented on some other bundled page is checked against that page
@@ -98,7 +106,15 @@ func firstRowSections(markdown string) map[string]string {
 	out := map[string]string{}
 	section := ""
 	inCode := false
-	for _, raw := range strings.Split(markdown, "\n") {
+	// Only rows inside a real table, and only under a "Field" header — the same two
+	// conditions renderTable applies. Without the separator check a pipe-prefixed
+	// prose line counted as a row; without the header check a presets or retired row
+	// did, and neither is something claimKey would ever anchor. Both would have
+	// failed the build over a row the renderer ignores, which is the false-failure
+	// this test has already been fixed for once.
+	lines := strings.Split(markdown, "\n")
+	inFieldTable := false
+	for i, raw := range lines {
 		line := strings.TrimSpace(raw)
 		if strings.HasPrefix(line, "```") {
 			inCode = !inCode
@@ -109,6 +125,19 @@ func firstRowSections(markdown string) map[string]string {
 		}
 		if m := sectionHeading.FindStringSubmatch(line); m != nil {
 			section = strings.TrimSpace(m[1])
+			inFieldTable = false
+			continue
+		}
+		if !strings.HasPrefix(line, "|") {
+			inFieldTable = false
+			continue
+		}
+		// A header row is one followed by a separator; that is what starts a table.
+		if i+1 < len(lines) && tableSeparator.MatchString(strings.TrimSpace(lines[i+1])) {
+			inFieldTable = firstColumnIsField.MatchString(line)
+			continue
+		}
+		if tableSeparator.MatchString(line) || !inFieldTable {
 			continue
 		}
 		if m := firstCellKey.FindStringSubmatch(line); m != nil {

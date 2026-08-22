@@ -296,13 +296,20 @@ struct OverviewView: View {
         // of whatever line it lands on — which is also why the Spacer that used
         // to sit before it is gone.
         return ActionRow(trailingCount: 1) {
-            captioned("block",
-                      state.routineHint("Cuts all traffic and holds it until you unblock.")) {
+            // A disabled control says why, rather than describing an action it will
+            // not perform. This text was tooltip-only before the row's titles were
+            // shortened; promoting it to the primary visible explanation is what makes
+            // "Releases a manual block…" under a greyed-out button worth fixing. The
+            // Pause branch below already worked this way.
+            captioned("block", blocked
+                ? "Disabled — traffic is already blocked."
+                : state.routineHint("Cuts all traffic and holds it until you unblock.")) {
                 Button("Block") { AppActions.routine(["block"], "block") }
                     .disabled(blocked)
             }
-            captioned("unblock",
-                      state.routineHint("Releases a manual block and resumes monitoring.")) {
+            captioned("unblock", !(blocked || guardHolds)
+                ? "Disabled — there is no manual block or guard hold to release."
+                : state.routineHint("Releases a manual block and resumes monitoring.")) {
                 Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
                     .disabled(!(blocked || guardHolds))
             }
@@ -419,9 +426,14 @@ struct OverviewView: View {
     /// present and always one line high — a caption that vanished between two
     /// buttons would reflow the row under the pointer.
     private func actionCaption(_ s: Snapshot) -> some View {
+        // The resting text is a prompt, not the posture. `PostureUI.humanPosture` is
+        // exactly `display.headline`, which the hero already renders in title2 a
+        // hundred points above — so with the pointer off the row, which is the normal
+        // state, the pane said "Traffic cut" twice. The only requirement on the
+        // fallback is that the line never collapses and reflows the row.
         Text(ActionCaption.text(hovered: hoveredAction?.hint,
                                 focused: focusedAction == nil ? nil : focusedHint,
-                                fallback: PostureUI.humanPosture(s)))
+                                fallback: "Point at a button to see what it does."))
             .font(.callout)
             .foregroundStyle(.secondary)
             // Two lines, always reserved. One line truncated the tail of every long

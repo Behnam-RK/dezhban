@@ -463,11 +463,24 @@ func isTableSeparator(line string) bool {
 
 // renderTable emits one table and reports how many lines it consumed.
 //
-// A row whose first cell is a lone code span — `vpn.redialWindow`, which is how
-// every field table in the docs opens a row — gets an `id` on its <tr> so a
-// contextual help link can land on that key. Every other row is emitted exactly
-// as before. claimKey decides the anchor and reports whether this row is the
-// one that gets it — see Render, which resolves keys documented in two tables.
+// In a table whose first column is headed "Field", a row opening with a lone code
+// span — `vpn.redialWindow` — gets an `id` on its <tr>, so a contextual help link
+// can land on that key. Every other row is emitted exactly as before. claimKey
+// decides the anchor and reports whether this row is the one that gets it.
+//
+// The header gate is what makes "a documented config key" mean something. Without
+// it, any lone code span in any first cell minted a `key-` anchor: concepts/modes.md
+// produced key-1006410 and key-fc007 from its private-range table, usage/cli.md
+// produced key-panic and key-run from its subcommand tables — pages that document no
+// config key at all, contradicting Rendered.Keys' own description. The cost was not
+// only untidiness: the collision guard aborts the whole app build, so a row added to
+// one of cli.md's flag tables could fail `task gui:build` complaining about a "key
+// row and a heading" on a page with no keys in it.
+//
+// It also settles definition-versus-summary structurally. docs/usage/config.md heads
+// its four defining tables "Field" and its presets and retired tables "Key", so a
+// summary row can no longer claim an anchor at all — where before, the right row
+// winning depended on the order the sections happened to appear in.
 func renderTable(out *strings.Builder, text *strings.Builder, lines []string,
 	renderInline func(string) string, claimKey func(string) (string, bool)) int {
 	header := splitRow(lines[0])
@@ -479,6 +492,9 @@ func renderTable(out *strings.Builder, text *strings.Builder, lines []string,
 	out.WriteString("</tr></thead>\n<tbody>\n")
 	text.WriteString("\n")
 
+	definesKeys := len(header) > 0 &&
+		strings.EqualFold(strings.TrimSpace(stripInline(header[0])), "Field")
+
 	used := 2 // header + separator
 	for _, line := range lines[2:] {
 		s := strings.TrimSpace(line)
@@ -487,8 +503,10 @@ func renderTable(out *strings.Builder, text *strings.Builder, lines []string,
 		}
 		cells := splitRow(s)
 		anchor := ""
-		if key, ok := rowKey(cells); ok {
-			anchor, _ = claimKey(key)
+		if definesKeys {
+			if key, ok := rowKey(cells); ok {
+				anchor, _ = claimKey(key)
+			}
 		}
 		if anchor != "" {
 			fmt.Fprintf(out, "<tr id=%q>", anchor)
