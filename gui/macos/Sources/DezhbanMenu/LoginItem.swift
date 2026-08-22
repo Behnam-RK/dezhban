@@ -134,15 +134,23 @@ enum LoginItem {
         /// Whether this outcome is a statement about the switch's own state, so that
         /// the switch later moving away from it makes the message false.
         ///
-        /// `.unstableLocation` is not: it says this copy of the app may not touch the
-        /// login item, which stays true however the switch reads — and on a dev build
-        /// beside an installed copy the switch reads ON permanently, so treating it
-        /// as switch-describing wiped the explanation on the very next activation.
+        /// `.unstableLocation` is the only one that does not: it says this copy of the
+        /// app may not touch the login item, which stays true however the switch
+        /// reads — and on a dev build beside an installed copy the switch reads ON
+        /// permanently, so treating it as switch-describing wiped the explanation on
+        /// the very next activation.
+        ///
+        /// `.failed` used to be excluded alongside it, which was wrong in the
+        /// dangerous direction: the binding moves the switch optimistically to where
+        /// the user put it and only corrects it from an outcome that describes the
+        /// switch, so a failed *enable* left it reading ON with nothing registered
+        /// until the next activation — the switch-versus-reality lie this type exists
+        /// to prevent. A failure is very much a statement about the switch.
         var describesSwitchState: Bool {
             switch self {
-            case .unstableLocation, .failed: return false
+            case .unstableLocation: return false
             case .enabled, .disabled, .awaitingApproval, .legacyStuck, .agentStuck,
-                 .blockedByLegacy:
+                 .blockedByLegacy, .failed:
                 return true
             }
         }
@@ -737,21 +745,6 @@ enum LoginItem {
         return roots.contains { bundle == $0 || bundle.hasPrefix($0 + "/") }
     }
 
-    /// Words, not a raw `SMAppService.Status`. It is an imported `NS_ENUM` with no
-    /// `CustomStringConvertible`, so interpolating it put
-    /// `SMAppService.Status(rawValue: 3)` in front of the user — in the very type
-    /// that exists so the UI can say something true.
-    /// The truthful outcome for whatever is live right now.
-    ///
-    /// Both "the legacy item survived" branches used to answer from their own
-    /// branch — `legacyEnabled ? .legacyStuck : .blockedByLegacy` — which ignored
-    /// the agent. With a dormant `.requiresApproval` legacy item that will not
-    /// retract AND a live agent registration, that returned `.blockedByLegacy`:
-    /// `isOn == false`, a message asserting "it has been left off", and a switch
-    /// snapping OFF while `isEnabled` said true and the next `seed()` flipped it
-    /// back. Deriving from the live state instead makes `isOn` agree with
-    /// `isEnabled` by construction, which is what `isEnabled`'s docstring demands.
-    ///
     /// Which way the user was moving the switch.
     ///
     /// The live state alone is not enough: a registered agent means "on, as asked"
@@ -765,6 +758,17 @@ enum LoginItem {
     /// explanation.
     enum Direction { case enabling, disabling }
 
+    /// The truthful outcome for whatever is live right now.
+    ///
+    /// Both "the legacy item survived" branches used to answer from their own
+    /// branch — `legacyEnabled ? .legacyStuck : .blockedByLegacy` — which ignored
+    /// the agent. With a dormant `.requiresApproval` legacy item that will not
+    /// retract AND a live agent registration, that returned `.blockedByLegacy`:
+    /// `isOn == false`, a message asserting "it has been left off", and a switch
+    /// snapping OFF while `isEnabled` said true and the next `seed()` flipped it
+    /// back. Deriving from the live state instead makes `isOn` agree with
+    /// `isEnabled` by construction, which is what `isEnabled`'s docstring demands.
+    ///
     /// `fallback` is used only when nothing is live at all.
     private static func liveOutcome(_ direction: Direction, fallback: Outcome) -> Outcome {
         if legacyEnabled { return .legacyStuck }
@@ -787,6 +791,10 @@ enum LoginItem {
         return fallback
     }
 
+    /// Words, not a raw `SMAppService.Status`. It is an imported `NS_ENUM` with no
+    /// `CustomStringConvertible`, so interpolating it put
+    /// `SMAppService.Status(rawValue: 3)` in front of the user — in the very type
+    /// that exists so the UI can say something true.
     private static func describe(_ status: SMAppService.Status) -> String {
         switch status {
         case .notRegistered: return "macOS did not keep the registration."

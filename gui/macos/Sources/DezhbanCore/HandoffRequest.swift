@@ -116,12 +116,26 @@ public struct HandoffRequest {
     /// predecessor.
     public func sweepAbandonedClaims() {
         let dir = url.deletingLastPathComponent()
+        let prefix = Self.claimPrefix(for: url)
         guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir.path) else {
             return
         }
-        for name in names where name.hasPrefix(".claiming-") {
+        for name in names where name.hasPrefix(prefix) {
             try? FileManager.default.removeItem(at: dir.appendingPathComponent(name))
         }
+    }
+
+    /// Claim files are named per *request*, not just "a claim in this directory".
+    ///
+    /// The directory is shared by every install of the app — `SessionLock` is
+    /// path-keyed precisely so `dist/Dezhban.app` may run beside the installed copy —
+    /// so a directory-wide sweep let one install delete the other's in-flight claim.
+    /// The victim's read then returned nothing, its claim reported a nil token, the
+    /// token was never recorded, and the paired notification opened the window a
+    /// second time: the duplicate activation the token design exists to eliminate,
+    /// caused by the cleanup meant to be harmless.
+    static func claimPrefix(for url: URL) -> String {
+        ".claiming-" + url.deletingPathExtension().lastPathComponent + "-"
     }
 
     /// Tries to take the request, and reports whether this caller owns it.
@@ -151,7 +165,7 @@ public struct HandoffRequest {
         // "cannot dedupe this one", which the caller treats as its own identity
         // rather than as a match.
         let claimed = url.deletingLastPathComponent()
-            .appendingPathComponent(".claiming-\(UUID().uuidString)")
+            .appendingPathComponent("\(Self.claimPrefix(for: url))\(UUID().uuidString)")
         do {
             try FileManager.default.moveItem(at: url, to: claimed)
         } catch let error as NSError {

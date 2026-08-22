@@ -103,6 +103,28 @@ struct HandoffRequestTests {
         }
     }
 
+    /// One install's sweep must not touch another's in-flight claim. The support
+    /// directory is shared by every copy of the app on purpose, so a directory-wide
+    /// sweep silently broke the other copy's dedupe.
+    @Test func sweepingLeavesAnotherRequestsClaimsAlone() throws {
+        let dir = try tempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let mine = HandoffRequest(url: dir.appendingPathComponent("instance-aaa.handoff"))
+        let theirs = HandoffRequest(url: dir.appendingPathComponent("instance-bbb.handoff"))
+
+        // Stand in for a claim each install has renamed aside but not yet read.
+        let myClaim = dir.appendingPathComponent(
+            HandoffRequest.claimPrefix(for: mine.url) + "1")
+        let theirClaim = dir.appendingPathComponent(
+            HandoffRequest.claimPrefix(for: theirs.url) + "1")
+        try Data().write(to: myClaim)
+        try Data().write(to: theirClaim)
+
+        mine.sweepAbandonedClaims()
+        #expect(!FileManager.default.fileExists(atPath: myClaim.path))
+        #expect(FileManager.default.fileExists(atPath: theirClaim.path))
+    }
+
     /// Scoped per install, like the lock it sits beside — two installs may
     /// legitimately run side by side.
     @Test func theRequestSitsBesideItsOwnLock() {

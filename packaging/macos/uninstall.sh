@@ -143,26 +143,32 @@ if true; then
 	for root in "$@"; do
 		[ -n "$search_dir" ] || break
 		[ -d "$root" ] || continue
-		# Unbounded depth, to match LoginItem.isInStableInstallLocation, which accepts
-		# anything *under* an Applications directory. A depth limit here meant an
-		# install the app would happily register the login agent from — say
-		# /Applications/Utilities/Network/Tools/Dezhban.app — was one the uninstaller
+		# Any depth under an Applications directory, to match
+		# LoginItem.isInStableInstallLocation — a depth limit meant an install the app
+		# would happily register the login agent from, say
+		# /Applications/Utilities/Network/Tools/Dezhban.app, was one the uninstaller
 		# could not find, so it printed "Nothing will start Dezhban (the app is gone)"
-		# over a bundle still sitting there launching at every login.
-		# Written to a file by find itself, not piped through `head`. `$(… | head -1)`
-		# truncates at the first newline, and a directory name may legally contain one
-		# on macOS — so `/Applications/My<newline>Apps/Dezhban.app` yielded
-		# APP=/Applications/My, which is then handed to `rm -rf` as root and used to
-		# exec the retraction errand. `-quit` stops at the first match, and printf
-		# without a trailing newline means the command substitution below reproduces
-		# the path exactly, embedded newlines included.
+		# over a bundle still launching at every login.
+		#
+		# But pruned at every .app boundary. Unpruned, this walked *inside* every
+		# installed application — millions of inodes on a Mac with Xcode, repeated for
+		# each home directory, any of which may be a network mount that blocks — while
+		# the script sat silent, after `panic` had already torn the rules down and
+		# before anything was deleted. Nothing useful lives inside another app bundle.
+		#
 		# One file per match, named by mktemp so nothing has to be counted, and each
 		# path written with printf so `$(cat …)` reproduces it byte for byte. Piping
-		# through `head -1` truncated at the first newline — legal in a macOS
-		# directory name — and the result is handed to `rm -rf` as root.
-		find "$root" -name Dezhban.app -type d -exec sh -c '
-			out=$(mktemp "$2/bundle.XXXXXX") || exit 0
-			printf "%s" "$1" >"$out"' _ {} "$search_dir" \; 2>/dev/null
+		# through `head -1` truncated at the first newline — legal in a macOS directory
+		# name — and the result is handed to `rm -rf` as root.
+		# Two pruned branches, not one chain: `expr -a \( … \) -prune` evaluates the
+		# prune only when the whole conjunction is true, so a non-matching bundle fell
+		# through and was descended into anyway — verified by finding a Dezhban.app
+		# nested inside an Xcode.app fixture.
+		find "$root" \
+			\( -name Dezhban.app -type d -exec sh -c '
+				out=$(mktemp "$2/bundle.XXXXXX") || exit 0
+				printf "%s" "$1" >"$out"' _ {} "$search_dir" \; -prune \) \
+			-o \( -name '*.app' -type d -prune \) 2>/dev/null
 	done
 fi
 # The default path counts as a candidate even if the search could not run.
