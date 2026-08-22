@@ -78,12 +78,18 @@ func TestEveryTunableDocAnchorResolves(t *testing.T) {
 	}
 
 	headings := map[string]map[string]bool{}
+	keyRows := map[string]map[string]bool{}
 	for _, e := range index {
-		set := map[string]bool{}
+		hs := map[string]bool{}
 		for _, h := range e.Headings {
-			set[h.Anchor] = true
+			hs[h.Anchor] = true
 		}
-		headings[e.Source] = set
+		headings[e.Source] = hs
+		ks := map[string]bool{}
+		for _, k := range e.Keys {
+			ks[k.Anchor] = true
+		}
+		keyRows[e.Source] = ks
 	}
 
 	check := func(t *testing.T, key, field, value string, in map[string]map[string]bool) {
@@ -108,7 +114,13 @@ func TestEveryTunableDocAnchorResolves(t *testing.T) {
 		// will open the file on GitHub, where row ids do not exist.
 		check(t, tun.Key, "DocAnchor", tun.DocAnchor, headings)
 		if tun.DocKeyAnchor != "" {
-			check(t, tun.Key, "DocKeyAnchor", tun.DocKeyAnchor, anchors)
+			// Key rows only, not rows-or-headings. Accepting either defeated this
+			// function's own promise: a key whose table row is deleted would still
+			// pass whenever some heading on the page happened to slug to the same
+			// `key-…` fragment — and such headings exist ("Key flags" in cli.md) —
+			// so the app would silently deep-link to a heading instead of failing
+			// here by name.
+			check(t, tun.Key, "DocKeyAnchor", tun.DocKeyAnchor, keyRows)
 		}
 	}
 }

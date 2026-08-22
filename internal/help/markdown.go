@@ -135,9 +135,34 @@ func Render(source, markdown string) Rendered {
 	// HTML besides: a browser jumps to whichever came first, so the choice is
 	// made here rather than left to chance.
 	claimedKeys := map[string]bool{}
+	// Heading anchors are collected up front, because a heading can appear *after*
+	// the row that would collide with it while r.Headings is filled in the same
+	// single pass below.
+	//
+	// The `key-` prefix was assumed to make collision impossible. It does not: a
+	// heading of "Key flags" — docs/usage/cli.md has one — slugs to exactly
+	// `key-flags`, which is also what a row for a key named `flags` would claim.
+	// Two elements with one id is invalid HTML and a browser jumps to whichever came
+	// first, so the reader lands on the heading and the contextual link is silently
+	// wrong. The heading wins, being the anchor markdown itself generates and the one
+	// written links depend on, and the row is *noted* rather than quietly skipped:
+	// Unsupported fails the bundle build (bundle.go), so this becomes a build error
+	// naming the page instead of a link that misses.
+	headingAnchors := map[string]bool{}
+	for _, line := range strings.Split(markdown, "\n") {
+		if t := strings.TrimSpace(line); strings.HasPrefix(t, "#") {
+			if title := strings.TrimSpace(strings.TrimLeft(t, "#")); title != "" {
+				headingAnchors[Anchor(title)] = true
+			}
+		}
+	}
 	claimKey := func(key string) (string, bool) {
 		anchor := KeyAnchor(key)
 		if claimedKeys[anchor] {
+			return "", false
+		}
+		if headingAnchors[anchor] {
+			note("a key row and a heading both claim the anchor " + anchor)
 			return "", false
 		}
 		claimedKeys[anchor] = true
@@ -591,10 +616,12 @@ func rowKey(cells []string) (string, bool) {
 
 // KeyAnchor derives the fragment id a documented config key gets.
 //
-// Prefixed, so a key anchor can never collide with the heading anchor GitHub
-// would derive from a heading of the same words — the two namespaces share one
-// document and a silent collision would send a help link somewhere plausible
-// and wrong.
+// Prefixed to keep key rows out of the way of most headings — but the prefix is
+// not a guarantee, and it was documented as one. A heading of "Key flags", which
+// docs/usage/cli.md has, slugs to `key-flags`, exactly what a row for a key named
+// `flags` would claim: the two namespaces share one document and can meet. Render
+// resolves that in the heading's favour and reports it, so the collision fails the
+// bundle build rather than sending a help link somewhere plausible and wrong.
 func KeyAnchor(key string) string {
 	return "key-" + Anchor(key)
 }

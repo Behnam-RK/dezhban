@@ -116,9 +116,16 @@ type Tunable struct {
 // LiveAppliable reports whether a running daemon adopts this key in place.
 func (t Tunable) LiveAppliable() bool { return t.RestartReason == "" }
 
-// Doc anchors. Each key resolves to its own row in docs/usage/config.md — see
-// docAnchorFor. These four section anchors are the declared fallback for a key
-// the reference documents in prose rather than as a table row.
+// Doc anchors — the *section* of docs/usage/config.md that covers a group of keys,
+// and every key's DocAnchor unconditionally. These are heading anchors, so they are
+// what `dezhban config schema` prints for a reader who will open the file on GitHub,
+// and the app's second choice after the key's own row (docKeyAnchorFor derives that
+// separately, and it is additional rather than a replacement).
+//
+// Not a "fallback for keys documented in prose", which is what this said: that was
+// true only of an intermediate design where the row anchor overwrote this one.
+// keysDocumentedInProse is empty today, and even if it were not, these would still
+// be every key's section.
 const (
 	anchorFields   = "usage/config.md#fields"
 	anchorControl  = "usage/config.md#control-block"

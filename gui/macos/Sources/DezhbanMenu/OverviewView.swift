@@ -16,6 +16,9 @@ struct OverviewView: View {
     /// `focusedAction != nil`, so blurring the row falls back to the posture
     /// headline instead of stranding the caption on a control nobody is on.
     @State private var focusedHint = ""
+    /// The last pointer position reported for each control, so `.active` phases
+    /// caused by a tracking area being rebuilt can be told from real movement.
+    @State private var lastHoverPoint: [String: CGPoint?] = [:]
     @FocusState private var focusedAction: String?
 
     var body: some View {
@@ -367,16 +370,29 @@ struct OverviewView: View {
                     hoveredAction = nil
                 }
             }
-            // Re-arms hover on the next mouse *movement*, not only on crossing a
-            // boundary. `onHover` fires on enter and exit alone, so once focus
-            // cleared the hover state (see below) a pointer already sitting on this
-            // control could not take the caption back until it left and re-entered —
-            // which is not what "move the pointer and it takes over again" means, and
-            // is the step the checklist now asks a tester to perform.
+            // Re-arms hover on actual mouse *movement*, not merely on being hovered.
+            // `onHover` fires on enter and exit alone, so once focus cleared the hover
+            // state (see below) a pointer already sitting on this control could not
+            // take the caption back until it left and re-entered — which is not what
+            // "move the pointer and it takes over again" means, and is the step the
+            // checklist asks a tester to perform.
+            //
+            // The location is compared, because `.active` is also reported when a
+            // tracking area is (re)established — and these controls re-measure
+            // constantly: a window's countdown retitles "Cancel (m:ss left)" every
+            // second, which re-places the row. Acting on any `.active` therefore let
+            // a parked pointer silently reclaim the caption a second after the
+            // keyboard took it, defeating "most recent interaction wins" in exactly
+            // the scenario the checklist step describes.
             .onContinuousHover { phase in
-                if case .active = phase, hoveredAction?.id != id {
-                    hoveredAction = (id, hint)
+                guard case .active(let point) = phase else {
+                    lastHoverPoint[id] = nil
+                    return
                 }
+                defer { lastHoverPoint[id] = point }
+                guard let previous = lastHoverPoint[id] ?? nil else { return }
+                guard previous != point else { return }
+                if hoveredAction?.id != id { hoveredAction = (id, hint) }
             }
             .onChange(of: focusedAction) { _ in
                 guard focusedAction == id else { return }
