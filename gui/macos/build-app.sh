@@ -123,7 +123,11 @@ fi
 # check for "…app.login"; and a bare substring search for the label also matched
 # LoginItem's dispatch-queue label, "…app.loginitem", which contains it — so the
 # check could not fail for that file no matter what plistName said.
-swift_decl="private static let plistName = \"$AGENT_LABEL.plist\""
+# No access modifier in the pattern: `plistName` is internal so `Purge` can
+# unregister the same agent without a second copy of the string, and this check has
+# to keep holding across that. A fixed-string match on the tail is satisfied by
+# `private static let …` and `static let …` alike.
+swift_decl="static let plistName = \"$AGENT_LABEL.plist\""
 if ! grep -qF "$swift_decl" "$HERE/Sources/DezhbanMenu/LoginItem.swift"; then
 	echo "build-app.sh: LoginItem.swift does not declare plistName as '$AGENT_LABEL.plist' — SMAppService would name a plist that does not exist, reported only as the .notFound status nobody reads" >&2
 	exit 1

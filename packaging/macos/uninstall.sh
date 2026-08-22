@@ -375,6 +375,35 @@ else
 	rm -rf "$CONFIG_DIR"
 fi
 
+# Per-user state, best effort, for the account that invoked sudo.
+#
+# This is the half a root script cannot properly reach, and the half whose
+# survival used to make a reinstall look like an already-configured machine to
+# the app's first-run wizard: the preference domain outlived every uninstall, so
+# `dezhban.firstRunCompleted` stayed set while /etc/dezhban was empty.
+#
+# The app's own "Remove Dezhban…" does this — plus the login-keychain token and
+# the login-item registration, which genuinely require the user's session and
+# are NOT attempted here. Repeating the defaults deletion is deliberate: the app
+# quits after clearing them, and AppKit can rewrite window frames on the way out.
+#
+# Only $SUDO_USER, never a loop over /Users: this script speaks for the person
+# running it. Other accounts are named below rather than touched.
+if [ -n "${SUDO_USER:-}" ] && [ "$SUDO_USER" != root ]; then
+	echo "removing $SUDO_USER's app preferences ..."
+	for domain in com.behnam-rk.dezhban.app com.dezhban.DezhbanMenu; do
+		sudo -u "$SUDO_USER" defaults delete "$domain" >/dev/null 2>&1 || true
+	done
+	echo "note: $SUDO_USER's Touch ID key and \"open at login\" registration are not removed here." >&2
+	echo "      Both live in that account's own session — use Dezhban.app's" >&2
+	echo "      Settings › Remove Dezhban before uninstalling, or remove them by hand:" >&2
+	echo "        security delete-generic-password -s sh.dezhban.menu" >&2
+	echo "      and untick Dezhban in System Settings › General › Login Items." >&2
+else
+	echo "note: no invoking user to clean up after (running as root directly)." >&2
+fi
+echo "note: other user accounts on this Mac keep their own dezhban app settings." >&2
+
 # Forget the receipts, or macOS still believes dezhban is installed (and a later
 # install of an older version would be refused as a downgrade).
 pkgutil --forget com.behnam-rk.dezhban.cli >/dev/null 2>&1 || true

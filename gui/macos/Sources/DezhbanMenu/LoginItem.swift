@@ -22,7 +22,12 @@ enum LoginItem {
     /// installs it under; launchd rejects a mismatch, and SMAppService reports
     /// it only as a `.notFound` status. build-app.sh greps this file for the
     /// label it installs, so the three cannot drift apart silently.
-    private static let plistName = "com.behnam-rk.dezhban.app.login.plist"
+    ///
+    /// Internal rather than private: `Purge` unregisters the same agent, and a
+    /// second copy of this string is a second thing to forget to rename. The
+    /// build-time check matches on `static let plistName = …`, without the access
+    /// modifier, so it holds either way.
+    static let plistName = "com.behnam-rk.dezhban.app.login.plist"
 
     /// Whether the one-shot move off `SMAppService.mainApp` has been attempted.
     ///

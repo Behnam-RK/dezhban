@@ -98,6 +98,51 @@ enum AppActions {
         [["panic"], ["stop"], ["uninstall"]]
     }
 
+    /// Where the installer leaves the uninstaller matching the installed
+    /// version. Both `scripts/install.sh` and the `.pkg` put it here.
+    static let uninstallerPath = "/usr/local/share/dezhban/uninstall.sh"
+
+    /// The exact command that removes everything root owns. Shown to the user
+    /// verbatim when Terminal cannot be opened, so it has to be copy-pasteable
+    /// as printed.
+    static func uninstallerCommand(keepConfig: Bool) -> String {
+        let prefix = keepConfig ? "sudo KEEP_CONFIG=1 sh " : "sudo sh "
+        return prefix + uninstallerPath
+    }
+
+    /// Opens Terminal.app running the root uninstaller. Reports whether Terminal
+    /// actually took the command.
+    ///
+    /// Terminal rather than an in-app privileged sequence, because the script
+    /// quits this app and deletes its bundle partway through — see
+    /// `SettingsView.uninstallEverything`. The user types their password into
+    /// `sudo` in a window they own, and watches the `panic` teardown land.
+    ///
+    /// The command is assembled from constants only, never from user input, so
+    /// there is nothing here to quote-escape. Keep it that way: this string is
+    /// executed as root.
+    @discardableResult
+    static func openUninstallerInTerminal(keepConfig: Bool) -> Bool {
+        guard FileManager.default.fileExists(atPath: uninstallerPath) else {
+            return false
+        }
+        let command = uninstallerCommand(keepConfig: keepConfig)
+        let script = """
+            tell application "Terminal"
+                activate
+                do script "\(command)"
+            end tell
+            """
+        guard let apple = NSAppleScript(source: script) else { return false }
+        var err: NSDictionary?
+        apple.executeAndReturnError(&err)
+        if let err = err {
+            NSLog("DezhbanMenu: could not start the uninstaller in Terminal: %@", err)
+            return false
+        }
+        return true
+    }
+
     /// download then apply, under ONE admin prompt — same reasoning as
     /// installCommands: the prompt is the expensive thing, and these two
     /// steps are meaningless run apart (apply has nothing staged without

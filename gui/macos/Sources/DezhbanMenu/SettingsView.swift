@@ -342,6 +342,20 @@ struct SettingsView: View {
                     Text("Some advanced options (control socket, geo providers, allowlist) live only in the config file.")
                         .foregroundStyle(.secondary)
                 }
+                Section {
+                    Button("Remove Dezhban…", action: uninstallEverything)
+                        .disabled(!state.cliFound)
+                    if !state.cliFound {
+                        Text("The dezhban command-line tool isn’t installed, so there is nothing for the "
+                            + "uninstaller to remove. You can still delete Dezhban.app from Applications.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    }
+                } header: {
+                    sectionHeader("Remove Dezhban",
+                                  "Takes the guard down, removes every firewall rule, and deletes "
+                                      + "everything Dezhban installed on this Mac.")
+                }
             }
             .formStyle(.grouped)
 
@@ -386,6 +400,68 @@ struct SettingsView: View {
                 .disabled(!canApply)
         }
         .padding(PaneMetrics.footerPadding)
+    }
+
+    // MARK: - remove everything
+
+    /// The complete removal: this account's own state first, in user context,
+    /// then the root uninstaller in a Terminal window, then quit.
+    ///
+    /// Handed to Terminal rather than run in-app for a reason the script makes
+    /// unavoidable: `uninstall.sh` quits Dezhban and deletes the bundle partway
+    /// through, so this app cannot survive to report its own result. A progress
+    /// sheet would die mid-teardown and leave the user unable to tell a finished
+    /// uninstall from one that stopped after `panic` removed the rules. A
+    /// terminal window outlives the app and shows every step, including that
+    /// teardown — which for a kill switch is the step you most want to see
+    /// succeed.
+    private func uninstallEverything() {
+        let alert = NSAlert()
+        alert.alertStyle = .critical
+        alert.messageText = "Remove Dezhban from this Mac?"
+        alert.informativeText = """
+            All dezhban firewall rules are removed first, so nothing is left blocking your network.
+
+            This then deletes the dezhban service, the command-line tool, Dezhban.app, its learned             VPN state, your Touch ID key, this app's settings, and its "open at login" registration.
+
+            It does not touch other user accounts on this Mac. Notification permission is removed             in System Settings › Notifications.
+
+            This cannot be undone.
+            """
+        let keepConfig = NSButton(checkboxWithTitle: "Keep my dezhban configuration in /etc/dezhban",
+                                  target: nil, action: nil)
+        keepConfig.state = .off
+        alert.accessoryView = keepConfig
+        alert.addButton(withTitle: "Remove Dezhban")
+        alert.addButton(withTitle: "Cancel")
+        // Cancel is the default: the return key must not be able to uninstall a
+        // kill switch, and the destructive button should cost a deliberate click.
+        alert.buttons.first?.keyEquivalent = ""
+        alert.buttons.last?.keyEquivalent = "\r"
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        // The per-user half, in this account's own session. Root cannot do it,
+        // and it is the half whose survival made every reinstall look like an
+        // already-configured machine to the first-run wizard.
+        let steps = Purge.perUser()
+        for step in steps where step.error != nil {
+            NSLog("DezhbanMenu: purge could not remove %@: %@", step.what, step.error ?? "")
+        }
+
+        guard AppActions.openUninstallerInTerminal(keepConfig: keepConfig.state == .on) else {
+            // Terminal never opened, so nothing root-owned was removed. Say so
+            // rather than quitting into a half-removed install: the per-user
+            // state above is gone, but the guard is still enforcing.
+            let failed = NSAlert()
+            failed.alertStyle = .warning
+            failed.messageText = "Could not open Terminal"
+            failed.informativeText = "Dezhban is still installed and still enforcing. "
+                + "Finish removing it by running this in a terminal:\n\n"
+                + AppActions.uninstallerCommand(keepConfig: keepConfig.state == .on)
+            failed.runModal()
+            return
+        }
+        NSApp.terminate(nil)
     }
 
     // MARK: - explicit restart
