@@ -132,6 +132,30 @@ if ! grep -qxF "LOGIN_AGENT=$AGENT_LABEL" "$REPO_ROOT/packaging/macos/uninstall.
 	echo "build-app.sh: uninstall.sh does not set LOGIN_AGENT to '$AGENT_LABEL' — it would fail to retract the registration it is meant to remove" >&2
 	exit 1
 fi
+# 4. BundleProgram must name the executable this script actually installs. It is
+#    bundle-relative and launchd resolves it at load time, so renaming the SwiftPM
+#    executable target passes go test, swift test and this build while the login job
+#    fails to load — surfacing only as a status nobody reads.
+agent_program="$(plutil -extract BundleProgram raw -o - "$AGENT_PLIST")"
+if [[ ! -x "$APP/$agent_program" ]]; then
+	echo "build-app.sh: LoginAgent.plist BundleProgram is '$agent_program', which is not an executable in the assembled bundle — launchd would fail to load the login job" >&2
+	exit 1
+fi
+# 5. The bundle identifier has to agree in three places: Info.plist (what macOS
+#    knows the app as), the agent's AssociatedBundleIdentifiers (what makes the
+#    Login Items row read "Dezhban" rather than a raw job label), and uninstall.sh's
+#    APP_BUNDLE_ID (what removes the per-user leftovers, including the flag that
+#    would otherwise make a later reinstall skip the login-item migration).
+bundle_id="$(plutil -extract CFBundleIdentifier raw -o - "$APP/Contents/Info.plist")"
+agent_assoc="$(plutil -extract AssociatedBundleIdentifiers.0 raw -o - "$AGENT_PLIST")"
+if [[ "$agent_assoc" != "$bundle_id" ]]; then
+	echo "build-app.sh: LoginAgent.plist AssociatedBundleIdentifiers is '$agent_assoc' but the bundle identifier is '$bundle_id' — the Login Items entry would not be attributed to Dezhban" >&2
+	exit 1
+fi
+if ! grep -qxF "APP_BUNDLE_ID=$bundle_id" "$REPO_ROOT/packaging/macos/uninstall.sh"; then
+	echo "build-app.sh: uninstall.sh does not set APP_BUNDLE_ID to '$bundle_id' — it would leave the per-user preferences behind, and a later reinstall would skip the login-item migration" >&2
+	exit 1
+fi
 
 # Documentation, rendered from the repo's own markdown into the bundle. Shipping
 # it means the help pane works with every byte of egress cut — which is exactly

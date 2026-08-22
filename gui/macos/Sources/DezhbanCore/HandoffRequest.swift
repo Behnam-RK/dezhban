@@ -120,16 +120,24 @@ public struct HandoffRequest {
     /// in a comment rather than a test would be asserting the whole point.
     public func claim(interleaved: () -> Void = {}) -> Claim {
         guard FileManager.default.fileExists(atPath: url.path) else { return .absent }
-        // Read before the unlink, since the unlink is what claims it. A request
-        // written by an older build carries no token; `nil` then means "cannot
-        // dedupe this one", which the caller treats as its own identity rather than
-        // as a match.
-        let token = (try? Data(contentsOf: url)).flatMap { String(data: $0, encoding: .utf8) }
         interleaved()
+        // Claimed by *renaming* it aside, then read from the renamed copy. Reading
+        // first and unlinking after was a TOCTOU on a claim-by-unlink design: a
+        // second duplicate's `post()` is an atomic replace, so one landing between
+        // the read and the unlink had this caller delete request T2 while reporting
+        // token T1 — and T1 is the token already handled, so the caller matched it,
+        // declined to open, and that second launch became a silent no-op with its
+        // request gone. The rename is the claim and the read barrier at once.
+        //
+        // A request written by an older build carries no token; `nil` then means
+        // "cannot dedupe this one", which the caller treats as its own identity
+        // rather than as a match.
+        let claimed = url.deletingLastPathComponent()
+            .appendingPathComponent(".claiming-\(UUID().uuidString)")
         do {
-            try FileManager.default.removeItem(at: url)
+            try FileManager.default.moveItem(at: url, to: claimed)
         } catch let error as NSError {
-            // Gone between the check and the remove is the benign case: somebody
+            // Gone between the check and the rename is the benign case: somebody
             // else claimed it and is acting on it. Anything else is a real failure
             // and must not wear the same face — see `Claim.blocked`.
             if error.domain == NSCocoaErrorDomain, error.code == NSFileNoSuchFileError {
@@ -141,6 +149,8 @@ public struct HandoffRequest {
             }
             return .blocked(error.localizedDescription)
         }
+        let token = (try? Data(contentsOf: claimed)).flatMap { String(data: $0, encoding: .utf8) }
+        try? FileManager.default.removeItem(at: claimed)
         return .fresh(token: token?.isEmpty == false ? token : nil)
     }
 }

@@ -233,7 +233,20 @@ enum LoginItem {
     /// the registration still on file, which is the orphan the errand exists to
     /// remove.
     private static func registered(_ target: SMAppService) -> Bool {
-        switch target.status {
+        isRegistered(target.status)
+    }
+
+    /// The same question asked of a status already in hand.
+    ///
+    /// Every decision that needs more than one fact about the agent takes *one*
+    /// status read and derives them all from it. Chaining `registered(service)`,
+    /// `service.status == .requiresApproval` and `agentEnabled` issued three separate
+    /// XPC queries of a mutable value, so a change between the first and the last
+    /// selected a branch matching neither instant — the reachable case being a user
+    /// approving Dezhban in System Settings while the pane read it, getting "macOS is
+    /// holding this for your approval" written under a switch painted OFF.
+    private static func isRegistered(_ status: SMAppService.Status) -> Bool {
+        switch status {
         case .notRegistered, .notFound: return false
         default: return true
         }
@@ -282,7 +295,8 @@ enum LoginItem {
     /// off for.
     static var state: (enabled: Bool, awaitingApproval: Bool) {
         queue.sync {
-            (registered(service) || legacyEnabled, service.status == .requiresApproval)
+            let agent = service.status
+            return (isRegistered(agent) || legacyEnabled, agent == .requiresApproval)
         }
     }
 
@@ -453,7 +467,7 @@ enum LoginItem {
             // on was refused, permanently, with nothing having warned them.
             return liveOutcome(.disabling, fallback: .blockedByLegacy)
         }
-        return registered(service) ? .agentStuck : .disabled
+        return stillRegistered(service) ? .agentStuck : .disabled
     }
 
     /// Retracts everything that could start this app at login, best effort.
@@ -479,7 +493,7 @@ enum LoginItem {
             // unregistered, files deleted". The orphan the errand exists to remove,
             // now silent. The exit status is what makes it visible.
             //
-            return !registered(service) && !registered(.mainApp)
+            return !stillRegistered(service) && !stillRegistered(.mainApp)
         }
     }
 
@@ -719,16 +733,21 @@ enum LoginItem {
     /// `fallback` is used only when nothing is live at all.
     private static func liveOutcome(_ direction: Direction, fallback: Outcome) -> Outcome {
         if legacyEnabled { return .legacyStuck }
+        let agent = service.status
         switch direction {
         case .enabling:
-            if agentEnabled { return .enabled }
-            if service.status == .requiresApproval { return .awaitingApproval }
-            if registered(service) { return .agentStuck }
+            // No `.agentStuck` here: it tells the user to go and *remove* the login
+            // item, which is the opposite of what somebody enabling asked for. The
+            // two registered statuses are both answered above it, so it was only ever
+            // reachable by the status changing between two of the three reads this
+            // used to take.
+            if agent == .enabled { return .enabled }
+            if agent == .requiresApproval { return .awaitingApproval }
         case .disabling:
             // Anything still registered after a disable is a retraction that failed,
             // whatever status it wears. `.awaitingApproval` in particular would tell
             // someone who clicked *off* to go and enable Dezhban.
-            if registered(service) { return .agentStuck }
+            if isRegistered(agent) { return .agentStuck }
         }
         return fallback
     }
@@ -743,6 +762,28 @@ enum LoginItem {
             return "macOS could not find the login item inside the app bundle — reinstall Dezhban."
         @unknown default: return "macOS reported an unrecognised login-item state."
         }
+    }
+
+    /// Whether `target` is still registered, giving the status a moment to catch up.
+    ///
+    /// `SMAppService.status` is not documented to update synchronously with
+    /// `unregister()`, and a single read taken microseconds afterwards is what every
+    /// "the retraction failed" report rests on. If it lags, `disable()` snaps the
+    /// switch back ON with "macOS would not remove the login item" over a retraction
+    /// that succeeded, and the uninstall errand exits non-zero so the script prints
+    /// its refusal warning over a clean removal — the crying-wolf failure the
+    /// `.notFound`-means-"cannot tell" predicate was deleted for, reached from the
+    /// other side.
+    ///
+    /// Bounded to ~150ms and only ever on the way to reporting a *refusal*, which is
+    /// the rare path; a success is returned on the first read. This runs on the
+    /// mutation queue, never the main thread.
+    private static func stillRegistered(_ target: SMAppService) -> Bool {
+        for _ in 0 ..< 3 {
+            if !registered(target) { return false }
+            usleep(50_000)
+        }
+        return registered(target)
     }
 
     private static func unregister(_ target: SMAppService, what: String) {
