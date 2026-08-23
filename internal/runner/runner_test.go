@@ -330,17 +330,53 @@ func TestVPNHoldsFullBlockOnProbeError(t *testing.T) {
 	}
 	// startup guard; IR → full block; each blocked tick probes (lift+re-cut)
 	// but an error never restores guard.
-	want := []string{
-		"apply-guard",     // startup guard
-		"apply-fullblock", // IR → FULL BLOCK
-		"apply-guard",     // probe 1 lift
-		"apply-fullblock", // probe 1 re-cut (error → hold block)
-		"apply-guard",     // probe 2 lift
-		"apply-fullblock", // probe 2 re-cut (error → hold block)
-		"cleanup",
+	//
+	// The SHAPE, not an exact tick count. Asserting the literal seven-call
+	// sequence made this test depend on a race it does not test: fakeMonitor.Once
+	// cancels while handing out the last result, and the loop then has both
+	// ctx.Done() and a 1ms geo ticker ready at its next select — which picks
+	// uniformly among ready cases, so one more probe cycle is a coin flip whenever
+	// processing the previous one took longer than the interval. That is
+	// vanishingly rare on a fast machine and ordinary under -race on a loaded CI
+	// runner, where it failed with one extra "apply-guard apply-fullblock" pair.
+	//
+	// What the test is actually for survives intact and is now stated directly: a
+	// probe lift is ALWAYS followed by a re-cut, so a probe error never leaves the
+	// guard standing in place of a full block. An extra probe cycle satisfies that
+	// as fully as the expected number does; a lifted block does not, at any count.
+	assertProbeNeverLiftsTheBlock(t, be.calls)
+}
+
+// assertProbeNeverLiftsTheBlock pins the call sequence of a daemon that entered
+// FULL BLOCK and stayed there: the startup guard, the escalation, then some whole
+// number of lift-and-probe pairs, then cleanup. Nothing may end on a lift.
+//
+// Timing-independent by construction — see the caller for why an exact length
+// cannot be. The lower bound is what keeps it from passing vacuously if probing
+// stops happening at all.
+func assertProbeNeverLiftsTheBlock(t *testing.T, calls []string) {
+	t.Helper()
+	if n := len(calls); n < 7 {
+		t.Fatalf("calls = %v: want the startup guard, the escalation, at least two "+
+			"probe pairs and cleanup", calls)
 	}
-	if !equal(be.calls, want) {
-		t.Fatalf("calls = %v, want %v (a probe error must not lift FULL BLOCK)", be.calls, want)
+	if last := calls[len(calls)-1]; last != "cleanup" {
+		t.Fatalf("calls = %v: last call is %q, want cleanup", calls, last)
+	}
+	body := calls[:len(calls)-1]
+	if len(body)%2 != 0 {
+		t.Fatalf("calls = %v: %d calls before cleanup is odd, so a lift went "+
+			"un-recut — a probe error must not lift FULL BLOCK", calls, len(body))
+	}
+	for i, call := range body {
+		want := "apply-fullblock"
+		if i%2 == 0 {
+			want = "apply-guard"
+		}
+		if call != want {
+			t.Fatalf("calls = %v: call %d is %q, want %q (a probe error must not "+
+				"lift FULL BLOCK)", calls, i, call, want)
+		}
 	}
 }
 
