@@ -43,6 +43,16 @@ current as you land changes.
 
 ### Fixed
 
+- **Shutting the daemon down no longer buys one last lift-and-probe.** When
+  FULL BLOCK is held and the tunnel-scoped provider pass cannot be built (no
+  provider addresses resolved), the recovery probe lifts the guard, looks up
+  the exit country, and re-cuts. The run loop could take one of those on the
+  way out: with a cancelled context and a pending geo tick both ready, the
+  select chose between them at random. Losing that toss meant a stop briefly
+  opened egress through the forbidden-country exit — to observe a country
+  nothing was left to act on, moments before teardown removed the rules
+  anyway. A cancelled context now ends the loop instead, the same as any
+  other path out.
 - **A contextual help link stays on the row it landed on.** The Help pane spends
   a deep link's anchor as soon as WebKit has scrolled to it, and the view update
   that followed asked for the same page without the fragment — which was loaded

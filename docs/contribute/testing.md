@@ -213,6 +213,14 @@ Only a live host can prove these — CI cannot reach a printer.
       IP resolves → the daemon logs that recovery will briefly lift the guard,
       and recovery still works via lift-and-probe. A FULL BLOCK that can never
       observe its way out would be worse than the leak.
+- [ ] **Shutdown takes no last probe.** Still on the unresolvable `providers`
+      above — the only configuration in which a probe lifts anything — hold FULL
+      BLOCK and stop the daemon (`Ctrl-C` in the foreground, or
+      `sudo dezhban stop`) with `pfctl -a dezhban -sr` polling in another shell.
+      The ruleset must go straight from FULL BLOCK to torn down: no lift-and-recut
+      in between. Buying a reading on the way out opens egress through the very
+      exit the block exists for, to observe a country nothing is left to act on.
+      `TestShutdownTakesNoProbeTick` covers the decision; only this shows the rules.
 
 ## Country check (exit country, not physical location)
 

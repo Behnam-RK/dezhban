@@ -3016,6 +3016,24 @@ func (o Options) runGuard(ctx context.Context) error {
 				snapshot()
 			}
 		case <-geoTick.C:
+			// The daemon is going down: Cleanup is deferred and about to remove
+			// every rule, so a reading taken now can change nothing. Returning is
+			// exactly what the ctx.Done() case above does — this only stops the
+			// answer depending on which of two ready cases select happened to pick,
+			// since it chooses uniformly among them and the ticker is ready whenever
+			// the previous tick's work outran the interval.
+			//
+			// It matters because a tick taken while blocked is not a passive read.
+			// `probe`'s fallback path — no provider addresses resolved, so the
+			// tunnel-scoped pass cannot be built — LIFTS the guard, looks, and
+			// re-cuts. On the way out of FULL BLOCK that is a shutdown that briefly
+			// opens egress through the forbidden-country exit, to observe a country
+			// nobody is left to act on. Same reasoning as the manualBlock and
+			// panic-disarm branches below: when recovery cannot act on what it
+			// learns, it must not pay a lift to learn it.
+			if ctx.Err() != nil {
+				return nil
+			}
 			// Any state that suspends the geo state machine also ends an
 			// accelerated episode: probing faster is pointless when no reading
 			// will be taken, and this is the one place every such state is

@@ -380,6 +380,91 @@ func assertProbeNeverLiftsTheBlock(t *testing.T, calls []string) {
 	}
 }
 
+// slowLastMonitor cancels while handing out its last result and then stays inside
+// Once past the geo interval, so the ticker is GUARANTEED ready when the loop
+// returns to its select. That is the state the run loop's ctx.Err() check exists
+// for, and the only way to reach it on purpose: with both cases ready, select
+// picks uniformly, so the scenario is otherwise a coin flip that a fast machine
+// almost never loses.
+type slowLastMonitor struct {
+	results []monitor.Result
+	idx     int
+	cancel  context.CancelFunc
+	stall   time.Duration
+}
+
+func (m *slowLastMonitor) Poll(ctx context.Context) <-chan monitor.Result {
+	ch := make(chan monitor.Result)
+	close(ch)
+	return ch
+}
+
+func (m *slowLastMonitor) Once(context.Context) (monitor.Reading, error) {
+	if m.idx >= len(m.results) {
+		if m.cancel != nil {
+			m.cancel()
+		}
+		return monitor.Reading{}, context.Canceled
+	}
+	r := m.results[m.idx]
+	m.idx++
+	if m.idx >= len(m.results) && m.cancel != nil {
+		m.cancel()
+		// Outlast the interval, so the tick that must NOT be taken is pending
+		// rather than merely possible.
+		time.Sleep(m.stall)
+	}
+	return r.Reading, r.Err
+}
+
+// TestShutdownTakesNoProbeTick pins that a cancelled context ends the loop instead
+// of buying one more reading.
+//
+// A geo tick taken while blocked is not a passive read: with no provider addresses
+// resolved — the fixture here, as in every runner test — `probe` lifts the guard,
+// looks, and re-cuts. Taking one on the way down means a shutdown that briefly
+// opens egress through the forbidden-country exit to observe a country nobody is
+// left to act on. So the calls must end at the last real probe's re-cut, with
+// nothing between it and cleanup.
+//
+// Repeated, deliberately. With the check in place this is exact every time; remove
+// it and each run is an independent coin flip, so the repetition turns "usually
+// caught" into "caught". The failure it guards is otherwise invisible on a
+// developer machine and shows up as a flake in CI, which is where it was found.
+func TestShutdownTakesNoProbeTick(t *testing.T) {
+	for i := range 12 {
+		be := &fakeBackend{}
+		ctx, cancel := context.WithCancel(context.Background())
+		o := Options{
+			Monitor: &slowLastMonitor{cancel: cancel, stall: 20 * time.Millisecond, results: []monitor.Result{
+				reading("IR"), // enter FULL BLOCK
+				failResult(),  // probe error → hold block
+			}},
+			Decider:   decision.New([]string{"IR"}, 1),
+			Backend:   be,
+			Log:       discardLog(),
+			Interval:  time.Millisecond,
+			Tunnels:   []string{"utun4"},
+			Endpoints: []netip.Addr{netip.MustParseAddr("203.0.113.7")},
+		}
+		if err := Run(ctx, o); err != nil {
+			t.Fatal(err)
+		}
+		want := []string{
+			"apply-guard",     // startup guard
+			"apply-fullblock", // IR → FULL BLOCK
+			"apply-guard",     // probe lift
+			"apply-fullblock", // probe re-cut (error → hold block)
+			"cleanup",
+		}
+		if !equal(be.calls, want) {
+			t.Fatalf("run %d: calls = %v, want %v (shutdown must not buy one more "+
+				"lift-and-probe, which opens egress through the blocked exit)",
+				i, be.calls, want)
+		}
+	}
+}
+
 func TestVPNStartupGuardFailureAborts(t *testing.T) {
 	be := &failingGuardBackend{}
 	o := Options{
