@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 /// What the single description line under the action row says.
@@ -49,5 +50,39 @@ public enum ActionCaption {
             }
         }
         return fallback
+    }
+
+    /// Whether a hover-enter is the user aiming at something, or a control arriving
+    /// under a pointer that never moved.
+    ///
+    /// `onHover(true)` cannot tell the two apart on its own: it fires both when the
+    /// pointer crosses into a control and when a tracking area is established
+    /// beneath a stationary one. Two guards, and they cover different halves:
+    ///
+    ///   - `previousHoverID != id` rejects the *same* control re-firing, which these
+    ///     controls do constantly — a window's countdown retitles "Cancel (m:ss
+    ///     left)" every second.
+    ///   - the pointer comparison rejects a *different* control arriving underneath,
+    ///     which the first guard cannot see. Pause becomes Cancel when a window
+    ///     opens, and the replacement's enter arrives with a new id while the user's
+    ///     hand has not moved — handing the caption back to the pointer a moment
+    ///     after the keyboard took it, the very failure the first guard was added
+    ///     for, through the other door.
+    ///
+    /// `pointer` must be in SCREEN coordinates (`NSEvent.mouseLocation`), which is
+    /// what makes this different from the local-space comparison that was tried and
+    /// removed: a banner appearing above the row moves a control under a stationary
+    /// mouse, so the pointer's position *within* that control changes while the
+    /// mouse itself has not. On screen it has not changed, which is the question
+    /// being asked.
+    ///
+    /// `lastPointer` is where the pointer was at the previous hover event, enter or
+    /// exit — nil before any, which counts as movement so the first entry of a
+    /// session is never swallowed.
+    public static func hoverIsAim(previousHoverID: String?, id: String,
+                                  pointer: CGPoint, lastPointer: CGPoint?) -> Bool {
+        guard previousHoverID != id else { return false }
+        guard let lastPointer else { return true }
+        return pointer != lastPointer
     }
 }

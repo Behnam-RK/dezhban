@@ -1017,6 +1017,22 @@ task gui:build && open dist/Dezhban.app
       A disabled Block or Unblock says why it is disabled rather than describing the
       action it will not perform.
 
+      **Unblock names what it will actually release.** The rule is the tunnel
+      first, the posture second, because the daemon's unblock handler branches on
+      `AutoArm && !tunnelUp && !standby` without looking at why egress was cut.
+      So check three states, not two: (a) guard holding a downed tunnel — pull the
+      VPN; (b) `dezhban block` with the VPN **off**, which is a full block over a
+      downed tunnel; (c) `dezhban block` with the VPN **up**. (a) and (b) must both
+      warn that enforcement stops and traffic uses your **real IP** until the VPN
+      reconnects (`vpn.autoArm` is on by default, so both drop the daemon to
+      STANDBY); only (c) may say the block is lifted and the guard re-blocks.
+      It may not claim the block was manual or automatic in any of them:
+      `postureName` derives `full-block` from `blocked` alone, so both arrive as
+      the same posture string and nothing on the wire tells them apart. And read
+      the whole caption at a narrow width — these sentences share the three-line
+      reservation with the row's longest existing hint, so an overlong one
+      truncates the password clause off the tail.
+
       Tab through the row with Full Keyboard Access on and confirm focus drives the
       caption too, **including with the pointer left resting on a different
       button** — focus is meant to supersede a parked pointer. Then move the pointer
@@ -1044,6 +1060,20 @@ task gui:build && open dist/Dezhban.app
       you had tabbed elsewhere first, since retitling re-establishes the tracking area
       under a stationary mouse.
 
+      Run that swap **once more with keyboard focus on Block first**, pointer still
+      parked over Pause and not moved. Cancel replaces Pause underneath it, which is
+      a *new* control arriving rather than the same one retitling — but the hand has
+      not moved, so this is not the user aiming either: the caption must stay on
+      **Block**, where the focus ring and the Space key are. Then move the mouse onto
+      any control and confirm the pointer takes it back immediately. The same applies
+      when an enforcement-error banner appears above the row and shifts a different
+      button under a stationary pointer.
+
+      And with focus on **Pause**, open a window the same way: focus lands on the
+      replacement control, and the caption must describe **Cancel** rather than
+      keeping Pause's sentence — "uses your real ISP IP" under a button that ends a
+      window is the opposite of what it does.
+
       Then, with the pointer parked on **Block**, run a pre-typed action that ends in
       a `refreshServiceState()` — any Overview action will do — with the control
       socket having gone away underneath (`control.enabled=false` plus a restart
@@ -1062,6 +1092,10 @@ task gui:build && open dist/Dezhban.app
       consequence as a hint — Cancel in particular must say whether it closes the
       automatic redial window or one you opened, since the titles no longer carry
       that and the caption line is hidden from VoiceOver to avoid reading it twice.
+      **Panic… below the row too** — it is not in the action row and has no caption
+      line, so its own hint is the only thing that says it force-unblocks; its
+      visible sentence beside it is hidden from VoiceOver for the same
+      read-it-twice reason. Hovering Panic… must also produce a tooltip.
 - [ ] **The degraded states keep their long panic title.** With the CLI missing
       or the service not installed, the panic button still reads "Panic — force
       unblock…" — there is no caption line there to carry the explanation.
@@ -1238,6 +1272,18 @@ traffic, so the check that matters is the one CI cannot run: with egress gone.
       does ("Open the documentation for …"): the key's own one-line help is already
       on the control beside it, so repeating it here left nothing telling a pointer
       user that the button navigates at all.
+      **And it stays there.** Watch the pane for a second after it opens: the row
+      must remain on screen, highlighted by `:target`. The deep link's anchor is
+      spent by the navigation it triggers, so the very next view update asks for the
+      same page with no fragment — answering that by loading again scrolled the
+      reader back to the top a fraction of a second after arriving
+      (`HelpNavigation.shouldLoad`). Then click a *different* key's **?** on the same
+      page and confirm it still moves: the fix must not turn into "never navigate
+      within a page again". Finally, search in the Help pane, click a heading hit,
+      scroll away by hand, and click **the same hit again** — it must scroll back.
+      An anchored request is always honoured, including a repeat of the anchor
+      already showing; suppressing it as "already there" made the second click do
+      nothing.
 - [ ] **A CLI newer than the bundled help still lands on the section.** The **?**
       offers the key's row first and its section second, so an app bundle predating
       row ids must land on the section heading rather than the top of the page.

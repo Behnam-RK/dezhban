@@ -19,6 +19,10 @@ struct OverviewView: View {
     /// Which input the user reached for last, so focus can outrank a parked pointer
     /// without the pointer's position being thrown away. See `ActionCaption.Aim`.
     @State private var aim: ActionCaption.Aim = .pointer
+    /// Where the mouse was at the last hover event, in screen coordinates — what
+    /// tells the pointer arriving somewhere from a control arriving under it. Nil
+    /// until the first one. See `ActionCaption.hoverIsAim`.
+    @State private var lastPointer: CGPoint?
     @FocusState private var focusedAction: String?
 
     var body: some View {
@@ -310,9 +314,15 @@ struct OverviewView: View {
                 Button("Block") { AppActions.routine(["block"], "block") }
                     .disabled(blocked)
             }
+            // Not one sentence for all three: this control is offered while a manual
+            // block is standing, while the guard holds a downed tunnel, and during
+            // FULL BLOCK, and it releases something different in each. See
+            // `PostureUI.unblockConsequence` — describing the other two as "a manual
+            // block" was survivable while this was a tooltip and is not now that it
+            // is the caption a user reads before clicking.
             captioned("unblock", !(blocked || guardHolds)
                 ? "Disabled — there is no manual block or guard hold to release."
-                : state.routineHint("Releases a manual block and resumes monitoring.")) {
+                : state.routineHint(PostureUI.unblockConsequence(s))) {
                 Button("Unblock") { AppActions.routine(["unblock"], "unblock") }
                     .disabled(!(blocked || guardHolds))
             }
@@ -391,18 +401,21 @@ struct OverviewView: View {
             // consequence belongs, and it is announced after the label.
             .accessibilityHint(hint)
             .onHover { inside in
+                // Where the mouse is, in SCREEN coordinates. Recorded on every hover
+                // event, enter and exit, and only on hover events: a keyboard
+                // interaction does not move the pointer, so it must not refresh what
+                // "has not moved since" means.
+                let pointer = NSEvent.mouseLocation
+                defer { lastPointer = pointer }
                 if inside {
-                    // `aim` moves only on an actual transition — this control was not
-                    // the hovered one a moment ago. `onHover(true)` also fires when a
-                    // tracking area is re-established under a stationary pointer, and
-                    // these controls re-measure constantly: a window's countdown
-                    // retitles "Cancel (m:ss left)" every second. Setting `aim`
-                    // unconditionally therefore handed the caption back to a parked
-                    // pointer about a second after the keyboard took it — the focus
-                    // ring and the Space key on one button, the caption describing
-                    // another. Exactly the layout churn the movement re-arm was
-                    // deleted for, arriving through the other door.
-                    if hoveredAction?.id != id { aim = .pointer }
+                    // Whether this is the user aiming or a control arriving under a
+                    // stationary pointer — see `ActionCaption.hoverIsAim`, which holds
+                    // both halves of that question and is tested. It is asked here and
+                    // nowhere else, so a control cannot opt out of it.
+                    if ActionCaption.hoverIsAim(previousHoverID: hoveredAction?.id, id: id,
+                                                pointer: pointer, lastPointer: lastPointer) {
+                        aim = .pointer
+                    }
                     hoveredAction = (id, hint)
                 } else if hoveredAction?.id == id {
                     hoveredAction = nil
@@ -418,15 +431,17 @@ struct OverviewView: View {
                 // so the caption fell to the resting prompt while the pointer sat on a
                 // button, until it moved off and back on.
                 //
-                // The pointer takes the caption back by *entering* a control, the same
-                // one or another. There is deliberately no "the mouse moved a little"
-                // re-arm: every version of it read a proxy for movement rather than
-                // movement. `onContinuousHover`'s `.active` fires when a tracking area
-                // is merely established, and these controls re-measure constantly (a
-                // window's countdown retitles "Cancel (m:ss left)" every second);
-                // comparing the reported point did not help either, being in local
-                // space, so a banner appearing above the row moved the control under a
-                // stationary mouse and read as movement. Jiggling inside the control
+                // The pointer takes the caption back by *entering* a control it was
+                // not already on, having actually moved to get there
+                // (`ActionCaption.hoverIsAim`). There is deliberately no "the mouse
+                // moved a little" re-arm on top of that: `onContinuousHover`'s
+                // `.active` fires when a tracking area is merely established, and
+                // these controls re-measure constantly (a window's countdown retitles
+                // "Cancel (m:ss left)" every second). The point it reports is in local
+                // space, so a banner appearing above the row moves the control under a
+                // stationary mouse and reads as movement — which is why the enter
+                // handler compares `NSEvent.mouseLocation` instead, on the screen,
+                // where a hand that has not moved has not moved. Jiggling inside the control
                 // you are already on aims at nothing new, so nothing is lost.
                 aim = .keyboard
             }
@@ -444,6 +459,17 @@ struct OverviewView: View {
                 // a control is hovered or focused is the realistic one.
                 if hoveredAction?.id == id { hoveredAction = (id, newHint) }
                 if focusedAction == id { focusedHint = newHint }
+            }
+            .onAppear {
+                // The mirror of `onDisappear` below, and needed for the same branch
+                // swap. `onChange` does not fire for a view inserted already matching
+                // the value it observes, so a control that arrives holding focus —
+                // AppKit can move first responder to the replacement before SwiftUI
+                // runs the outgoing view's `onDisappear`, which then declines to clear
+                // a hint it no longer owns — never wrote its own hint. The caption was
+                // left describing Pause while focus sat on Cancel, whose consequence is
+                // the opposite one.
+                if focusedAction == id { focusedHint = hint }
             }
             .onDisappear {
                 // A control can be replaced under a stationary pointer — Pause
@@ -534,7 +560,12 @@ struct OverviewView: View {
     private static let switchID = "switch"
 
     private var panicRow: some View {
-        HStack(alignment: .firstTextBaseline, spacing: PaneMetrics.controlSpacing) {
+        // The sentence the shortened title no longer carries, said once and
+        // delivered three ways — visibly beside the button, as its tooltip, and as
+        // its VoiceOver hint. Held in a `let` so the three cannot drift.
+        let consequence =
+            "Force unblock: removes every dezhban firewall rule, even with dezhban not running."
+        return HStack(alignment: .firstTextBaseline, spacing: PaneMetrics.controlSpacing) {
             Button(role: .destructive) {
                 guard AppActions.confirmPanic() else { return }
                 AppActions.capturedPrivileged(["panic"]) { result in
@@ -545,12 +576,24 @@ struct OverviewView: View {
             }
             .tint(.red)
             .fixedSize()
-            Text("Force unblock: removes every dezhban firewall rule, even with dezhban not running.")
+            // Same rule the action row's `captioned` applies, and for the same
+            // reason: shortening a title moves its explanation somewhere a pointer
+            // user and VoiceOver can each still reach it. Left off, the one
+            // destructive control on the pane announced "Panic…, button" and offered
+            // no tooltip at all — the gap `captioned` was written to close, open on
+            // the button where it costs the most.
+            .help(consequence)
+            .accessibilityHint(consequence)
+            Text(consequence)
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 // Wrap to a second line rather than truncate: this caption is
                 // the sentence that stops someone pressing panic by accident.
                 .fixedSize(horizontal: false, vertical: true)
+                // Hidden from VoiceOver because the button now carries it as a
+                // hint — exactly as the action row's caption line is hidden. Read
+                // from both, it would be announced twice.
+                .accessibilityHidden(true)
         }
     }
 

@@ -19,10 +19,13 @@ struct PostureUITests {
             obj["display"] = ["key": d.key, "headline": d.headline, "detail": d.detail]
         }
         if let e = enforcementErr { obj["enforcementErr"] = e }
+        // nil OMITS the key, rather than writing an empty array. `tunnels` is
+        // `omitempty` on the wire and `[Tunnel]?` here, so absent and `[]` decode to
+        // two different values and are two different cases — and writing `[]` for
+        // nil made the test for the absent one silently exercise the empty one,
+        // which another test already covered. Pass `[]` for the empty case.
         if let tuns = tunnels {
             obj["tunnels"] = tuns.map { ["name": $0.name, "up": $0.up] }
-        } else {
-            obj["tunnels"] = []
         }
         let data = try! JSONSerialization.data(withJSONObject: obj)
         return StateReader.decode(data)!
@@ -146,6 +149,92 @@ struct PostureUITests {
             snapshot(posture: "guard", display: nil, tunnels: [(name: "utun4", up: false)])))
         #expect(!PostureUI.guardHoldsDownedTunnel(
             snapshot(posture: "guard", display: nil, tunnels: [(name: "utun4", up: true)])))
+    }
+
+    // MARK: - unblockConsequence
+
+    /// Overview enables Unblock in two states and its caption is now the primary
+    /// pre-click explanation, so the sentence has to name what is actually being
+    /// released.
+    ///
+    /// `postureName` derives "full-block" from `blocked` alone, so an operator's
+    /// own block and a blocked-country escalation are the same string on the wire.
+    /// The caption may therefore claim neither — only what is true of both.
+    @Test func unblockConsequenceNamesTheFullBlockItLifts() {
+        let text = PostureUI.unblockConsequence(snapshot(posture: "full-block",
+                                                         display: Self.downedGuardDisplay))
+        #expect(text.contains("full block"))
+        #expect(!text.contains("manual"))
+    }
+
+    /// The posture check may not come first. `runner`'s unblock handler branches on
+    /// `AutoArm && !tunnelUp && !standby` without looking at *why* egress was cut,
+    /// so a full block standing over a downed tunnel — `dezhban block` with the VPN
+    /// off, or a tunnel that dropped under a geo block, which opens no redial window
+    /// — drops to STANDBY exactly like the guard case does. Answering that with
+    /// "resumes monitoring" is the same false promise this function removed from the
+    /// guard branch, in the branch the first version did not cover.
+    @Test func unblockConsequenceWarnsWhenAFullBlockSitsOverADownedTunnel() {
+        let text = PostureUI.unblockConsequence(
+            snapshot(posture: "full-block", display: Self.downedGuardDisplay,
+                     tunnels: [(name: "utun4", up: false)]))
+        #expect(text.contains("real IP"))
+        #expect(!text.contains("resumes monitoring"))
+    }
+
+    /// …and an absent tunnel list reads the same way. It is what the daemon sends
+    /// when it has none (`omitempty`), and guessing "up" there would put the false
+    /// promise back for the one snapshot that says least.
+    @Test func unblockConsequenceTreatsNoTunnelAsDown() {
+        let text = PostureUI.unblockConsequence(
+            snapshot(posture: "full-block", display: Self.downedGuardDisplay, tunnels: nil))
+        #expect(text.contains("real IP"))
+    }
+
+    /// The caption reserves three lines sized for the longest hint the row already
+    /// had, and `AppState.routineHint` appends 60 characters to whatever this
+    /// returns. A longer sentence truncates, and the tail that disappears is the
+    /// password clause — the exact failure the three-line reservation was
+    /// introduced to prevent.
+    @Test func everyUnblockSentenceFitsTheCaption() {
+        let states = [
+            snapshot(posture: "guard"),
+            snapshot(posture: "guard", display: Self.downedGuardDisplay),
+            snapshot(posture: "full-block", display: Self.downedGuardDisplay),
+            snapshot(posture: "full-block", display: Self.downedGuardDisplay,
+                     tunnels: [(name: "utun4", up: false)]),
+        ]
+        for s in states {
+            let text = PostureUI.unblockConsequence(s)
+            #expect(text.count <= 80, "too long for the caption (\(text.count)): \(text)")
+        }
+        #expect(PostureUI.unblockConsequence(nil).count <= 80)
+    }
+
+    /// With `vpn.autoArm` on — the default — an explicit unblock with the tunnel
+    /// down drops the daemon to STANDBY, which installs nothing. Saying
+    /// "resumes monitoring" there was the opposite of what happens.
+    @Test func unblockConsequenceNamesTheRealIPExposure() {
+        let text = PostureUI.unblockConsequence(
+            snapshot(posture: "guard", display: Self.downedGuardDisplay))
+        #expect(text.contains("real IP"))
+        #expect(!text.contains("resumes monitoring"))
+    }
+
+    /// A healthy guard does not offer the button at all (`blocked` is false and the
+    /// guard is not holding), so this is the default rather than a live state — but
+    /// it must still be a sentence, and must not inherit either warning.
+    @Test func unblockConsequenceFallsBackToThePlainSentence() {
+        let text = PostureUI.unblockConsequence(snapshot(posture: "guard"))
+        #expect(text.contains("resumes monitoring"))
+        #expect(!text.contains("real IP"))
+        #expect(!text.contains("full block"))
+    }
+
+    /// No snapshot is not a state the button is offered in, but the function must
+    /// still answer with a sentence rather than an empty caption.
+    @Test func unblockConsequenceHasATextForNoSnapshot() {
+        #expect(!PostureUI.unblockConsequence(nil).isEmpty)
     }
 
     // MARK: - dockState / mmss / agoString

@@ -279,7 +279,14 @@ struct HelpWebView: NSViewRepresentable {
             let target = anchored.isFileURL ? anchored : url.absoluteURL
             defer { clearAnchor() }
             guard target.isFileURL, readAccess.isFileURL else { return }
-            guard target != loaded else { return }
+            // Not `target != loaded`. The anchor is one-shot (see clearAnchor), so
+            // every anchored load is followed one runloop turn later by an identical
+            // call with no anchor — which differs from `loaded` only by the dropped
+            // fragment, and reloading on that took the reader straight back to the
+            // top of the page the "?" had just scrolled into. `HelpNavigation` owns
+            // the rule so it can be tested; DezhbanMenu is an executable target and
+            // this method cannot be.
+            guard HelpNavigation.shouldLoad(target: target, loaded: loaded) else { return }
             loaded = target
             web.loadFileURL(target, allowingReadAccessTo: readAccess)
         }

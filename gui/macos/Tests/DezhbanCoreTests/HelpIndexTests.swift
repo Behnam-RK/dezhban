@@ -206,3 +206,64 @@ struct HelpIndexTests {
             == "file:///Applications/Dezhban.app/Contents/Resources/help/usage-config.html")
     }
 }
+
+/// The rule that keeps a contextual "?" from undoing its own scroll.
+struct HelpNavigationTests {
+    private let page = URL(fileURLWithPath: "/A/help/usage-config.html")
+    private var anchored: URL { HelpURL.appendingFragment(page, "key-vpnredialwindow") }
+
+    @Test func nothingLoadedMeansLoad() {
+        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: nil))
+    }
+
+    /// The same *bare* page is not reloaded.
+    @Test func theSamePageIsNotReloaded() {
+        #expect(!HelpNavigation.shouldLoad(target: page, loaded: page))
+    }
+
+    /// The same *anchor* is. An anchored target is an explicit "scroll here", and
+    /// the reader may have scrolled away since — clicking the same search hit again
+    /// to get back is how you ask. Answering it with "you are already there" made
+    /// the second click do nothing at all.
+    @Test func repeatingAnAnchorScrollsBackToIt() {
+        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: anchored))
+    }
+
+    /// The regression this exists for. The anchor is spent by the navigation it
+    /// triggered, so the very next view update asks for the same page with no
+    /// fragment — and answering it with a load put the reader back at the top of a
+    /// forty-key reference a fraction of a second after the "?" scrolled them to
+    /// their key.
+    @Test func droppingTheSpentAnchorDoesNotReload() {
+        #expect(!HelpNavigation.shouldLoad(target: page, loaded: anchored))
+    }
+
+    /// The other direction still navigates: a target that names an anchor is a
+    /// request to scroll somewhere, including from one key's row to another's.
+    @Test func aDifferentAnchorOnTheSamePageStillLoads() {
+        #expect(HelpNavigation.shouldLoad(target: HelpURL.appendingFragment(page, "key-other"),
+                                          loaded: anchored))
+        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: page))
+    }
+
+    @Test func anotherPageAlwaysLoads() {
+        let other = URL(fileURLWithPath: "/A/help/usage-cli.html")
+        #expect(HelpNavigation.shouldLoad(target: other, loaded: anchored))
+        #expect(HelpNavigation.shouldLoad(target: other, loaded: page))
+    }
+
+    /// The based-URL trap `HelpURL` exists for, one layer up. `Bundle.main
+    /// .resourceURL` carries a base, so the page derived fresh each view update is
+    /// based while the one remembered from `appendingFragment` is absolute. Compared
+    /// as written they are unequal, and the reload — and the jump back to the top of
+    /// the page — comes straight back.
+    @Test func aBasedURLIsStillRecognisedAsTheLoadedPage() {
+        let app = URL(fileURLWithPath: "/Applications/Dezhban.app/", isDirectory: true)
+        let based = URL(string: "Contents/Resources/help/usage-config.html", relativeTo: app)!
+        #expect(based.baseURL != nil, "the fixture must reproduce a based URL, or it tests nothing")
+
+        let anchoredAbsolute = HelpURL.appendingFragment(based, "key-vpnredialwindow")
+        #expect(!HelpNavigation.shouldLoad(target: based, loaded: anchoredAbsolute))
+        #expect(!HelpNavigation.shouldLoad(target: based, loaded: based.absoluteURL))
+    }
+}

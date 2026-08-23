@@ -5,8 +5,9 @@ import Testing
 /// Builds a schema good enough to exercise the pane's use of it, without
 /// shelling out to the CLI. Kinds and labels match what `config schema --json`
 /// reports for these keys.
-/// Mirrors Go's `config.anchorSlug` / `help.Anchor`: lowercase, then keep only
-/// letters, digits and hyphens — so a dot is **dropped**, not turned into a hyphen.
+/// Mirrors Go's `config.anchorSlug` / `help.Anchor`: lowercase, keep ASCII
+/// letters, digits and hyphens, turn a space into a hyphen, drop everything else —
+/// so a dot is **dropped**, not turned into a hyphen.
 ///
 /// Spelled out here because the fixture is the app-side reference for a
 /// cross-language contract, and it had the rule wrong: it mapped "." to "-" and
@@ -15,8 +16,23 @@ import Testing
 /// person deriving an anchor from this fixture would have got a fragment resolving
 /// nowhere. Go's TestKeyAnchorSlugMatchesTheRenderer pins the two derivations that
 /// actually ship; this keeps the fixture honest about them.
+///
+/// Written over `unicodeScalars` with explicit ASCII ranges rather than
+/// `isLowercase`/`isNumber`, which was the same near-miss one layer down: those
+/// accept letters and digits outside ASCII that Go's `r >= '0' && r <= '9'`
+/// rejects, and neither spelling handled the space at all. No config key exercises
+/// either today — which is precisely why the fixture, not a key, has to carry the
+/// rule correctly.
 private func goAnchorSlug(_ key: String) -> String {
-    key.lowercased().filter { $0.isLowercase && $0.isASCII || $0.isNumber || $0 == "-" }
+    var out = ""
+    for scalar in key.lowercased().unicodeScalars {
+        switch scalar {
+        case "a"..."z", "0"..."9", "-": out.unicodeScalars.append(scalar)
+        case " ": out.append("-")
+        default: break
+        }
+    }
+    return out
 }
 
 private func testSchema() -> ConfigSchema {

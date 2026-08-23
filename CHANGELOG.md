@@ -43,6 +43,36 @@ current as you land changes.
 
 ### Fixed
 
+- **A contextual help link stays on the row it landed on.** The Help pane spends
+  a deep link's anchor as soon as WebKit has scrolled to it, and the view update
+  that followed asked for the same page without the fragment — which was loaded
+  again, putting the reader back at the top of the page a fraction of a second
+  after arriving. The pane now treats a target that differs only by a dropped
+  fragment as the page already on screen. Links *between* anchors on one page
+  still navigate, and clicking the same search hit again after scrolling away
+  still scrolls back to it.
+- **The caption no longer follows a button that moved under a resting pointer.**
+  When a switch window opens, Cancel replaces Pause beneath wherever the mouse
+  happens to be; that counted as the pointer aiming at something and took the
+  caption away from the keyboard's own focused button. It now asks whether the
+  mouse actually moved, in screen coordinates, so only a hand that went somewhere
+  counts. A control that arrives already holding keyboard focus also writes its
+  own sentence now, rather than leaving the outgoing button's on screen.
+- **Unblock says what it will actually release.** The button is offered both
+  while egress is cut by a standing block and while the guard is holding a downed
+  tunnel, and it described both as releasing a manual block and resuming
+  monitoring. Whenever the tunnel is down — under the guard *or* under a full
+  block — it now warns that enforcement stops and traffic uses your real IP until
+  the VPN reconnects, which is what `vpn.autoArm` does; with the tunnel up it
+  says the full block is lifted and the guard re-blocks the exit if it is still
+  forbidden.
+- **Panic explains itself to VoiceOver and to a tooltip.** Shortening its title
+  to "Panic…" left the pane's one destructive control announcing nothing but its
+  name, with its explanation in an adjacent label no pointer or VoiceOver user
+  reached from the button. It now carries that sentence as both tooltip and
+  accessibility hint, with the visible copy hidden from VoiceOver so it is not
+  read twice — the same arrangement the action row already used.
+
 - **"Open minimized" now actually decides whether the window opens.** The app
   used to infer a login launch from `NSApplication.launchIsDefaultUserInfoKey`,
   which reported wrong in both directions — the window appeared at login with

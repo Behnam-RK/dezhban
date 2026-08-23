@@ -292,3 +292,43 @@ public enum HelpURL {
         return c?.url ?? absolute
     }
 }
+
+/// Whether a help URL has to be handed to the web view at all, given what is
+/// already showing.
+///
+/// Separate from the web view — and from the executable target, which cannot be
+/// `@testable import`ed — because the answer is not "are these URLs equal". A
+/// deep link's anchor is one-shot: it is spent by the navigation it triggered and
+/// cleared on the next runloop turn, which re-evaluates the view and asks for the
+/// *same page with no fragment* a moment later. Answering that second ask by
+/// loading again reloads the page and puts the reader back at the top — undoing
+/// the scroll the "?" button exists to perform, a fraction of a second after it
+/// happened.
+public enum HelpNavigation {
+    /// True when `target` is not already on screen.
+    ///
+    /// `loaded` is the last URL handed to the web view, fragment included.
+    ///
+    /// The rule is about the *fragment*, not about equality. A target that carries
+    /// one is an explicit "scroll here" and is always honoured — including a repeat
+    /// of the anchor already showing, because between the two requests the reader
+    /// may have scrolled away, and clicking the same search hit again to get back is
+    /// the obvious way to ask. Suppressing that on "you are already there" made the
+    /// second click do nothing at all.
+    ///
+    /// A target with no fragment is suppressed when it names the page already
+    /// loaded, which is the spent-anchor follow-up this type exists for. Nothing is
+    /// lost: a bare request for the page on screen is a request to show what is
+    /// already shown.
+    public static func shouldLoad(target: URL, loaded: URL?) -> Bool {
+        guard let loaded else { return true }
+        // Compared absolute, for the reason `HelpURL` spends a paragraph on: a URL
+        // built from `Bundle.main.resourceURL` carries a base, and the same page
+        // reached the two ways this method sees it — freshly derived (based) and
+        // remembered from a previous `appendingFragment` (absolute) — is otherwise
+        // unequal to itself. That inequality would silently restore the reload.
+        let bare = HelpURL.deletingFragment(target)
+        if bare != target.absoluteURL { return true } // carries a fragment
+        return bare != HelpURL.deletingFragment(loaded)
+    }
+}

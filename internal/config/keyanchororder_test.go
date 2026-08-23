@@ -75,9 +75,11 @@ func headsAKeyTable(headerLine string) bool {
 // the reference's definition headings. Nothing else notices if that changes: the
 // resolution test stays green as long as some row carries the anchor.
 func TestKeyRowsAnchorToTheirDefinitionSection(t *testing.T) {
-	// The pages come from the anchors themselves rather than being hardcoded, so a
-	// tunable documented on some other bundled page is checked against that page
-	// instead of being reported as having no row at all.
+	// Read out of the anchors rather than restated here. Today that always yields
+	// exactly one page — docKeyAnchorFor builds every anchor from keyReferencePage —
+	// so this is not extra coverage; it is the test declining to hold a second copy
+	// of a constant it does not own. If the reference is ever split across pages,
+	// this reads the split instead of failing on it.
 	pages := map[string]bool{}
 	for _, tun := range Tunables() {
 		if tun.DocKeyAnchor == "" {

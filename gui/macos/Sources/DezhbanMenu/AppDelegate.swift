@@ -105,7 +105,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.delegate = self
         // We compute item enablement ourselves (see addAction); without this, AppKit's
         // automatic validation force-enables any item whose target responds to its
-        // selector, so the gating on "Block now" etc. would be ignored.
+        // selector, so the gating on "Pause — use my real IP" etc. would be ignored.
         menu.autoenablesItems = false
         statusItem.menu = menu
         watchdog.start()
