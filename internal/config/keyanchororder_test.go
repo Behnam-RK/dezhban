@@ -50,15 +50,31 @@ func headsAKeyTable(headerLine string) bool {
 	if m == nil {
 		return false
 	}
-	cell := strings.Map(func(r rune) rune {
+	// Links and images reduce to their text FIRST, then emphasis characters go.
+	// Both steps, because stripInline does both: with only the second, a header
+	// written `| [Field](../x.md) |` makes the renderer mint row anchors for that
+	// table while this file stops treating it as a key table — the coverage
+	// narrowing silently, and the `checked == 0` fatal no help because it fires
+	// only when EVERY key falls out, never a subset. The same near-miss the
+	// comment above warns about, one construct over.
+	cell := inlineImageText.ReplaceAllString(m[1], "$1")
+	cell = inlineLinkText.ReplaceAllString(cell, "$1")
+	cell = strings.Map(func(r rune) rune {
 		switch r {
 		case '`', '*', '_':
 			return -1
 		}
 		return r
-	}, m[1])
+	}, cell)
 	return strings.EqualFold(strings.TrimSpace(cell), "Field")
 }
+
+// Mirroring help's own inlineImage/inlineLink, image first so `![a](b)` does not
+// reduce to a stray `!`.
+var (
+	inlineImageText = regexp.MustCompile(`!\[([^\]]*)\]\([^)]+\)`)
+	inlineLinkText  = regexp.MustCompile(`\[([^\]]*)\]\([^)]+\)`)
+)
 
 // TestKeyRowsAnchorToTheirDefinitionSection pins the document arrangement that
 // help.claimKey depends on.

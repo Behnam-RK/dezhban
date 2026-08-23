@@ -19,10 +19,12 @@ struct OverviewView: View {
     /// Which input the user reached for last, so focus can outrank a parked pointer
     /// without the pointer's position being thrown away. See `ActionCaption.Aim`.
     @State private var aim: ActionCaption.Aim = .pointer
-    /// Where the mouse was at the last hover event, in screen coordinates — what
-    /// tells the pointer arriving somewhere from a control arriving under it. Nil
-    /// until the first one. See `ActionCaption.hoverIsAim`.
-    @State private var lastPointer: CGPoint?
+    /// Where the mouse was when the keyboard last took the caption, in screen
+    /// coordinates — the reference that tells the pointer arriving somewhere from a
+    /// control arriving under a pointer that has not moved. Nil while the keyboard
+    /// has not taken it, and cleared once the pointer has proved it moved. See
+    /// `ActionCaption.hoverIsAim`.
+    @State private var keyboardAimPoint: CGPoint?
     @FocusState private var focusedAction: String?
 
     var body: some View {
@@ -401,20 +403,26 @@ struct OverviewView: View {
             // consequence belongs, and it is announced after the label.
             .accessibilityHint(hint)
             .onHover { inside in
-                // Where the mouse is, in SCREEN coordinates. Recorded on every hover
-                // event, enter and exit, and only on hover events: a keyboard
-                // interaction does not move the pointer, so it must not refresh what
-                // "has not moved since" means.
-                let pointer = NSEvent.mouseLocation
-                defer { lastPointer = pointer }
                 if inside {
                     // Whether this is the user aiming or a control arriving under a
                     // stationary pointer — see `ActionCaption.hoverIsAim`, which holds
                     // both halves of that question and is tested. It is asked here and
                     // nowhere else, so a control cannot opt out of it.
+                    //
+                    // The reference is where the mouse was when the KEYBOARD took the
+                    // caption, in screen coordinates, not where it was at the last
+                    // hover event. `onHover` fires on enter and exit only, so a
+                    // reading taken here is the last boundary crossing rather than
+                    // the hand's actual position, and both errors follow from that.
                     if ActionCaption.hoverIsAim(previousHoverID: hoveredAction?.id, id: id,
-                                                pointer: pointer, lastPointer: lastPointer) {
+                                                pointer: NSEvent.mouseLocation,
+                                                keyboardAimedAt: keyboardAimPoint) {
                         aim = .pointer
+                        // Spent. The pointer has demonstrably moved since the keyboard
+                        // took over, so there is nothing left to measure against — and
+                        // a point kept past that would suppress a later entry that
+                        // happened to land on the same pixel.
+                        keyboardAimPoint = nil
                     }
                     hoveredAction = (id, hint)
                 } else if hoveredAction?.id == id {
@@ -444,6 +452,12 @@ struct OverviewView: View {
                 // where a hand that has not moved has not moved. Jiggling inside the control
                 // you are already on aims at nothing new, so nothing is lost.
                 aim = .keyboard
+                // Where the mouse is at this instant, which is the reference the enter
+                // handler measures against. Sampled here rather than at each hover
+                // event on purpose: the question a later enter has to answer is "has
+                // the hand gone anywhere since the keyboard took over", and that is
+                // the only moment at which the answer's baseline exists.
+                keyboardAimPoint = NSEvent.mouseLocation
             }
             .onChange(of: hint) { newHint in
                 // The captured string has to track the live one. `state.routineHint`

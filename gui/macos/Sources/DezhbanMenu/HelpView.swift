@@ -254,6 +254,11 @@ struct HelpWebView: NSViewRepresentable {
         var parent: HelpWebView
         /// What was last handed to the web view, fragment included.
         private var loaded: URL?
+        /// The anchored URL served in the episode still in progress, cleared by the
+        /// bare call that ends it. Distinct from `loaded`, which never forgets — this
+        /// one exists only to tell a repeat click apart from the same-turn duplicate
+        /// `makeNSView` + `updateNSView` produce. See `HelpNavigation.shouldLoad`.
+        private var servedAnchor: URL?
 
         init(_ parent: HelpWebView) {
             self.parent = parent
@@ -286,7 +291,15 @@ struct HelpWebView: NSViewRepresentable {
             // top of the page the "?" had just scrolled into. `HelpNavigation` owns
             // the rule so it can be tested; DezhbanMenu is an executable target and
             // this method cannot be.
-            guard HelpNavigation.shouldLoad(target: target, loaded: loaded) else { return }
+            //
+            // That bare follow-up is also what ends an anchored episode: it is the
+            // one call that can only arrive after the pending anchor was cleared, so
+            // clearing `servedAnchor` here is what lets a later click on the SAME
+            // anchor navigate again while the same-turn duplicate below does not.
+            if anchor == nil { servedAnchor = nil }
+            guard HelpNavigation.shouldLoad(target: target, loaded: loaded,
+                                            servedAnchor: servedAnchor) else { return }
+            if anchor != nil { servedAnchor = target.absoluteURL }
             loaded = target
             web.loadFileURL(target, allowingReadAccessTo: readAccess)
         }

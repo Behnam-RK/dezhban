@@ -310,25 +310,34 @@ public enum HelpNavigation {
     /// `loaded` is the last URL handed to the web view, fragment included.
     ///
     /// The rule is about the *fragment*, not about equality. A target that carries
-    /// one is an explicit "scroll here" and is always honoured — including a repeat
-    /// of the anchor already showing, because between the two requests the reader
-    /// may have scrolled away, and clicking the same search hit again to get back is
-    /// the obvious way to ask. Suppressing that on "you are already there" made the
-    /// second click do nothing at all.
+    /// one is an explicit "scroll here" and is honoured again on a repeat, because
+    /// between the two requests the reader may have scrolled away, and clicking the
+    /// same search hit again to get back is the obvious way to ask. Suppressing that
+    /// on "you are already there" made the second click do nothing at all.
+    ///
+    /// `servedAnchor` is what keeps "again" from meaning "twice in one breath".
+    /// `NSViewRepresentable` calls `updateNSView` immediately after `makeNSView`, in
+    /// the same runloop turn, while the anchor is still pending — it is cleared
+    /// asynchronously — so opening the pane on a deep link asks for the identical
+    /// anchored URL twice, and honouring both started a second load that cancelled
+    /// the first mid-flight. The caller records what it just served and clears it on
+    /// the following bare call, so a genuine repeat click (which arrives after that
+    /// clear) still navigates and the same-turn duplicate does not.
     ///
     /// A target with no fragment is suppressed when it names the page already
     /// loaded, which is the spent-anchor follow-up this type exists for. Nothing is
     /// lost: a bare request for the page on screen is a request to show what is
     /// already shown.
-    public static func shouldLoad(target: URL, loaded: URL?) -> Bool {
-        guard let loaded else { return true }
+    public static func shouldLoad(target: URL, loaded: URL?, servedAnchor: URL?) -> Bool {
         // Compared absolute, for the reason `HelpURL` spends a paragraph on: a URL
         // built from `Bundle.main.resourceURL` carries a base, and the same page
         // reached the two ways this method sees it — freshly derived (based) and
         // remembered from a previous `appendingFragment` (absolute) — is otherwise
         // unequal to itself. That inequality would silently restore the reload.
+        let here = target.absoluteURL
         let bare = HelpURL.deletingFragment(target)
-        if bare != target.absoluteURL { return true } // carries a fragment
+        if bare != here { return here != servedAnchor } // carries a fragment
+        guard let loaded else { return true }
         return bare != HelpURL.deletingFragment(loaded)
     }
 }

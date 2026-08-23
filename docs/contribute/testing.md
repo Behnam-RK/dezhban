@@ -1061,13 +1061,23 @@ task gui:build && open dist/Dezhban.app
       under a stationary mouse.
 
       Run that swap **once more with keyboard focus on Block first**, pointer still
-      parked over Pause and not moved. Cancel replaces Pause underneath it, which is
-      a *new* control arriving rather than the same one retitling — but the hand has
-      not moved, so this is not the user aiming either: the caption must stay on
-      **Block**, where the focus ring and the Space key are. Then move the mouse onto
-      any control and confirm the pointer takes it back immediately. The same applies
-      when an enforcement-error banner appears above the row and shifts a different
-      button under a stationary pointer.
+      parked over Pause. Cancel replaces Pause underneath it, which is a *new*
+      control arriving rather than the same one retitling — but the hand has not
+      moved since Tab, so this is not the user aiming either: the caption must stay
+      on **Block**, where the focus ring and the Space key are. Then move the mouse
+      onto any control and confirm the pointer takes it back immediately. The same
+      applies when an enforcement-error banner appears above the row and shifts a
+      different button under a stationary pointer.
+
+      Do that one twice more, because the reference point is *where the mouse was
+      when Tab moved the focus*, not where it was at the last hover event — and the
+      two differ in both directions. First **nudge the pointer a few points inside
+      Pause before tabbing** (no hover event fires, so a reading taken at the last
+      boundary would be stale): the caption must still stay on Block when Cancel
+      arrives. Then, with focus on Block, **flick the mouse quickly from one button
+      to the next** rather than easing across: the exit and the enter can be
+      dispatched from a single mouse-moved event, and the pointer must still take the
+      caption back.
 
       And with focus on **Pause**, open a window the same way: focus lands on the
       replacement control, and the caption must describe **Cancel** rather than
@@ -1281,9 +1291,13 @@ traffic, so the check that matters is the one CI cannot run: with egress gone.
       page and confirm it still moves: the fix must not turn into "never navigate
       within a page again". Finally, search in the Help pane, click a heading hit,
       scroll away by hand, and click **the same hit again** — it must scroll back.
-      An anchored request is always honoured, including a repeat of the anchor
+      An anchored request is honoured again on a repeat, including of the anchor
       already showing; suppressing it as "already there" made the second click do
-      nothing.
+      nothing. It must not be honoured *twice in one breath*, though: watch the pane
+      for a flash or a half-drawn page as it opens, which is a second `loadFileURL`
+      cancelling the first — `makeNSView` and `updateNSView` both run in the turn the
+      anchor is still pending, and only the served-anchor record tells that duplicate
+      from a real repeat.
 - [ ] **A CLI newer than the bundled help still lands on the section.** The **?**
       offers the key's row first and its section second, so an app bundle predating
       row ids must land on the section heading rather than the top of the page.

@@ -76,13 +76,21 @@ public enum ActionCaption {
     /// mouse itself has not. On screen it has not changed, which is the question
     /// being asked.
     ///
-    /// `lastPointer` is where the pointer was at the previous hover event, enter or
-    /// exit — nil before any, which counts as movement so the first entry of a
-    /// session is never swallowed.
+    /// `keyboardAimedAt` is where the pointer was when the keyboard last took the
+    /// caption, and nil when it has not. That is the reference point, NOT the
+    /// pointer's position at the previous hover event, which was the first shape of
+    /// this and was wrong in both directions. `onHover` fires on enter and exit
+    /// only, so a reading taken there is the position at the last boundary crossing:
+    /// a hand that drifted a few points while reading (no hover event) then made a
+    /// swap look like movement, and a fast flick across the gap between two buttons
+    /// — whose exit and enter are dispatched from a single mouse-moved event, so
+    /// both sample the same location — looked like stillness and silently refused to
+    /// take the caption back. Anchored to the moment the keyboard took over, the
+    /// question is the one actually being asked: has the hand gone anywhere since?
     public static func hoverIsAim(previousHoverID: String?, id: String,
-                                  pointer: CGPoint, lastPointer: CGPoint?) -> Bool {
+                                  pointer: CGPoint, keyboardAimedAt: CGPoint?) -> Bool {
         guard previousHoverID != id else { return false }
-        guard let lastPointer else { return true }
-        return pointer != lastPointer
+        guard let keyboardAimedAt else { return true }
+        return pointer != keyboardAimedAt
     }
 }

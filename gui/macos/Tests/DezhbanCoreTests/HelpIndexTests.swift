@@ -213,12 +213,12 @@ struct HelpNavigationTests {
     private var anchored: URL { HelpURL.appendingFragment(page, "key-vpnredialwindow") }
 
     @Test func nothingLoadedMeansLoad() {
-        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: nil))
+        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: nil, servedAnchor: nil))
     }
 
     /// The same *bare* page is not reloaded.
     @Test func theSamePageIsNotReloaded() {
-        #expect(!HelpNavigation.shouldLoad(target: page, loaded: page))
+        #expect(!HelpNavigation.shouldLoad(target: page, loaded: page, servedAnchor: nil))
     }
 
     /// The same *anchor* is. An anchored target is an explicit "scroll here", and
@@ -226,7 +226,21 @@ struct HelpNavigationTests {
     /// to get back is how you ask. Answering it with "you are already there" made
     /// the second click do nothing at all.
     @Test func repeatingAnAnchorScrollsBackToIt() {
-        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: anchored))
+        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: anchored, servedAnchor: nil))
+    }
+
+    /// …but not twice in one breath. `NSViewRepresentable` calls `updateNSView`
+    /// immediately after `makeNSView`, in the same runloop turn, while the anchor is
+    /// still pending — so opening the pane on a deep link asks for the identical
+    /// anchored URL twice, and honouring both started a load that cancelled the
+    /// first mid-flight. The caller records what it just served; the bare follow-up
+    /// clears it, which is what keeps the repeat click above working.
+    @Test func theSameTurnDuplicateIsNotServedTwice() {
+        #expect(!HelpNavigation.shouldLoad(target: anchored, loaded: anchored,
+                                           servedAnchor: anchored))
+        // A different anchor is a different request, pending episode or not.
+        #expect(HelpNavigation.shouldLoad(target: HelpURL.appendingFragment(page, "key-other"),
+                                          loaded: anchored, servedAnchor: anchored))
     }
 
     /// The regression this exists for. The anchor is spent by the navigation it
@@ -235,21 +249,21 @@ struct HelpNavigationTests {
     /// forty-key reference a fraction of a second after the "?" scrolled them to
     /// their key.
     @Test func droppingTheSpentAnchorDoesNotReload() {
-        #expect(!HelpNavigation.shouldLoad(target: page, loaded: anchored))
+        #expect(!HelpNavigation.shouldLoad(target: page, loaded: anchored, servedAnchor: nil))
     }
 
     /// The other direction still navigates: a target that names an anchor is a
     /// request to scroll somewhere, including from one key's row to another's.
     @Test func aDifferentAnchorOnTheSamePageStillLoads() {
         #expect(HelpNavigation.shouldLoad(target: HelpURL.appendingFragment(page, "key-other"),
-                                          loaded: anchored))
-        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: page))
+                                          loaded: anchored, servedAnchor: nil))
+        #expect(HelpNavigation.shouldLoad(target: anchored, loaded: page, servedAnchor: nil))
     }
 
     @Test func anotherPageAlwaysLoads() {
         let other = URL(fileURLWithPath: "/A/help/usage-cli.html")
-        #expect(HelpNavigation.shouldLoad(target: other, loaded: anchored))
-        #expect(HelpNavigation.shouldLoad(target: other, loaded: page))
+        #expect(HelpNavigation.shouldLoad(target: other, loaded: anchored, servedAnchor: nil))
+        #expect(HelpNavigation.shouldLoad(target: other, loaded: page, servedAnchor: nil))
     }
 
     /// The based-URL trap `HelpURL` exists for, one layer up. `Bundle.main
@@ -263,7 +277,7 @@ struct HelpNavigationTests {
         #expect(based.baseURL != nil, "the fixture must reproduce a based URL, or it tests nothing")
 
         let anchoredAbsolute = HelpURL.appendingFragment(based, "key-vpnredialwindow")
-        #expect(!HelpNavigation.shouldLoad(target: based, loaded: anchoredAbsolute))
-        #expect(!HelpNavigation.shouldLoad(target: based, loaded: based.absoluteURL))
+        #expect(!HelpNavigation.shouldLoad(target: based, loaded: anchoredAbsolute, servedAnchor: nil))
+        #expect(!HelpNavigation.shouldLoad(target: based, loaded: based.absoluteURL, servedAnchor: nil))
     }
 }
