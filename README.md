@@ -68,9 +68,10 @@ Gatekeeper friction** and asks for your password exactly once. Details, the
 Open the app and everything else happens by clicking:
 
 - **Menubar dropdown** — the safety core. One glance tells you the posture
-  (e.g. "Guard — NL via Mullvad"); **Block now** / **Unblock**, the VPN switch
-  window with a live countdown, and **Panic**. These never require the main
-  window to be open.
+  (e.g. "Guard — NL via Mullvad"); the VPN switch window with a live countdown,
+  **Pause**, and **Panic**. These never require the main window to be open.
+  Manual **Block** / **Unblock** are not here — they live in Overview, since
+  anyone who wants to cut their own internet can turn off Wi-Fi.
 - **Overview** — live status, the daily controls, and guided recovery: if the
   service isn't installed or is stopped, there's an inline button for exactly
   that, not an error message.

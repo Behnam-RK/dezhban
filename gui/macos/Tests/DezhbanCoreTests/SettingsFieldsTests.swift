@@ -5,6 +5,36 @@ import Testing
 /// Builds a schema good enough to exercise the pane's use of it, without
 /// shelling out to the CLI. Kinds and labels match what `config schema --json`
 /// reports for these keys.
+/// Mirrors Go's `config.anchorSlug` / `help.Anchor`: lowercase, keep ASCII
+/// letters, digits and hyphens, turn a space into a hyphen, drop everything else —
+/// so a dot is **dropped**, not turned into a hyphen.
+///
+/// Spelled out here because the fixture is the app-side reference for a
+/// cross-language contract, and it had the rule wrong: it mapped "." to "-" and
+/// then asserted `key-vpn-endpointrefresh`, which the pipeline never emits. Nothing
+/// failed, because the test only exercised decoding and ordering — but the next
+/// person deriving an anchor from this fixture would have got a fragment resolving
+/// nowhere. Go's TestKeyAnchorSlugMatchesTheRenderer pins the two derivations that
+/// actually ship; this keeps the fixture honest about them.
+///
+/// Written over `unicodeScalars` with explicit ASCII ranges rather than
+/// `isLowercase`/`isNumber`, which was the same near-miss one layer down: those
+/// accept letters and digits outside ASCII that Go's `r >= '0' && r <= '9'`
+/// rejects, and neither spelling handled the space at all. No config key exercises
+/// either today — which is precisely why the fixture, not a key, has to carry the
+/// rule correctly.
+private func goAnchorSlug(_ key: String) -> String {
+    var out = ""
+    for scalar in key.lowercased().unicodeScalars {
+        switch scalar {
+        case "a"..."z", "0"..."9", "-": out.unicodeScalars.append(scalar)
+        case " ": out.append("-")
+        default: break
+        }
+    }
+    return out
+}
+
 private func testSchema() -> ConfigSchema {
     func tunable(_ key: String, _ label: String, _ kind: String,
                  defaultValue: String = "", capKey: String? = nil,
@@ -13,7 +43,8 @@ private func testSchema() -> ConfigSchema {
         {"key":"\(key)","label":"\(label)","kind":"\(kind)","default":"\(defaultValue)",
          \(capKey.map { "\"capKey\":\"\($0)\"," } ?? "")
          "disablable":\(disablable),"advanced":false,"preset":false,
-         "help":"help for \(key)","docAnchor":"usage/config.md#fields"}
+         "help":"help for \(key)","docAnchor":"usage/config.md#fields",
+         "docKeyAnchor":"usage/config.md#key-\(goAnchorSlug(key))"}
         """
         return try! JSONDecoder().decode(ConfigTunable.self, from: Data(json.utf8))
     }
@@ -251,13 +282,33 @@ struct ConfigSchemaTests {
 
     /// Every control's help link is only as good as the anchor it carries. Go's
     /// TestEveryTunableDocAnchorResolves proves the anchors exist in the
-    /// bundled pages; this proves the app turns them into a page and a heading
-    /// rather than dropping the fragment and landing at the top.
-    @Test func docAnchorBecomesADeepLink() {
+    /// bundled pages; this proves the app turns them into a page and a fragment
+    /// rather than dropping the fragment and landing at the top — and that it
+    /// offers the key's own row *before* the section, with the section still there
+    /// as the step to fall back to when a bundle predates row ids.
+    @Test func docAnchorsBecomeDeepLinksRowFirst() {
         let schema = testSchema()
-        let target = try! #require(schema["vpn.endpointRefresh"]?.docTarget)
-        #expect(target.source == "usage/config.md")
-        #expect(target.anchor == "fields")
+        let targets = try! #require(schema["vpn.endpointRefresh"]?.docTargets)
+        #expect(targets.count == 2)
+        #expect(targets[0].source == "usage/config.md")
+        // Dots dropped, not hyphenated — see `goAnchorSlug`.
+        #expect(targets[0].anchor == "key-vpnendpointrefresh")
+        #expect(targets[1].anchor == "fields")
+    }
+
+    /// A key documented in prose has no row to land on, so it offers the section
+    /// alone rather than a fabricated row id. Absent in the JSON, not empty: an
+    /// older CLI that does not know the field at all has to behave the same way.
+    @Test func aKeyWithoutARowOffersOnlyItsSection() {
+        let json = """
+        {"key":"some.key","label":"Some key","kind":"text","default":"",
+         "disablable":false,"advanced":false,"preset":false,
+         "help":"","docAnchor":"usage/config.md#fields"}
+        """
+        let tunable = try! JSONDecoder().decode(ConfigTunable.self, from: Data(json.utf8))
+        #expect(tunable.docKeyAnchor == nil)
+        #expect(tunable.docTargets.count == 1)
+        #expect(tunable.docTargets[0].anchor == "fields")
     }
 
     /// The placeholder states the real default, which is the whole point: the

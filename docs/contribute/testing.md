@@ -213,6 +213,14 @@ Only a live host can prove these — CI cannot reach a printer.
       IP resolves → the daemon logs that recovery will briefly lift the guard,
       and recovery still works via lift-and-probe. A FULL BLOCK that can never
       observe its way out would be worse than the leak.
+- [ ] **Shutdown takes no last probe.** Still on the unresolvable `providers`
+      above — the only configuration in which a probe lifts anything — hold FULL
+      BLOCK and stop the daemon (`Ctrl-C` in the foreground, or
+      `sudo dezhban stop`) with `pfctl -a dezhban -sr` polling in another shell.
+      The ruleset must go straight from FULL BLOCK to torn down: no lift-and-recut
+      in between. Buying a reading on the way out opens egress through the very
+      exit the block exists for, to observe a country nothing is left to act on.
+      `TestShutdownTakesNoProbeTick` covers the decision; only this shows the rules.
 
 ## Country check (exit country, not physical location)
 
@@ -999,20 +1007,130 @@ task gui:build && open dist/Dezhban.app
 
 ### Actions
 
-- [ ] **Routine ops are passwordless with a live daemon.** Block/Unblock and the
-      switch window complete over the control socket with **no** prompt, from both
-      the menubar and Overview; the switch countdown ticks in both surfaces and
-      matches.
+- [ ] **The action row explains itself before the click.** Titles are short
+      (Block / Unblock / Switch VPN… / Pause / Guard down). Panic… is *not* part of
+      this row — it sits below with its own fixed caption, so hovering it changes
+      nothing, which is correct rather than a failure. Move the pointer across the
+      row: the caption line beneath it changes to that
+      control's sentence — in particular, hovering **Pause** must say it uses
+      your real ISP IP, which is the warning its old title carried — and the whole
+      sentence must be readable, including the password expectation at its tail,
+      which is what a single truncated line used to cut. Narrow the window until the
+      action row wraps and check it again there: two reserved lines were enough at a
+      comfortable width and put the ellipsis back on the password clause at a small
+      one, which is why the caption reserves three. Moving off the row leaves a
+      prompt ("Point at a button to see what it does."), *not* the posture headline —
+      the status hero already shows that a few lines above, and the caption used to
+      repeat it verbatim.
+      A disabled Block or Unblock says why it is disabled rather than describing the
+      action it will not perform.
+
+      **Unblock names what it will actually release.** The rule is the tunnel
+      first, the posture second, because the daemon's unblock handler branches on
+      `AutoArm && !tunnelUp && !standby` without looking at why egress was cut.
+      So check three states, not two: (a) guard holding a downed tunnel — pull the
+      VPN; (b) `dezhban block` with the VPN **off**, which is a full block over a
+      downed tunnel; (c) `dezhban block` with the VPN **up**. (a) and (b) must both
+      warn that enforcement stops and traffic uses your **real IP** until the VPN
+      reconnects (`vpn.autoArm` is on by default, so both drop the daemon to
+      STANDBY); only (c) may say the block is lifted and the guard re-blocks.
+      It may not claim the block was manual or automatic in any of them:
+      `postureName` derives `full-block` from `blocked` alone, so both arrive as
+      the same posture string and nothing on the wire tells them apart. And read
+      the whole caption at a narrow width — these sentences share the three-line
+      reservation with the row's longest existing hint, so an overlong one
+      truncates the password clause off the tail.
+
+      Tab through the row with Full Keyboard Access on and confirm focus drives the
+      caption too, **including with the pointer left resting on a different
+      button** — focus is meant to supersede a parked pointer. Then move the pointer
+      onto a control (the same one or another) and confirm it takes over again:
+      re-entering is what hands it back, deliberately, since jiggling inside the
+      control you are already on aims at nothing new.
+
+      Then, still with the pointer parked on a button, Tab *out* of the row
+      altogether. The caption must go back to describing the button under the pointer
+      — not to the resting prompt. Focus outranks a parked pointer while it is in the
+      row; it does not erase where the pointer is. The line must never go blank or
+      change height either, which would reflow the row under the pointer.
+
+      Two more, both about a caption outliving what it described, and both needing
+      the pointer to stay put — so trigger them from a terminal that already has
+      focus, with the command pre-typed. Reaching for the menubar moves the pointer
+      off the control, which fires a hover-exit and clears the state the step is
+      trying to observe.
+
+      With the pointer parked on **Pause**, press Return on a waiting
+      `sudo dezhban switch --no-wait`: the button under the pointer becomes
+      **Cancel**, and the caption must stop describing Pause without waiting for the
+      mouse to move. Leave the pointer there through the next few countdown ticks —
+      the caption must stay on Cancel, and must not be handed back to the pointer if
+      you had tabbed elsewhere first, since retitling re-establishes the tracking area
+      under a stationary mouse.
+
+      Run that swap **once more with keyboard focus on Block first**, pointer still
+      parked over Pause. Cancel replaces Pause underneath it, which is a *new*
+      control arriving rather than the same one retitling — but the hand has not
+      moved since Tab, so this is not the user aiming either: the caption must stay
+      on **Block**, where the focus ring and the Space key are. Then move the mouse
+      onto any control and confirm the pointer takes it back immediately. The same
+      applies when an enforcement-error banner appears above the row and shifts a
+      different button under a stationary pointer.
+
+      Do that one twice more, because the reference point is *where the mouse was
+      when Tab moved the focus*, not where it was at the last hover event — and the
+      two differ in both directions. First **nudge the pointer a few points inside
+      Pause before tabbing** (no hover event fires, so a reading taken at the last
+      boundary would be stale): the caption must still stay on Block when Cancel
+      arrives. Then, with focus on Block, **flick the mouse quickly from one button
+      to the next** rather than easing across: the exit and the enter can be
+      dispatched from a single mouse-moved event, and the pointer must still take the
+      caption back.
+
+      And with focus on **Pause**, open a window the same way: focus lands on the
+      replacement control, and the caption must describe **Cancel** rather than
+      keeping Pause's sentence — "uses your real ISP IP" under a button that ends a
+      window is the opposite of what it does.
+
+      Then, with the pointer parked on **Block**, run a pre-typed action that ends in
+      a `refreshServiceState()` — any Overview action will do — with the control
+      socket having gone away underneath (`control.enabled=false` plus a restart
+      beforehand). The caption's password clause must follow the tooltip's rather
+      than keeping the answer it was given at hover-enter. It has to be an action
+      rather than simply waiting: the 1-second timer polls the state file and
+      repaints only, so `controlIsReachable` changes at launch, when either surface
+      opens, and after an action sequence — not on a tick.
+
+      Do not reach for either by stopping the daemon: `state.isLive` goes false,
+      Overview renders its guided "stopped" layout, and the action row and its
+      caption line are gone before any of this could be observed. `routineHint` keys
+      on `controlIsReachable`, which is the socket, not the posture.
+- [ ] **VoiceOver still hears what each button does.** With VoiceOver on, move
+      through the action row: each control announces its short title *and* its
+      consequence as a hint — Cancel in particular must say whether it closes the
+      automatic redial window or one you opened, since the titles no longer carry
+      that and the caption line is hidden from VoiceOver to avoid reading it twice.
+      **Panic… below the row too** — it is not in the action row and has no caption
+      line, so its own hint is the only thing that says it force-unblocks; its
+      visible sentence beside it is hidden from VoiceOver for the same
+      read-it-twice reason. Hovering Panic… must also produce a tooltip.
+- [ ] **The degraded states keep their long panic title.** With the CLI missing
+      or the service not installed, the panic button still reads "Panic — force
+      unblock…" — there is no caption line there to carry the explanation.
+- [ ] **Routine ops are passwordless with a live daemon.** Block/Unblock (Overview
+      only — they are deliberately not in the menubar) and the switch window (both
+      surfaces) complete over the control socket with **no** prompt; the switch
+      countdown ticks in both surfaces and matches.
 - [ ] **Pause and Resume, from both surfaces.** Pause opens with no password
-      (`control.allowPauseOps` default true); the app shows "Resume now (m:ss
-      left)" in place of the switch-window Cancel item, and the countdown agrees
-      between menubar and Overview. Resuming early re-arms the guard immediately.
+      (`control.allowPauseOps` default true); Overview shows "Resume (m:ss left)"
+      and the menubar "Resume now (m:ss left)" in place of the switch-window
+      Cancel item, and the countdown agrees between the two. Resuming early re-arms the guard immediately.
       Letting a pause expire re-arms it with no action needed. With
       `vpn.pauseMax: "0"`, Pause is disabled in both surfaces with a reason
       ("vpn.pauseMax is \"0\""), not just a silent no-op.
 - [ ] **Profile picker.** With `configs/dezhban.profiles.json`, Overview's
       details grid lists every configured profile and marks the one that
-      matched (`(active)`), matching `dezhban vpn list`; "Switching VPN…"
+      matched (`(active)`), matching `dezhban vpn list`; "Switch VPN…"
       becomes a menu with "Any known VPN" plus one item per profile, and
       picking a profile passes `--name <profile>` (`dezhban vpn list` shows the
       learned endpoint attributed to it afterward). With no profiles
@@ -1164,9 +1282,37 @@ traffic, so the check that matters is the one CI cannot run: with egress gone.
       shows this; the Go tests cannot.
 - [ ] Built from a checkout whose `docs/` was renamed under it, `task gui:build`
       **fails** rather than producing an app whose Help pane is missing a page.
-- [ ] The **?** beside a Settings field opens Help scrolled to that key's own
-      heading — not the top of the configuration reference. Spot-check one field
-      per section, including one under Advanced.
+- [ ] The **?** beside a Settings field opens Help scrolled to **that key's own
+      table row** — not to the section heading it shares with dozens of other
+      keys, and not to the top of the reference. Spot-check one field per
+      section, including one under Advanced (whose rows are anchored on the
+      fully-qualified `vpn.advanced.*` name). Its **tooltip** says what the button
+      does ("Open the documentation for …"): the key's own one-line help is already
+      on the control beside it, so repeating it here left nothing telling a pointer
+      user that the button navigates at all.
+      **And it stays there.** Watch the pane for a second after it opens: the row
+      must remain on screen, highlighted by `:target`. The deep link's anchor is
+      spent by the navigation it triggers, so the very next view update asks for the
+      same page with no fragment — answering that by loading again scrolled the
+      reader back to the top a fraction of a second after arriving
+      (`HelpNavigation.shouldLoad`). Then click a *different* key's **?** on the same
+      page and confirm it still moves: the fix must not turn into "never navigate
+      within a page again". Finally, search in the Help pane, click a heading hit,
+      scroll away by hand, and click **the same hit again** — it must scroll back.
+      An anchored request is honoured again on a repeat, including of the anchor
+      already showing; suppressing it as "already there" made the second click do
+      nothing. It must not be honoured *twice in one breath*, though: watch the pane
+      for a flash or a half-drawn page as it opens, which is a second `loadFileURL`
+      cancelling the first — `makeNSView` and `updateNSView` both run in the turn the
+      anchor is still pending, and only the served-anchor record tells that duplicate
+      from a real repeat.
+- [ ] **A CLI newer than the bundled help still lands on the section.** The **?**
+      offers the key's row first and its section second, so an app bundle predating
+      row ids must land on the section heading rather than the top of the page.
+      Reproduce by running the built app against a help bundle from before this
+      change, or by checking that `dezhban config schema` prints a `docs:` anchor
+      that resolves as a heading on GitHub — that is the one a CLI reader follows,
+      and row ids exist only in the app's rendered help.
 - [ ] Against a CLI too old to know `config schema`, the **?** buttons are absent
       rather than present and inert.
 

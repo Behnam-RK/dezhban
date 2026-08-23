@@ -216,12 +216,39 @@ final class AppState: ObservableObject {
         }
     }
 
-    /// Opens the Help pane at a specific place in the documentation, named the
-    /// way a `Tunable`'s docAnchor writes it ("usage/config.md#fields").
-    /// A docAnchor that names nothing bundled still opens the pane — better a
-    /// reader lands in the documentation than on a dead control.
-    func openHelp(docAnchor: String) {
-        helpTarget = HelpTarget(docAnchor: docAnchor)
+    /// Decoded lazily on the first contextual help click and kept thereafter — see
+    /// `openHelp(preferring:)`.
+    private var cachedHelpBundle: HelpBundle?
+
+    /// Opens the first of `targets` whose anchor actually exists in the bundle.
+    ///
+    /// The only entry point, deliberately. A second `openHelp(docAnchor:)` taking a
+    /// bare string survived this change with no callers, and it skipped the
+    /// resolution step this one exists for — so picking the shorter-looking overload
+    /// would have silently restored landing at the top of the page.
+    ///
+    /// Preference order, not alternatives: a key's own row first, then its
+    /// section. Resolving here rather than in the Help pane is what makes the
+    /// fallback a *section* rather than the top of the page — the pane's own
+    /// resolve() drops an unknown fragment and keeps the page, which for a
+    /// forty-key reference is not a useful place to land.
+    func openHelp(preferring targets: [HelpTarget]) {
+        guard !targets.isEmpty else { return }
+        // Decoded once and kept, rather than on every click of a `?`: `bundled()`
+        // reads the payload off disk and JSON-decodes every page's full text plus its
+        // per-row key list.
+        //
+        // It does not make that the app's only decode — `HelpView` evaluates
+        // `bundled()` in its own `@State` initialiser, so a second copy exists and is
+        // rebuilt more often than this one. Sharing them is worth doing and is not
+        // this change's business; the point here is only that resolving a target must
+        // not add a decode of its own.
+        //
+        // Nil (a bare SwiftPM binary with no help payload) leaves the preferred
+        // target, which is the right guess when nothing can be checked.
+        if cachedHelpBundle == nil { cachedHelpBundle = HelpBundle.bundled() }
+        let index = cachedHelpBundle
+        helpTarget = targets.first { index?.resolve($0)?.anchor != nil } ?? targets[0]
         selectedSection = .help
     }
 

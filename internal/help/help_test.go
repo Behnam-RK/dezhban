@@ -54,32 +54,95 @@ func TestBundleBuilds(t *testing.T) {
 // TestEveryTunableDocAnchorResolves ties the settings schema to the bundle. A
 // contextual help link is a promise that the section exists; a stale anchor
 // silently lands the reader at the top of a long reference page instead.
+//
+// Both anchors a Tunable carries are checked, because they are load-bearing for
+// different readers. DocAnchor is a *heading* anchor and must resolve everywhere
+// markdown does, since a CLI prints it for someone reading the file on GitHub.
+// DocKeyAnchor names the key's own row (config.docKeyAnchorFor) and exists only in
+// the rendered HTML; it is what gives the app's contextual help its per-key grain,
+// and a key that loses its documentation row fails here by name rather than
+// degrading into a link to the top of a long reference.
 func TestEveryTunableDocAnchorResolves(t *testing.T) {
 	index := buildInto(t)
 
-	anchors := map[string]map[string]bool{}
+	headings := map[string]map[string]bool{}
+	keyRows := map[string]map[string]bool{}
 	for _, e := range index {
-		set := map[string]bool{}
+		hs := map[string]bool{}
 		for _, h := range e.Headings {
-			set[h.Anchor] = true
+			hs[h.Anchor] = true
 		}
-		anchors[e.Source] = set
+		headings[e.Source] = hs
+		ks := map[string]bool{}
+		for _, k := range e.Keys {
+			ks[k.Anchor] = true
+		}
+		keyRows[e.Source] = ks
+	}
+
+	check := func(t *testing.T, key, field, value string, in map[string]map[string]bool) {
+		t.Helper()
+		page, frag, found := strings.Cut(value, "#")
+		if !found {
+			t.Errorf("%s: %s %q has no fragment", key, field, value)
+			return
+		}
+		set, ok := in[page]
+		if !ok {
+			t.Errorf("%s: %s names %q, which is not a bundled page", key, field, page)
+			return
+		}
+		if !set[frag] {
+			t.Errorf("%s: nothing in %s has the anchor %q (%s)", key, page, frag, field)
+		}
 	}
 
 	for _, tun := range config.Tunables() {
-		page, frag, found := strings.Cut(tun.DocAnchor, "#")
-		if !found {
-			t.Errorf("%s: DocAnchor %q has no fragment", tun.Key, tun.DocAnchor)
-			continue
+		// A heading, specifically: this is the one a CLI prints for a reader who
+		// will open the file on GitHub, where row ids do not exist.
+		check(t, tun.Key, "DocAnchor", tun.DocAnchor, headings)
+		if tun.DocKeyAnchor != "" {
+			// Key rows only, not rows-or-headings. Accepting either defeated this
+			// function's own promise: a key whose table row is deleted would still
+			// pass whenever some heading on the page happened to slug to the same
+			// `key-…` fragment — and such headings exist ("Key flags" in cli.md) —
+			// so the app would silently deep-link to a heading instead of failing
+			// here by name.
+			check(t, tun.Key, "DocKeyAnchor", tun.DocKeyAnchor, keyRows)
 		}
-		set, ok := anchors[page]
-		if !ok {
-			t.Errorf("%s: DocAnchor names %q, which is not a bundled page", tun.Key, page)
-			continue
+	}
+}
+
+// TestKeyAnchorSlugMatchesTheRenderer pins config.anchorSlug (which cannot
+// import this package — internal/help imports internal/config to check its own
+// work) to help.KeyAnchor. The two derive the same fragment id from opposite
+// ends of the same link, and a divergence would break every contextual help
+// link at once while both packages' own tests still passed.
+func TestKeyAnchorSlugMatchesTheRenderer(t *testing.T) {
+	checked := 0
+	for _, tun := range config.Tunables() {
+		// DocKeyAnchor, not DocAnchor: the latter is a *section* anchor, so reading it
+		// here made every iteration skip and the test could not fail — while its doc
+		// comment claimed to be the pin against exactly this divergence.
+		if tun.DocKeyAnchor == "" {
+			continue // documented in prose; covered by the resolution test above
 		}
-		if !set[frag] {
-			t.Errorf("%s: no heading in %s has the anchor %q", tun.Key, page, frag)
+		// Compared directly, with no "is it in the bundle" gate. Such a gate is the
+		// second way this went inert: a slug that has *diverged* is by definition not
+		// among the rendered anchors, so gating on presence skipped precisely the
+		// keys it was meant to catch. Whether the anchor exists is the resolution
+		// test's question; whether the two derivations agree is this one's.
+		page, frag, _ := strings.Cut(tun.DocKeyAnchor, "#")
+		if want := KeyAnchor(tun.Key); frag != want {
+			t.Errorf("%s: schema derived %q, renderer derives %q (page %s)",
+				tun.Key, frag, want, page)
 		}
+		checked++
+	}
+	// A test that silently checks nothing is worse than no test: this one already
+	// went inert once, when the field it reads stopped being the key anchor.
+	if checked == 0 {
+		t.Fatal("compared no anchors — the schema and the renderer are no longer being pinned together")
 	}
 }
 

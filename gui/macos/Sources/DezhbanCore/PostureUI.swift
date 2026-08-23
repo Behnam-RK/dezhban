@@ -96,6 +96,69 @@ public enum PostureUI {
         return !tuns.contains(where: { $0.up })
     }
 
+    /// What Unblock actually releases, which is not a manual block in the state
+    /// that matters most.
+    ///
+    /// Overview enables it on `blocked || guardHoldsDownedTunnel`, and the sentence
+    /// describing it is no longer a tooltip a reader may never see but the caption
+    /// under the row — the primary pre-click explanation. "Releases a manual block
+    /// and resumes monitoring" covered both cases and was wrong about the second:
+    ///
+    ///   - A tunnel that is not up. `runner`'s unblock handler branches on
+    ///     `AutoArm && !tunnelUp && !standby` and does **not** look at why egress
+    ///     was cut, so this has to be asked first, for every posture. With
+    ///     `vpn.autoArm` (default on) an explicit unblock there is read as "the VPN
+    ///     is off on purpose": the daemon drops to STANDBY, which installs no rules
+    ///     at all. Monitoring is precisely what does *not* resume — the guard
+    ///     re-arms when a tunnel comes back, not before.
+    ///   - Otherwise `blocked`: egress cut by a standing block, which the snapshot
+    ///     reports as posture "full-block" whether an operator asked for it or a
+    ///     blocked-country reading did — `postureName` derives it from `blocked`
+    ///     alone and nothing on the wire tells the two apart, so this must not claim
+    ///     either. What is true of both: the daemon restores the guard and hands the
+    ///     geo state machine back the wheel, so a still-forbidden exit carries
+    ///     traffic until the next reading re-escalates.
+    ///
+    /// `vpn.autoArm` is assumed on, since the snapshot does not carry it and it is
+    /// the default. Turned off, the daemon restores the guard instead — which with
+    /// no tunnel is still a total cut, so the error is a caption warning about an
+    /// exposure that does not happen. That is the survivable direction; promising
+    /// "resumes monitoring" over a drop to standby is not.
+    ///
+    /// Returned bare, without the password expectation `AppState.routineHint`
+    /// appends — which is also why these stay short. That suffix is 60 characters,
+    /// and the caption reserves three lines sized for the longest existing hint
+    /// (~78 bare); a sentence that overruns it truncates, and the tail it drops is
+    /// the password clause.
+    public static func unblockConsequence(_ s: Snapshot?) -> String {
+        guard let s = s else { return "Releases the block and resumes monitoring." }
+        if releasingDropsToStandby(s) {
+            return "Stops enforcing until the VPN reconnects — traffic uses your real IP."
+        }
+        if s.posture == "full-block" {
+            return "Lifts the full block; traffic uses the exit until the guard re-blocks it."
+        }
+        return "Releases the block and resumes monitoring."
+    }
+
+    /// Whether an explicit unblock would land in the daemon's autoArm branch and
+    /// leave nothing enforcing.
+    ///
+    /// `guardHoldsDownedTunnel` answers this for the guard posture and is preferred
+    /// where it applies, because the daemon's own Display is authoritative there.
+    /// It cannot answer for FULL BLOCK: it returns false for any posture but
+    /// "guard", and `fullBlockDisplay` reports the blocked key whether the tunnel is
+    /// up or down, so the tunnel list is the only thing left to read.
+    ///
+    /// Nothing reported as up counts as down, an absent list included — the same
+    /// reading `guardHoldsDownedTunnel` gives an empty list, and the direction that
+    /// errs toward the warning rather than toward the false promise.
+    private static func releasingDropsToStandby(_ s: Snapshot) -> Bool {
+        if guardHoldsDownedTunnel(s) { return true }
+        guard let tuns = s.tunnels, tuns.contains(where: { $0.up }) else { return true }
+        return false
+    }
+
     /// SwiftUI accent for a brand state — used where the bundled bitmap isn't
     /// (SF Symbol fallback, text highlights).
     public static func color(for state: String) -> Color {

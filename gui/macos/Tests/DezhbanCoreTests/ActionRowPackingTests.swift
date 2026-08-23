@@ -3,9 +3,16 @@ import Testing
 @testable import DezhbanCore
 
 struct ActionRowPackingTests {
-    /// The Overview's standard-state row, measured at macOS 13pt bordered-button
-    /// metrics: Block now / Unblock / Switching VPN… (a Menu, so + chevron) /
-    /// Pause — use my real IP / Guard down.
+    /// The Overview's standard-state row: Block / Unblock / Switch VPN… (a Menu,
+    /// so + chevron) / Pause / Guard down.
+    ///
+    /// The widths are the ones measured at macOS 13pt bordered-button metrics
+    /// when those controls still carried their long titles ("Block now",
+    /// "Pause — use my real IP"). They are deliberately kept: what is under test
+    /// is the packing arithmetic and the break points these numbers exercise,
+    /// not the current text metrics. Shrinking them to match today's shorter
+    /// titles would make every row fit on one line and quietly stop testing the
+    /// wrapping this type exists for. Treat them as a fixture, not a measurement.
     private let overview: [CGFloat] = [94, 82, 141, 168, 110]
     private let spacing: CGFloat = 10
     private let gutter: CGFloat = 24
@@ -85,11 +92,12 @@ struct ActionRowPackingTests {
     }
 
     /// The middle slot is state-dependent and can grow a live countdown
-    /// ("Cancel redial window (12:34 left)"), so the break point moves at
-    /// runtime. Packing must follow it rather than assume a fixed arity.
+    /// ("Cancel (12:34 left)"), so the break point moves at runtime. Packing
+    /// must follow it rather than assume a fixed arity. Same fixture caveat as
+    /// `overview` above: the widths exercise the break, they do not measure it.
     @Test func aLongerMiddleSlotMovesTheBreakPoint() {
-        let short: [CGFloat] = [94, 82, 141, 110]   // "Cancel VPN switch"        → 471 natural
-        let long: [CGFloat] = [94, 82, 215, 110]    // "Cancel redial window (12:34 left)" → 545
+        let short: [CGFloat] = [94, 82, 141, 110]   // no countdown              → 471 natural
+        let long: [CGFloat] = [94, 82, 215, 110]    // with a live countdown     → 545
         // One pane width, two different answers — which is the point: nothing
         // here may be decided from the control COUNT, only from the measurements.
         #expect(pack(short, 500, pinnedFrom: 3).count == 1)

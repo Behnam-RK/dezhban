@@ -12,7 +12,76 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Changed
+
+- **Contextual help lands on the key you asked about.** The **?** beside a
+  setting used to open one of four section anchors shared by every key in that
+  section; it now scrolls to that key's own row in the configuration reference.
+  The help renderer gives each documented key a row anchor, and each key's
+  anchor is derived from the key rather than hand-written, so the two cannot
+  drift — a key that loses its documentation row now fails the build by name.
+  The **?** button now says what it does on hover ("Open the documentation for
+  …"), which is the affordance a pointer user was missing — the key's own one-line
+  help is already on the control beside it, and visible under the toggles that
+  carry a caption.
+- **Shorter action buttons, with one caption line under the row.** The Overview's
+  controls are now Block / Unblock / Switch VPN… / Pause / Guard down / Panic…,
+  with the window controls shortened to match — **Resume (m:ss left)** rather than
+  "Resume now", and one **Cancel** in place of "Cancel redial window" and "Cancel
+  VPN switch" (which window it closes is in the caption). The sentence each title
+  used to carry inline moved to a caption line beneath the row that follows the
+  pointer and the keyboard focus, and reads "Point at a button to see what it
+  does." when neither is on the row. Whichever of the two you used last wins, so
+  tabbing takes the caption from a resting pointer and moving the pointer takes it
+  back. The same sentence remains the tooltip and is also announced by VoiceOver as
+  the control's hint, and the caption wraps rather than truncating — its tail is
+  where the password expectation is stated, and that has to survive a narrow window.
+  The menubar's items are unchanged: a menu has no caption line to delegate to, and
+  a guided empty state's panic button keeps its full title for the same reason.
+- **The advanced tunables table names its keys in full** (`vpn.advanced.redialBudget`
+  rather than `redialBudget`), matching every other table in the reference.
+
 ### Fixed
+
+- **Shutting the daemon down no longer buys one last lift-and-probe.** When
+  FULL BLOCK is held and the tunnel-scoped provider pass cannot be built (no
+  provider addresses resolved), the recovery probe lifts the guard, looks up
+  the exit country, and re-cuts. The run loop could take one of those on the
+  way out: with a cancelled context and a pending geo tick both ready, the
+  select chose between them at random. Losing that toss meant a stop briefly
+  opened egress through the forbidden-country exit — to observe a country
+  nothing was left to act on, moments before teardown removed the rules
+  anyway. A cancelled context now ends the loop instead, the same as any
+  other path out.
+- **A contextual help link stays on the row it landed on.** The Help pane spends
+  a deep link's anchor as soon as WebKit has scrolled to it, and the view update
+  that followed asked for the same page without the fragment — which was loaded
+  again, putting the reader back at the top of the page a fraction of a second
+  after arriving. The pane now treats a target that differs only by a dropped
+  fragment as the page already on screen. Links *between* anchors on one page
+  still navigate, and clicking the same search hit again after scrolling away
+  still scrolls back to it.
+- **The caption no longer follows a button that moved under a resting pointer.**
+  When a switch window opens, Cancel replaces Pause beneath wherever the mouse
+  happens to be; that counted as the pointer aiming at something and took the
+  caption away from the keyboard's own focused button. It now asks whether the
+  mouse actually moved, in screen coordinates, so only a hand that went somewhere
+  counts. A control that arrives already holding keyboard focus also writes its
+  own sentence now, rather than leaving the outgoing button's on screen.
+- **Unblock says what it will actually release.** The button is offered both
+  while egress is cut by a standing block and while the guard is holding a downed
+  tunnel, and it described both as releasing a manual block and resuming
+  monitoring. Whenever the tunnel is down — under the guard *or* under a full
+  block — it now warns that enforcement stops and traffic uses your real IP until
+  the VPN reconnects, which is what `vpn.autoArm` does; with the tunnel up it
+  says the full block is lifted and the guard re-blocks the exit if it is still
+  forbidden.
+- **Panic explains itself to VoiceOver and to a tooltip.** Shortening its title
+  to "Panic…" left the pane's one destructive control announcing nothing but its
+  name, with its explanation in an adjacent label no pointer or VoiceOver user
+  reached from the button. It now carries that sentence as both tooltip and
+  accessibility hint, with the visible copy hidden from VoiceOver so it is not
+  read twice — the same arrangement the action row already used.
 
 - **"Open minimized" now actually decides whether the window opens.** The app
   used to infer a login launch from `NSApplication.launchIsDefaultUserInfoKey`,
