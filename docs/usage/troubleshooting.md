@@ -510,3 +510,69 @@ dezhban validate --config <config>     # prints the precise validation error
 ```
 
 See [config.md](config.md) for every field and its constraints.
+
+## I reinstalled, but the setup wizard never appears
+
+The app offers the first-run wizard only when it has never been completed on
+this account *and* dezhban knows no VPN server. The first half is a flag in the
+app's own preferences, and it used to outlive every uninstall — so a machine
+with an empty `/etc/dezhban` could still answer "already done" and stay silent.
+
+Check both halves:
+
+```sh
+defaults read com.behnam-rk.dezhban.app dezhban.firstRunCompleted   # 1 means "already done"
+dezhban config show                                                 # look at vpn.endpoints / profiles
+```
+
+Two ways out. **Settings → Run Setup Again…** walks the same questions with your
+current settings filled in — that is the intended route, and it does not require
+uninstalling anything. Or clear the flag:
+
+```sh
+defaults delete com.behnam-rk.dezhban.app dezhban.firstRunCompleted
+```
+
+A Mac that ran an early build may also still carry a `com.dezhban.DezhbanMenu`
+preference domain from a superseded bundle identifier. It is inert, and
+**Settings → Remove Dezhban…** clears it.
+
+## Removing dezhban completely
+
+**Settings → Remove Dezhban…** in the app is the complete route. It removes what
+only your own login session can reach — the Touch ID key in your login keychain
+and this app's preferences — then opens Terminal running the root uninstaller
+and quits, so you watch the firewall-rule teardown happen rather than trusting a
+dialog that is about to be deleted. The uninstaller retracts the "open at login"
+registration itself, through the app, as part of that run. Tick "Keep my dezhban
+configuration in /etc/dezhban" to keep your config.
+
+If Terminal refuses to open, allow Dezhban under **System Settings › Privacy &
+Security › Automation**; the app says so, and prints the command to run instead.
+
+Without the app, the root half alone is:
+
+```sh
+sudo sh /usr/local/share/dezhban/uninstall.sh                 # everything
+sudo KEEP_CONFIG=1 sh /usr/local/share/dezhban/uninstall.sh   # keep /etc/dezhban
+```
+
+It removes every firewall rule first (`panic`), so it can never leave you cut
+off. It clears your app preferences and, if you are logged in at the Mac itself *and*
+Dezhban.app is still there, retracts the "open at login" registration — only the
+bundle can retract its own registration, so deleting the app first leaves that
+entry behind, and the script says so. The one thing no root process can
+reach is your login keychain, so it prints this for you to run as yourself:
+
+```sh
+while security delete-generic-password -s sh.dezhban.menu >/dev/null 2>&1; do :; done
+```
+
+A loop rather than one command: dezhban stores two items under that service, and
+each run removes one. If you ran the script over SSH or from a second account,
+also untick Dezhban in **System Settings › General › Login Items**. Other user
+accounts keep their own app settings either way. Nothing can withdraw Dezhban's
+notification permission — turn that off yourself in
+**System Settings › Notifications**. See
+[ADR-0015](../adr/0015-complete-purge-semantics.md) for why the work is split
+this way.

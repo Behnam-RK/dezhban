@@ -120,6 +120,11 @@ directly any time: `sudo sh /usr/local/share/dezhban/uninstall.sh` (add
 the firewall rules even with no daemon running — before touching anything
 else, so you're never left locked out mid-removal.
 
+The script alone is not a complete removal: it cannot reach your login keychain,
+so Dezhban's Touch ID key survives it (it prints the command that clears that).
+On macOS, **Settings → Remove Dezhban…** in the app does both halves — see
+[Removing dezhban completely](troubleshooting.md#removing-dezhban-completely).
+
 ## Other ways to install
 
 ### The `.pkg` (macOS)

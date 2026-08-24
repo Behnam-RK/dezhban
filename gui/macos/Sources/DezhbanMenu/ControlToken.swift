@@ -422,7 +422,9 @@ enum ControlToken {
     /// daemon's hash with one for a token that was never stored.
     static func markOrphaned() { orphanFlag.sync { orphaned = true } }
 
-    /// Cleared by a successful `store`, and only there. Everywhere else the flag
+    /// Cleared by a successful `store`, and by a `purge` that actually removed the
+    /// item — in both cases because the account no longer holds a secret the
+    /// daemon will not accept. Never on a failed removal. Everywhere else the flag
     /// is checked alongside `isStored`, so once the item is gone a stale `true`
     /// changes nothing — but a re-enrollment puts a NEW secret under the same
     /// account, and that one the daemon does know. Leaving the flag set would
@@ -492,10 +494,47 @@ enum ControlToken {
         return SecItemCopyMatching(q as CFDictionary, &last) == errSecItemNotFound
     }
 
+    /// Removes every keychain item this app owns: the token and the capability
+    /// probe. Reports whether BOTH are now gone — `remove` returns true for an
+    /// item that was never there, so this is "the keychain is clean", not
+    /// "something was deleted". AND, never OR: a failed token deletion is still
+    /// a failed purge even if the probe went.
+    ///
+    /// Lives here rather than in `Purge` because the account names are private
+    /// to this type, and deliberately so — the probe account exists precisely so
+    /// a probe can never collide with a real token, and a second place naming it
+    /// would be a second place to get that wrong. Uses `remove`, never
+    /// `SecItemDelete`, for the ACL reason documented on it.
+    static func purge() -> Bool {
+        let tokenGone = remove(account: account)
+        let probeGone = remove(account: probeAccount)
+        // Only once the item is actually gone. Clearing it unconditionally reset
+        // the flag on the path where `remove` FAILED — a locked keychain, a
+        // cancelled unlock dialog, an ACL refusal — leaving an orphaned token
+        // still in the keychain but no longer known to be orphaned. `ConfigApply`
+        // gates the token path on `isKnownOrphaned`, and a daemon refusal is
+        // deliberately never retried, so every later save would offer a token the
+        // daemon rejects while the About pane stopped saying why: the permanent
+        // dead end `markOrphaned` exists to prevent, re-entered by the uninstaller.
+        if tokenGone { clearOrphaned() }
+        return tokenGone && probeGone
+    }
+
     /// What to tell the user to run when this app cannot clear the item itself.
     /// Built from the same constants the queries use, so the instruction cannot
     /// drift away from the item it is meant to remove.
     static var manualRemovalCommand: String {
         "security delete-generic-password -s \(service) -a \(account)"
+    }
+
+    /// What to tell the user to run when a `purge` could not clear the keychain.
+    /// Service-scoped and looped, where `manualRemovalCommand` is account-scoped:
+    /// `purge` fails if EITHER item survived, and naming the token would hand
+    /// somebody whose capability probe is the one still there a command that
+    /// reports "The specified item could not be found" and changes nothing.
+    /// `delete-generic-password` removes one match per run, so the loop is what
+    /// empties the service. Same string uninstall.sh prints, same reasoning.
+    static var manualPurgeCommand: String {
+        "while security delete-generic-password -s \(service) >/dev/null 2>&1; do :; done"
     }
 }

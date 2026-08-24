@@ -12,6 +12,25 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Settings → Remove Dezhban…** — the complete uninstall, from the app. It
+  removes what only your own login session can reach (the Touch ID key in the
+  login keychain, this app's preferences and saved window state), then opens
+  Terminal running the root uninstaller and quits — so you watch the
+  firewall-rule teardown happen instead of trusting a dialog that is about to be
+  deleted. The uninstaller retracts the "open at login" registration itself,
+  through the app. "Keep my dezhban configuration in /etc/dezhban" maps to the
+  uninstaller's existing `KEEP_CONFIG=1`. If Terminal cannot be opened — or the
+  uninstaller is not installed on a Mac that is still enforcing — the app says
+  so, says dezhban is still installed, and tells you how to finish instead of
+  quitting into a half-removed install. A missing uninstaller does not mean a
+  missing dezhban: a network install treats fetching it as non-fatal, so that
+  case is decided on whether the command-line tool or the system service is
+  still there, never on the file alone. Other accounts' own settings, keychain
+  items and login registrations are deliberately untouched
+  ([ADR-0015](docs/adr/0015-complete-purge-semantics.md)).
+
 ### Changed
 
 - **Contextual help lands on the key you asked about.** The **?** beside a
@@ -82,7 +101,17 @@ current as you land changes.
   reached from the button. It now carries that sentence as both tooltip and
   accessibility hint, with the visible copy hidden from VoiceOver so it is not
   read twice — the same arrangement the action row already used.
-
+- **The setup wizard appears again after a reinstall.** `uninstall.sh` removed
+  only root-owned state, so the app's `dezhban.firstRunCompleted` preference
+  outlived every uninstall — a machine with an empty `/etc/dezhban` and no VPN
+  still answered "the wizard has been completed", and stayed silent. The
+  uninstaller now clears both of your preference domains — the dead
+  `com.dezhban.DezhbanMenu` one from a superseded bundle identifier as well as
+  the current one — for whoever is logged in at the Mac and, separately, for
+  whoever invoked it over SSH or from another account. It also removes the saved
+  window state, and the app's own Remove Dezhban… clears everything else this
+  account holds. If you are hitting this today, Settings → Run Setup Again… is
+  the route that needs no uninstall at all.
 - **"Open minimized" now actually decides whether the window opens.** The app
   used to infer a login launch from `NSApplication.launchIsDefaultUserInfoKey`,
   which reported wrong in both directions — the window appeared at login with
