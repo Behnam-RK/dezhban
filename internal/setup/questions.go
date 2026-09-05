@@ -51,8 +51,8 @@ type Question struct {
 	// JSON use it, so it is a compatibility surface: do not rename one.
 	ID string `json:"id"`
 	// Key is the dotted config key this answer writes, empty when the question
-	// only steers the flow (ConfigureVPN, AutoMode) or is folded into another
-	// key's value (OtherCountries).
+	// only steers the flow (AutoMode) or is folded into another key's value
+	// (OtherCountries).
 	Key         string `json:"key,omitempty"`
 	Kind        string `json:"kind"`
 	Title       string `json:"title"`

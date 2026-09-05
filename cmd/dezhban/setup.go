@@ -78,21 +78,14 @@ func cmdSetup(args []string) int {
 	for _, group := range groupsOf(qs) {
 		asked := map[string]bool{}
 		for {
+			wave := nextWave(qs, group, asked, answers)
+			if len(wave) == 0 {
+				break
+			}
 			var fields []huh.Field
-			for _, q := range qs {
-				if q.Group != group || asked[q.ID] || !answers.ShouldAsk(q) {
-					continue
-				}
-				// Defer anything still waiting on an unanswered question in
-				// this same group; the next wave picks it up.
-				if q.Gated() && !asked[q.RequiresID] && gateIsInGroup(qs, q, group) {
-					continue
-				}
+			for _, q := range wave {
 				asked[q.ID] = true
 				fields = append(fields, field(q, answers))
-			}
-			if len(fields) == 0 {
-				break
 			}
 			if err := runForm(huh.NewForm(huh.NewGroup(fields...))); err != nil {
 				return formExit(err)
@@ -103,8 +96,13 @@ func cmdSetup(args []string) int {
 	// Import any named config files into profiles (best-effort; a bad file is
 	// reported but doesn't abort the wizard). Reading files is the caller's job,
 	// not internal/setup's.
+	// Only what the user was actually shown: the question is gated behind manual
+	// mode, and reading it unconditionally would import files from a field this
+	// run never rendered — the same "unasked means untouched" rule Apply follows
+	// for keys, and what keeps this in step with the macOS app, whose
+	// profileFiles is empty for exactly that reason.
 	var profiles []config.Profile
-	{
+	if q, ok := questionByID(qs, "profileFiles"); ok && answers.ShouldAsk(q) {
 		for _, f := range setup.SplitList(answers.Text("profileFiles")) {
 			eps, format, ierr := vpnimport.Extract(f)
 			if ierr != nil {
@@ -130,20 +128,18 @@ func cmdSetup(args []string) int {
 	}
 
 	// --- lockout guard: warn if an endpoint sits inside a tunnel subnet ---
-	{
-		if warn := setup.EndpointLockoutWarning(cfg); warn != "" {
-			var proceed bool
-			fmt.Fprintln(os.Stderr, warn)
-			if err := runForm(huh.NewForm(huh.NewGroup(
-				huh.NewConfirm().Title("Save anyway?").
-					Description("The flagged endpoint would very likely lock you out.").Value(&proceed),
-			))); err != nil {
-				return formExit(err)
-			}
-			if !proceed {
-				fmt.Fprintln(os.Stderr, "setup cancelled — fix the endpoint (see 'dezhban doctor').")
-				return 1
-			}
+	if warn := setup.EndpointLockoutWarning(cfg); warn != "" {
+		var proceed bool
+		fmt.Fprintln(os.Stderr, warn)
+		if err := runForm(huh.NewForm(huh.NewGroup(
+			huh.NewConfirm().Title("Save anyway?").
+				Description("The flagged endpoint would very likely lock you out.").Value(&proceed),
+		))); err != nil {
+			return formExit(err)
+		}
+		if !proceed {
+			fmt.Fprintln(os.Stderr, "setup cancelled — fix the endpoint (see 'dezhban doctor').")
+			return 1
 		}
 	}
 
@@ -321,15 +317,64 @@ func isTerminal(f *os.File) bool {
 	return term.IsTerminal(f.Fd())
 }
 
-// gateIsInGroup reports whether the question q depends on lives in the same
-// group — the case the wave loop above has to defer, because a huh form cannot
-// react to an answer given inside itself. A gate pointing at an EARLIER group is
-// already decided by the time this group runs and needs no deferral.
-func gateIsInGroup(qs []setup.Question, q setup.Question, group int) bool {
-	for _, other := range qs {
-		if other.ID == q.RequiresID {
-			return other.Group == group
+// questionByID finds a question in the set the wizard is running, so a caller
+// can ask whether the user was actually shown it.
+func questionByID(qs []setup.Question, id string) (setup.Question, bool) {
+	for _, q := range qs {
+		if q.ID == id {
+			return q, true
 		}
+	}
+	return setup.Question{}, false
+}
+
+// nextWave picks the questions of this group to put on the next form: those
+// whose gate is already satisfied, minus any whose gate is about to be answered
+// on that very form.
+//
+// It takes `asked` as read-only and leaves the marking to the caller, which is
+// what makes the deferral work at all. Marking inside the selection pass — as
+// this did — defeats it silently whenever a gating question appears BEFORE its
+// dependents in the question set, which is the normal way to write one: by the
+// time the dependent is examined, the gate it is waiting on has been marked
+// asked earlier in the same pass, so it is never held back. The visible symptom
+// was a re-run on a pinned config, where autoMode seeds to false and so all of
+// step 2 satisfied its gate up front and arrived as one form instead of two —
+// and ticking automatic detection on that form then retracted the endpoint
+// answer the same form had just collected.
+//
+// Being a plain function over (questions, answers) rather than a loop body is
+// also the only reason this is testable without driving a terminal;
+// TestStepTwoArrivesInWaves covers it.
+func nextWave(qs []setup.Question, group int, asked map[string]bool, a *setup.Answers) []setup.Question {
+	var wave []setup.Question
+	for _, q := range qs {
+		if q.Group != group || asked[q.ID] || !a.ShouldAsk(q) {
+			continue
+		}
+		if q.Gated() && stillToAsk(qs, q.RequiresID, group, asked, a) {
+			continue
+		}
+		wave = append(wave, q)
+	}
+	return wave
+}
+
+// stillToAsk reports whether the question a gate points at is in this same group
+// and is genuinely still coming — the only case where deferring is right.
+//
+// A gate pointing at an EARLIER group is already decided by the time this group
+// runs. A gate pointing at a question this run will never show — because that
+// question's own gate is unmet — is fixed at its seeded default and will never
+// change, so deferring for it would strand the dependent question forever: the
+// wave it waits for never arrives, the loop runs out of fields and breaks, and
+// the question is silently never asked.
+func stillToAsk(qs []setup.Question, id string, group int, asked map[string]bool, a *setup.Answers) bool {
+	for _, q := range qs {
+		if q.ID != id {
+			continue
+		}
+		return q.Group == group && !asked[q.ID] && a.ShouldAsk(q)
 	}
 	return false
 }
