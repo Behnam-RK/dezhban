@@ -253,6 +253,46 @@ func TestTunnelQuestionFollowsDetection(t *testing.T) {
 	}
 }
 
+// Detection only sees tunnels that are UP. A re-run while the VPN is down must
+// still offer — and preselect — the interface the config pins, or pressing
+// Enter through the pick list answers "none of them" and unpins it.
+func TestAPinnedTunnelSurvivesADetectionMiss(t *testing.T) {
+	cfg := config.Default()
+	cfg.BlockedCountries = []string{"IR"}
+	cfg.VPN.Endpoints = []string{"203.0.113.7"}
+	cfg.VPN.TunnelInterfaces = []string{"utun9"}
+	config.Normalize(&cfg)
+	before := config.KeyValues(&cfg)
+
+	// utun9 is absent from the detected set: that tunnel is not up right now.
+	qs := Questions(Options{Config: &cfg, GOOS: "darwin", DetectedTunnels: []string{"utun0", "utun4"}})
+
+	q := byID(qs)["tunnels"]
+	var offered []string
+	for _, o := range q.Options {
+		offered = append(offered, o.Value)
+	}
+	if !reflect.DeepEqual(offered, []string{"utun0", "utun4", "utun9"}) {
+		t.Errorf("options = %v, want the detected tunnels plus the pinned one", offered)
+	}
+	if !reflect.DeepEqual(q.Selected, []string{"utun9"}) {
+		t.Errorf("selected = %v, want the pinned tunnel preselected", q.Selected)
+	}
+
+	// And the whole click-through must be a no-op, as it is when the pin is up.
+	after := cfg
+	in := NewAnswers(qs).Input(strconv.Itoa(cfg.Hysteresis), nil)
+	in.MacOS = true
+	in.ConfigExisted = true
+	Apply(&after, in)
+	config.Normalize(&after)
+	for key, want := range before {
+		if got := config.KeyValues(&after)[key]; got != want {
+			t.Errorf("%s changed by answering nothing: %q -> %q", key, want, got)
+		}
+	}
+}
+
 // --- gating ---
 
 // Automatic detection is the one gate left, and everything manual hangs off it.

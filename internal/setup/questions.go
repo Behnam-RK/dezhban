@@ -232,16 +232,33 @@ func tunnelQuestion(detected, configured []string) Question {
 		q.Default = strings.Join(configured, ",")
 		return q
 	}
+	q.Kind = KindMultiSelect
+	q.Description = "Detected tunnels — pick the VPN's."
+
+	// A pinned interface is an option even when it is not detected right now.
+	// Detection only sees tunnels that are UP, so a re-run while the VPN is
+	// down would otherwise offer a list its own configured interface is not in
+	// — and pressing Enter through that list answers "none of them", which
+	// Apply writes as an empty vpn.tunnelInterfaces. That silently unpins an
+	// interface someone chose deliberately, which is the very thing seeding
+	// autoMode to false from those pins exists to prevent; offering the pins
+	// but leaving them unselectable would close only half of it.
+	// TestAPinnedTunnelSurvivesADetectionMiss pins this.
+	seen := map[string]bool{}
+	for _, t := range append(append([]string(nil), detected...), configured...) {
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		q.Options = append(q.Options, Option{Label: t, Value: t})
+	}
 	cfgSet := map[string]bool{}
 	for _, t := range configured {
 		cfgSet[t] = true
 	}
-	q.Kind = KindMultiSelect
-	q.Description = "Detected tunnels — pick the VPN's."
-	for _, t := range detected {
-		q.Options = append(q.Options, Option{Label: t, Value: t})
-		if cfgSet[t] {
-			q.Selected = append(q.Selected, t)
+	for _, o := range q.Options {
+		if cfgSet[o.Value] {
+			q.Selected = append(q.Selected, o.Value)
 		}
 	}
 	return q

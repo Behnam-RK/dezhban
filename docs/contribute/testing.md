@@ -733,7 +733,10 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
       automatic detection must arrive **already unticked**, and
       `dezhban config show` must still list the same interfaces. This is what
       replaced the old "Configure your VPN now?" escape, so it is the check that
-      matters most in this section.
+      matters most in this section. Run it **twice: once with the VPN up and once
+      with it down.** Detection only sees tunnels that are up, so the down run is
+      the one where the pinned interface has to appear in the pick list — and stay
+      ticked — on its own.
 - [ ] **A re-run under automatic detection keeps configured endpoints.** With
       `vpn.endpoints` set and no pinned interfaces, re-run, leave automatic
       detection ticked, finish: the endpoints are unchanged. The question was

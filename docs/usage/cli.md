@@ -353,7 +353,9 @@ Two consequences of there being no "configure your VPN now?" question, which
 this wizard used to open with. A run always writes the VPN keys, so the
 automatic-detection answer is **seeded from your config**: a config with pinned
 `vpn.tunnelInterfaces` starts on manual, and pressing Enter through the wizard
-preserves the pins rather than clearing them. And choosing automatic detection
+preserves the pins rather than clearing them — including while that tunnel is
+down, since detection only sees tunnels that are up and the pick list would
+otherwise not contain your own pinned interface. And choosing automatic detection
 deliberately clears those pins, because a leftover pin is precisely what stops
 autodetection from happening.
 
