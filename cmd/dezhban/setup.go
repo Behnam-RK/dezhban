@@ -296,7 +296,11 @@ func printQuestions(qs []setup.Question, asJSON bool) int {
 					vals = append(vals, fmt.Sprintf("%s (%s)", o.Value, o.Label))
 				}
 			}
-			fmt.Printf("    options: %s\n", strings.Join(vals, ", "))
+			// Semicolons, not commas: labels are prose and may contain a comma
+			// themselves ("utun9 (configured, not up right now)"), which in a
+			// comma-joined list reads as two options, one of them an interface
+			// named "utun9 (configured".
+			fmt.Printf("    options: %s\n", strings.Join(vals, "; "))
 		}
 		if q.Gated() {
 			fmt.Printf("    asked only when %s is %s\n", q.RequiresID, q.RequiresValue)
