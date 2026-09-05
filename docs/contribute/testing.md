@@ -725,9 +725,12 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
 - [ ] Re-running it **without** naming profile files keeps the profiles already
       imported (`dezhban vpn list`).
 - [ ] **Two steps.** Step 1 is countries. Step 2 opens with "Use automatic VPN
-      detection?"; leaving it ticked ends the wizard there, unticking it asks for
-      tunnel interfaces, self-hosted config files, and endpoints. In a terminal
-      that second half arrives as a follow-up prompt, not the same screen.
+      detection?". **On macOS**, leaving it ticked ends the wizard there, and
+      unticking it asks for tunnel interfaces, self-hosted config files, and
+      endpoints as a follow-up prompt rather than on the same screen.
+      **Off macOS** the endpoint question is ungated — there is no live discovery
+      to find a server — so it rides on that first prompt beside the tickbox, and
+      unticking brings only tunnel interfaces and config files.
 - [ ] **A re-run on a pinned config keeps its pins.** With
       `vpn.tunnelInterfaces` set, re-run and press Enter through everything:
       automatic detection must arrive **already unticked**, and

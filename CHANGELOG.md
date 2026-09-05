@@ -40,9 +40,11 @@ current as you land changes.
   VPN keys, so instead the detection answer is **seeded from your config** and a
   config with pinned `vpn.tunnelInterfaces` starts on manual, meaning a re-run
   clicked straight through preserves your pins — even when that tunnel is down,
-  which previously dropped it from the pick list and so cleared it. A question that is not asked
-  still writes no key, so leaving automatic detection on does not blank
-  endpoints you set by hand. Off macOS, where there is no live discovery, the
+  which previously dropped it from the pick list and so cleared it. A question
+  that is not asked still writes no key, so leaving automatic detection on does
+  not blank endpoints you set by hand; the one deliberate exception is that
+  *choosing* automatic detection clears pinned interfaces, since a leftover pin
+  is what stops autodetection happening. Off macOS, where there is no live discovery, the
   endpoint question is asked whichever mode you pick. Both wizards read the same
   question set, so `dezhban setup` changes with the app — in a terminal,
   unticking automatic detection brings the manual fields as a second prompt

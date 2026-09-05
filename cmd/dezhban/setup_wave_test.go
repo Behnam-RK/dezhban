@@ -71,6 +71,28 @@ func TestStepTwoArrivesInWaves(t *testing.T) {
 	}
 }
 
+// Off macOS there is no live discovery, so the endpoint question is ungated and
+// rides on the FIRST prompt beside the tickbox — a Linux user who leaves
+// automatic detection on must still be asked for a server, or the config cannot
+// enforce. That makes the wave shape genuinely platform-dependent, which is why
+// it is pinned rather than left to the darwin cases above.
+func TestOffMacOSTheEndpointQuestionRidesTheFirstWave(t *testing.T) {
+	for _, goos := range []string{"linux", "windows"} {
+		t.Run(goos, func(t *testing.T) {
+			cfg := config.Default()
+			qs := setup.Questions(setup.Options{Config: &cfg, GOOS: goos})
+			a := setup.NewAnswers(qs)
+
+			// Automatic detection left on, the recommended answer.
+			got := drive(qs, 2, a, func(string) {})
+			want := [][]string{{"autoMode", "endpoints"}}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("waves = %v, want %v", got, want)
+			}
+		})
+	}
+}
+
 // Ticking automatic detection retracts the manual half of step 2. The three
 // gated questions must then never be put on a form at all — the wave loop is
 // what makes that true, and it is the case the old mark-inside-the-pass loop got

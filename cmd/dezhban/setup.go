@@ -278,9 +278,23 @@ func printQuestions(qs []setup.Question, asJSON bool) int {
 			fmt.Printf("    selected: %s\n", strings.Join(q.Selected, ", "))
 		}
 		if len(q.Options) > 0 {
+			// Value is what gets written, but an option whose label says more
+			// than its value — a tunnel offered because it is configured rather
+			// than because it was detected — has to show that here too. This is
+			// the form a human reads to answer "why is that one on the list?";
+			// --json already carries both.
 			vals := make([]string, 0, len(q.Options))
 			for _, o := range q.Options {
-				vals = append(vals, o.Value)
+				switch {
+				case o.Label == "" || o.Label == o.Value:
+					vals = append(vals, o.Value)
+				case strings.Contains(o.Label, o.Value):
+					// The label already carries the value, as the tunnel list's
+					// "utun9 (configured, not up right now)" does.
+					vals = append(vals, o.Label)
+				default:
+					vals = append(vals, fmt.Sprintf("%s (%s)", o.Value, o.Label))
+				}
 			}
 			fmt.Printf("    options: %s\n", strings.Join(vals, ", "))
 		}
