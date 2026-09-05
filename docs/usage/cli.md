@@ -362,10 +362,12 @@ autodetection from happening.
 The one silent defaulting decision it kept: a brand-new macOS config gets live
 endpoint discovery turned on.
 
-In a terminal, step 2 is shown as two consecutive prompts rather than one
-screen — the form library binds every field before any is answered, so a
-question that appears only when you untick another has to come after it. The
-macOS app re-evaluates as you type and shows step 2 as a single screen.
+In a terminal, unticking automatic detection brings the manual fields as a
+second prompt rather than revealing them in place — the form library binds every
+field before any is answered, so a question that appears only when you untick
+another has to come after it. Leave automatic detection on and step 2 is the one
+prompt. The macOS app re-evaluates as you type and shows step 2 as a single
+screen either way.
 
 `setup --questions` is the exception: it prints what the wizard *would* ask —
 each question, what it writes, its seeded answer, and which earlier answer

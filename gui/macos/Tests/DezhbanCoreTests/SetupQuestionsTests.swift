@@ -163,8 +163,23 @@ struct SetupQuestionsTests {
         var a = SetupAnswers(questions: qs)
         a["profileFiles"] = "/tmp/home.conf, /tmp/work.ovpn"
 
-        #expect(a.profileFiles == ["/tmp/home.conf", "/tmp/work.ovpn"])
+        a["autoMode"] = "false"
+        #expect(a.profileFiles(for: qs) == ["/tmp/home.conf", "/tmp/work.ovpn"])
         #expect(!a.configPairs(for: qs).contains { $0.contains("profileFiles") })
+    }
+
+    /// The field is revealed in place and re-evaluated live, so a user can pick
+    /// files and then tick automatic detection again. The answer survives in the
+    /// dictionary; acting on it would import files the user visibly withdrew.
+    @Test func withdrawnProfileFilesAreNotImported() throws {
+        let qs = try Self.questions()
+        var a = SetupAnswers(questions: qs)
+        a["autoMode"] = "false"
+        a["profileFiles"] = "/tmp/home.conf"
+        #expect(a.profileFiles(for: qs) == ["/tmp/home.conf"])
+
+        a["autoMode"] = "true" // the field disappears again
+        #expect(a.profileFiles(for: qs).isEmpty)
     }
 
     @Test func firstRunIsOfferedOnlyWhenNothingIsKnownYet() {

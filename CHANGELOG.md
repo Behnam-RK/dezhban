@@ -44,8 +44,9 @@ current as you land changes.
   still writes no key, so leaving automatic detection on does not blank
   endpoints you set by hand. Off macOS, where there is no live discovery, the
   endpoint question is asked whichever mode you pick. Both wizards read the same
-  question set, so `dezhban setup` changes with the app — in a terminal step 2
-  appears as two consecutive prompts, since a form cannot react to an answer
+  question set, so `dezhban setup` changes with the app — in a terminal,
+  unticking automatic detection brings the manual fields as a second prompt
+  rather than revealing them in place, since a form cannot react to an answer
   given inside itself.
 - **Contextual help lands on the key you asked about.** The **?** beside a
   setting used to open one of four section anchors shared by every key in that

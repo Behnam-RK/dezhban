@@ -2,6 +2,7 @@ package main
 
 import (
 	"reflect"
+	"strconv"
 	"testing"
 
 	"github.com/behnam-rk/dezhban/internal/config"
@@ -70,29 +71,61 @@ func TestStepTwoArrivesInWaves(t *testing.T) {
 	}
 }
 
-// The wave loop must never strand a question. Whatever the user answers, every
-// question whose gate ends up satisfied has to have been put on some form.
-func TestEveryGatedQuestionIsReachable(t *testing.T) {
+// Ticking automatic detection retracts the manual half of step 2. The three
+// gated questions must then never be put on a form at all — the wave loop is
+// what makes that true, and it is the case the old mark-inside-the-pass loop got
+// wrong by shipping all four on one form.
+func TestTickingAutomaticRetractsTheManualFields(t *testing.T) {
 	cfg := config.Default()
 	cfg.VPN.TunnelInterfaces = []string{"utun9"} // seeds autoMode false
+	cfg.VPN.Endpoints = []string{"203.0.113.7"}
 	qs := setup.Questions(setup.Options{Config: &cfg, GOOS: "darwin"})
 	a := setup.NewAnswers(qs)
 
-	// The user unticks nothing but re-affirms manual mode when asked.
 	seen := map[string]bool{}
-	for _, w := range drive(qs, 2, a, func(id string) {
+	drive(qs, 2, a, func(id string) {
+		seen[id] = true
+		if id == "autoMode" {
+			a.Set("autoMode", "true") // the user ticks it after all
+		}
+	})
+
+	if !seen["autoMode"] {
+		t.Fatal("autoMode was never asked")
+	}
+	for _, id := range []string{"tunnels", "profileFiles", "endpoints"} {
+		if seen[id] {
+			t.Errorf("%s was put on a form despite automatic detection being on", id)
+		}
+	}
+
+	// And nothing it would have written may reach the config.
+	after := cfg
+	in := a.Input(strconv.Itoa(cfg.Hysteresis), nil)
+	in.MacOS, in.ConfigExisted = true, true
+	setup.Apply(&after, in)
+	config.Normalize(&after)
+	if got := after.VPN.Endpoints; !reflect.DeepEqual(got, []string{"203.0.113.7"}) {
+		t.Errorf("endpoints = %v, want the configured one untouched", got)
+	}
+}
+
+// Every question whose gate ends up satisfied must have been put on some form.
+func TestEveryGatedQuestionIsReachable(t *testing.T) {
+	cfg := config.Default()
+	cfg.VPN.TunnelInterfaces = []string{"utun9"}
+	qs := setup.Questions(setup.Options{Config: &cfg, GOOS: "darwin"})
+	a := setup.NewAnswers(qs)
+
+	seen := map[string]bool{}
+	drive(qs, 2, a, func(id string) {
 		seen[id] = true
 		if id == "autoMode" {
 			a.Set("autoMode", "false")
 		}
-	}) {
-		_ = w
-	}
+	})
 	for _, q := range qs {
-		if q.Group != 2 {
-			continue
-		}
-		if a.ShouldAsk(q) && !seen[q.ID] {
+		if q.Group == 2 && a.ShouldAsk(q) && !seen[q.ID] {
 			t.Errorf("%s has a satisfied gate but was never asked", q.ID)
 		}
 	}

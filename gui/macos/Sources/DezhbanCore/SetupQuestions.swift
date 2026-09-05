@@ -175,9 +175,21 @@ public struct SetupAnswers {
     }
 
     /// The VPN config files to import, which are not a config key at all — they
-    /// become profiles through `dezhban vpn import`. Empty under automatic
-    /// detection, where the question is not asked.
-    public var profileFiles: [String] { list("profileFiles") }
+    /// become profiles through `dezhban vpn import`.
+    ///
+    /// Gated, for the same reason `configPairs` skips an unasked key: this step
+    /// reveals in place and re-evaluates as answers change, so someone can untick
+    /// automatic detection, choose files, then tick it again — the field goes
+    /// away but the answer it collected does not. Importing those would enact a
+    /// choice the user visibly withdrew, and Go's wizard does not (it reads this
+    /// answer only when `ShouldAsk` holds). Taking the question set rather than
+    /// reading the stored answer blind is what keeps the two in step.
+    public func profileFiles(for questions: [SetupQuestion]) -> [String] {
+        guard let q = questions.first(where: { $0.id == "profileFiles" }), shouldAsk(q) else {
+            return []
+        }
+        return list("profileFiles")
+    }
 }
 
 /// When the first-run wizard should be offered.

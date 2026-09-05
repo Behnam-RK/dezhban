@@ -432,6 +432,66 @@ func TestAnsweringNothingChangesNothing(t *testing.T) {
 	}
 }
 
+// The PR's headline guarantee, driven through Answers rather than a hand-built
+// Input: leaving automatic detection on must not blank a server set by hand.
+// TestAnUnaskedEndpointListTouchesNoEndpoint pins Apply's half of this with a
+// nil Endpoints; this pins that the wizard actually produces that nil.
+func TestLeavingAutomaticOnKeepsAConfiguredEndpoint(t *testing.T) {
+	cfg := config.Default()
+	cfg.BlockedCountries = []string{"IR"}
+	cfg.VPN.Endpoints = []string{"203.0.113.7"}
+	config.Normalize(&cfg)
+
+	qs := Questions(Options{Config: &cfg, GOOS: "darwin"})
+	a := NewAnswers(qs)
+	a.Set("autoMode", "true") // the recommended answer, and the default
+
+	in := a.Input(strconv.Itoa(cfg.Hysteresis), nil)
+	if in.Endpoints != nil {
+		t.Errorf("Endpoints = %v, want nil: the question was gated away", *in.Endpoints)
+	}
+	after := cfg
+	in.MacOS, in.ConfigExisted = true, true
+	Apply(&after, in)
+	config.Normalize(&after)
+	if got := after.VPN.Endpoints; !reflect.DeepEqual(got, []string{"203.0.113.7"}) {
+		t.Errorf("endpoints = %v, want the configured one untouched", got)
+	}
+}
+
+// Two separate pieces of machinery assume gates are shallow and never point
+// forward: the CLI's wave loop (a gate question this run will never show is
+// treated as fixed at its seed, which is only safe when gates cannot nest) and
+// Answers.wasAsked (which re-evaluates a gate against the FINAL answers, so a
+// question gated on a LATER group's answer would be judged against a seed).
+// Both are correct only because of the shape pinned here. Adding a gated gate,
+// or a gate pointing at a later group, means fixing those two first.
+func TestGatesAreShallowAndPointBackwards(t *testing.T) {
+	for _, goos := range []string{"darwin", "linux", "windows"} {
+		cfg := config.Default()
+		qs := Questions(Options{Config: &cfg, GOOS: goos})
+		byid := byID(qs)
+		for _, q := range qs {
+			if !q.Gated() {
+				continue
+			}
+			gate, ok := byid[q.RequiresID]
+			if !ok {
+				t.Errorf("%s/%s: gate points at unknown question %q", goos, q.ID, q.RequiresID)
+				continue
+			}
+			if gate.Gated() {
+				t.Errorf("%s/%s: gate %q is itself gated; the wave loop assumes depth 1",
+					goos, q.ID, gate.ID)
+			}
+			if gate.Group > q.Group {
+				t.Errorf("%s/%s: gate %q is in a LATER group (%d > %d); wasAsked would read a seed",
+					goos, q.ID, gate.ID, gate.Group, q.Group)
+			}
+		}
+	}
+}
+
 func TestValidDuration(t *testing.T) {
 	for _, ok := range []string{"30s", "5m", " 1h "} {
 		if err := ValidDuration(ok); err != nil {

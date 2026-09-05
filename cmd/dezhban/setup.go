@@ -365,10 +365,17 @@ func nextWave(qs []setup.Question, group int, asked map[string]bool, a *setup.An
 //
 // A gate pointing at an EARLIER group is already decided by the time this group
 // runs. A gate pointing at a question this run will never show — because that
-// question's own gate is unmet — is fixed at its seeded default and will never
-// change, so deferring for it would strand the dependent question forever: the
-// wave it waits for never arrives, the loop runs out of fields and breaks, and
-// the question is silently never asked.
+// question's own gate is unmet — is fixed at its seeded default, so deferring
+// for it would strand the dependent question forever: the wave it waits for
+// never arrives, the loop runs out of fields and breaks, and the question is
+// silently never asked.
+//
+// That second case is only sound while gates are ONE deep. A gate question that
+// is itself gated could become askable later, and releasing its dependent now
+// would evaluate it against a seed — the very bug this loop was fixed for, one
+// level down. Depth 1 is a property of the question set, not of this function,
+// so it is pinned there by TestGatesAreShallowAndPointBackwards; make this
+// predicate transitive before adding a gated gate.
 func stillToAsk(qs []setup.Question, id string, group int, asked map[string]bool, a *setup.Answers) bool {
 	for _, q := range qs {
 		if q.ID != id {

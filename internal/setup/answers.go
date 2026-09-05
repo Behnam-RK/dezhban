@@ -203,10 +203,17 @@ func (a *Answers) Input(hysteresis string, profiles []config.Profile) Input {
 	}
 }
 
-// wasAsked reports whether the question with this id exists and its gate was
-// satisfied by the answers collected — i.e. whether the user actually saw it.
-// The question set is retained by NewAnswers precisely so this does not have to
-// be re-derived by every caller.
+// wasAsked reports whether the question with this id exists and its gate is
+// satisfied by the FINAL answers collected. The question set is retained by
+// NewAnswers precisely so this does not have to be re-derived by every caller.
+//
+// That stands in for "the user saw it", and the two agree only because a gate
+// never points forward: every gate names an ungated question in the same or an
+// earlier group, so by the time a gated question is put to the user its gate is
+// already answered and cannot move afterwards. A gate pointing at a LATER
+// group's answer would be read here against that question's seeded default,
+// and this would report a question asked that nobody was shown — writing its
+// key from a seed. TestGatesAreShallowAndPointBackwards pins the shape.
 func (a *Answers) wasAsked(id string) bool {
 	for _, q := range a.asked {
 		if q.ID == id {

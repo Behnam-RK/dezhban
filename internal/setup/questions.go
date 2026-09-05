@@ -233,7 +233,6 @@ func tunnelQuestion(detected, configured []string) Question {
 		return q
 	}
 	q.Kind = KindMultiSelect
-	q.Description = "Detected tunnels — pick the VPN's."
 
 	// A pinned interface is an option even when it is not detected right now.
 	// Detection only sees tunnels that are UP, so a re-run while the VPN is
@@ -244,13 +243,33 @@ func tunnelQuestion(detected, configured []string) Question {
 	// autoMode to false from those pins exists to prevent; offering the pins
 	// but leaving them unselectable would close only half of it.
 	// TestAPinnedTunnelSurvivesADetectionMiss pins this.
+	//
+	// Those extras are labelled, because a list headed "detected" containing a
+	// ticked interface that is plainly not up reads as a bug in the detector.
+	// The label carries it; the Value stays the bare interface name, which is
+	// what gets written.
+	detectedSet := map[string]bool{}
+	for _, t := range detected {
+		detectedSet[t] = true
+	}
 	seen := map[string]bool{}
+	offDuty := false
 	for _, t := range append(append([]string(nil), detected...), configured...) {
 		if seen[t] {
 			continue
 		}
 		seen[t] = true
-		q.Options = append(q.Options, Option{Label: t, Value: t})
+		label := t
+		if !detectedSet[t] {
+			label = t + " (configured, not up right now)"
+			offDuty = true
+		}
+		q.Options = append(q.Options, Option{Label: label, Value: t})
+	}
+	q.Description = "Detected tunnels — pick the VPN's."
+	if offDuty {
+		q.Description = "Pick the VPN's. Interfaces you already configured are listed " +
+			"and kept ticked even while they are down."
 	}
 	cfgSet := map[string]bool{}
 	for _, t := range configured {
