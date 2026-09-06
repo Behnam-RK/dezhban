@@ -68,7 +68,7 @@ Commands:
   status      Show version, config, and current state
   validate    Load and validate a config file (no root, no side effects)
   monitor     Live read-only view: IP, country, tunnel state, endpoints, verdict
-  print-rules Print the firewall ruleset a block/guard would apply (--applied: what is applied now)
+  print-rules Print the ruleset a block/guard would apply (--applied/--installed: what is live)
   doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
   panic       Force-remove dezhban's rules even if nothing is running
   install     Register dezhban as a boot-persistent OS service
@@ -2061,6 +2061,16 @@ func printInstalledRules(asJSON bool) int {
 			rec.Mode, rec.At.Local().Format(time.RFC3339))
 		fmt.Fprintln(os.Stderr, "but the kernel holds no dezhban rules. Something removed them.")
 		fmt.Fprintln(os.Stderr, "dezhban's own verification re-applies on its next tick; `dezhban status` will say.")
+		// Print the text here too, for the same reason the no-rules branch below
+		// does: on Windows the blocking lives in each profile's
+		// DefaultOutboundAction rather than in the rule group, so a host whose
+		// group was removed while the default is still Block is FULLY CUT — and
+		// this is the branch taken whenever a record exists, which is exactly
+		// when someone is asking. Dropping the profile table here described that
+		// lockout as "nothing is loaded".
+		if strings.TrimSpace(text) != "" {
+			fmt.Print(text)
+		}
 		return 0
 	}
 	if !loaded {

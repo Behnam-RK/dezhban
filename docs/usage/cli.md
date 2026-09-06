@@ -265,12 +265,14 @@ machine output. The two texts will not match byte for byte on a healthy host, so
 neither surface diffs them — see
 [modes.md](../concepts/modes.md#what-is-enforcing-right-now).
 
-The three selectors are mutually exclusive and saying so is an error rather than
-a silent preference: `--applied` with `--installed` is refused (they are two
+The selectors are mutually exclusive and saying so is an error rather than a
+silent preference: `--applied` with `--installed` is refused (they are two
 sources, not two views of one), so is `--mode` with either (it renders a posture
-that is *not* in force, which is the opposite question), and so is `--json`
-without one of them (a rendered ruleset is firewall syntax, not JSON). Each exits
-2 and says which flag to drop. `doctor
+that is *not* in force, which is the opposite question), so is `--json` without
+one of them (a rendered ruleset is firewall syntax, not JSON), and so is
+`--config` with either — both read dezhban's own state directory, which is a
+fixed path the config file does not move. Each exits 2 and says which flag to
+drop. `doctor
 --json` prints the identical findings `doctor` reports in prose — `{checks:
 [{name, status, summary, details, fixes}], ok}` — for a consumer (the macOS
 app's Diagnostics pane) that needs to render them itself rather than parse

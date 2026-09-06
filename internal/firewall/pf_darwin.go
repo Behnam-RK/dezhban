@@ -226,6 +226,17 @@ func (b *pfBackend) InstalledRules() (string, bool, error) {
 		return "", false, nil
 	}
 	var b0 strings.Builder
+	// pf being switched off entirely (`pfctl -d`) is the third way a loaded
+	// anchor enforces nothing, alongside an empty anchor and a main ruleset that
+	// does not reference it. IsBlocked checks all three; a readback that checked
+	// only two would render a disabled firewall as a healthy one.
+	if info, err := pfctlCtx(ctx, "", "-s", "info"); err != nil {
+		b0.WriteString("# WARNING: could not read pf's status, so whether pf is enabled at all\n")
+		b0.WriteString("# is UNKNOWN — these rules may be loaded but inert.\n")
+	} else if !strings.Contains(info, "Status: Enabled") {
+		b0.WriteString("# WARNING: pf is DISABLED — these rules are loaded but nothing is\n")
+		b0.WriteString("# being filtered. Re-enable with `sudo pfctl -e`.\n")
+	}
 	// Its own timeout, not the remainder of the one the anchor read just spent:
 	// sharing the budget meant a slow first call could leave nothing for this
 	// one, and the verdict below is the whole point of reading the main ruleset.

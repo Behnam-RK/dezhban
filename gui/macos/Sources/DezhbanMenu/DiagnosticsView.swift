@@ -65,7 +65,16 @@ struct DiagnosticsView: View {
         // async doctor run returned; after a doctor failure with nothing
         // retained; and permanently on a host where `doctor --json` cannot run
         // at all. refreshVPNInventoryIfStale fetched it and nothing showed it.
-        if state.doctorReport != nil || state.vpnInventory != nil {
+        //
+        // The firewall-rules section needs NEITHER of them: the applied record is
+        // its own unprivileged read, the kernel button is a button, and the
+        // previews render from config. Leaving it inside the gate hid it exactly
+        // where it is most wanted — on a host where `doctor --json` cannot run,
+        // which is the state someone is most likely diagnosing — and on every
+        // first open until the async doctor returned. Same bug the paragraph
+        // above describes for the inventory, one section over, so the gate now
+        // opens for anything the List can show.
+        if state.doctorReport != nil || state.vpnInventory != nil || state.cliFound {
             List {
                 if let error = state.doctorError {
                     Section {
@@ -137,8 +146,13 @@ struct DiagnosticsView: View {
     @ViewBuilder
     private var appliedRow: some View {
         if let a = state.appliedRules {
+            // The posture is in the title and the time is only in the caption,
+            // so a pane held open across GUARD → FULL BLOCK kept reading
+            // "Applied by dezhban — Guard". This read is unprivileged and cheap,
+            // unlike the kernel one, so the honest fix is to say WHEN, in the
+            // title, where the claim is made.
             rulesDisclosure(
-                title: "Applied by dezhban — \(postureLabel(a.mode))",
+                title: "Applied by dezhban — \(postureLabel(a.mode)), at \(Self.stamp.string(from: a.at))",
                 caption: "What dezhban installed at \(Self.stamp.string(from: a.at)), in \(a.backend) syntax. "
                     + "This is dezhban's own record, not a reading of the firewall.",
                 rules: a.rules)

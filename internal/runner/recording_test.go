@@ -1,13 +1,17 @@
 package runner
 
 import (
+	"context"
 	"errors"
 	"net/netip"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/behnam-rk/dezhban/internal/applied"
 	"github.com/behnam-rk/dezhban/internal/firewall"
+	"github.com/behnam-rk/dezhban/internal/netdetect"
+	"github.com/behnam-rk/dezhban/internal/state"
 )
 
 func recordingAt(t *testing.T, at time.Time) (Backend, *fakeBackend, string) {
@@ -127,5 +131,64 @@ func TestANilLoggerDoesNotPanic(t *testing.T) {
 	b := newRecordingBackend(&fakeBackend{}, applied.Path(t.TempDir()), nil)
 	if err := b.Apply(guardPolicy()); err != nil {
 		t.Fatalf("Apply: %v", err)
+	}
+}
+
+// The decorator's own behaviour is covered above, but Run WIRING it is what
+// makes any of that reach a real daemon. Deleting the newRecordingBackend call
+// from Run left every test in this file green while nothing was ever recorded,
+// so this drives the loop end to end: a Run given an AppliedRulesPath must leave
+// a record behind after it applies.
+func TestRunWiresTheRecordingBackend(t *testing.T) {
+	path := filepath.Join(t.TempDir(), applied.FileName)
+
+	be := &fakeBackend{}
+	mon := &countingMonitor{cc: "US"} // allowed exit → healthy GUARD
+	tun := &scriptedWatcher{}
+	o := recoveryOpts(be, mon, tun.watcher())
+	o.AppliedRulesPath = path
+
+	snaps := make(chan state.Snapshot, 64)
+	o.Publish = func(s state.Snapshot) {
+		select {
+		case snaps <- s:
+		default:
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- Run(ctx, o) }()
+
+	tun.send(t, netdetect.TunnelState{Up: true, Names: []string{"utun4"}, Detail: "connected"})
+	if !waitFor(t, snaps, func(s state.Snapshot) bool { return s.Posture == "guard" }) {
+		t.Fatal("never reached healthy GUARD, so nothing was applied to record")
+	}
+
+	// The apply and the record both happen on the run loop, in that order, so
+	// a snapshot showing the posture means the write has been attempted.
+	var rec applied.Record
+	for i := 0; i < 200; i++ {
+		r, ok, err := applied.Load(path)
+		if err == nil && ok {
+			rec = r
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if rec.Rules == "" {
+		t.Fatal("Run applied a guard ruleset but recorded nothing — the backend was never wrapped")
+	}
+	if rec.Mode != firewall.ModeGuard.String() {
+		t.Errorf("recorded mode = %q, want %q", rec.Mode, firewall.ModeGuard.String())
+	}
+
+	cancel()
+	<-done
+	// Run's deferred Cleanup tears the rules down, so the record must not
+	// outlive it — a stale record reads as the live posture.
+	if _, ok, err := applied.Load(path); err == nil && ok {
+		t.Error("the record survived Run's shutdown Cleanup")
 	}
 }
