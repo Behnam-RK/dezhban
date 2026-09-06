@@ -143,13 +143,20 @@ func (a *Answers) ShouldAsk(q Question) bool {
 
 // Input is the collected answers, in the shape the config wants them.
 type Input struct {
-	Hysteresis   string
-	Countries    []string
-	ConfigureVPN bool
+	Hysteresis string
+	Countries  []string
 	// AutoMode is automatic tunnel detection: no pinned interface names.
-	AutoMode           bool
-	Tunnels, Endpoints []string
-	Profiles           []config.Profile
+	AutoMode bool
+	Tunnels  []string
+	// Endpoints is nil when the wizard never asked — on macOS the question is
+	// gated behind "not automatic", because live discovery learns the server
+	// address there. Nil rather than empty for the same reason AutoDiscover is
+	// a pointer: Apply must leave an unasked key ALONE, and an empty slice is
+	// indistinguishable from "asked, and cleared on purpose". Writing it
+	// unconditionally would blank the endpoints of anyone who re-ran setup and
+	// left automatic detection on.
+	Endpoints *[]string
+	Profiles  []config.Profile
 	// AutoDiscover is nil when nothing answered it — the wizard no longer asks;
 	// a surface that still collects an explicit answer can set it. Nil rather
 	// than false because Apply must leave an unanswered key ALONE: writing
@@ -178,26 +185,51 @@ func (a *Answers) Input(hysteresis string, profiles []config.Profile) Input {
 		// The no-tunnels-detected form of the question is free text.
 		tunnels = SplitList(a.Text("tunnels"))
 	}
+	var endpoints *[]string
+	if a.wasAsked("endpoints") {
+		eps := SplitList(a.Text("endpoints"))
+		endpoints = &eps
+	}
 	return Input{
-		Hysteresis:   hysteresis,
-		Countries:    countries,
-		ConfigureVPN: a.Bool("configureVPN"),
-		AutoMode:     a.Bool("autoMode"),
-		Tunnels:      tunnels,
-		Endpoints:    SplitList(a.Text("endpoints")),
-		Profiles:     profiles,
+		Hysteresis: hysteresis,
+		Countries:  countries,
+		AutoMode:   a.Bool("autoMode"),
+		Tunnels:    tunnels,
+		Endpoints:  endpoints,
+		Profiles:   profiles,
 		// Nil unless a surface asked the (no-longer-offered) question anyway;
 		// nil leaves the configured value untouched in Apply.
 		AutoDiscover: a.OptionalBool("autoDiscover"),
 	}
 }
 
+// wasAsked reports whether the question with this id exists and its gate is
+// satisfied by the FINAL answers collected. The question set is retained by
+// NewAnswers precisely so this does not have to be re-derived by every caller.
+//
+// That stands in for "the user saw it", and the two agree only because a gate
+// never points forward: every gate names an ungated question in the same or an
+// earlier group, so by the time a gated question is put to the user its gate is
+// already answered and cannot move afterwards. A gate pointing at a LATER
+// group's answer would be read here against that question's seeded default,
+// and this would report a question asked that nobody was shown — writing its
+// key from a seed. TestGatesAreShallowAndPointBackwards pins the shape.
+func (a *Answers) wasAsked(id string) bool {
+	for _, q := range a.asked {
+		if q.ID == id {
+			return a.ShouldAsk(q)
+		}
+	}
+	return false
+}
+
 // Apply writes collected answers onto cfg. Validation happens after, by the
 // caller: this only assembles.
 //
 // A question the user never reached leaves its part of the config alone. That
-// is why the VPN keys are written only when ConfigureVPN is true — answering
-// "no" must not blank out a tunnel someone configured earlier.
+// is why Endpoints is a pointer: on macOS the question is gated behind "not
+// automatic", and an unasked endpoint list must not blank out a server someone
+// configured earlier.
 // Keys the wizard no longer asks about (pollInterval, logLevel,
 // providerQuorum, vpn.allowPhysicalDNS) are deliberately not assigned at all:
 // unasked means untouched, so re-running setup can never clobber a value tuned
@@ -208,9 +240,6 @@ func Apply(cfg *config.Config, in Input) {
 	}
 	cfg.BlockedCountries = in.Countries // config.Normalize upper-cases and de-dupes on save
 
-	if !in.ConfigureVPN {
-		return
-	}
 	if in.AutoMode {
 		// Automatic detection: no pinned interface names (Normalize implies
 		// autodetect), plus live discovery where supported.
@@ -218,7 +247,9 @@ func Apply(cfg *config.Config, in Input) {
 	} else {
 		cfg.VPN.TunnelInterfaces = in.Tunnels
 	}
-	cfg.VPN.Endpoints = in.Endpoints
+	if in.Endpoints != nil {
+		cfg.VPN.Endpoints = *in.Endpoints
+	}
 	cfg.VPN.Profiles = mergeProfiles(cfg.VPN.Profiles, in.Profiles)
 	switch {
 	case in.AutoDiscover != nil:

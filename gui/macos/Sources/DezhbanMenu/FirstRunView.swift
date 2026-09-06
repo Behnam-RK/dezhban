@@ -248,7 +248,7 @@ struct FirstRunView: View {
                 }
                 return
             }
-            let files = answers.profileFiles
+            let files = answers.profileFiles(for: questions)
             FirstRun.markComplete()
             guard !files.isEmpty else {
                 done(true)

@@ -51,8 +51,8 @@ type Question struct {
 	// JSON use it, so it is a compatibility surface: do not rename one.
 	ID string `json:"id"`
 	// Key is the dotted config key this answer writes, empty when the question
-	// only steers the flow (ConfigureVPN, AutoMode) or is folded into another
-	// key's value (OtherCountries).
+	// only steers the flow (AutoMode) or is folded into another key's value
+	// (OtherCountries).
 	Key         string `json:"key,omitempty"`
 	Kind        string `json:"kind"`
 	Title       string `json:"title"`
@@ -145,12 +145,38 @@ func Questions(opts Options) []Question {
 		endpointDesc = "Server IP(s)/hostname(s), comma-separated. Required on this platform (no live discovery)."
 	}
 
+	// Automatic detection is the recommendation, but never at the cost of
+	// silently unpinning interfaces someone chose on purpose: a config with
+	// pinned vpn.tunnelInterfaces seeds this to false, so clicking straight
+	// through a re-run preserves them. This is load-bearing now that there is
+	// no "configure your VPN?" question to skip the whole branch —
+	// TestAutoModeSeedsFalseWhenInterfacesArePinned pins it.
+	autoModeDefault := "true"
+	if len(cfg.VPN.TunnelInterfaces) > 0 {
+		autoModeDefault = "false"
+	}
+
+	// Endpoints are gated behind "not automatic" on macOS, where live discovery
+	// learns the server address. Everywhere else there is no discovery, so the
+	// endpoint is required whichever detection mode is chosen and the question
+	// is ungated — a Linux host that picked automatic detection and was never
+	// asked for a server would end up with a config that cannot enforce.
+	endpointsRequires, endpointsRequiresValue := "autoMode", "false"
+	if !macOS {
+		endpointsRequires, endpointsRequiresValue = "", ""
+	}
+
 	// The wizard asks only what has no safe default: what to block, and how to
 	// find the VPN. Everything it used to also ask (poll interval, log level,
 	// provider quorum, physical DNS, auto-discovery) ships with a sane default,
 	// lives in Settings/`config set`, and — critically — is left UNTOUCHED by a
 	// wizard run, so re-running setup never clobbers a tuned value
 	// (TestAnUnaskedQuestionLeavesItsKeyAlone pins this).
+	//
+	// Two groups, which is two steps: what to block, then how to find the VPN.
+	// Everything in group 2 hangs off the one automatic-detection question, so
+	// unticking it reveals the manual fields in place rather than paging to
+	// another screen.
 	return []Question{
 		{
 			ID: "blockedCountries", Key: "blockedCountries", Kind: KindMultiSelect, Group: 1,
@@ -166,36 +192,28 @@ func Questions(opts Options) []Question {
 			Default:     strings.Join(extra, ","),
 		},
 		{
-			ID: "configureVPN", Kind: KindBool, Group: 1,
-			Title: "Configure your VPN now?",
-			Description: "dezhban only enforces once it knows your VPN's tunnel and server. " +
-				"Say no and it starts in standby — fully open, nothing blocked — until you " +
-				"run 'dezhban setup' again or edit the config.",
-			Default: "true",
-		},
-		{
 			ID: "autoMode", Kind: KindBool, Group: 2,
 			Title: "Use automatic VPN detection? (recommended)",
 			Description: "dezhban finds your tunnel and, on macOS, learns the server address " +
-				"itself — works with any VPN and survives redials.",
-			Default:       "true",
-			RequiresID:    "configureVPN",
-			RequiresValue: "true",
+				"itself — works with any VPN and survives redials. Untick it to name your " +
+				"tunnel and server yourself.",
+			Default: autoModeDefault,
 		},
 		tunnelQuestion(opts.DetectedTunnels, cfg.VPN.TunnelInterfaces),
 		{
-			ID: "profileFiles", Kind: KindList, Group: 4,
+			ID: "profileFiles", Kind: KindList, Group: 2,
 			Title: "Self-hosted VPN config files",
 			Description: "Comma-separated paths to WireGuard/.conf, OpenVPN/.ovpn, or V2Ray " +
 				"JSON to import as profiles (optional).",
-			RequiresID: "configureVPN", RequiresValue: "true",
+			RequiresID: "autoMode", RequiresValue: "false",
 		},
 		{
-			ID: "endpoints", Key: "vpn.endpoints", Kind: KindList, Group: 4,
-			Title:       "VPN endpoint(s)",
-			Description: endpointDesc,
-			Default:     strings.Join(cfg.VPN.Endpoints, ","),
-			RequiresID:  "configureVPN", RequiresValue: "true",
+			ID: "endpoints", Key: "vpn.endpoints", Kind: KindList, Group: 2,
+			Title:         "VPN endpoint(s)",
+			Description:   endpointDesc,
+			Default:       strings.Join(cfg.VPN.Endpoints, ","),
+			RequiresID:    endpointsRequires,
+			RequiresValue: endpointsRequiresValue,
 		},
 	}
 }
@@ -204,7 +222,7 @@ func Questions(opts Options) []Question {
 // none were — the same split the CLI's tunnelSelector used to make on its own.
 func tunnelQuestion(detected, configured []string) Question {
 	q := Question{
-		ID: "tunnels", Key: "vpn.tunnelInterfaces", Group: 3,
+		ID: "tunnels", Key: "vpn.tunnelInterfaces", Group: 2,
 		Title:      "Tunnel interface(s)",
 		RequiresID: "autoMode", RequiresValue: "false",
 	}
@@ -214,16 +232,52 @@ func tunnelQuestion(detected, configured []string) Question {
 		q.Default = strings.Join(configured, ",")
 		return q
 	}
+	q.Kind = KindMultiSelect
+
+	// A pinned interface is an option even when it is not detected right now.
+	// Detection only sees tunnels that are UP, so a re-run while the VPN is
+	// down would otherwise offer a list its own configured interface is not in
+	// — and pressing Enter through that list answers "none of them", which
+	// Apply writes as an empty vpn.tunnelInterfaces. That silently unpins an
+	// interface someone chose deliberately, which is the very thing seeding
+	// autoMode to false from those pins exists to prevent; offering the pins
+	// but leaving them unselectable would close only half of it.
+	// TestAPinnedTunnelSurvivesADetectionMiss pins this.
+	//
+	// Those extras are labelled, because a list headed "detected" containing a
+	// ticked interface that is plainly not up reads as a bug in the detector.
+	// The label carries it; the Value stays the bare interface name, which is
+	// what gets written.
+	detectedSet := map[string]bool{}
+	for _, t := range detected {
+		detectedSet[t] = true
+	}
+	seen := map[string]bool{}
+	offDuty := false
+	for _, t := range append(append([]string(nil), detected...), configured...) {
+		if seen[t] {
+			continue
+		}
+		seen[t] = true
+		label := t
+		if !detectedSet[t] {
+			label = t + " (configured, not up right now)"
+			offDuty = true
+		}
+		q.Options = append(q.Options, Option{Label: label, Value: t})
+	}
+	q.Description = "Detected tunnels — pick the VPN's."
+	if offDuty {
+		q.Description = "Pick the VPN's. Interfaces you already configured are listed " +
+			"and kept ticked even while they are down."
+	}
 	cfgSet := map[string]bool{}
 	for _, t := range configured {
 		cfgSet[t] = true
 	}
-	q.Kind = KindMultiSelect
-	q.Description = "Detected tunnels — pick the VPN's."
-	for _, t := range detected {
-		q.Options = append(q.Options, Option{Label: t, Value: t})
-		if cfgSet[t] {
-			q.Selected = append(q.Selected, t)
+	for _, o := range q.Options {
+		if cfgSet[o.Value] {
+			q.Selected = append(q.Selected, o.Value)
 		}
 	}
 	return q

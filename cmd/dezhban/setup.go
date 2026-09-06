@@ -66,27 +66,43 @@ func cmdSetup(args []string) int {
 	// Asked a screenful at a time, in Group order, so a gate can be evaluated
 	// against answers already given — which is exactly what makes the VPN
 	// branch a branch.
+	//
+	// Within a group, in waves. A huh form binds every field before any of them
+	// is answered, so a question gated on another question in the SAME group
+	// would be decided by that question's seeded default rather than by what
+	// the user just typed. The macOS app has no such problem — it re-evaluates
+	// gates as answers change and shows the whole step at once, which is what
+	// makes step 2 a single screen there — so rather than splitting the shared
+	// question set to suit one renderer, this one asks the ungated questions,
+	// re-evaluates, and asks whatever that opened up.
 	for _, group := range groupsOf(qs) {
-		var fields []huh.Field
-		for _, q := range qs {
-			if q.Group != group || !answers.ShouldAsk(q) {
-				continue
+		asked := map[string]bool{}
+		for {
+			wave := nextWave(qs, group, asked, answers)
+			if len(wave) == 0 {
+				break
 			}
-			fields = append(fields, field(q, answers))
-		}
-		if len(fields) == 0 {
-			continue
-		}
-		if err := runForm(huh.NewForm(huh.NewGroup(fields...))); err != nil {
-			return formExit(err)
+			var fields []huh.Field
+			for _, q := range wave {
+				asked[q.ID] = true
+				fields = append(fields, field(q, answers))
+			}
+			if err := runForm(huh.NewForm(huh.NewGroup(fields...))); err != nil {
+				return formExit(err)
+			}
 		}
 	}
 
 	// Import any named config files into profiles (best-effort; a bad file is
 	// reported but doesn't abort the wizard). Reading files is the caller's job,
 	// not internal/setup's.
+	// Only what the user was actually shown: the question is gated behind manual
+	// mode, and reading it unconditionally would import files from a field this
+	// run never rendered — the same "unasked means untouched" rule Apply follows
+	// for keys, and what keeps this in step with the macOS app, whose
+	// profileFiles is empty for exactly that reason.
 	var profiles []config.Profile
-	if answers.Bool("configureVPN") {
+	if q, ok := questionByID(qs, "profileFiles"); ok && answers.ShouldAsk(q) {
 		for _, f := range setup.SplitList(answers.Text("profileFiles")) {
 			eps, format, ierr := vpnimport.Extract(f)
 			if ierr != nil {
@@ -112,20 +128,18 @@ func cmdSetup(args []string) int {
 	}
 
 	// --- lockout guard: warn if an endpoint sits inside a tunnel subnet ---
-	if answers.Bool("configureVPN") {
-		if warn := setup.EndpointLockoutWarning(cfg); warn != "" {
-			var proceed bool
-			fmt.Fprintln(os.Stderr, warn)
-			if err := runForm(huh.NewForm(huh.NewGroup(
-				huh.NewConfirm().Title("Save anyway?").
-					Description("The flagged endpoint would very likely lock you out.").Value(&proceed),
-			))); err != nil {
-				return formExit(err)
-			}
-			if !proceed {
-				fmt.Fprintln(os.Stderr, "setup cancelled — fix the endpoint (see 'dezhban doctor').")
-				return 1
-			}
+	if warn := setup.EndpointLockoutWarning(cfg); warn != "" {
+		var proceed bool
+		fmt.Fprintln(os.Stderr, warn)
+		if err := runForm(huh.NewForm(huh.NewGroup(
+			huh.NewConfirm().Title("Save anyway?").
+				Description("The flagged endpoint would very likely lock you out.").Value(&proceed),
+		))); err != nil {
+			return formExit(err)
+		}
+		if !proceed {
+			fmt.Fprintln(os.Stderr, "setup cancelled — fix the endpoint (see 'dezhban doctor').")
+			return 1
 		}
 	}
 
@@ -176,9 +190,7 @@ func cmdSetup(args []string) int {
 	} else {
 		fmt.Println("later, enable it with: sudo dezhban install && sudo dezhban start")
 	}
-	if answers.Bool("configureVPN") {
-		fmt.Println("to connect a brand-new VPN whose server isn't known yet: dezhban switch, then connect it.")
-	}
+	fmt.Println("to connect a brand-new VPN whose server isn't known yet: dezhban switch, then connect it.")
 	return 0
 }
 
@@ -266,11 +278,29 @@ func printQuestions(qs []setup.Question, asJSON bool) int {
 			fmt.Printf("    selected: %s\n", strings.Join(q.Selected, ", "))
 		}
 		if len(q.Options) > 0 {
+			// Value is what gets written, but an option whose label says more
+			// than its value — a tunnel offered because it is configured rather
+			// than because it was detected — has to show that here too. This is
+			// the form a human reads to answer "why is that one on the list?";
+			// --json already carries both.
 			vals := make([]string, 0, len(q.Options))
 			for _, o := range q.Options {
-				vals = append(vals, o.Value)
+				switch {
+				case o.Label == "" || o.Label == o.Value:
+					vals = append(vals, o.Value)
+				case strings.Contains(o.Label, o.Value):
+					// The label already carries the value, as the tunnel list's
+					// "utun9 (configured, not up right now)" does.
+					vals = append(vals, o.Label)
+				default:
+					vals = append(vals, fmt.Sprintf("%s (%s)", o.Value, o.Label))
+				}
 			}
-			fmt.Printf("    options: %s\n", strings.Join(vals, ", "))
+			// Semicolons, not commas: labels are prose and may contain a comma
+			// themselves ("utun9 (configured, not up right now)"), which in a
+			// comma-joined list reads as two options, one of them an interface
+			// named "utun9 (configured".
+			fmt.Printf("    options: %s\n", strings.Join(vals, "; "))
 		}
 		if q.Gated() {
 			fmt.Printf("    asked only when %s is %s\n", q.RequiresID, q.RequiresValue)
@@ -303,4 +333,73 @@ func isInteractive() bool {
 // /dev/null — that distinction matters for deciding whether sudo can prompt).
 func isTerminal(f *os.File) bool {
 	return term.IsTerminal(f.Fd())
+}
+
+// questionByID finds a question in the set the wizard is running, so a caller
+// can ask whether the user was actually shown it.
+func questionByID(qs []setup.Question, id string) (setup.Question, bool) {
+	for _, q := range qs {
+		if q.ID == id {
+			return q, true
+		}
+	}
+	return setup.Question{}, false
+}
+
+// nextWave picks the questions of this group to put on the next form: those
+// whose gate is already satisfied, minus any whose gate is about to be answered
+// on that very form.
+//
+// It takes `asked` as read-only and leaves the marking to the caller, which is
+// what makes the deferral work at all. Marking inside the selection pass — as
+// this did — defeats it silently whenever a gating question appears BEFORE its
+// dependents in the question set, which is the normal way to write one: by the
+// time the dependent is examined, the gate it is waiting on has been marked
+// asked earlier in the same pass, so it is never held back. The visible symptom
+// was a re-run on a pinned config, where autoMode seeds to false and so all of
+// step 2 satisfied its gate up front and arrived as one form instead of two —
+// and ticking automatic detection on that form then retracted the endpoint
+// answer the same form had just collected.
+//
+// Being a plain function over (questions, answers) rather than a loop body is
+// also the only reason this is testable without driving a terminal;
+// TestStepTwoArrivesInWaves covers it.
+func nextWave(qs []setup.Question, group int, asked map[string]bool, a *setup.Answers) []setup.Question {
+	var wave []setup.Question
+	for _, q := range qs {
+		if q.Group != group || asked[q.ID] || !a.ShouldAsk(q) {
+			continue
+		}
+		if q.Gated() && stillToAsk(qs, q.RequiresID, group, asked, a) {
+			continue
+		}
+		wave = append(wave, q)
+	}
+	return wave
+}
+
+// stillToAsk reports whether the question a gate points at is in this same group
+// and is genuinely still coming — the only case where deferring is right.
+//
+// A gate pointing at an EARLIER group is already decided by the time this group
+// runs. A gate pointing at a question this run will never show — because that
+// question's own gate is unmet — is fixed at its seeded default, so deferring
+// for it would strand the dependent question forever: the wave it waits for
+// never arrives, the loop runs out of fields and breaks, and the question is
+// silently never asked.
+//
+// That second case is only sound while gates are ONE deep. A gate question that
+// is itself gated could become askable later, and releasing its dependent now
+// would evaluate it against a seed — the very bug this loop was fixed for, one
+// level down. Depth 1 is a property of the question set, not of this function,
+// so it is pinned there by TestGatesAreShallowAndPointBackwards; make this
+// predicate transitive before adding a gated gate.
+func stillToAsk(qs []setup.Question, id string, group int, asked map[string]bool, a *setup.Answers) bool {
+	for _, q := range qs {
+		if q.ID != id {
+			continue
+		}
+		return q.Group == group && !asked[q.ID] && a.ShouldAsk(q)
+	}
+	return false
 }

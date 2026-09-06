@@ -724,18 +724,44 @@ macOS only, privileged (`dezhban upgrade download`/`apply`). See
       forms are bound to the same answers.
 - [ ] Re-running it **without** naming profile files keeps the profiles already
       imported (`dezhban vpn list`).
+- [ ] **Two steps.** Step 1 is countries. Step 2 opens with "Use automatic VPN
+      detection?". **On macOS**, leaving it ticked ends the wizard there, and
+      unticking it asks for tunnel interfaces, self-hosted config files, and
+      endpoints as a follow-up prompt rather than on the same screen.
+      **Off macOS** the endpoint question is ungated — there is no live discovery
+      to find a server — so it rides on that first prompt beside the tickbox, and
+      unticking brings only tunnel interfaces and config files.
+- [ ] **A re-run on a pinned config keeps its pins.** With
+      `vpn.tunnelInterfaces` set, re-run and press Enter through everything:
+      automatic detection must arrive **already unticked**, and
+      `dezhban config show` must still list the same interfaces. This is what
+      replaced the old "Configure your VPN now?" escape, so it is the check that
+      matters most in this section. Run it **twice: once with the VPN up and once
+      with it down.** Detection only sees tunnels that are up, so the down run is
+      the one where the pinned interface has to appear in the pick list — and stay
+      ticked — on its own.
+- [ ] **A re-run under automatic detection keeps configured endpoints.** With
+      `vpn.endpoints` set and no pinned interfaces, re-run, leave automatic
+      detection ticked, finish: the endpoints are unchanged. The question was
+      never asked, so nothing may have been written.
+- [ ] **Off macOS the endpoint question always appears.** On Linux or Windows,
+      leave automatic detection ticked — you must still be asked for an endpoint,
+      because there is no live discovery to find one.
 - [ ] `dezhban setup --questions --json` runs with no TTY, no root, and no
       config file present, and lists the same questions the wizard asks.
 
 ### First-run wizard (macOS app)
 
-- [ ] With no VPN configured and `defaults delete com.dezhban.menu
+- [ ] With no VPN configured and `defaults delete com.behnam-rk.dezhban.app
       dezhban.firstRunCompleted`, launching the app opens the window **and** the
       wizard. With a VPN already configured from the CLI, it does not — the
       questions were already answered.
 - [ ] The questions, their order, and the gating match `dezhban setup` run in a
-      terminal on the same host. Declining "Configure your VPN now?" skips the
-      whole VPN branch in both.
+      terminal on the same host. Unticking "Use automatic VPN detection?" reveals
+      the same three manual fields in both — in the app they appear **on the same
+      screen**, without paging forward.
+- [ ] **Two steps, labelled as two.** The step counter reads "Step 1 of 2" and
+      "Step 2 of 2"; unticking automatic detection must not add a third.
 - [ ] Saving writes through one `config set` (one password prompt, or none with
       a token enrolled) and the values land in `dezhban config show`. Choosing
       automatic detection leaves `vpn.tunnelInterfaces` **empty**.
