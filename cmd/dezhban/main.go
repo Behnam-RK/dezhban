@@ -2020,6 +2020,11 @@ type installedRules struct {
 	// Carried as its own field because the backends already know the answer,
 	// and leaving it discoverable only inside the ruleset text meant a JSON
 	// consumer saw {"loaded":true,"drift":false} and concluded healthy.
+	//
+	// It is only as good as the warnings its backend emits. pf and nft report
+	// every way their rules can be loaded-but-inert; WFP reports none yet, so
+	// on Windows this currently degrades to `loaded`. Documented in cli.md
+	// rather than quietly overstated.
 	Enforcing bool `json:"enforcing"`
 }
 

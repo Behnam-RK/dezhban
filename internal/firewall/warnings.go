@@ -20,26 +20,22 @@ const WarningPrefix = "# WARNING:"
 // which is the healthy case, and the only one in which "loaded" means
 // "enforcing".
 //
-// Warnings are emitted as consecutive lines, so a continuation line (one that
-// follows a warning and is itself a comment) is folded into the warning above
-// it rather than dropped: the second half of "pf is DISABLED — these rules are
-// loaded but nothing is / being filtered" is the half that says what it means.
+// One warning is exactly one line, which is a rule the backends keep rather
+// than something inferred here. An earlier version folded a warning's
+// continuation lines into it, and could not tell a continuation from the
+// ORDINARY comment that follows: pf emits "# main ruleset references the
+// dezhban anchor" right after a disabled-pf warning, so the fold produced a
+// single entry reading "…nothing is being filtered. Re-enable with `sudo pfctl
+// -e`. main ruleset references the dezhban anchor" — a self-contradicting
+// sentence, in the pane's orange row, in exactly the scenario the on-host check
+// tells a tester to reproduce. Long lines wrap; a heuristic that guesses which
+// comments belong together does not.
 func Warnings(readback string) []string {
 	var out []string
-	inWarning := false
 	for _, line := range strings.Split(readback, "\n") {
 		trimmed := strings.TrimSpace(line)
-		switch {
-		case strings.HasPrefix(trimmed, WarningPrefix):
+		if strings.HasPrefix(trimmed, WarningPrefix) {
 			out = append(out, strings.TrimSpace(strings.TrimPrefix(trimmed, WarningPrefix)))
-			inWarning = true
-		case inWarning && strings.HasPrefix(trimmed, "#"):
-			cont := strings.TrimSpace(strings.TrimPrefix(trimmed, "#"))
-			if cont != "" && len(out) > 0 {
-				out[len(out)-1] += " " + cont
-			}
-		default:
-			inWarning = false
 		}
 	}
 	return out

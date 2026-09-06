@@ -139,8 +139,7 @@ func (b *nftBackend) InstalledRules() (string, bool, error) {
 	}
 	var sb strings.Builder
 	if !outputChainPolicyIsDrop(out) {
-		sb.WriteString("# WARNING: the output chain's policy is no longer drop —\n")
-		sb.WriteString("# this table is loaded but is not cutting anything.\n")
+		sb.WriteString("# WARNING: the output chain's policy is no longer drop — this table is loaded but is not cutting anything.\n")
 	}
 	sb.WriteString(out)
 	return sb.String(), true, nil

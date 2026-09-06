@@ -266,7 +266,10 @@ enforcing**. A firewall can hold every rule dezhban installed and filter none of
 them — pf switched off with `pfctl -d`, an anchor the main ruleset stopped
 referencing, an nft chain whose policy drifted off `drop` — and in that state
 every other signal looks healthy, because the rules really are all there.
-`enforcing` is false and `warnings` says why. The two texts will not match byte
+`enforcing` is false and `warnings` says why. It is only as good as the warnings
+its backend emits: pf and nft report every way their rules can be loaded and
+inert, **Windows does not yet**, so `enforcing` there currently means no more
+than `loaded`. The two texts will not match byte
 for byte on a healthy host, so neither surface diffs them — see
 [modes.md](../concepts/modes.md#what-is-enforcing-right-now).
 

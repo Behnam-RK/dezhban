@@ -233,11 +233,9 @@ func (b *pfBackend) InstalledRules() (string, bool, error) {
 	ictx, icancel := context.WithTimeout(context.Background(), pfctlTimeout)
 	defer icancel()
 	if info, err := pfctlCtx(ictx, "", "-s", "info"); err != nil {
-		b0.WriteString("# WARNING: could not read pf's status, so whether pf is enabled at all\n")
-		b0.WriteString("# is UNKNOWN — these rules may be loaded but inert.\n")
+		b0.WriteString("# WARNING: could not read pf's status, so whether pf is enabled at all is UNKNOWN — these rules may be loaded but inert.\n")
 	} else if !strings.Contains(info, "Status: Enabled") {
-		b0.WriteString("# WARNING: pf is DISABLED — these rules are loaded but nothing is\n")
-		b0.WriteString("# being filtered. Re-enable with `sudo pfctl -e`.\n")
+		b0.WriteString("# WARNING: pf is DISABLED — these rules are loaded but nothing is being filtered. Re-enable with `sudo pfctl -e`.\n")
 	}
 	// Its own timeout, like the status probe above and for the same reason:
 	// every probe here gets a full pfctlTimeout rather than the remainder of a
@@ -254,13 +252,11 @@ func (b *pfBackend) InstalledRules() (string, bool, error) {
 		// Never silently. A loaded anchor that pf does not descend into is
 		// exactly the non-enforcing state this readback exists to expose, so
 		// "could not check" must not render identically to "checked, fine".
-		b0.WriteString("# WARNING: could not read the main ruleset, so whether pf descends into\n")
-		b0.WriteString("# the dezhban anchor is UNKNOWN — these rules may be loaded but inert.\n")
+		b0.WriteString("# WARNING: could not read the main ruleset, so whether pf descends into the dezhban anchor is UNKNOWN — these rules may be loaded but inert.\n")
 	case mainRulesetReferencesAnchor(main):
 		b0.WriteString("# main ruleset references the dezhban anchor\n")
 	default:
-		b0.WriteString("# WARNING: the main ruleset does NOT reference the dezhban anchor —\n")
-		b0.WriteString("# these rules are loaded but pf never descends into them.\n")
+		b0.WriteString("# WARNING: the main ruleset does NOT reference the dezhban anchor — these rules are loaded but pf never descends into them.\n")
 	}
 	b0.WriteString(rules)
 	return b0.String(), true, nil

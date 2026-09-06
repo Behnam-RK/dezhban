@@ -221,6 +221,15 @@ func (b *wfpBackend) IsBlocked() (bool, error) {
 // "rules loaded", with the noise shown to the user as the kernel's ruleset.
 const noRulesMarker = "# NO-DEZHBAN-RULES"
 
+// TODO(windows): this emits no firewall.WarningPrefix line, ever, so
+// `enforcing` degrades to `loaded` on Windows — a host with dezhban's group
+// present and a profile whose DefaultOutboundAction is no longer Block reports
+// enforcing while filtering nothing. Deciding that properly means comparing the
+// live defaults against appliedActionPath(), the way IsBlocked does, and it is
+// not written blind: Windows is an unfinished target here (see the matrix note
+// in .github/workflows/ci.yml) and this cannot be exercised on the machines
+// that build it. docs/usage/cli.md carries the caveat so the field is not read
+// as a promise it does not keep on this platform.
 func (b *wfpBackend) InstalledRules() (string, bool, error) {
 	// The profile defaults come FIRST and unconditionally, before the group is
 	// even looked up. On Windows that default is where the blocking actually
