@@ -1371,9 +1371,18 @@ end up typing a password.
 - [ ] **It tracks the posture.** Drive a block with `--simulate-country IR`; the
       applied row becomes "Full block" and the timestamp moves. Open a switch
       window; it becomes "Switch window".
-- [ ] **Teardown clears it.** `sudo dezhban stop` (or `panic`), then re-open
-      Diagnostics: the row reads "no ruleset recorded yet". A stale ruleset shown
-      as live over an open network is the failure this must never have.
+- [ ] **Teardown clears it — by every route.** Check all three separately:
+      `sudo dezhban stop` (the daemon's own Cleanup), `sudo dezhban panic`, and
+      `sudo dezhban unblock --force`. After each, re-open Diagnostics and run
+      `dezhban print-rules --applied`: both must read "no ruleset recorded yet".
+      `panic` is the one that matters most and the one that was broken — it is
+      deliberately daemon-independent, so nothing else will ever clear the
+      record. A stale ruleset shown as live over an open network is the failure
+      this must never have.
+- [ ] **A block applied by hand is recorded.** `sudo dezhban block --guard`
+      with no daemon running, then `dezhban print-rules --applied`: it shows that
+      ruleset, not "nothing recorded". The record must not be truthful only when
+      the daemon happened to be the one enforcing.
 - [ ] **The kernel readback asks for a password and only reads.** "Read from the
       kernel…" prompts once and shows `pfctl -a dezhban -s rules` output. Confirm
       nothing changed: `dezhban status` and the posture are identical before and
@@ -1387,9 +1396,17 @@ end up typing a password.
 - [ ] **The previews cost nothing and need no root.** As an unprivileged user
       with dezhban stopped, expand each of Guard / Full block / Switch window:
       each renders, and each matches `dezhban print-rules --mode <m>`.
-- [ ] **Only what is opened is fetched.** Visiting Diagnostics with every
-      disclosure collapsed must spawn no `print-rules` subprocess (watch with
-      `sudo fs_usage -w -f exec | grep dezhban`, or Activity Monitor).
+- [ ] **Only what is opened is rendered.** Visiting Diagnostics with every
+      disclosure collapsed must spawn no `print-rules --mode` subprocess (watch
+      with `sudo fs_usage -w -f exec | grep dezhban`, or Activity Monitor). One
+      `print-rules --applied --json` is expected on every visit — that is the
+      cheap unprivileged record the "Applied by dezhban" row is made of, and it
+      is fetched whether or not anything is expanded.
+- [ ] **The kernel readback does not outlive its posture.** Read from the
+      kernel with the guard up, then force FULL BLOCK (`--simulate-country IR`).
+      The kernel row must not still be presenting the guard ruleset: it is
+      titled with the time it was read, and pressing **Run diagnostics** clears
+      it rather than leaving a stale snapshot beside fresh rows.
 
 ### Help pane
 

@@ -213,12 +213,26 @@ func (b *wfpBackend) IsBlocked() (bool, error) {
 // our rules and nothing else. A read: it changes nothing and is safe from any
 // goroutine or process. It does need an elevated shell, which is why nothing
 // calls it on a tick.
+// noRulesMarker is emitted on its own line when dezhban's rule group is absent.
+// A marker line rather than a bare whole-output word because -ErrorAction
+// SilentlyContinue does not suppress warnings on the success stream — the same
+// reason parseProfileQuery scans for its answer instead of comparing the whole
+// string. Incidental leading text would otherwise make "no rules" read as
+// "rules loaded", with the noise shown to the user as the kernel's ruleset.
+const noRulesMarker = "# NO-DEZHBAN-RULES"
+
 func (b *wfpBackend) InstalledRules() (string, bool, error) {
+	// The profile defaults come FIRST and unconditionally, before the group is
+	// even looked up. On Windows that default is where the blocking actually
+	// lives: Remove-NetFirewallRule -Group dezhban takes away only the allow
+	// rules, so a host whose group was removed by hand while
+	// DefaultOutboundAction is still Block is fully cut — and reporting that as
+	// "no dezhban rules are loaded" would describe a total lockout as standby.
 	script := strings.Join([]string{
-		"$g = Get-NetFirewallRule -Group " + groupName + " -ErrorAction SilentlyContinue",
-		"if ($null -eq $g) { 'NONE'; exit 0 }",
 		"'# default outbound action per profile'",
 		"Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction | Format-Table -AutoSize | Out-String",
+		"$g = Get-NetFirewallRule -Group " + groupName + " -ErrorAction SilentlyContinue",
+		"if ($null -eq $g) { '" + noRulesMarker + "'; exit 0 }",
 		"'# dezhban rules'",
 		"$g | Select-Object DisplayName,Direction,Action,Enabled | Format-Table -AutoSize | Out-String",
 	}, "\n")
@@ -226,10 +240,20 @@ func (b *wfpBackend) InstalledRules() (string, bool, error) {
 	if err != nil {
 		return "", false, fmt.Errorf("read the dezhban firewall group: %w", err)
 	}
-	if strings.TrimSpace(out) == "NONE" {
-		return "", false, nil
+	// Text is returned either way: with no group there is still a profile table
+	// worth reading, and it is the half that says whether egress is cut.
+	return out, !hasNoRulesMarker(out), nil
+}
+
+// hasNoRulesMarker reports whether the script said dezhban's group is absent.
+// Split out so it can be exercised against captured output on any platform.
+func hasNoRulesMarker(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == noRulesMarker {
+			return true
+		}
 	}
-	return out, true, nil
+	return false
 }
 
 // queryBlockedAndDefaults combines the group-existence check and the

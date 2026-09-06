@@ -226,13 +226,23 @@ func (b *pfBackend) InstalledRules() (string, bool, error) {
 		return "", false, nil
 	}
 	var b0 strings.Builder
-	if main, err := pfctlCtx(ctx, "", "-s", "rules"); err == nil {
-		if mainRulesetReferencesAnchor(main) {
-			b0.WriteString("# main ruleset references the dezhban anchor\n")
-		} else {
-			b0.WriteString("# WARNING: the main ruleset does NOT reference the dezhban anchor —\n")
-			b0.WriteString("# these rules are loaded but pf never descends into them.\n")
-		}
+	// Its own timeout, not the remainder of the one the anchor read just spent:
+	// sharing the budget meant a slow first call could leave nothing for this
+	// one, and the verdict below is the whole point of reading the main ruleset.
+	mctx, mcancel := context.WithTimeout(context.Background(), pfctlTimeout)
+	defer mcancel()
+	switch main, err := pfctlCtx(mctx, "", "-s", "rules"); {
+	case err != nil:
+		// Never silently. A loaded anchor that pf does not descend into is
+		// exactly the non-enforcing state this readback exists to expose, so
+		// "could not check" must not render identically to "checked, fine".
+		b0.WriteString("# WARNING: could not read the main ruleset, so whether pf descends into\n")
+		b0.WriteString("# the dezhban anchor is UNKNOWN — these rules may be loaded but inert.\n")
+	case mainRulesetReferencesAnchor(main):
+		b0.WriteString("# main ruleset references the dezhban anchor\n")
+	default:
+		b0.WriteString("# WARNING: the main ruleset does NOT reference the dezhban anchor —\n")
+		b0.WriteString("# these rules are loaded but pf never descends into them.\n")
 	}
 	b0.WriteString(rules)
 	return b0.String(), true, nil

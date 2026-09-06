@@ -171,8 +171,24 @@ final class AppState: ObservableObject {
     /// asked for.
     @Published var appliedRules: AppliedRuleset?
     @Published var installedRules: InstalledRuleset?
+    /// When the kernel readback above was captured. A readback is a SNAPSHOT,
+    /// not a subscription: nothing re-reads it when the posture changes, so
+    /// showing it under a bare "In the kernel now" would let a guard ruleset
+    /// read during GUARD go on describing the firewall after FULL BLOCK
+    /// engaged — the "the current rules" claim Rulesets.swift says no surface
+    /// may make. The pane labels it with this instead.
+    @Published var installedRulesAt: Date?
     @Published var installedRulesError: String?
     @Published var installedRulesRunning = false
+
+    /// Drops a kernel readback, so a stale snapshot cannot outlive the posture
+    /// it described. Called when the pane re-runs its diagnostics and when it
+    /// goes away; re-reading costs a password, so it is never done automatically.
+    func clearInstalledRules() {
+        installedRules = nil
+        installedRulesAt = nil
+        installedRulesError = nil
+    }
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
     /// sidebar can subscribe with removeDuplicates() and never reload at 1 Hz.
@@ -394,8 +410,10 @@ final class AppState: ObservableObject {
                 self.installedRulesRunning = false
                 if let decoded {
                     self.installedRules = decoded
+                    self.installedRulesAt = Date()
                 } else {
                     self.installedRules = nil
+                    self.installedRulesAt = nil
                     self.installedRulesError = r.output.isEmpty
                         ? "No output from `dezhban print-rules --installed`."
                         : r.output

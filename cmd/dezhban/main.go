@@ -1047,10 +1047,12 @@ func cmdBlock(args []string) int {
 
 	switch {
 	case *force:
-		if err := fw.Apply(forceBlockPolicy()); err != nil {
+		forced := forceBlockPolicy()
+		if err := fw.Apply(forced); err != nil {
 			log.Error("forced block failed", "err", err)
 			return 1
 		}
+		recordAppliedBestEffort(forced)
 		log.Info("network force-blocked: all egress cut except loopback — no geo-provider pass, no automatic recovery; restore with `dezhban unblock` or `dezhban panic`")
 	default:
 		// `--guard` installs the always-on interface guard (tunnel stays open,
@@ -1065,6 +1067,7 @@ func cmdBlock(args []string) int {
 			log.Error("block failed", "err", err)
 			return 1
 		}
+		recordAppliedBestEffort(d.Policy)
 		if *guard {
 			log.Info("vpn guard active", "tunnels", d.Tunnels, "endpoints", len(d.Endpoints))
 		} else {
@@ -1209,6 +1212,59 @@ func resolveProviderAddrs(cfg *config.Config, log *slog.Logger) []netip.Addr {
 	return hosts
 }
 
+// appliedPath resolves the applied-rules record. Indirected through a variable
+// so a test can point it at a temp directory: stateDir() is a hardcoded absolute
+// path, so without this a unit test reads — and prints — the developer's own
+// live ruleset, and fails outright on a host whose record happens to be corrupt.
+var appliedPath = func() string { return applied.Path(stateDir()) }
+
+// recordAppliedBestEffort notes a ruleset this command installed directly,
+// keeping `print-rules --applied` and the Diagnostics pane true for the paths
+// that never go near the run loop.
+//
+// The daemon records through internal/runner's decorator, which covers every
+// Apply the loop makes. `block` bypasses the loop entirely — it is root, with no
+// daemon or deliberately around one — so without this the record would say
+// "nothing applied" while rules this command installed were enforcing. That
+// understates rather than overstates, which is why it is the less urgent half of
+// the pair below, but a diagnostic that is only right when the daemon did it is
+// not one an operator can use.
+//
+// Best-effort by the same rule as everywhere else this record is touched:
+// failing to write down what happened must never fail the thing that happened.
+func recordAppliedBestEffort(p firewall.Policy) {
+	rules, err := firewall.RenderRules(p)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "warning — could not render the applied ruleset for diagnostics:", err)
+		return
+	}
+	rec := applied.Record{Mode: p.Mode.String(), At: time.Now(), Rules: rules, Backend: firewall.RulesetKind}
+	if err := applied.Save(appliedPath(), rec); err != nil {
+		fmt.Fprintln(os.Stderr, "warning — could not record the applied ruleset:", err)
+	}
+}
+
+// clearAppliedRecordBestEffort drops the record after this command tore rules
+// down, so nothing can read a ruleset that is no longer installed as the live
+// posture.
+//
+// This is the dangerous direction, and it is why `panic` needs it most. `panic`
+// is deliberately daemon-independent — the escape hatch for a crashed daemon
+// that left a block in place — so the run loop's deferred Cleanup, which is what
+// normally clears this, never runs. Leaving the record behind meant
+// `print-rules --applied` and the pane both reporting "guard applied at 14:02"
+// over a network this command had just thrown wide open, at the one moment an
+// operator is asking whether the rules are really gone.
+//
+// Cleared even when the teardown reported an error, exactly as the runner's
+// decorator does: the rules are then in an unknown state, and a record that
+// confidently names the old posture is worse than no record at all.
+func clearAppliedRecordBestEffort(what string) {
+	if err := applied.Remove(appliedPath()); err != nil {
+		fmt.Fprintf(os.Stderr, "%s: warning — could not clear the applied-ruleset record: %v\n", what, err)
+	}
+}
+
 func cmdUnblock(args []string) int {
 	fs := flag.NewFlagSet("unblock", flag.ExitOnError)
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
@@ -1237,8 +1293,12 @@ func cmdUnblock(args []string) int {
 		fmt.Fprintln(os.Stderr, "firewall backend unavailable:", err)
 		return 1
 	}
-	if err := fw.Unblock(); err != nil {
-		fmt.Fprintln(os.Stderr, "unblock failed:", err)
+	unblockErr := fw.Unblock()
+	// Before the error return: a failed Unblock leaves the rules in an unknown
+	// state, and the record must not go on naming the old posture.
+	clearAppliedRecordBestEffort("unblock")
+	if unblockErr != nil {
+		fmt.Fprintln(os.Stderr, "unblock failed:", unblockErr)
 		return 1
 	}
 	// This path runs as root with no daemon involved (or bypassing one via
@@ -1288,8 +1348,13 @@ func cmdPanic(args []string) int {
 	}
 	// Cleanup is best-effort and idempotent: it restores any saved prior state
 	// (e.g. pf) and removes dezhban's rules whether or not a daemon owns them.
-	if err := fw.Cleanup(); err != nil {
-		fmt.Fprintln(os.Stderr, "panic: teardown reported an error (rules may persist):", err)
+	cleanupErr := fw.Cleanup()
+	// Cleared whatever Cleanup reported, and before the error return: this
+	// command is the escape hatch for a daemon that is not running, so nothing
+	// else will ever clear it.
+	clearAppliedRecordBestEffort("panic")
+	if cleanupErr != nil {
+		fmt.Fprintln(os.Stderr, "panic: teardown reported an error (rules may persist):", cleanupErr)
 		return 1
 	}
 	fmt.Println("dezhban: panic teardown complete — all dezhban rules removed, connectivity restored")
@@ -1829,6 +1894,11 @@ func cmdPrintRules(args []string) int {
 		fmt.Fprintln(os.Stderr, "--applied is what dezhban recorded installing; --installed is what the kernel holds now.")
 		return 2
 	}
+	if (*appliedOnly || *installed) && typed["config"] {
+		fmt.Fprintln(os.Stderr, "--config does not reach --applied/--installed: both read dezhban's own state directory,")
+		fmt.Fprintln(os.Stderr, "which is a fixed path, not something the config file moves. Drop --config.")
+		return 2
+	}
 	if (*appliedOnly || *installed) && typed["mode"] {
 		fmt.Fprintln(os.Stderr, "--mode renders a posture that is not in force; --applied and --installed report the one that is.")
 		fmt.Fprintln(os.Stderr, "Drop --mode to report the live ruleset, or drop --applied/--installed to render a hypothetical one.")
@@ -1877,11 +1947,16 @@ func cmdPrintRules(args []string) int {
 // has applied nothing, and neither has one that was never started. It exits 0
 // and says so, so a caller can tell that apart from an error.
 func printAppliedRules(asJSON bool) int {
-	path := applied.Path(stateDir())
+	path := appliedPath()
 	rec, ok, err := applied.Load(path)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "could not read the applied-ruleset record:", err)
-		return 1
+		// internal/applied's contract is that a corrupt record is discarded and
+		// never fatal — it describes the past, and enforcement does not depend
+		// on it. Reporting it as a failure instead of as "nothing recorded"
+		// contradicted that, and made an unreadable file indistinguishable from
+		// a broken command. Said out loud on stderr, then treated as absence.
+		fmt.Fprintln(os.Stderr, "warning — the applied-ruleset record is unreadable, treating it as absent:", err)
+		ok = false
 	}
 	if asJSON {
 		if !ok {
@@ -1940,8 +2015,12 @@ type installedRules struct {
 // Repairing a discrepancy is not this command's job either: the run loop's
 // verify tick already owns that, and a second repairer would be a second writer.
 func printInstalledRules(asJSON bool) int {
-	rec, hasRecord, recErr := applied.Load(applied.Path(stateDir()))
-	if recErr != nil {
+	rec, hasRecord, recErr := applied.Load(appliedPath())
+	if recErr != nil && !asJSON {
+		// Human output only. The macOS app runs `--installed --json` through a
+		// privileged helper that captures stdout and stderr TOGETHER, so a note
+		// printed here would prepend prose to the document, fail the decode, and
+		// turn a successful privileged readback into an error in the pane.
 		fmt.Fprintln(os.Stderr, "note: could not read the applied-ruleset record:", recErr)
 	}
 	backend, err := firewall.New()
@@ -1986,6 +2065,13 @@ func printInstalledRules(asJSON bool) int {
 	}
 	if !loaded {
 		fmt.Fprintln(os.Stderr, "no dezhban rules are loaded (standby, or nothing running).")
+		// Still print whatever the backend returned. On Windows the blocking
+		// lives in each profile's DefaultOutboundAction rather than in the rule
+		// group, so a host with no group can still be fully cut — and printing
+		// nothing here would describe that lockout as standby.
+		if strings.TrimSpace(text) != "" {
+			fmt.Print(text)
+		}
 		return 0
 	}
 	fmt.Fprintf(os.Stderr, "# %s rules currently loaded, read from the kernel\n", out.Backend)

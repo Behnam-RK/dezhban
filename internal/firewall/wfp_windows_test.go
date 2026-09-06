@@ -362,3 +362,28 @@ func TestRenderBlockScriptTunnelScopedProviders(t *testing.T) {
 		t.Errorf("a tunnel group cannot be expressed in WFP — the provider pass must be omitted, not emitted unscoped:\n%s", grp)
 	}
 }
+
+// -ErrorAction SilentlyContinue does not suppress warnings on the success
+// stream, so the "no rules" answer has to be found as its own line rather than
+// by comparing the whole output. Incidental leading text would otherwise make
+// "no dezhban rules" read as "rules loaded", and the noise itself would be
+// shown to the user as what the kernel holds.
+func TestNoRulesMarkerIsFoundAsALine(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		out  string
+		want bool
+	}{
+		{"marker alone", noRulesMarker, true},
+		{"marker after a profile table", "# default outbound action per profile\nName Action\n---- ------\n" + noRulesMarker + "\n", true},
+		{"marker behind a stray warning", "WARNING: something chatty\n" + noRulesMarker + "\n", true},
+		{"rules present", "# dezhban rules\nDisplayName Direction\n----------- ---------\ndezhban-out Outbound\n", false},
+		{"marker only as a substring", "# NO-DEZHBAN-RULES-BUT-ACTUALLY-SOME here\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := hasNoRulesMarker(tc.out); got != tc.want {
+				t.Errorf("hasNoRulesMarker(%q) = %v, want %v", tc.out, got, tc.want)
+			}
+		})
+	}
+}

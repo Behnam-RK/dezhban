@@ -76,21 +76,26 @@ The **privileged set** — requires root/admin — is exactly: `run`, `block`,
 `pause`, `resume`, `vpn add`/`remove`/`promote`/`forget`/`import` (but not
 `vpn list`/`show`), `setup` (but not `setup --questions`, which asks nothing and only reports what
 the wizard would ask), `config set`/`edit`/`preset apply`, `token enroll`/`forget` (but not
-`token status`), `upgrade download`/`upgrade apply` (macOS only — `download`'s staging directory is root-owned so a local user
-can't swap the verified `.pkg` before `apply` installs it), and `print-rules --installed`
-(but not the rest of `print-rules`, which stays pure rendering — `--installed` reads the
-kernel back through `FirewallBackend.InstalledRules`, which needs root; it is still a
-READ and installs nothing). `switch`, `pause`,
+`token status`), and `upgrade download`/`upgrade apply` (macOS only — `download`'s staging directory is root-owned so a local user
+can't swap the verified `.pkg` before `apply` installs it). `switch`, `pause`,
 and `resume` are usually passwordless in practice: they ask the running daemon
 over its control socket first (gated by `control.allowSwitchOps`/
 `control.allowPauseOps` respectively) and only fall back to the root-owned
 command file when no daemon answers. Everything else — `status`, `detect-vpn`,
-`validate`, `print-rules` (except `--installed`, above), `doctor`, `monitor`, `vpn list`/`show`,
+`validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
 `config show`/`path`/`schema`/`preset list`/`preset show`/`preset diff`, `token status`,
 `completion`, `upgrade check`, `version`,
 `help` — is read-only: no root, no firewall effects. Full reference:
 [docs/usage/cli.md](docs/usage/cli.md); the upgrade design in full:
 [docs/usage/upgrade.md](docs/usage/upgrade.md).
+
+`print-rules --installed` is the one read-only command that still needs root on
+unix, because it asks the kernel for dezhban's own rules
+(`FirewallBackend.InstalledRules`) rather than rendering them. It is deliberately
+NOT in the privileged set: that set auto-re-execs under sudo via `requireRoot`,
+and silently elevating a diagnostic read is not something a read should do — it
+prints the `sudo` hint and exits instead. It installs and changes nothing, and on
+Windows it needs no elevation at all.
 
 ## Rules that must not be broken
 

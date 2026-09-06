@@ -17,6 +17,7 @@ struct DiagnosticsView: View {
             Divider()
             content
         }
+        .onDisappear { state.clearInstalledRules() }
         .onAppear {
             // The report and the inventory live on AppState (they feed the
             // sidebar badge and survive navigation); this pane only asks for a
@@ -48,6 +49,11 @@ struct DiagnosticsView: View {
         state.runDoctor(discover: discover)
         state.refreshVPNInventoryIfStale(maxAge: 0)
         state.refreshAppliedRules()
+        // The kernel readback is a snapshot and re-reading it costs a password,
+        // so a refresh drops it rather than silently renewing it. Keeping it
+        // would leave the previous posture's rules under a heading that says
+        // "now", beside freshly-read rows.
+        state.clearInstalledRules()
     }
 
     @ViewBuilder
@@ -178,10 +184,16 @@ struct DiagnosticsView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
+                    // Titled by WHEN it was read, never "now": this is a
+                    // snapshot nothing refreshes, and the posture can change
+                    // underneath it.
                     rulesDisclosure(
-                        title: "In the kernel now",
-                        caption: "Read back from the firewall, in \(i.backend) syntax. It will not match the "
-                            + "applied text byte for byte — the firewall renders its own normalised form.",
+                        title: state.installedRulesAt.map { "In the kernel, read at \(Self.stamp.string(from: $0))" }
+                            ?? "In the kernel, as read",
+                        caption: "Read back from the firewall, in \(i.backend) syntax. It is a snapshot from when "
+                            + "you pressed the button, not a live view — read it again after the posture changes. "
+                            + "It will not match the applied text byte for byte: the firewall renders its own "
+                            + "normalised form.",
                         rules: i.installed)
                 }
             }
@@ -227,9 +239,13 @@ struct DiagnosticsView: View {
         RulesetPreview(rawValue: mode)?.label ?? mode
     }
 
+    /// Times shown beside a ruleset carry their DATE as well. A record survives
+    /// restarts, so one applied three days ago rendered as a bare "14:02:11"
+    /// reads as today — precisely the wrong impression for the row that tells
+    /// someone what is enforcing.
     private static let stamp: DateFormatter = {
         let f = DateFormatter()
-        f.dateStyle = .none
+        f.dateStyle = .short
         f.timeStyle = .medium
         return f
     }()

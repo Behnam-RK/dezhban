@@ -21,6 +21,22 @@ struct RulesetsTests {
         #expect(a.rules == "block drop out all\n")
     }
 
+    /// Nanosecond precision — NINE fractional digits, which is what `time.Now()`
+    /// actually produces on Linux and macOS, and therefore the form the record
+    /// almost always carries in the field. The six-digit case above is the one
+    /// that gets written by hand in a fixture; this is the one that ships.
+    @Test func decodesNanosecondTimestamps() throws {
+        let json = """
+        {"version":1,"mode":"fullblock","at":"2026-08-21T14:02:11.123456789+02:00",
+         "rules":"block drop out all\\n","backend":"pf"}
+        """
+        let a = try #require(AppliedRuleset.decode(Data(json.utf8)))
+        #expect(a.mode == "fullblock")
+        // A timestamp that silently decoded to the epoch would render as 1970
+        // beside a live ruleset, so pin that it actually parsed.
+        #expect(a.at.timeIntervalSince1970 > 1_700_000_000)
+    }
+
     /// Whole seconds, no fraction — what Go emits when the instant happens to
     /// land on one. Both forms have to decode or the pane works only sometimes.
     @Test func decodesWholeSecondTimestamps() throws {
