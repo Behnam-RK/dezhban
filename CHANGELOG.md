@@ -12,8 +12,6 @@ current as you land changes.
 
 ## [Unreleased]
 
-## [0.12.0] - 2026-09-06
-
 ### Added
 
 - **The firewall rules are visible in Diagnostics.** Three things, because they
@@ -38,6 +36,11 @@ current as you land changes.
   repairs nothing. `--json` on either for machine output. The two texts will not
   match byte for byte on a healthy host — the firewall renders its own
   normalised form — so neither surface diffs them.
+
+## [0.12.0] - 2026-09-06
+
+### Added
+
 - **Settings → Remove Dezhban…** — the complete uninstall, from the app. It
   removes what only your own login session can reach (the Touch ID key in the
   login keychain, this app's preferences and saved window state), then opens
