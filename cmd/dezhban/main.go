@@ -1817,9 +1817,26 @@ func cmdPrintRules(args []string) int {
 	asJSON := fs.Bool("json", false, "machine-readable output (with --applied or --installed)")
 	_ = fs.Parse(args)
 
+	// Which flags the user actually typed, as opposed to their defaults. --mode
+	// has a non-empty default, so its value alone cannot tell the two apart, and
+	// a flag that is accepted and then quietly discarded is the shape of bug
+	// this tool least wants to ship.
+	typed := map[string]bool{}
+	fs.Visit(func(f *flag.Flag) { typed[f.Name] = true })
+
 	if *appliedOnly && *installed {
 		fmt.Fprintln(os.Stderr, "--applied and --installed are two different sources; pick one.")
 		fmt.Fprintln(os.Stderr, "--applied is what dezhban recorded installing; --installed is what the kernel holds now.")
+		return 2
+	}
+	if (*appliedOnly || *installed) && typed["mode"] {
+		fmt.Fprintln(os.Stderr, "--mode renders a posture that is not in force; --applied and --installed report the one that is.")
+		fmt.Fprintln(os.Stderr, "Drop --mode to report the live ruleset, or drop --applied/--installed to render a hypothetical one.")
+		return 2
+	}
+	if typed["json"] && !*appliedOnly && !*installed {
+		fmt.Fprintln(os.Stderr, "--json needs --applied or --installed; a rendered ruleset is firewall syntax, not JSON.")
+		fmt.Fprintln(os.Stderr, "Use 'print-rules --mode <m>' for the text, or add --applied/--installed for a JSON document.")
 		return 2
 	}
 	if *appliedOnly {

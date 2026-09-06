@@ -76,13 +76,16 @@ The **privileged set** — requires root/admin — is exactly: `run`, `block`,
 `pause`, `resume`, `vpn add`/`remove`/`promote`/`forget`/`import` (but not
 `vpn list`/`show`), `setup` (but not `setup --questions`, which asks nothing and only reports what
 the wizard would ask), `config set`/`edit`/`preset apply`, `token enroll`/`forget` (but not
-`token status`), and `upgrade download`/`upgrade apply` (macOS only — `download`'s staging directory is root-owned so a local user
-can't swap the verified `.pkg` before `apply` installs it). `switch`, `pause`,
+`token status`), `upgrade download`/`upgrade apply` (macOS only — `download`'s staging directory is root-owned so a local user
+can't swap the verified `.pkg` before `apply` installs it), and `print-rules --installed`
+(but not the rest of `print-rules`, which stays pure rendering — `--installed` reads the
+kernel back through `FirewallBackend.InstalledRules`, which needs root; it is still a
+READ and installs nothing). `switch`, `pause`,
 and `resume` are usually passwordless in practice: they ask the running daemon
 over its control socket first (gated by `control.allowSwitchOps`/
 `control.allowPauseOps` respectively) and only fall back to the root-owned
 command file when no daemon answers. Everything else — `status`, `detect-vpn`,
-`validate`, `print-rules`, `doctor`, `monitor`, `vpn list`/`show`,
+`validate`, `print-rules` (except `--installed`, above), `doctor`, `monitor`, `vpn list`/`show`,
 `config show`/`path`/`schema`/`preset list`/`preset show`/`preset diff`, `token status`,
 `completion`, `upgrade check`, `version`,
 `help` — is read-only: no root, no firewall effects. Full reference:
