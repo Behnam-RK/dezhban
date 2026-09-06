@@ -84,12 +84,26 @@ public struct InstalledRuleset: Hashable {
            let subData = try? JSONSerialization.data(withJSONObject: sub) {
             nested = AppliedRuleset.decode(subData)
         }
+        // The fields the CLI ALWAYS emits are required, not defaulted. Defaulting
+        // them made every JSON object decode — `{}` included — as a confident
+        // "no rules loaded, no drift", so a malformed or version-skewed response
+        // reached the pane as a benign standby message instead of taking the
+        // error path. False reassurance about whether a kill switch is enforcing
+        // is the one thing this surface must never produce; failing to decode is
+        // recoverable, and the pane already says so.
+        //
+        // `installed` stays optional-with-default on purpose: it is legitimately
+        // absent-or-empty when nothing is loaded.
+        guard let loaded = obj["loaded"] as? Bool,
+              let drift = obj["drift"] as? Bool,
+              let backend = obj["backend"] as? String
+        else { return nil }
         return InstalledRuleset(
             installed: obj["installed"] as? String ?? "",
-            loaded: obj["loaded"] as? Bool ?? false,
+            loaded: loaded,
             applied: nested,
-            drift: obj["drift"] as? Bool ?? false,
-            backend: obj["backend"] as? String ?? "")
+            drift: drift,
+            backend: backend)
     }
 }
 

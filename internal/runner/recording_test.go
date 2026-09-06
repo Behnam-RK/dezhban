@@ -192,3 +192,35 @@ func TestRunWiresTheRecordingBackend(t *testing.T) {
 		t.Error("the record survived Run's shutdown Cleanup")
 	}
 }
+
+// atomicfile.Write leaves the OLD file in place when the replacement fails, so
+// a failed record after a SUCCESSFUL apply would leave the previous posture
+// advertised as current — the stale record this decorator exists to prevent,
+// arriving by the one path that looks like it merely loses information.
+// "Nothing recorded" is an ordinary answer; a confidently wrong posture is not.
+func TestAFailedSaveDropsTheStaleRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), applied.FileName)
+	inner := &fakeBackend{}
+	be := newRecordingBackend(inner, path, discardLog()).(*recordingBackend)
+
+	// A first, healthy apply leaves a guard record behind.
+	if err := be.Apply(firewall.Policy{Mode: firewall.ModeGuard, TunnelIfaces: []string{"utun4"}}); err != nil {
+		t.Fatalf("first apply: %v", err)
+	}
+	if _, ok, _ := applied.Load(path); !ok {
+		t.Fatal("first apply recorded nothing")
+	}
+
+	// The next write fails while the apply itself still succeeds. Injected
+	// rather than arranged on disk: the ways a real save fails either also
+	// break the removal (a read-only directory) or cannot be provoked here (a
+	// full disk), and it is the removal that is under test.
+	be.save = func(string, applied.Record) error { return errors.New("no space left on device") }
+
+	if err := be.Apply(firewall.Policy{Mode: firewall.ModeFullBlock}); err != nil {
+		t.Fatalf("apply must still succeed when only the record fails: %v", err)
+	}
+	if rec, ok, _ := applied.Load(path); ok {
+		t.Errorf("a %q record survived a failed save; it names the posture BEFORE the one applied", rec.Mode)
+	}
+}

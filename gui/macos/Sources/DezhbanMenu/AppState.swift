@@ -188,7 +188,17 @@ final class AppState: ObservableObject {
         installedRules = nil
         installedRulesAt = nil
         installedRulesError = nil
+        // Invalidate any read still in flight. The privileged call sits behind a
+        // password prompt, so it can easily outlive the clear that was meant to
+        // discard it — pressing Run diagnostics, or leaving the pane, while the
+        // prompt is open — and its completion would then repopulate exactly the
+        // snapshot clearing existed to throw away.
+        installedRulesGeneration &+= 1
     }
+
+    /// Bumped by every clear, captured by every read, compared on completion.
+    /// A read whose generation no longer matches is discarded rather than shown.
+    private var installedRulesGeneration = 0
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
     /// sidebar can subscribe with removeDuplicates() and never reload at 1 Hz.
@@ -402,12 +412,17 @@ final class AppState: ObservableObject {
         guard !installedRulesRunning, cliFound else { return }
         installedRulesRunning = true
         installedRulesError = nil
+        let generation = installedRulesGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let r = DezhbanCLI.runPrivileged(["print-rules", "--installed", "--json"])
             let decoded = r.ok ? r.output.data(using: .utf8).flatMap(InstalledRuleset.decode) : nil
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.installedRulesRunning = false
+                // Someone cleared while this was behind the password prompt.
+                // Publishing now would restore the very snapshot that clear
+                // invalidated, under a heading naming the time it was read.
+                guard generation == self.installedRulesGeneration else { return }
                 if let decoded {
                     self.installedRules = decoded
                     self.installedRulesAt = Date()

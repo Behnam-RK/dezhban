@@ -193,10 +193,22 @@ struct DiagnosticsView: View {
                         .font(.callout)
                         .foregroundStyle(.orange)
                 } else if !i.loaded {
-                    Label("No dezhban rules are loaded. That is expected in standby, or with dezhban stopped.",
+                    // Scoped to dezhban's OWN rules. On Windows the blocking
+                    // lives in each profile's default outbound action, so their
+                    // absence does not mean egress is open — and the readback
+                    // below says which.
+                    Label("dezhban has no rules of its own loaded — expected in standby, or with dezhban stopped.",
                           systemImage: "info.circle")
                         .font(.callout)
                         .foregroundStyle(.secondary)
+                    if !i.installed.isEmpty {
+                        rulesDisclosure(
+                            title: state.installedRulesAt.map { "What the firewall reported, read at \(Self.stamp.string(from: $0))" }
+                                ?? "What the firewall reported",
+                            caption: "dezhban's own rules are absent, but this is what the firewall said when asked. "
+                                + "On Windows the outbound default is where the blocking lives.",
+                            rules: i.installed)
+                    }
                 } else {
                     // Titled by WHEN it was read, never "now": this is a
                     // snapshot nothing refreshes, and the posture can change

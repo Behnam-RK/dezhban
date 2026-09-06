@@ -37,6 +37,11 @@ type recordingBackend struct {
 	// now is injected so a test can assert the recorded timestamp instead of
 	// asserting that some time passed.
 	now func() time.Time
+	// save is injected for the same reason: the failure path below must drop a
+	// stale record, and the ways a real write fails (a full disk) are not ones
+	// a test can arrange without also breaking the removal that the fix depends
+	// on. Defaults to applied.Save.
+	save func(string, applied.Record) error
 }
 
 // newRecordingBackend wraps b when path is non-empty; otherwise it returns b
@@ -52,7 +57,7 @@ func newRecordingBackend(b Backend, path string, log *slog.Logger) Backend {
 		// daemon on the one day the disk is full.
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	return &recordingBackend{Backend: b, path: path, log: log, now: time.Now}
+	return &recordingBackend{Backend: b, path: path, log: log, now: time.Now, save: applied.Save}
 }
 
 func (r *recordingBackend) Apply(p firewall.Policy) error {
@@ -74,8 +79,17 @@ func (r *recordingBackend) Apply(p firewall.Policy) error {
 		Rules:   rules,
 		Backend: firewall.RulesetKind,
 	}
-	if err := applied.Save(r.path, rec); err != nil {
+	if err := r.save(r.path, rec); err != nil {
 		r.log.Warn("could not record the applied ruleset", "err", err, "path", r.path)
+		// The PREVIOUS record is still on disk — atomicfile.Write leaves the
+		// old file intact when the replacement fails — and it now names a
+		// posture that is no longer the one installed. That is the stale record
+		// this whole decorator exists to prevent, arriving by the one path that
+		// looked like it only lost information. Absent is the designed
+		// fallback ("nothing recorded yet"); wrong is not.
+		// Same reasoning, and the same shape, as writeAppliedAction's failure
+		// path in internal/firewall/wfp_windows.go.
+		r.clear()
 	}
 	return nil
 }

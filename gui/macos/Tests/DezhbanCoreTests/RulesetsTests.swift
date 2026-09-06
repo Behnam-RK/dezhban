@@ -90,4 +90,18 @@ struct RulesetsTests {
             #expect(!mode.detail.isEmpty)
         }
     }
+
+    /// A malformed or version-skewed response must take the ERROR path, not
+    /// decode into a confident "nothing is loaded, no drift". False reassurance
+    /// about whether a kill switch is enforcing is the one thing this surface
+    /// must never produce.
+    @Test func aMalformedReadbackDoesNotDecodeAsStandby() {
+        #expect(InstalledRuleset.decode(Data("{}".utf8)) == nil)
+        // Missing `drift` alone is enough: it is the finding the pane renders.
+        let noDrift = #"{"installed":"","loaded":false,"backend":"pf"}"#
+        #expect(InstalledRuleset.decode(Data(noDrift.utf8)) == nil)
+        // A complete document still decodes.
+        let good = #"{"installed":"","loaded":false,"drift":false,"backend":"pf"}"#
+        #expect(InstalledRuleset.decode(Data(good.utf8)) != nil)
+    }
 }

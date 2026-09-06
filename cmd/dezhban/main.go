@@ -1241,6 +1241,13 @@ func recordAppliedBestEffort(p firewall.Policy) {
 	rec := applied.Record{Mode: p.Mode.String(), At: time.Now(), Rules: rules, Backend: firewall.RulesetKind}
 	if err := applied.Save(appliedPath(), rec); err != nil {
 		fmt.Fprintln(os.Stderr, "warning — could not record the applied ruleset:", err)
+		// atomicfile.Write leaves the old file in place when the replacement
+		// fails, so the record would go on naming the posture BEFORE this one.
+		// Dropping it is the safe direction: "nothing recorded" is an ordinary
+		// answer, a confidently wrong posture is not.
+		if rmErr := applied.Remove(appliedPath()); rmErr != nil {
+			fmt.Fprintln(os.Stderr, "warning — could not clear the stale applied-ruleset record:", rmErr)
+		}
 	}
 }
 
@@ -2074,7 +2081,18 @@ func printInstalledRules(asJSON bool) int {
 		return 0
 	}
 	if !loaded {
-		fmt.Fprintln(os.Stderr, "no dezhban rules are loaded (standby, or nothing running).")
+		// "dezhban's rules" is the honest scope of this claim, not "the
+		// firewall". On Windows the blocking lives in each profile's
+		// DefaultOutboundAction, so the group being absent does NOT mean egress
+		// is open — and asserting standby over a readback that says otherwise
+		// would be the misreport this section exists to avoid.
+		if strings.TrimSpace(text) != "" {
+			fmt.Fprintln(os.Stderr, "dezhban has no rules of its own loaded. That is expected in standby,")
+			fmt.Fprintln(os.Stderr, "or with dezhban stopped — but read what the firewall reported below")
+			fmt.Fprintln(os.Stderr, "before concluding that your traffic is flowing freely.")
+		} else {
+			fmt.Fprintln(os.Stderr, "no dezhban rules are loaded (standby, or nothing running).")
+		}
 		// Still print whatever the backend returned. On Windows the blocking
 		// lives in each profile's DefaultOutboundAction rather than in the rule
 		// group, so a host with no group can still be fully cut — and printing
