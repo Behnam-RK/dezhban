@@ -63,14 +63,26 @@ public struct InstalledRuleset: Hashable {
     /// healthy host. The texts are shown side by side for a person to read.
     public let drift: Bool
     public let backend: String
+    /// Why the loaded rules are not filtering — pf switched off, an anchor the
+    /// main ruleset no longer references, an nft chain whose policy drifted off
+    /// drop. Empty on a healthy host.
+    public let warnings: [String]
+    /// The question a reader actually has, and it is NOT `loaded`: a firewall
+    /// can hold every rule dezhban installed and filter none of them. Left
+    /// inside the ruleset text, that state rendered as a collapsed disclosure
+    /// with nothing visibly wrong.
+    public let enforcing: Bool
 
     public init(installed: String, loaded: Bool, applied: AppliedRuleset?,
-                drift: Bool, backend: String) {
+                drift: Bool, backend: String,
+                warnings: [String] = [], enforcing: Bool = true) {
         self.installed = installed
         self.loaded = loaded
         self.applied = applied
         self.drift = drift
         self.backend = backend
+        self.warnings = warnings
+        self.enforcing = enforcing
     }
 
     /// Decoded by hand rather than through Codable so the nested `applied`
@@ -98,12 +110,19 @@ public struct InstalledRuleset: Hashable {
               let drift = obj["drift"] as? Bool,
               let backend = obj["backend"] as? String
         else { return nil }
+        // Both default rather than being required: a CLI predating them emits
+        // neither, and an older CLI must degrade to the previous behaviour
+        // rather than fail to decode. `enforcing` defaults to `loaded` there,
+        // which is exactly what the pane assumed before this existed.
+        let warnings = obj["warnings"] as? [String] ?? []
         return InstalledRuleset(
             installed: obj["installed"] as? String ?? "",
             loaded: loaded,
             applied: nested,
             drift: drift,
-            backend: backend)
+            backend: backend,
+            warnings: warnings,
+            enforcing: obj["enforcing"] as? Bool ?? loaded)
     }
 }
 

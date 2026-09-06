@@ -2011,6 +2011,16 @@ type installedRules struct {
 	Drift bool `json:"drift"`
 	// Backend names the syntax of Installed.
 	Backend string `json:"backend"`
+	// Warnings are the reasons the loaded rules are not actually filtering —
+	// pf switched off, an anchor the main ruleset no longer references, an nft
+	// chain whose policy drifted off drop. Empty on a healthy host.
+	Warnings []string `json:"warnings,omitempty"`
+	// Enforcing is the question a reader actually has, and it is NOT `loaded`:
+	// a firewall can hold every rule dezhban installed and filter none of them.
+	// Carried as its own field because the backends already know the answer,
+	// and leaving it discoverable only inside the ruleset text meant a JSON
+	// consumer saw {"loaded":true,"drift":false} and concluded healthy.
+	Enforcing bool `json:"enforcing"`
 }
 
 // printInstalledRules reads dezhban's rules back out of the kernel — the other
@@ -2044,11 +2054,14 @@ func printInstalledRules(asJSON bool) int {
 		return 1
 	}
 
+	warnings := firewall.Warnings(text)
 	out := installedRules{
 		Installed: text,
 		Loaded:    loaded,
 		Backend:   firewall.RulesetKind,
 		Drift:     hasRecord && !loaded,
+		Warnings:  warnings,
+		Enforcing: loaded && len(warnings) == 0,
 	}
 	if hasRecord {
 		out.Applied = &rec
@@ -2101,6 +2114,14 @@ func printInstalledRules(asJSON bool) int {
 			fmt.Print(text)
 		}
 		return 0
+	}
+	// Loaded but inert is its own answer, and the loudest one here: the rules
+	// are all present, so every other signal reads healthy.
+	for _, w := range warnings {
+		fmt.Fprintln(os.Stderr, "WARNING:", w)
+	}
+	if len(warnings) > 0 {
+		fmt.Fprintln(os.Stderr, "dezhban's rules are loaded but are NOT filtering. See above.")
 	}
 	fmt.Fprintf(os.Stderr, "# %s rules currently loaded, read from the kernel\n", out.Backend)
 	if hasRecord {

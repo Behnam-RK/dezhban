@@ -19,10 +19,18 @@ import (
 // green, which made the fix that added them unprotected. Same technique, and
 // same reason, as TestNoTestInPackageMainIsParallel.
 func TestEveryDirectFirewallPathKeepsTheRecordHonest(t *testing.T) {
-	want := map[string]string{
-		"cmdBlock":   "recordAppliedBestEffort",
-		"cmdUnblock": "clearAppliedRecordBestEffort",
-		"cmdPanic":   "clearAppliedRecordBestEffort",
+	// The COUNT matters, not just presence: cmdBlock applies from two branches
+	// (--force and the default plan), and asserting "calls it at all" stayed
+	// green when either one alone lost its call — the exact deletion this guard
+	// claims to catch.
+	want := []struct {
+		fn     string
+		callee string
+		calls  int
+	}{
+		{"cmdBlock", "recordAppliedBestEffort", 2},
+		{"cmdUnblock", "clearAppliedRecordBestEffort", 1},
+		{"cmdPanic", "clearAppliedRecordBestEffort", 1},
 	}
 
 	fset := token.NewFileSet()
@@ -31,32 +39,36 @@ func TestEveryDirectFirewallPathKeepsTheRecordHonest(t *testing.T) {
 		t.Fatalf("parse main.go: %v", err)
 	}
 
-	found := map[string]bool{}
+	fns := map[string]*ast.FuncDecl{}
 	for _, decl := range f.Decls {
-		fn, ok := decl.(*ast.FuncDecl)
-		if !ok || fn.Recv != nil {
-			continue
-		}
-		callee, watched := want[fn.Name.Name]
-		if !watched {
-			continue
-		}
-		found[fn.Name.Name] = true
-		calls := false
-		ast.Inspect(fn, func(n ast.Node) bool {
-			if id, ok := n.(*ast.Ident); ok && id.Name == callee {
-				calls = true
-			}
-			return !calls
-		})
-		if !calls {
-			t.Errorf("%s does not call %s — it changes the firewall directly, so the "+
-				"applied record would describe a posture that is not in force", fn.Name.Name, callee)
+		if fn, ok := decl.(*ast.FuncDecl); ok && fn.Recv == nil {
+			fns[fn.Name.Name] = fn
 		}
 	}
-	for name := range want {
-		if !found[name] {
-			t.Errorf("%s not found in main.go — this guard would pass vacuously", name)
+
+	for _, w := range want {
+		fn, ok := fns[w.fn]
+		if !ok {
+			t.Errorf("%s not found in main.go — this guard would pass vacuously", w.fn)
+			continue
+		}
+		got := 0
+		ast.Inspect(fn, func(n ast.Node) bool {
+			call, ok := n.(*ast.CallExpr)
+			if !ok {
+				return true
+			}
+			if id, ok := call.Fun.(*ast.Ident); ok && id.Name == w.callee {
+				got++
+			}
+			return true
+		})
+		if got != w.calls {
+			t.Errorf("%s calls %s %d time(s), want %d.\n"+
+				"If you MOVED the call into a helper this guard is simply out of date — update it.\n"+
+				"If you REMOVED it, that path changes the firewall without keeping the applied\n"+
+				"record honest, and a surface will report a posture that is not in force.",
+				w.fn, w.callee, got, w.calls)
 		}
 	}
 }

@@ -24,7 +24,12 @@ current as you land changes.
   caption saying what that posture does to your traffic. When dezhban recorded
   applying rules and the firewall holds none, the pane says so; it does not offer
   to repair, because the running daemon's own verification tick already does
-  that and a second repairer would be a second writer.
+  that and a second repairer would be a second writer. The readback also reports
+  **loaded is not enforcing**: pf switched off, an anchor the main ruleset no
+  longer references, or an nft chain whose policy drifted off `drop` all leave
+  dezhban's rules present and filtering nothing. That gets its own row, and its
+  own `enforcing` field in `--json`, because it is the state where every other
+  signal reads healthy.
 - **`dezhban print-rules --applied` and `--installed`**, the CLI half of the
   above. `--applied` reads a record dezhban now writes on every successful apply
   (a 0644 file beside the state file — no root, same on every platform).

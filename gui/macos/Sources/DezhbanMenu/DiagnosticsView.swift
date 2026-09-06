@@ -93,6 +93,7 @@ struct DiagnosticsView: View {
                             .textSelection(.enabled)
                     }
                 }
+                noReportYetRow
                 vpnInventorySection
                 firewallRulesSection
                 if let report = state.doctorReport {
@@ -108,13 +109,28 @@ struct DiagnosticsView: View {
                 }
             }
             .listStyle(.inset)
-        } else if let error = state.doctorError {
-            guided(symbol: "exclamationmark.triangle", title: "Couldn't run diagnostics", message: error)
         } else if !state.cliFound {
             guided(symbol: "questionmark.circle", title: "dezhban CLI not found",
                    message: "Install the dezhban command-line tool, then run diagnostics again.")
         } else {
             guided(symbol: "stethoscope", title: "No results yet", message: "Run diagnostics to see tunnels, endpoints, and lockout risks.")
+        }
+    }
+
+    /// The prompt that used to live in the outer `else`. Widening the section's
+    /// gate to include `cliFound` made that branch unreachable — the first
+    /// condition is true whenever `cliFound` is — which silently deleted the
+    /// pane's only call to action on a healthy host's first open. It belongs
+    /// inside the List now, beside the firewall rows that are there already.
+    @ViewBuilder
+    private var noReportYetRow: some View {
+        if state.doctorReport == nil && !state.doctorRunning {
+            Section {
+                Label("Run diagnostics to see tunnels, endpoints, and lockout risks.",
+                      systemImage: "stethoscope")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 
@@ -210,6 +226,20 @@ struct DiagnosticsView: View {
                             rules: i.installed)
                     }
                 } else {
+                    // Loaded but NOT filtering is the loudest thing this pane
+                    // can learn, and every other signal reads healthy when it
+                    // happens — the rules are all present. It gets its own
+                    // visible row rather than living inside a collapsed
+                    // ruleset, where an operator would have to expand pf syntax
+                    // and read it to find out nothing is being filtered.
+                    if !i.enforcing {
+                        Label("dezhban's rules are loaded but are NOT filtering.\n"
+                                + i.warnings.joined(separator: "\n"),
+                              systemImage: "exclamationmark.octagon.fill")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
                     // Titled by WHEN it was read, never "now": this is a
                     // snapshot nothing refreshes, and the posture can change
                     // underneath it.

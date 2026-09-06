@@ -1388,6 +1388,14 @@ end up typing a password.
       nothing changed: `dezhban status` and the posture are identical before and
       after, and running it with the guard DOWN reports "no dezhban rules are
       loaded" rather than an error.
+- [ ] **Loaded but not filtering is reported as loudly as missing.** With the
+      guard up, disable pf itself (`sudo pfctl -d`) — the rules stay loaded — then
+      "Read from the kernel…": the pane must show an orange **"dezhban's rules are
+      loaded but are NOT filtering"** row without expanding anything, and
+      `sudo dezhban print-rules --installed --json` must report
+      `"enforcing": false` with a `warnings` entry. Re-enable with `sudo pfctl -e`.
+      This is the state where every other signal reads healthy, so a warning
+      buried inside the ruleset text would never be found.
 - [ ] **Drift is reported, not repaired.** With the guard up, flush the anchor by
       hand (`sudo pfctl -a dezhban -F rules`), then "Read from the kernel…": the
       pane must warn that dezhban applied rules the firewall no longer holds, and

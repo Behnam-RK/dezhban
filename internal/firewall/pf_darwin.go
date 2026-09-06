@@ -230,16 +230,23 @@ func (b *pfBackend) InstalledRules() (string, bool, error) {
 	// anchor enforces nothing, alongside an empty anchor and a main ruleset that
 	// does not reference it. IsBlocked checks all three; a readback that checked
 	// only two would render a disabled firewall as a healthy one.
-	if info, err := pfctlCtx(ctx, "", "-s", "info"); err != nil {
+	ictx, icancel := context.WithTimeout(context.Background(), pfctlTimeout)
+	defer icancel()
+	if info, err := pfctlCtx(ictx, "", "-s", "info"); err != nil {
 		b0.WriteString("# WARNING: could not read pf's status, so whether pf is enabled at all\n")
 		b0.WriteString("# is UNKNOWN — these rules may be loaded but inert.\n")
 	} else if !strings.Contains(info, "Status: Enabled") {
 		b0.WriteString("# WARNING: pf is DISABLED — these rules are loaded but nothing is\n")
 		b0.WriteString("# being filtered. Re-enable with `sudo pfctl -e`.\n")
 	}
-	// Its own timeout, not the remainder of the one the anchor read just spent:
-	// sharing the budget meant a slow first call could leave nothing for this
-	// one, and the verdict below is the whole point of reading the main ruleset.
+	// Its own timeout, like the status probe above and for the same reason:
+	// every probe here gets a full pfctlTimeout rather than the remainder of a
+	// shared budget. Sharing one meant a slow earlier call could leave nothing
+	// for a later probe, which then fails on deadline and prints a WARNING on a
+	// perfectly healthy host — the readback crying wolf about the exact
+	// condition it exists to report. IsBlocked shares one budget because it
+	// returns a single bool and a timeout there is simply an error; this
+	// returns text a person reads, so a false warning is worse than a slow read.
 	mctx, mcancel := context.WithTimeout(context.Background(), pfctlTimeout)
 	defer mcancel()
 	switch main, err := pfctlCtx(mctx, "", "-s", "rules"); {

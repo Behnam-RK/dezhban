@@ -261,8 +261,13 @@ never a dump of unrelated state — and needs root for that reason. It is a read
 it installs nothing and repairs nothing. When dezhban recorded applying rules and
 the firewall holds none, `--installed` says so; repairing that is the running
 daemon's verification tick's job, not this command's. Add `--json` to either for
-machine output. The two texts will not match byte for byte on a healthy host, so
-neither surface diffs them — see
+machine output, whose `enforcing` field is the one to read: **loaded is not
+enforcing**. A firewall can hold every rule dezhban installed and filter none of
+them — pf switched off with `pfctl -d`, an anchor the main ruleset stopped
+referencing, an nft chain whose policy drifted off `drop` — and in that state
+every other signal looks healthy, because the rules really are all there.
+`enforcing` is false and `warnings` says why. The two texts will not match byte
+for byte on a healthy host, so neither surface diffs them — see
 [modes.md](../concepts/modes.md#what-is-enforcing-right-now).
 
 The selectors are mutually exclusive and saying so is an error rather than a
