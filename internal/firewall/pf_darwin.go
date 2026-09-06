@@ -202,6 +202,66 @@ func (b *pfBackend) IsBlocked() (bool, error) {
 	return mainRulesetReferencesAnchor(main), nil
 }
 
+// InstalledRules reads dezhban's anchor back out of the kernel.
+//
+// Scoped to `-a dezhban` exactly like every other operation here: it reports our
+// own rules and nothing else, so it can never become a way to dump a user's
+// unrelated pf configuration. The anchor reference line from the main ruleset is
+// prepended when present, because a loaded anchor that the main ruleset does not
+// reference is not being evaluated at all — the same gap IsBlocked checks for,
+// and the reader of this text has to be able to see it.
+//
+// A read, not a write: it takes no lock in this package and is safe from any
+// goroutine or process. It does need root, which is why nothing calls it on a
+// tick.
+func (b *pfBackend) InstalledRules() (string, bool, error) {
+	ctx, cancel := context.WithTimeout(context.Background(), pfctlTimeout)
+	defer cancel()
+
+	rules, err := pfctlCtx(ctx, "", "-a", anchorName, "-s", "rules")
+	if err != nil {
+		return "", false, fmt.Errorf("read the dezhban anchor: %w", err)
+	}
+	if strings.TrimSpace(rules) == "" {
+		return "", false, nil
+	}
+	var b0 strings.Builder
+	// pf being switched off entirely (`pfctl -d`) is the third way a loaded
+	// anchor enforces nothing, alongside an empty anchor and a main ruleset that
+	// does not reference it. IsBlocked checks all three; a readback that checked
+	// only two would render a disabled firewall as a healthy one.
+	ictx, icancel := context.WithTimeout(context.Background(), pfctlTimeout)
+	defer icancel()
+	if info, err := pfctlCtx(ictx, "", "-s", "info"); err != nil {
+		b0.WriteString("# WARNING: could not read pf's status, so whether pf is enabled at all is UNKNOWN — these rules may be loaded but inert.\n")
+	} else if !strings.Contains(info, "Status: Enabled") {
+		b0.WriteString("# WARNING: pf is DISABLED — these rules are loaded but nothing is being filtered. Re-enable with `sudo pfctl -e`.\n")
+	}
+	// Its own timeout, like the status probe above and for the same reason:
+	// every probe here gets a full pfctlTimeout rather than the remainder of a
+	// shared budget. Sharing one meant a slow earlier call could leave nothing
+	// for a later probe, which then fails on deadline and prints a WARNING on a
+	// perfectly healthy host — the readback crying wolf about the exact
+	// condition it exists to report. IsBlocked shares one budget because it
+	// returns a single bool and a timeout there is simply an error; this
+	// returns text a person reads, so a false warning is worse than a slow read.
+	mctx, mcancel := context.WithTimeout(context.Background(), pfctlTimeout)
+	defer mcancel()
+	switch main, err := pfctlCtx(mctx, "", "-s", "rules"); {
+	case err != nil:
+		// Never silently. A loaded anchor that pf does not descend into is
+		// exactly the non-enforcing state this readback exists to expose, so
+		// "could not check" must not render identically to "checked, fine".
+		b0.WriteString("# WARNING: could not read the main ruleset, so whether pf descends into the dezhban anchor is UNKNOWN — these rules may be loaded but inert.\n")
+	case mainRulesetReferencesAnchor(main):
+		b0.WriteString("# main ruleset references the dezhban anchor\n")
+	default:
+		b0.WriteString("# WARNING: the main ruleset does NOT reference the dezhban anchor — these rules are loaded but pf never descends into them.\n")
+	}
+	b0.WriteString(rules)
+	return b0.String(), true, nil
+}
+
 // mainRulesetReferencesAnchor reports whether pfctl's rendered main ruleset
 // still contains our anchor reference. Split out from IsBlocked so it can be
 // exercised in tests against captured `pfctl -s rules` output without

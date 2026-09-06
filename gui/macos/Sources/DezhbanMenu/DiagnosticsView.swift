@@ -17,12 +17,14 @@ struct DiagnosticsView: View {
             Divider()
             content
         }
+        .onDisappear { state.clearInstalledRules() }
         .onAppear {
             // The report and the inventory live on AppState (they feed the
             // sidebar badge and survive navigation); this pane only asks for a
             // refresh when what is there has gone stale.
             state.runDoctorIfStale(maxAge: 15 * 60)
             state.refreshVPNInventoryIfStale()
+            state.refreshAppliedRules()
         }
     }
 
@@ -46,6 +48,12 @@ struct DiagnosticsView: View {
     private func run() {
         state.runDoctor(discover: discover)
         state.refreshVPNInventoryIfStale(maxAge: 0)
+        state.refreshAppliedRules()
+        // The kernel readback is a snapshot and re-reading it costs a password,
+        // so a refresh drops it rather than silently renewing it. Keeping it
+        // would leave the previous posture's rules under a heading that says
+        // "now", beside freshly-read rows.
+        state.clearInstalledRules()
     }
 
     @ViewBuilder
@@ -57,7 +65,16 @@ struct DiagnosticsView: View {
         // async doctor run returned; after a doctor failure with nothing
         // retained; and permanently on a host where `doctor --json` cannot run
         // at all. refreshVPNInventoryIfStale fetched it and nothing showed it.
-        if state.doctorReport != nil || state.vpnInventory != nil {
+        //
+        // The firewall-rules section needs NEITHER of them: the applied record is
+        // its own unprivileged read, the kernel button is a button, and the
+        // previews render from config. Leaving it inside the gate hid it exactly
+        // where it is most wanted — on a host where `doctor --json` cannot run,
+        // which is the state someone is most likely diagnosing — and on every
+        // first open until the async doctor returned. Same bug the paragraph
+        // above describes for the inventory, one section over, so the gate now
+        // opens for anything the List can show.
+        if state.doctorReport != nil || state.vpnInventory != nil || state.cliFound {
             List {
                 if let error = state.doctorError {
                     Section {
@@ -76,7 +93,9 @@ struct DiagnosticsView: View {
                             .textSelection(.enabled)
                     }
                 }
+                noReportYetRow
                 vpnInventorySection
+                firewallRulesSection
                 if let report = state.doctorReport {
                     Section {
                         Label(report.ok ? "No lockout risk found" : "Found something to fix",
@@ -90,8 +109,6 @@ struct DiagnosticsView: View {
                 }
             }
             .listStyle(.inset)
-        } else if let error = state.doctorError {
-            guided(symbol: "exclamationmark.triangle", title: "Couldn't run diagnostics", message: error)
         } else if !state.cliFound {
             guided(symbol: "questionmark.circle", title: "dezhban CLI not found",
                    message: "Install the dezhban command-line tool, then run diagnostics again.")
@@ -99,6 +116,195 @@ struct DiagnosticsView: View {
             guided(symbol: "stethoscope", title: "No results yet", message: "Run diagnostics to see tunnels, endpoints, and lockout risks.")
         }
     }
+
+    /// The prompt that used to live in the outer `else`. Widening the section's
+    /// gate to include `cliFound` made that branch unreachable — the first
+    /// condition is true whenever `cliFound` is — which silently deleted the
+    /// pane's only call to action on a healthy host's first open. It belongs
+    /// inside the List now, beside the firewall rows that are there already.
+    @ViewBuilder
+    private var noReportYetRow: some View {
+        if state.doctorReport == nil && !state.doctorRunning {
+            Section {
+                Label("Run diagnostics to see tunnels, endpoints, and lockout risks.",
+                      systemImage: "stethoscope")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - firewall rules
+
+    /// What the guard is doing to your traffic, in three parts, because they
+    /// answer three different questions and are not interchangeable:
+    ///
+    ///  - **Applied** — what dezhban recorded installing, and when. Its own
+    ///    account: cheap, unprivileged, and identical on every platform.
+    ///  - **In the kernel** — what is actually loaded, read back on demand.
+    ///    Costs a password, so it is never automatic. This is the half that can
+    ///    see something outside dezhban having flushed the firewall.
+    ///  - **Would apply** — the ruleset of each posture, rendered without
+    ///    applying anything (`print-rules --mode`). The safe way to find out
+    ///    what FULL BLOCK does before you are in it.
+    ///
+    /// The labels say which is which. "The current rules" would be a claim only
+    /// the middle one can make.
+    @ViewBuilder
+    private var firewallRulesSection: some View {
+        Section("Firewall rules") {
+            appliedRow
+            installedRow
+            previewRows
+        }
+    }
+
+    @ViewBuilder
+    private var appliedRow: some View {
+        if let a = state.appliedRules {
+            // The posture is in the title and the time is only in the caption,
+            // so a pane held open across GUARD → FULL BLOCK kept reading
+            // "Applied by dezhban — Guard". This read is unprivileged and cheap,
+            // unlike the kernel one, so the honest fix is to say WHEN, in the
+            // title, where the claim is made.
+            rulesDisclosure(
+                title: "Applied by dezhban — \(postureLabel(a.mode)), at \(Self.stamp.string(from: a.at))",
+                caption: "What dezhban installed at \(Self.stamp.string(from: a.at)), in \(a.backend) syntax. "
+                    + "This is dezhban's own record, not a reading of the firewall.",
+                rules: a.rules)
+        } else {
+            Label("No ruleset recorded yet — dezhban writes one every time it applies rules. "
+                    + "In standby it has applied none.",
+                  systemImage: "doc.text")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    @ViewBuilder
+    private var installedRow: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 10) {
+                Button("Read from the kernel…") { state.readInstalledRules() }
+                    .disabled(state.installedRulesRunning || !state.cliFound)
+                    .help("Asks the firewall itself what dezhban rules it holds. Needs your password. "
+                        + "It only reads — nothing is installed, changed, or repaired.")
+                if state.installedRulesRunning { ProgressView().controlSize(.small) }
+            }
+            if let error = state.installedRulesError {
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
+            if let i = state.installedRules {
+                if i.drift {
+                    // The finding, stated plainly. No repair button: the run
+                    // loop's verification tick already re-applies rules that go
+                    // missing, and a second repairer would be a second writer of
+                    // the firewall.
+                    Label("dezhban applied rules, but the firewall holds none. Something removed them. "
+                            + "dezhban's own verification re-applies on its next check — this pane only reports.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                } else if !i.loaded {
+                    // Scoped to dezhban's OWN rules. On Windows the blocking
+                    // lives in each profile's default outbound action, so their
+                    // absence does not mean egress is open — and the readback
+                    // below says which.
+                    Label("dezhban has no rules of its own loaded — expected in standby, or with dezhban stopped.",
+                          systemImage: "info.circle")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                    if !i.installed.isEmpty {
+                        rulesDisclosure(
+                            title: state.installedRulesAt.map { "What the firewall reported, read at \(Self.stamp.string(from: $0))" }
+                                ?? "What the firewall reported",
+                            caption: "dezhban's own rules are absent, but this is what the firewall said when asked. "
+                                + "On Windows the outbound default is where the blocking lives.",
+                            rules: i.installed)
+                    }
+                } else {
+                    // Loaded but NOT filtering is the loudest thing this pane
+                    // can learn, and every other signal reads healthy when it
+                    // happens — the rules are all present. It gets its own
+                    // visible row rather than living inside a collapsed
+                    // ruleset, where an operator would have to expand pf syntax
+                    // and read it to find out nothing is being filtered.
+                    if !i.enforcing {
+                        Label("dezhban's rules are loaded but are NOT filtering.\n"
+                                + i.warnings.joined(separator: "\n"),
+                              systemImage: "exclamationmark.octagon.fill")
+                            .font(.callout)
+                            .foregroundStyle(.orange)
+                            .textSelection(.enabled)
+                    }
+                    // Titled by WHEN it was read, never "now": this is a
+                    // snapshot nothing refreshes, and the posture can change
+                    // underneath it.
+                    rulesDisclosure(
+                        title: state.installedRulesAt.map { "In the kernel, read at \(Self.stamp.string(from: $0))" }
+                            ?? "In the kernel, as read",
+                        caption: "Read back from the firewall, in \(i.backend) syntax. It is a snapshot from when "
+                            + "you pressed the button, not a live view — read it again after the posture changes. "
+                            + "It will not match the applied text byte for byte: the firewall renders its own "
+                            + "normalised form.",
+                        rules: i.installed)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var previewRows: some View {
+        ForEach(RulesetPreview.allCases) { mode in
+            rulesDisclosure(
+                title: "Would apply — \(mode.label)",
+                caption: mode.detail,
+                rules: nil,
+                load: { DezhbanCLI.renderRules(mode: mode) })
+        }
+    }
+
+    /// One collapsed ruleset. `rules` is text already in hand; `load` fetches it
+    /// the first time it is opened instead — the three previews each cost a
+    /// subprocess, and rendering all of them on every visit to this pane would
+    /// be three processes nobody asked for.
+    @ViewBuilder
+    private func rulesDisclosure(title: String, caption: String,
+                                 rules: String?,
+                                 load: (() -> String?)? = nil) -> some View {
+        DisclosureGroup {
+            RulesetBody(rules: rules, load: load)
+        } label: {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(title).font(.callout.weight(.medium))
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    /// The posture strings are stable CLI identifiers, not display text, so they
+    /// are mapped rather than shown raw. An unknown one is shown as-is: a
+    /// daemon newer than this app is not a reason to hide what it said.
+    private func postureLabel(_ mode: String) -> String {
+        RulesetPreview(rawValue: mode)?.label ?? mode
+    }
+
+    /// Times shown beside a ruleset carry their DATE as well. A record survives
+    /// restarts, so one applied three days ago rendered as a bare "14:02:11"
+    /// reads as today — precisely the wrong impression for the row that tells
+    /// someone what is enforcing.
+    private static let stamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .short
+        f.timeStyle = .medium
+        return f
+    }()
 
     /// The VPN inventory (`detect-vpn --json`): which tunnels and VPN apps
     /// detection can see, and which one is connected now. Hidden entirely when
@@ -255,4 +461,48 @@ struct DiagnosticsView: View {
         .padding(24)
     }
 
+}
+
+/// The body of one ruleset disclosure: monospaced, selectable, and scrollable in
+/// its own right so a long ruleset cannot stretch the pane.
+///
+/// It exists as a view rather than a `@ViewBuilder` function so `load` can run
+/// once, on first appearance, and hold its result. The three posture previews
+/// each cost a `print-rules` subprocess; rendering them eagerly would spawn
+/// three processes on every visit to Diagnostics for text nobody may open.
+private struct RulesetBody: View {
+    let rules: String?
+    let load: (() -> String?)?
+
+    @State private var loaded: String?
+    @State private var failed = false
+
+    var body: some View {
+        Group {
+            if let text = rules ?? loaded {
+                ScrollView([.horizontal, .vertical]) {
+                    Text(text)
+                        .font(.system(.caption, design: .monospaced))
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .frame(maxHeight: 260)
+            } else if failed {
+                Text("Couldn't render this ruleset. `dezhban print-rules` needs a config it can read.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .onAppear {
+            guard rules == nil, loaded == nil, let load else { return }
+            DispatchQueue.global(qos: .userInitiated).async {
+                let text = load()
+                DispatchQueue.main.async {
+                    if let text { loaded = text } else { failed = true }
+                }
+            }
+        }
+    }
 }

@@ -1362,6 +1362,60 @@ end up typing a password.
       `dezhban doctor` prints in a terminal.
 - [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
 
+### Firewall rules (Diagnostics)
+
+- [ ] **Applied appears without a password.** With the guard up, open
+      Diagnostics: "Applied by dezhban — Guard" shows a timestamp and the pf
+      ruleset, with no prompt. Compare it against
+      `dezhban print-rules --applied` in a terminal — same text.
+- [ ] **It tracks the posture.** Drive a block with `--simulate-country IR`; the
+      applied row becomes "Full block" and the timestamp moves. Open a switch
+      window; it becomes "Switch window".
+- [ ] **Teardown clears it — by every route.** Check all three separately:
+      `sudo dezhban stop` (the daemon's own Cleanup), `sudo dezhban panic`, and
+      `sudo dezhban unblock --force`. After each, re-open Diagnostics and run
+      `dezhban print-rules --applied`: both must read "no ruleset recorded yet".
+      `panic` is the one that matters most and the one that was broken — it is
+      deliberately daemon-independent, so nothing else will ever clear the
+      record. A stale ruleset shown as live over an open network is the failure
+      this must never have.
+- [ ] **A block applied by hand is recorded.** `sudo dezhban block --guard`
+      with no daemon running, then `dezhban print-rules --applied`: it shows that
+      ruleset, not "nothing recorded". The record must not be truthful only when
+      the daemon happened to be the one enforcing.
+- [ ] **The kernel readback asks for a password and only reads.** "Read from the
+      kernel…" prompts once and shows `pfctl -a dezhban -s rules` output. Confirm
+      nothing changed: `dezhban status` and the posture are identical before and
+      after, and running it with the guard DOWN reports "no dezhban rules are
+      loaded" rather than an error.
+- [ ] **Loaded but not filtering is reported as loudly as missing.** With the
+      guard up, disable pf itself (`sudo pfctl -d`) — the rules stay loaded — then
+      "Read from the kernel…": the pane must show an orange **"dezhban's rules are
+      loaded but are NOT filtering"** row without expanding anything, and
+      `sudo dezhban print-rules --installed --json` must report
+      `"enforcing": false` with a `warnings` entry. Re-enable with `sudo pfctl -e`.
+      This is the state where every other signal reads healthy, so a warning
+      buried inside the ruleset text would never be found.
+- [ ] **Drift is reported, not repaired.** With the guard up, flush the anchor by
+      hand (`sudo pfctl -a dezhban -F rules`), then "Read from the kernel…": the
+      pane must warn that dezhban applied rules the firewall no longer holds, and
+      must offer **no** repair button. Then confirm the daemon's own verify tick
+      re-applies them within `vpn.advanced.verifyInterval` and the log says so.
+- [ ] **The previews cost nothing and need no root.** As an unprivileged user
+      with dezhban stopped, expand each of Guard / Full block / Switch window:
+      each renders, and each matches `dezhban print-rules --mode <m>`.
+- [ ] **Only what is opened is rendered.** Visiting Diagnostics with every
+      disclosure collapsed must spawn no `print-rules --mode` subprocess (watch
+      with `sudo fs_usage -w -f exec | grep dezhban`, or Activity Monitor). One
+      `print-rules --applied --json` is expected on every visit — that is the
+      cheap unprivileged record the "Applied by dezhban" row is made of, and it
+      is fetched whether or not anything is expanded.
+- [ ] **The kernel readback does not outlive its posture.** Read from the
+      kernel with the guard up, then force FULL BLOCK (`--simulate-country IR`).
+      The kernel row must not still be presenting the guard ruleset: it is
+      titled with the time it was read, and pressing **Run diagnostics** clears
+      it rather than leaving a stale snapshot beside fresh rows.
+
 ### Help pane
 
 The pane's whole reason for existing is that it works while the guard has cut

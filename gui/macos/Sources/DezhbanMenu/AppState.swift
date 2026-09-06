@@ -164,6 +164,41 @@ final class AppState: ObservableObject {
     @Published var doctorReport: DoctorReport?
     @Published var doctorError: String?
     @Published var doctorRunning = false
+
+    /// The rules dezhban recorded applying, and the rules the kernel actually
+    /// holds. Two separate reads: the first is unprivileged and refreshed with
+    /// the rest of the pane, the second costs a password and only happens when
+    /// asked for.
+    @Published var appliedRules: AppliedRuleset?
+    @Published var installedRules: InstalledRuleset?
+    /// When the kernel readback above was captured. A readback is a SNAPSHOT,
+    /// not a subscription: nothing re-reads it when the posture changes, so
+    /// showing it under a bare "In the kernel now" would let a guard ruleset
+    /// read during GUARD go on describing the firewall after FULL BLOCK
+    /// engaged — the "the current rules" claim Rulesets.swift says no surface
+    /// may make. The pane labels it with this instead.
+    @Published var installedRulesAt: Date?
+    @Published var installedRulesError: String?
+    @Published var installedRulesRunning = false
+
+    /// Drops a kernel readback, so a stale snapshot cannot outlive the posture
+    /// it described. Called when the pane re-runs its diagnostics and when it
+    /// goes away; re-reading costs a password, so it is never done automatically.
+    func clearInstalledRules() {
+        installedRules = nil
+        installedRulesAt = nil
+        installedRulesError = nil
+        // Invalidate any read still in flight. The privileged call sits behind a
+        // password prompt, so it can easily outlive the clear that was meant to
+        // discard it — pressing Run diagnostics, or leaving the pane, while the
+        // prompt is open — and its completion would then repopulate exactly the
+        // snapshot clearing existed to throw away.
+        installedRulesGeneration &+= 1
+    }
+
+    /// Bumped by every clear, captured by every read, compared on completion.
+    /// A read whose generation no longer matches is discarded rather than shown.
+    private var installedRulesGeneration = 0
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
     /// sidebar can subscribe with removeDuplicates() and never reload at 1 Hz.
@@ -349,6 +384,54 @@ final class AppState: ObservableObject {
                     // not go on asserting the pre-failure verdict. A run that
                     // can't complete is itself something to look at.
                     self.diagnosticsAttention = true
+                }
+            }
+        }
+    }
+
+    /// Reads what dezhban recorded applying. Unprivileged and cheap — the record
+    /// is a small file beside state.json — so it refreshes with the rest of the
+    /// Diagnostics pane rather than on demand.
+    func refreshAppliedRules() {
+        guard cliFound else { return }
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let rules = DezhbanCLI.readAppliedRules()
+            DispatchQueue.main.async { self?.appliedRules = rules }
+        }
+    }
+
+    /// Reads dezhban's rules back out of the kernel. Costs an admin prompt, so
+    /// it is never automatic.
+    ///
+    /// A READ — it installs nothing, changes nothing, and does not go through
+    /// `Backend.Apply`, so it leaves the run loop's single-writer rule alone.
+    /// There is deliberately no repair here either: the run loop's verification
+    /// tick already re-applies rules that go missing, and a second repairer
+    /// would be a second writer.
+    func readInstalledRules() {
+        guard !installedRulesRunning, cliFound else { return }
+        installedRulesRunning = true
+        installedRulesError = nil
+        let generation = installedRulesGeneration
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let r = DezhbanCLI.runPrivileged(["print-rules", "--installed", "--json"])
+            let decoded = r.ok ? r.output.data(using: .utf8).flatMap(InstalledRuleset.decode) : nil
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.installedRulesRunning = false
+                // Someone cleared while this was behind the password prompt.
+                // Publishing now would restore the very snapshot that clear
+                // invalidated, under a heading naming the time it was read.
+                guard generation == self.installedRulesGeneration else { return }
+                if let decoded {
+                    self.installedRules = decoded
+                    self.installedRulesAt = Date()
+                } else {
+                    self.installedRules = nil
+                    self.installedRulesAt = nil
+                    self.installedRulesError = r.output.isEmpty
+                        ? "No output from `dezhban print-rules --installed`."
+                        : r.output
                 }
             }
         }

@@ -61,7 +61,7 @@ _dezhban() {
         return
     fi
     case "$cur" in
-        -*) COMPREPLY=( $(compgen -W "--config --mode --force --guard --dry-run --once --json --discover --simulate-country --verbose -v --no-sudo --no-daemon" -- "$cur") ) ;;
+        -*) COMPREPLY=( $(compgen -W "--config --mode --applied --installed --force --guard --dry-run --once --json --discover --simulate-country --verbose -v --no-sudo --no-daemon" -- "$cur") ) ;;
     esac
 }
 complete -F _dezhban dezhban
@@ -83,7 +83,7 @@ _dezhban() {
         config) compadd -- path show get set reset edit; return ;;
         token) compadd -- status enroll forget; return ;;
     esac
-    compadd -- --config --mode --force --guard --dry-run --once --json --discover --simulate-country --verbose --no-sudo --no-daemon
+    compadd -- --config --mode --applied --installed --force --guard --dry-run --once --json --discover --simulate-country --verbose --no-sudo --no-daemon
 }
 compdef _dezhban dezhban
 `
@@ -95,6 +95,8 @@ complete -c dezhban -n '__fish_use_subcommand' -a '` + completionCommands + `'
 # flag values
 complete -c dezhban -l mode -x -a 'guard fullblock switch'
 complete -c dezhban -l config -r
+complete -c dezhban -l applied
+complete -c dezhban -l installed
 complete -c dezhban -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 complete -c dezhban -n '__fish_seen_subcommand_from config' -a 'path show get set reset edit'
 complete -c dezhban -n '__fish_seen_subcommand_from token' -a 'status enroll forget'

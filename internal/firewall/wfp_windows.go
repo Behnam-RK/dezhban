@@ -204,6 +204,67 @@ func (b *wfpBackend) IsBlocked() (bool, error) {
 	return true, nil
 }
 
+// InstalledRules renders dezhban's own firewall rules back out of Windows, plus
+// each profile's default outbound action — which is where the actual blocking
+// lives on this platform (see the Model note above renderBlockScript), so a list
+// of allow rules without it would be a misleading half of the picture.
+//
+// Scoped to `-Group dezhban`, exactly like Remove-NetFirewallRule, so it reports
+// our rules and nothing else. A read: it changes nothing and is safe from any
+// goroutine or process. It does need an elevated shell, which is why nothing
+// calls it on a tick.
+// noRulesMarker is emitted on its own line when dezhban's rule group is absent.
+// A marker line rather than a bare whole-output word because -ErrorAction
+// SilentlyContinue does not suppress warnings on the success stream — the same
+// reason parseProfileQuery scans for its answer instead of comparing the whole
+// string. Incidental leading text would otherwise make "no rules" read as
+// "rules loaded", with the noise shown to the user as the kernel's ruleset.
+const noRulesMarker = "# NO-DEZHBAN-RULES"
+
+// TODO(windows): this emits no firewall.WarningPrefix line, ever, so
+// `enforcing` degrades to `loaded` on Windows — a host with dezhban's group
+// present and a profile whose DefaultOutboundAction is no longer Block reports
+// enforcing while filtering nothing. Deciding that properly means comparing the
+// live defaults against appliedActionPath(), the way IsBlocked does, and it is
+// not written blind: Windows is an unfinished target here (see the matrix note
+// in .github/workflows/ci.yml) and this cannot be exercised on the machines
+// that build it. docs/usage/cli.md carries the caveat so the field is not read
+// as a promise it does not keep on this platform.
+func (b *wfpBackend) InstalledRules() (string, bool, error) {
+	// The profile defaults come FIRST and unconditionally, before the group is
+	// even looked up. On Windows that default is where the blocking actually
+	// lives: Remove-NetFirewallRule -Group dezhban takes away only the allow
+	// rules, so a host whose group was removed by hand while
+	// DefaultOutboundAction is still Block is fully cut — and reporting that as
+	// "no dezhban rules are loaded" would describe a total lockout as standby.
+	script := strings.Join([]string{
+		"'# default outbound action per profile'",
+		"Get-NetFirewallProfile | Select-Object Name,DefaultOutboundAction | Format-Table -AutoSize | Out-String",
+		"$g = Get-NetFirewallRule -Group " + groupName + " -ErrorAction SilentlyContinue",
+		"if ($null -eq $g) { '" + noRulesMarker + "'; exit 0 }",
+		"'# dezhban rules'",
+		"$g | Select-Object DisplayName,Direction,Action,Enabled | Format-Table -AutoSize | Out-String",
+	}, "\n")
+	out, err := powershell(script)
+	if err != nil {
+		return "", false, fmt.Errorf("read the dezhban firewall group: %w", err)
+	}
+	// Text is returned either way: with no group there is still a profile table
+	// worth reading, and it is the half that says whether egress is cut.
+	return out, !hasNoRulesMarker(out), nil
+}
+
+// hasNoRulesMarker reports whether the script said dezhban's group is absent.
+// Split out so it can be exercised against captured output on any platform.
+func hasNoRulesMarker(out string) bool {
+	for _, line := range strings.Split(out, "\n") {
+		if strings.TrimSpace(line) == noRulesMarker {
+			return true
+		}
+	}
+	return false
+}
+
 // queryBlockedAndDefaults combines the group-existence check and the
 // per-profile DefaultOutboundAction query into a single PowerShell
 // invocation. IsBlocked is called synchronously from the run loop's verifyC

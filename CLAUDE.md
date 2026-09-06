@@ -89,6 +89,14 @@ command file when no daemon answers. Everything else — `status`, `detect-vpn`,
 [docs/usage/cli.md](docs/usage/cli.md); the upgrade design in full:
 [docs/usage/upgrade.md](docs/usage/upgrade.md).
 
+`print-rules --installed` is the one read-only command that still needs root on
+unix, because it asks the kernel for dezhban's own rules
+(`FirewallBackend.InstalledRules`) rather than rendering them. It is deliberately
+NOT in the privileged set: that set auto-re-execs under sudo via `requireRoot`,
+and silently elevating a diagnostic read is not something a read should do — it
+prints the `sudo` hint and exits instead. It installs and changes nothing, and on
+Windows it needs no elevation at all.
+
 ## Rules that must not be broken
 
 The design depends on these invariants (rationale in

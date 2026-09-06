@@ -12,6 +12,31 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **The firewall rules are visible in Diagnostics.** Three things, because they
+  answer three different questions: what dezhban **recorded installing** (and
+  when), what the **kernel actually holds** (read back on demand, needs your
+  password), and what **each posture would apply** — guard, full block, switch
+  window — rendered without applying anything. Each carries a plain-language
+  caption saying what that posture does to your traffic. When dezhban recorded
+  applying rules and the firewall holds none, the pane says so; it does not offer
+  to repair, because the running daemon's own verification tick already does
+  that and a second repairer would be a second writer. The readback also reports
+  **loaded is not enforcing**: pf switched off, an anchor the main ruleset no
+  longer references, or an nft chain whose policy drifted off `drop` all leave
+  dezhban's rules present and filtering nothing. That gets its own row, and its
+  own `enforcing` field in `--json`, because it is the state where every other
+  signal reads healthy.
+- **`dezhban print-rules --applied` and `--installed`**, the CLI half of the
+  above. `--applied` reads a record dezhban now writes on every successful apply
+  (a 0644 file beside the state file — no root, same on every platform).
+  `--installed` asks the firewall itself, scoped to dezhban's own
+  anchor/table/group and needing root for that reason; it installs nothing and
+  repairs nothing. `--json` on either for machine output. The two texts will not
+  match byte for byte on a healthy host — the firewall renders its own
+  normalised form — so neither surface diffs them.
+
 ## [0.12.0] - 2026-09-06
 
 ### Added
