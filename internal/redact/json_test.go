@@ -317,3 +317,19 @@ func TestARememberedHostnameIsReplacedInErrorText(t *testing.T) {
 		t.Errorf("got %q, want the token the config already uses", got)
 	}
 }
+
+// A redacted bare endpoint must not eat a provider hostname that contains it.
+//
+// The literal pass matches on the name's own alphabet — `[A-Za-z0-9._-]` — so
+// an endpoint called `geojs` is not claimed inside `get.geojs.io`, where dots
+// flank it on both sides. That is what keeps "which provider answered", a real
+// diagnostic and an allow-listed name, readable next to a redacted endpoint
+// that happens to share a word with it.
+func TestARedactedEndpointDoesNotClaimAProviderHostname(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"endpoints":["geojs"]}}`)
+	got := r.JSON(`{"details":["reached https://get.geojs.io/v1/ip.json"]}`)
+	if !strings.Contains(got, "get.geojs.io") {
+		t.Errorf("the provider hostname was claimed by a colliding endpoint: %s", got)
+	}
+}

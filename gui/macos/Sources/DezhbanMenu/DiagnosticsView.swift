@@ -155,10 +155,17 @@ struct DiagnosticsView: View {
         if let problems = state.problems {
             Section("Recent problems") {
                 if let partial = state.problemsPartial {
-                    Label("Part of the log could not be read, so this list may be incomplete. \(partial)",
+                    // The CLI's own warning goes in the tooltip, not inline: it
+                    // already opens with "part of the log could not be read", so
+                    // interpolating it after this sentence said the same thing
+                    // twice. Parsing the prefix off would couple this view to the
+                    // exact wording of a Go string, which is the coupling this
+                    // whole path avoids by parsing the log in Go.
+                    Label("Part of the log could not be read, so this list may be incomplete.",
                           systemImage: "exclamationmark.triangle")
                         .font(.callout)
                         .foregroundStyle(.orange)
+                        .help(partial)
                 }
                 if problems.isEmpty && state.problemsPartial == nil {
                     Label("Nothing logged as a warning or an error.", systemImage: "checkmark.circle.fill")
