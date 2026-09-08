@@ -1394,6 +1394,22 @@ end up typing a password.
       rule can see. Confirm the structure survived: `/Users/user-1/Downloads/…`
       still reads as a Downloads folder, and the same profile is the same
       `profile-N` token in config.json and state.json.
+- [ ] **Nothing dezhban ships is redacted.** The other direction, and it fails
+      just as badly: a bundle that hides the diagnosis has thrown away the
+      answer and hidden no identity. In the same bundle confirm dezhban's OWN
+      vocabulary survived —
+      `doctor.json`'s check names (`config`, `tunnels`, `endpoints`, `lockout`,
+      …), the shipped geo-provider hostnames, the posture strings (`guard`,
+      `full-block`, `switch-window`, `standby`), the mode names in
+      rules-preview.txt, and every `utun*`/`lo0`. If the check names read as
+      `profile-N`, the redactor has replaced the answer rather than the
+      identity, and the legend is overcounting to match.
+- [ ] **Every JSON entry still opens.** `for f in *.json; do python3 -m json.tool
+      "$f" >/dev/null || echo "$f"; done` over the unpacked bundle prints
+      nothing. A redactor that rewrites text it does not understand can break
+      the escaping of the file it is rewriting, and a `doctor.json` no reader
+      can open is a diagnosis nobody gets — which looks exactly like a working
+      bundle until someone tries to use it.
 - [ ] **The bundle is 0600.** `ls -l dezhban-report-*.zip` — an
       `--include-network` bundle must not be readable by other local accounts.
 - [ ] **The README never leaks.** Its legend reports counts

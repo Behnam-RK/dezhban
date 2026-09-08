@@ -14,12 +14,15 @@ package logread
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/logging"
 )
 
 // Record is one parsed log line.
@@ -59,6 +62,19 @@ func Severity(level string) int {
 	}
 }
 
+// Known reports whether Severity recognised the level rather than defaulting it
+// to INFO. Ranking an unknown level is not the same as judging it, and only the
+// filter needs the difference: giving TRACE the INFO rank and then applying a
+// warn-and-above threshold to it drops the record, which is precisely what
+// Severity's comment promises does not happen.
+func Known(level string) bool {
+	switch strings.ToUpper(strings.TrimSpace(level)) {
+	case "DEBUG", "INFO", "WARN", "WARNING", "ERROR":
+		return true
+	}
+	return false
+}
+
 // ParseLine parses one slog text line. It never fails: a line it cannot make
 // sense of comes back with Raw set and Msg holding the whole line, because a
 // malformed line in a diagnostic log is itself worth seeing.
@@ -90,11 +106,25 @@ func ParseLine(line string) Record {
 			r.Attrs = append(r.Attrs, Attr{Key: key, Value: value})
 		}
 	}
+	// Whatever the pair loop could not read is KEPT, not dropped. slog quotes a
+	// key that needs quoting (`"a=b"=v`), nextPair refuses such a key, and
+	// breaking there discarded every REMAINING attr on the line rather than the
+	// one it choked on — with msg already seen, the raw-line fallback below
+	// could not fire either, so the evidence left in Raw and nowhere a surface
+	// reads. "Nothing is silently dropped" has to hold mid-line too.
+	if leftover := strings.TrimSpace(rest); leftover != "" && (sawMsg || len(r.Attrs) > 0) {
+		r.Attrs = append(r.Attrs, Attr{Key: UnparsedKey, Value: leftover})
+	}
 	if !sawMsg && len(r.Attrs) == 0 {
 		r.Msg = strings.TrimSpace(line)
 	}
 	return r
 }
+
+// UnparsedKey is the attr key ParseLine uses for the tail of a line it could
+// not read as key=value pairs. Named rather than anonymous so a surface can
+// tell dezhban's own words from the daemon's.
+const UnparsedKey = "logread.unparsed"
 
 // nextPair pulls one key=value off the front of s, honouring slog's quoting:
 // a value containing a space, a quote, or an equals sign is written as a Go
@@ -150,24 +180,39 @@ type Options struct {
 // that pushed the file over its rotation threshold. A missing file is an empty
 // result, not an error: a daemon that has never run has no log, and that is an
 // ordinary state for the surfaces that call this.
+//
+// A non-nil error and a non-empty slice arrive TOGETHER when part of the chain
+// could not be read. Callers must report the error and still use the records —
+// the whole point is that one unreadable file costs only itself.
 func Read(path string, opt Options) ([]Record, error) {
 	var all []Record
-	// Oldest archive first, live file last, so the result reads forward in time.
-	for i := 2; i >= 1; i-- {
-		recs, err := readFile(fmt.Sprintf("%s.%d", path, i), opt)
-		if err != nil {
-			return nil, err
-		}
+	var problems []string
+	// Every file is read, and one that fails costs only itself. Returning early
+	// meant a permission problem on the OLDEST archive threw away the live file
+	// with it — the most recent and most useful records lost to the least
+	// important one. The error still travels back beside the records, so a
+	// caller can say what it could not read without pretending it read nothing.
+	read := func(p string) {
+		recs, err := readFile(p, opt)
 		all = append(all, recs...)
+		if err != nil {
+			problems = append(problems, err.Error())
+		}
 	}
-	recs, err := readFile(path, opt)
-	if err != nil {
-		return nil, err
+	// Oldest archive first, live file last, so the result reads forward in time.
+	// The chain length comes from the WRITER's constant, not a literal matching
+	// it by coincidence: growing the writer's chain must not leave this reader
+	// silently dropping the oldest records.
+	for i := logging.FileBackups; i >= 1; i-- {
+		read(fmt.Sprintf("%s.%d", path, i))
 	}
-	all = append(all, recs...)
+	read(path)
 
 	if opt.Limit > 0 && len(all) > opt.Limit {
 		all = all[len(all)-opt.Limit:]
+	}
+	if len(problems) > 0 {
+		return all, errors.New(strings.Join(problems, "; "))
 	}
 	return all, nil
 }
@@ -198,7 +243,12 @@ func readFile(path string, opt Options) ([]Record, error) {
 			continue
 		}
 		r := ParseLine(line)
-		if Severity(r.Level) < min {
+		// Only a level this build RECOGNISES may be filtered out. A level it
+		// does not know is not evidence the record is unimportant — a newer
+		// daemon, a custom slog level, a hand-edited line — and ranking it as
+		// INFO for ordering must not become a warn-and-above query silently
+		// swallowing it.
+		if Known(r.Level) && Severity(r.Level) < min {
 			continue
 		}
 		if !opt.Since.IsZero() && !r.Time.IsZero() && r.Time.Before(opt.Since) {
@@ -206,8 +256,12 @@ func readFile(path string, opt Options) ([]Record, error) {
 		}
 		out = append(out, r)
 	}
+	// `out`, not nil: a single line past the 4 MiB cap used to cost every record
+	// already parsed from this file, so one pathological line took the whole
+	// history with it. The error still travels — it is the caller's to report —
+	// but it no longer erases what was readable.
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("read %s: %w", filepath.Base(path), err)
+		return out, fmt.Errorf("read %s: %w", filepath.Base(path), err)
 	}
 	return out, nil
 }

@@ -433,6 +433,13 @@ interesting failure is often the one that pushed the file over its rotation
 threshold. `--limit` keeps the most recent N (200 by default, `0` for all).
 Nothing matched exits **0**; "no errors" is an answer, usually the good one.
 
+`--level` takes `debug`, `info`, `warn` (or `warning`) and `error`, and
+anything else is rejected rather than quietly answering a different question. A record whose
+*own* level this build does not recognise — a newer daemon, a custom slog
+level — is never filtered out, whatever `--level` you asked for: a level
+dezhban cannot rank is not evidence the record is unimportant, and a log
+reader that silently drops lines is worse than none.
+
 ### Collecting a bug report
 
 ```sh

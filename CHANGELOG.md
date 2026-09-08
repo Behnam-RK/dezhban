@@ -12,8 +12,6 @@ current as you land changes.
 
 ## [Unreleased]
 
-## [0.13.0] - 2026-09-06
-
 ### Added
 
 - **Recent problems, in Diagnostics.** Warn-and-worse records from dezhban's own
@@ -38,6 +36,83 @@ current as you land changes.
   unreadable. Hostname redaction works from an allow-list, so an unanticipated
   name is redacted rather than leaked. `--include-network` (a checkbox in the
   app) produces the full-fidelity version and says so in three places.
+
+### Fixed
+
+- **The diagnostic bundle redacts the identifiers that are not addresses.** Your
+  profile names (`vpn.profiles[].name`, `activeProfile`, `tunnelHint`), the
+  account name in any home-directory path, your Mac's `.local` name, and the
+  basename of a `.conf`/`.ovpn` you imported all went into a "safe to paste into
+  a public issue" bundle verbatim — they are ordinary words rather than
+  address-shaped text, so nothing was looking at them, and they name the provider
+  or the person as plainly as a server address does. They now get placeholders of
+  their own kind (`profile-1`, `user-1`). The filename-suffix exemptions shrank to
+  match: `.sh` and `.md` are real top-level domains, and `.conf`/`.ovpn` files are
+  yours and named after your VPN.
+- **The diagnostic bundle redacts its own "not included" notes.** They name why a
+  file was left out, and the reason can quote the value that broke — a malformed
+  endpoint is exactly that shape — but they were written into the bundle's README
+  untouched.
+- **The diagnostic bundle is written 0600**, so the `--include-network` version is
+  not readable by every other account on the machine.
+- **A diagnostic bundle whose final write failed is reported as a failure** rather
+  than exiting 0 over a truncated zip, and a README that could not be written is
+  named on stderr instead of vanishing.
+- **`dezhban logs --level` rejects a level it does not know** instead of silently
+  filtering at INFO and then reporting "no `<that level>`-or-worse records" as
+  though the filter had been honoured.
+- **A record logged with an empty message is no longer re-labelled with its own
+  raw line.** `msg=""` is a record dezhban understood; only a line the parser
+  could not read at all falls back to showing the raw text.
+- **A log record whose timestamp dezhban could not read no longer shows a
+  year-0001 clock time** in the app. Go writes an unset timestamp as
+  `0001-01-01T00:00:00Z`, which parses perfectly well, so the "no date" path never
+  ran.
+- **Diagnostics no longer flashes "couldn't read dezhban's log"** while the first
+  read is still in flight.
+- **Redaction reaches identifiers it used to walk past.** An IPv6 address whose
+  compression sits at either end (`::ffff:cb00:7107`, `2001:db8::`) was matched
+  only in part and therefore left verbatim; an endpoint that is a bare name
+  rather than a dotted host (`mullvad`, `vpn.123abc` — both valid endpoints) was
+  not matched at all; and a name containing a quote had its tail left in the
+  bundle beside a stray quote that also broke the file's JSON.
+- **The bundle's JSON is redacted by walking it, not by pattern-matching its
+  text.** A pattern over raw JSON has to reason about escaping, about which
+  array a key sits in, and about where a value ends, and it got each of those
+  wrong: a match starting inside a `\u003c` escape left `doctor.json`
+  unparseable, so the file a reader opens first could not be opened at all;
+  hand-balanced brackets failed OPEN when a profile name contained one, and
+  every name in that file shipped verbatim. The document is now parsed once and
+  values are rewritten as values, with `encoding/json` re-escaping on the way
+  out — key order and all. A document that does not parse still gets the text
+  passes, because a hand-edited config is exactly the host a bundle is
+  collected from.
+- **Profile names in `doctor`'s prose are redacted.** The retention check writes
+  learned entry names into its summary and details as ordinary words ("every
+  learned address for work-nord has aged out") — no dot for a hostname shape to
+  catch, no key for a field-aware pass to read — so every host with learned
+  endpoints shipped its profile names inside a bundle that says it hides them.
+  Doctor's suggested fix commands, meanwhile, stay runnable: `vpn.endpoints` and
+  `wg0.conf` are dezhban's own words and are no longer replaced.
+- **The bundle no longer redacts dezhban's own words.** `doctor.json` gives every
+  check a name, and those were being replaced with `profile-N` — the file a
+  reader opens first came back unreadable, and the README's legend reported VPN
+  profiles the host does not have. A legend entry of one is written `ip-1`, not
+  `ip-1 … ip-1`.
+- **`dezhban logs` stops losing records to one bad line or one bad file.** A
+  record whose own level this build does not recognise is no longer dropped by
+  `--level warn`; a key the parser cannot read no longer discards the rest of
+  that line's attrs; a line past the size cap, and an archive that cannot be
+  opened, each now cost only themselves instead of the whole history.
+- **`dezhban report` cleans up after a failed write**, rather than leaving a
+  truncated zip that looks like a good one. It no longer prints real hostnames
+  and endpoints to the terminal while writing a redacted bundle, and on a host
+  with no config file it says so instead of `open : no such file or directory`.
+
+## [0.13.0] - 2026-09-06
+
+### Added
+
 - **The firewall rules are visible in Diagnostics.** Three things, because they
   answer three different questions: what dezhban **recorded installing** (and
   when), what the **kernel actually holds** (read back on demand, needs your
@@ -169,37 +244,6 @@ current as you land changes.
   reached from the button. It now carries that sentence as both tooltip and
   accessibility hint, with the visible copy hidden from VoiceOver so it is not
   read twice — the same arrangement the action row already used.
-- **The diagnostic bundle redacts the identifiers that are not addresses.** Your
-  profile names (`vpn.profiles[].name`, `activeProfile`, `tunnelHint`), the
-  account name in any home-directory path, your Mac's `.local` name, and the
-  basename of a `.conf`/`.ovpn` you imported all went into a "safe to paste into
-  a public issue" bundle verbatim — they are ordinary words rather than
-  address-shaped text, so nothing was looking at them, and they name the provider
-  or the person as plainly as a server address does. They now get placeholders of
-  their own kind (`profile-1`, `user-1`). The filename-suffix exemptions shrank to
-  match: `.sh` and `.md` are real top-level domains, and `.conf`/`.ovpn` files are
-  yours and named after your VPN.
-- **The diagnostic bundle redacts its own "not included" notes.** They name why a
-  file was left out, and the reason can quote the value that broke — a malformed
-  endpoint is exactly that shape — but they were written into the bundle's README
-  untouched.
-- **The diagnostic bundle is written 0600**, so the `--include-network` version is
-  not readable by every other account on the machine.
-- **A diagnostic bundle whose final write failed is reported as a failure** rather
-  than exiting 0 over a truncated zip, and a README that could not be written is
-  named on stderr instead of vanishing.
-- **`dezhban logs --level` rejects a level it does not know** instead of silently
-  filtering at INFO and then reporting "no `<that level>`-or-worse records" as
-  though the filter had been honoured.
-- **A record logged with an empty message is no longer re-labelled with its own
-  raw line.** `msg=""` is a record dezhban understood; only a line the parser
-  could not read at all falls back to showing the raw text.
-- **A log record whose timestamp dezhban could not read no longer shows a
-  year-0001 clock time** in the app. Go writes an unset timestamp as
-  `0001-01-01T00:00:00Z`, which parses perfectly well, so the "no date" path never
-  ran.
-- **Diagnostics no longer flashes "couldn't read dezhban's log"** while the first
-  read is still in flight.
 - **The setup wizard appears again after a reinstall.** `uninstall.sh` removed
   only root-owned state, so the app's `dezhban.firstRunCompleted` preference
   outlived every uninstall — a machine with an empty `/etc/dezhban` and no VPN

@@ -48,10 +48,15 @@ func cmdLogs(args []string) int {
 	}
 
 	path := defaultLogPath()
+	// Read hands back an error and records TOGETHER when part of the chain was
+	// unreadable. Say what could not be read, then print what could: a
+	// permission problem on the oldest archive must not cost the live file.
 	recs, err := logread.Read(path, opt)
 	if err != nil {
-		fmt.Fprintln(os.Stderr, "could not read the log:", err)
-		return 1
+		fmt.Fprintln(os.Stderr, "warning: part of the log could not be read:", err)
+		if len(recs) == 0 {
+			return 1
+		}
 	}
 
 	if *asJSON {

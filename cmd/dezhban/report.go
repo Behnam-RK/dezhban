@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,8 +73,10 @@ func cmdReport(args []string) int {
 
 	var notes []string
 	// add takes the (body, err) pair a reader returns, so each call site reads
-	// as one line rather than four.
-	add := func(entry string, body string, err error) {
+	// as one line rather than four. asJSON picks how the body is redacted: a
+	// document with structure is WALKED, so a key decides what a value means,
+	// while a genuinely textual entry gets the shape passes.
+	add := func(entry string, body string, err error, asJSON bool) {
 		if err != nil {
 			// A missing input is not a failure: a host with no daemon has no
 			// state file, and a bundle that refused to exist because of that
@@ -88,26 +91,37 @@ func cmdReport(args []string) int {
 			notes = append(notes, fmt.Sprintf("%s: not included — %v", entry, werr))
 			return
 		}
-		if _, werr := w.Write([]byte(r.Text(body))); werr != nil {
+		redacted := r.Text(body)
+		if asJSON {
+			redacted = r.JSON(body)
+		}
+		if _, werr := w.Write([]byte(redacted)); werr != nil {
 			notes = append(notes, fmt.Sprintf("%s: truncated — %v", entry, werr))
 		}
 	}
 
+	// ORDER IS LOAD-BEARING. config.json and learned.json carry the profile
+	// names, and doctor.json writes those same names into its prose — "every
+	// learned address for work-nord has aged out" — where no shape and no key
+	// can see them. The redactor replaces them there by remembering what it has
+	// already replaced, so the files that TEACH it the names have to be
+	// collected first. Do not reorder this list.
 	for _, item := range []struct {
-		entry string
-		read  func() (string, error)
+		entry  string
+		read   func() (string, error)
+		asJSON bool
 	}{
-		{"config.json", func() (string, error) { return readFileString(resolveConfigPath(*cfgPath)) }},
-		{"state.json", func() (string, error) { return readFileString(defaultStatePath()) }},
-		{"learned.json", func() (string, error) { return readFileString(defaultLearnedPath()) }},
-		{"armed.json", func() (string, error) { return readFileString(defaultArmedPath()) }},
-		{"applied-rules.json", func() (string, error) { return readFileString(applied.Path(stateDir())) }},
-		{"doctor.json", func() (string, error) { return reportDoctor(*cfgPath) }},
-		{"rules-preview.txt", func() (string, error) { return reportRulePreviews(*cfgPath) }},
-		{"log.txt", reportLog},
+		{"config.json", func() (string, error) { return reportConfig(resolveConfigPath(*cfgPath)) }, true},
+		{"state.json", func() (string, error) { return readFileString(defaultStatePath()) }, true},
+		{"learned.json", func() (string, error) { return readFileString(defaultLearnedPath()) }, true},
+		{"armed.json", func() (string, error) { return readFileString(defaultArmedPath()) }, true},
+		{"applied-rules.json", func() (string, error) { return readFileString(applied.Path(stateDir())) }, true},
+		{"doctor.json", func() (string, error) { return reportDoctor(*cfgPath) }, true},
+		{"rules-preview.txt", func() (string, error) { return reportRulePreviews(*cfgPath) }, false},
+		{"log.txt", reportLog, false},
 	} {
 		body, err := item.read()
-		add(item.entry, body, err)
+		add(item.entry, body, err, item.asJSON)
 	}
 
 	// The README goes in LAST, so it can name what was missing. It is also the
@@ -119,12 +133,18 @@ func cmdReport(args []string) int {
 	} else if _, err := io.WriteString(w, reportReadme(stamp, r, notes)); err != nil {
 		fmt.Fprintln(os.Stderr, "note: README.txt: truncated —", err)
 	}
+	// A failed final flush leaves a TRUNCATED zip on disk, and it looks exactly
+	// like a good one — same name, same place, plausible size. Removing it is
+	// the whole point of checking Close at all: a bundle that cannot be trusted
+	// must not be sitting there to be attached to an issue.
 	if err := z.Close(); err != nil {
 		fmt.Fprintln(os.Stderr, "could not finish the bundle:", err)
+		removeTruncated(path)
 		return 1
 	}
 	if err := f.Close(); err != nil {
 		fmt.Fprintln(os.Stderr, "could not finish the bundle:", err)
+		removeTruncated(path)
 		return 1
 	}
 
@@ -142,6 +162,31 @@ func cmdReport(args []string) int {
 	return 0
 }
 
+// reportConfig reads the config file for the bundle, given the path dezhban
+// resolved for it.
+//
+// resolveConfigPath returns "" when there is no file anywhere and dezhban is
+// running on its built-in defaults — the ordinary state on a host that has
+// never run `setup`, and exactly the host someone collects a bundle from. That
+// is an answer, so it says so: handing readFileString the empty path printed
+// `config.json: not included — open : no such file or directory`, which reads
+// like a fault in the collector rather than a fact about the host.
+func reportConfig(path string) (string, error) {
+	if path == "" {
+		return "", fmt.Errorf("no config file; dezhban is running on its built-in defaults")
+	}
+	return readFileString(path)
+}
+
+// removeTruncated deletes a bundle whose final write failed, and says so if it
+// cannot — a file left behind after "could not finish the bundle" is the one
+// outcome worse than the failure itself.
+func removeTruncated(path string) {
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		fmt.Fprintf(os.Stderr, "note: the incomplete bundle is still at %s — delete it: %v\n", path, err)
+	}
+}
+
 func readFileString(path string) (string, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -150,12 +195,25 @@ func readFileString(path string) (string, error) {
 	return string(data), nil
 }
 
+// quietLogger discards everything the bundle's collectors log.
+//
+// newLogger writes to stderr, and runDoctor and policyForMode log autodetect
+// and resolution warnings carrying REAL hostnames and endpoints. Printing those
+// during a redacted `report` puts the identifiers the bundle just replaced onto
+// the operator's terminal, interleaved with the `note:` lines — and a terminal
+// session pasted beside a "safe to share" bundle undoes the redaction as
+// completely as a missed field would. Their findings reach the bundle through
+// doctor.json and rules-preview.txt, which do go through the redactor.
+func quietLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
 func reportDoctor(cfgPath string) (string, error) {
 	cfg, err := loadConfig(cfgPath)
 	if err != nil {
 		return "", err
 	}
-	rep := runDoctor(cfg, newLogger(cfg), false)
+	rep := runDoctor(cfg, quietLogger(), false)
 	data, err := json.MarshalIndent(rep, "", "  ")
 	if err != nil {
 		return "", err
@@ -170,7 +228,7 @@ func reportRulePreviews(cfgPath string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	log := newLogger(cfg)
+	log := quietLogger()
 	var b strings.Builder
 	for _, mode := range []string{"guard", "fullblock", "switch"} {
 		fmt.Fprintf(&b, "===== %s =====\n", mode)
@@ -191,14 +249,21 @@ func reportRulePreviews(cfgPath string) (string, error) {
 }
 
 func reportLog() (string, error) {
+	// An error here can arrive WITH records, when one file in the rotation chain
+	// was unreadable. Losing the readable half over that would drop the log from
+	// a bundle collected precisely because something went wrong, so the problem
+	// is written into the entry and the records are kept.
 	recs, err := logread.Read(defaultLogPath(), logread.Options{Limit: reportLogLimit})
-	if err != nil {
+	if err != nil && len(recs) == 0 {
 		return "", err
 	}
 	if len(recs) == 0 {
 		return "", fmt.Errorf("no log records at %s", defaultLogPath())
 	}
 	var b strings.Builder
+	if err != nil {
+		fmt.Fprintf(&b, "# part of the log could not be read: %v\n", err)
+	}
 	for _, rec := range recs {
 		b.WriteString(rec.Raw)
 		b.WriteString("\n")
@@ -249,6 +314,8 @@ func reportReadme(at time.Time, r *redact.Redactor, notes []string) string {
 			}
 			b.WriteString("\n")
 		}
+		b.WriteString("  The JSON entries are re-serialised as they are redacted, so their\n")
+		b.WriteString("  whitespace may differ from the file on disk. Key order does not.\n\n")
 		b.WriteString("  Re-run with --include-network for the full-fidelity version. Do not post\n")
 		b.WriteString("  that one publicly.\n\n")
 	} else {

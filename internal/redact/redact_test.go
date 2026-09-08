@@ -1,6 +1,7 @@
 package redact
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -138,8 +139,10 @@ func TestProfileNamesAreRedacted(t *testing.T) {
 	}
 	// Stable and DISTINCT: three different names must not collapse onto one
 	// token, or "the active profile is not the one that was imported" stops
-	// being visible in the bundle.
-	for _, want := range []string{"profile-1", "profile-2", "profile-3"} {
+	// being visible in the bundle. The hint carries its OWN kind — it is an
+	// interface-name prefix, display-only, and counting it as a profile name
+	// made the legend claim a VPN profile the host does not have.
+	for _, want := range []string{"profile-1", "profile-2", "hint-1"} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %s in %q", want, got)
 		}
@@ -255,6 +258,223 @@ block drop out all
 	for _, kept := range []string{"utun4", "lo0", "port 51820", "192.168.1.0/24", "block drop out all"} {
 		if !strings.Contains(got, kept) {
 			t.Errorf("%q was lost:\n%s", kept, got)
+		}
+	}
+}
+
+// An IPv6 address whose compression sits at either END must not survive.
+//
+// The matcher used `\b` for its boundaries, and `\b` is the wrong boundary for
+// this alphabet: there is no word boundary in front of a leading `::`, so
+// `::ffff:cb00:7107` matched only its `ffff:cb00:7107` tail — which is not a
+// parseable address, and an unparseable match is returned verbatim. The whole
+// address therefore left the machine inside a bundle that said it had been
+// redacted, which is the one failure this package must not have. `2001:db8::`
+// is the mirror case, failing the trailing boundary.
+func TestACompressedIPv6AtEitherEndIsRedacted(t *testing.T) {
+	for _, in := range []string{
+		"::ffff:cb00:7107",
+		"::abcd:1234:5678",
+		"2001:db8::",
+		`"endpoints": ["2001:db8::"]`,
+		"block drop out quick from any to ::abcd:1234:5678",
+	} {
+		got := New(true).Text(in)
+		for _, leak := range []string{"cb00", "abcd:1234", "2001:db8"} {
+			if strings.Contains(in, leak) && strings.Contains(got, leak) {
+				t.Errorf("Text(%q) = %q — %q survived", in, got, leak)
+			}
+		}
+	}
+}
+
+// Every endpoint config ACCEPTS must be redacted, not only the ones the
+// hostname shape happens to match.
+//
+// config.isPlausibleHostname takes single-label names and last labels carrying
+// digits; hostRe requires a dot and an all-letter last label. The gap between
+// them is a provider's own server name copied verbatim into a bundle — exactly
+// what the allow-list direction exists to prevent — so the endpoint FIELDS are
+// read by name, the way the profile names already are.
+func TestAnEndpointFieldIsRedactedEvenWhenItIsNotHostShaped(t *testing.T) {
+	for _, tc := range []struct{ in, leak string }{
+		{`"endpoints": ["mullvad"]`, "mullvad"},
+		{`"endpoints": ["vpn.123abc"]`, "vpn.123abc"},
+		{`"endpoints": ["se-sto-01", "203.0.113.9"]`, "se-sto-01"},
+		{`"addr": "nordlynx"`, "nordlynx"},
+		{`level=WARN msg="resolution failed" host=vpn.123abc`, "vpn.123abc"},
+		{`level=WARN msg=dropping endpoint=mullvad`, "endpoint=mullvad"},
+	} {
+		if got := New(true).Text(tc.in); strings.Contains(got, tc.leak) {
+			t.Errorf("Text(%q) = %q — %q survived", tc.in, got, tc.leak)
+		}
+	}
+}
+
+// The endpoint pass must not eat what the shape passes read correctly: a
+// provider URL keeps its allow-listed host (which provider answered is a real
+// diagnostic), a count is a count, and a structural address stays readable.
+func TestTheEndpointPassLeavesStructureAlone(t *testing.T) {
+	for _, in := range []string{
+		`level=DEBUG msg="ipv6 lookup failed" endpoint=https://get.geojs.io/v1/ip.json`,
+		`level=INFO msg="vpn guard active" tunnels=[utun4] endpoint=443`,
+		`"endpoints": ["192.168.1.1"]`,
+		`time=2026-09-08T10:15:43.972Z level=WARN msg=late`,
+	} {
+		if got := New(true).Text(in); got != in {
+			t.Errorf("Text(%q) = %q, want it unchanged", in, got)
+		}
+	}
+}
+
+// A doctor CHECK name is not a profile name, and must survive.
+//
+// `"name"` was matched as a bare key, so every check in doctor.json — the one
+// file a reader opens first — came back as `profile-N`, and the legend told
+// them the host had nine VPN profiles when it had none. A check name is
+// dezhban's own vocabulary, identical on every install, like the geo providers
+// this package already keeps. The profile names it was aimed at live inside
+// config's `profiles` and learned.json's `entries`, and still go.
+func TestADoctorCheckNameIsNotAProfileName(t *testing.T) {
+	r := New(true)
+	got := r.Text(`{"checks":[{"name":"vpn endpoints","status":"warn"},{"name":"tunnel interfaces","status":"ok"}]}`)
+	for _, want := range []string{"vpn endpoints", "tunnel interfaces"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("check name %q was redacted: %s", want, got)
+		}
+	}
+	if legend := r.Legend(); len(legend) != 0 {
+		t.Errorf("a doctor report minted placeholders: %v", legend)
+	}
+}
+
+// The profile names the pass above narrowed around must still go, in both
+// documents that carry them.
+func TestAProfileNameInsideItsArrayIsStillRedacted(t *testing.T) {
+	for _, tc := range []struct{ in, leak string }{
+		{`{"profiles":[{"name":"mullvad-de","endpoints":["203.0.113.9"]}]}`, "mullvad-de"},
+		{`{"entries":[{"name":"work-nord","endpoints":[{"addr":"203.0.113.9"}]}]}`, "work-nord"},
+		{`{"activeProfile":"mullvad-de"}`, "mullvad-de"},
+	} {
+		if got := New(true).Text(tc.in); strings.Contains(got, tc.leak) {
+			t.Errorf("Text(%q) = %q — %q survived", tc.in, got, tc.leak)
+		}
+	}
+}
+
+// A range of one is not a range. "ip-1 … ip-1" reads as a rendering bug, in
+// the one file in the bundle that has to look trustworthy.
+func TestTheLegendDoesNotRenderARangeOfOne(t *testing.T) {
+	r := New(true)
+	r.Text("endpoint 203.0.113.7")
+	legend := r.Legend()
+	if len(legend) != 1 || legend[0] != "1 distinct IP address → ip-1" {
+		t.Errorf("legend = %v, want a single unranged entry", legend)
+	}
+}
+
+// A name carrying a quote must be matched WHOLE.
+//
+// The JSON-string patterns used `[^"]+`, which stops at a backslash-escaped
+// quote: `{"name":"foo\"bar"}` minted a placeholder for the first half, left
+// `bar` in the bundle, and produced invalid JSON on the way out. `report`
+// copies config.json off disk verbatim and never validates it, so a
+// hand-edited config — exactly the kind a bundle gets collected for — reaches
+// this.
+func TestAnEscapedQuoteDoesNotSplitTheValue(t *testing.T) {
+	for _, tc := range []struct{ in, leak string }{
+		{`{"profiles":[{"name":"foo\"bar"}]}`, "bar"},
+		{`{"activeProfile":"work\"nord"}`, "nord"},
+		{`{"endpoints":["se\"sto"]}`, "sto"},
+		{`{"addr":"vpn\"one"}`, "one"},
+	} {
+		got := New(true).Text(tc.in)
+		if strings.Contains(got, tc.leak) {
+			t.Errorf("Text(%q) = %q — %q survived", tc.in, got, tc.leak)
+		}
+		// The tail used to be left beside a stray quote, which also broke the
+		// JSON the bundle ships.
+		if !json.Valid([]byte(got)) {
+			t.Errorf("Text(%q) = %q — the bundle would carry invalid JSON", tc.in, got)
+		}
+	}
+}
+
+// The same name written two ways is one name. Keying on the escaped spelling
+// would hand it two placeholders and hide that they are the same server.
+func TestAnEscapedValueKeysOnItsUnescapedForm(t *testing.T) {
+	r := New(true)
+	// `\u002D` IS `-`. Two spellings of one name, so a redactor keying on the
+	// raw text mints two tokens and the bundle stops showing that the active
+	// profile and the logged one are the same. The first version of this test
+	// wrote the same literal twice, so jsonBody never ran and gutting it left
+	// the test green.
+	got := r.Text(`{"activeProfile":"nord\u002Dse"}` + "\n" + `profile=nord-se`)
+	if strings.Count(got, "profile-1") != 2 {
+		t.Errorf("got %q, want one stable token for both spellings", got)
+	}
+}
+
+// The switch window's profile name is in state.json under `"profile"`, and a
+// window being open is the likeliest moment to collect a bundle — so the file
+// most likely to name a VPN was the one no pass was looking at.
+func TestTheSwitchWindowsProfileNameIsRedacted(t *testing.T) {
+	in := `{"switch":{"open":true,"profile":"mullvad-de","until":"2026-09-08T10:00:00Z"}}`
+	if got := New(true).Text(in); strings.Contains(got, "mullvad-de") {
+		t.Errorf("Text(%q) = %q — the switch window's profile survived", in, got)
+	}
+}
+
+// The name scoping must never FAIL OPEN.
+//
+// profileArrayRe balances brackets by hand: a `[` inside a name made it match
+// nothing at all — so every name in the document shipped verbatim — and a `]`
+// truncated the body, so every name after it did. That is worse than the
+// over-redaction the scoping was introduced to fix, because it is a leak.
+func TestNameScopingDoesNotFailOpenOnABracket(t *testing.T) {
+	for _, in := range []string{
+		`{"profiles":[{"name":"work[de"},{"name":"mullvad-se"}]}`,
+		`{"profiles":[{"name":"a]b"},{"name":"mullvad-se"}]}`,
+		`{"entries":[{"name":"nord-ch","endpoints":[{"addr":"203.0.113.4"}],"tags":[["x"]]}]}`,
+	} {
+		got := New(true).Text(in)
+		for _, leak := range []string{"mullvad-se", "work[de", "a]b", "nord-ch"} {
+			if strings.Contains(in, leak) && strings.Contains(got, leak) {
+				t.Errorf("Text(%q) = %q — %q survived", in, got, leak)
+			}
+		}
+	}
+}
+
+// `_unattributed` is dezhban's own constant, identical on every install. Minting
+// it as `profile-N` hides a word that names nobody and tells the legend the host
+// has one more VPN profile than it has.
+func TestDezhbansOwnEntryNameIsKept(t *testing.T) {
+	r := New(true)
+	in := `{"entries":[{"name":"_unattributed","endpoints":[{"addr":"203.0.113.4"}]}]}`
+	if got := r.Text(in); !strings.Contains(got, "_unattributed") {
+		t.Errorf("Text(%q) = %q — dezhban's own entry name was redacted", in, got)
+	}
+	for _, line := range r.Legend() {
+		if strings.Contains(line, "profile") {
+			t.Errorf("the legend counted a profile that does not exist: %q", line)
+		}
+	}
+}
+
+// A value that is NOT replaced must go back exactly as it was written. Writing
+// the unescaped body back unconditionally put a literal tab inside a JSON
+// string, so the bundle carried a file that no longer parses — over a value
+// nothing needed to hide.
+func TestAnUnreplacedValueKeepsItsEscaping(t *testing.T) {
+	for _, in := range []string{
+		`{"addr":"a\tb"}`,
+		`{"endpoints":["x\ty"]}`,
+		`{"addr":"192.168.1.1"}`,
+	} {
+		got := New(true).Text(in)
+		if !json.Valid([]byte(got)) {
+			t.Errorf("Text(%q) = %q — the bundle would carry invalid JSON", in, got)
 		}
 	}
 }

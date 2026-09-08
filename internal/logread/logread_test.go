@@ -258,3 +258,106 @@ func TestAnEmptyMessageIsNotRelabelledWithTheRawLine(t *testing.T) {
 		t.Errorf("the fallback stopped working: %q", got)
 	}
 }
+
+// A level this build does not recognise must survive a warn-and-above query.
+//
+// Severity ranks an unknown level as INFO so it can be ordered at all, and the
+// filter used to read that rank as a verdict — so `--level warn` silently
+// dropped every record a newer daemon, a custom slog level or a hand-edited
+// line wrote. A level this build does not know is not evidence the record is
+// unimportant, which is the whole reason it is not dropped at parse time.
+func TestAnUnknownLevelSurvivesAWarnAndAboveQuery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeLog(t, path,
+		`time=2026-09-08T10:00:00Z level=INFO msg=ordinary`,
+		`time=2026-09-08T10:00:01Z level=TRACE msg=unfamiliar`,
+		`time=2026-09-08T10:00:02Z level=ERROR msg=broken`,
+	)
+
+	recs, err := Read(path, Options{MinLevel: "warn"})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	var msgs []string
+	for _, r := range recs {
+		msgs = append(msgs, r.Msg)
+	}
+	if len(recs) != 2 || msgs[0] != "unfamiliar" || msgs[1] != "broken" {
+		t.Fatalf("got %v, want the unknown level kept and INFO filtered out", msgs)
+	}
+}
+
+// A key this parser cannot read must not take the rest of the line with it.
+//
+// slog quotes a key that needs quoting, and nextPair refuses such a key.
+// Breaking the loop there discarded every REMAINING attr on the line, and with
+// `msg` already seen the raw-line fallback could not fire either — so the
+// evidence survived only in Raw, which no surface reads for a record that
+// parsed. "Nothing is silently dropped" has to hold mid-line too.
+func TestAnUnreadableKeyKeepsTheRestOfTheLine(t *testing.T) {
+	r := ParseLine(`time=2026-09-08T10:00:00Z level=WARN msg=cut "a=b"=v mode=guard`)
+	if r.Msg != "cut" {
+		t.Fatalf("Msg = %q, want the message", r.Msg)
+	}
+	var kept string
+	for _, a := range r.Attrs {
+		if a.Key == UnparsedKey {
+			kept = a.Value
+		}
+	}
+	if !strings.Contains(kept, "mode=guard") {
+		t.Errorf("attrs = %+v, want the unreadable tail kept including mode=guard", r.Attrs)
+	}
+}
+
+// One unreadable file in the rotation chain costs only itself.
+//
+// Read used to return on the first error, so a permission problem on the
+// OLDEST archive threw away the live file with it — the most recent and most
+// useful records lost to the least important one.
+func TestAnUnreadableArchiveDoesNotCostTheLiveFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeLog(t, path, `time=2026-09-08T10:00:00Z level=ERROR msg=live`)
+	blocked := fmt.Sprintf("%s.%d", path, logging.FileBackups)
+	writeLog(t, blocked, `time=2026-09-08T09:00:00Z level=ERROR msg=oldest`)
+	if err := os.Chmod(blocked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(blocked, 0o644) })
+	if f, err := os.Open(blocked); err == nil { // running as root: the test cannot bite
+		f.Close()
+		t.Skip("cannot make a file unreadable as this user")
+	}
+
+	recs, err := Read(path, Options{})
+	if err == nil {
+		t.Error("an unreadable archive must still be reported")
+	}
+	if len(recs) != 1 || recs[0].Msg != "live" {
+		t.Fatalf("got %+v, want the live file's record kept alongside the error", recs)
+	}
+}
+
+// A line past the scanner's cap costs that line, not the file.
+//
+// sc.Err() used to discard every record already parsed, so one pathological
+// line took the whole history with it and `dezhban logs` printed nothing.
+func TestALineOverTheCapKeepsTheRecordsBeforeIt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	huge := strings.Repeat("x", 5*1024*1024) // over the 4 MiB cap
+	writeLog(t, path,
+		`time=2026-09-08T10:00:00Z level=ERROR msg=before`,
+		`time=2026-09-08T10:00:01Z level=ERROR msg=`+huge,
+	)
+
+	recs, err := Read(path, Options{})
+	if err == nil {
+		t.Error("a line past the cap must still be reported")
+	}
+	if len(recs) != 1 || recs[0].Msg != "before" {
+		t.Fatalf("got %d records, want the one parsed before the long line", len(recs))
+	}
+}

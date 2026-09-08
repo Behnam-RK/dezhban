@@ -210,6 +210,22 @@ final class AppState: ObservableObject {
     /// "couldn't read dezhban's log" on every visit before the first read lands
     /// — an error where the truth is "one moment".
     @Published var problemsAsked = false
+    /// Bumped by every read, captured by each, compared on completion, so the
+    /// newest answer always wins. Diagnostics calls `refreshProblems` from both
+    /// `onAppear` and the Run button, so two reads can be in flight; the
+    /// earlier one landing last would overwrite the newer answer, and a stale
+    /// `nil` flips the pane to "Couldn't read dezhban's log" on a host whose
+    /// log is perfectly fine.
+    ///
+    /// Related to `installedRulesGeneration` but NOT the same rule: that one is
+    /// bumped on CLEAR, to stop a read landing after the user threw its result
+    /// away. This one is bumped on every READ, because the race here is two
+    /// reads rather than a read against a clear. There is deliberately no
+    /// in-flight guard either — this is an unprivileged `dezhban logs` costing
+    /// a few milliseconds, not a call behind a password prompt, and refusing
+    /// the Run button because `onAppear` is still in flight would make the
+    /// button look broken on the one visit where it matters.
+    private var problemsGeneration = 0
 
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
@@ -416,11 +432,14 @@ final class AppState: ObservableObject {
     /// so it refreshes with the rest of the Diagnostics pane.
     func refreshProblems() {
         guard cliFound else { return }
+        problemsGeneration += 1
+        let generation = problemsGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let recs = DezhbanCLI.readProblems()
             DispatchQueue.main.async {
-                self?.problems = recs
-                self?.problemsAsked = true
+                guard let self, generation == self.problemsGeneration else { return }
+                self.problems = recs
+                self.problemsAsked = true
             }
         }
     }
