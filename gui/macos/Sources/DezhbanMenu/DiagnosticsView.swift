@@ -219,11 +219,19 @@ struct DiagnosticsView: View {
         panel.prompt = "Save Here"
         panel.message = "Where should the diagnostic bundle go?"
 
-        let includeNetwork = NSButton(checkboxWithTitle: "Include my real VPN server addresses and exit IP",
-                                      target: nil, action: nil)
+        // The label names everything the box turns off, not just the network
+        // half. The checkbox disables the redactor ENTIRELY, so it also exposes
+        // profile names, tunnel hints, the account name and imported filenames —
+        // and someone about to attach this to a public issue is consenting to
+        // whatever the label told them, which had named a third of it.
+        let includeNetwork = NSButton(
+            checkboxWithTitle: "Turn redaction off: include my real server addresses, exit IP, "
+                + "VPN profile names and account name",
+            target: nil, action: nil)
         includeNetwork.state = .off
         includeNetwork.toolTip = "Leave this off to get a bundle that is safe to attach to a public issue: "
-            + "addresses and hostnames are replaced with stable placeholders, so it is still diagnosable."
+            + "addresses, hostnames, profile names, tunnel hints and your account name are all "
+            + "replaced with stable placeholders, so it is still diagnosable."
         panel.accessoryView = includeNetwork
         panel.isAccessoryViewDisclosed = true
 

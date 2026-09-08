@@ -279,3 +279,25 @@ func TestAHostShapedProfileNameGetsOneTokenNotTwo(t *testing.T) {
 		t.Errorf("got %q, want the profile token it already has", got)
 	}
 }
+
+// A profile name spelled with the punctuation config accepts must still go.
+//
+// The boundary was `\b`, which cannot match at a non-word-to-non-word edge, so
+// a name like `-work-` or `.home` had no boundary at either end and stayed
+// verbatim in every prose string the literal pass covers.
+func TestAPunctuatedProfileNameIsStillFoundInProse(t *testing.T) {
+	for _, name := range []string{"-work-", ".home", "a.b-c"} {
+		r := New(true)
+		r.JSON(`{"profiles":[{"name":"` + name + `"}]}`)
+		got := r.JSON(`{"summary":"every learned address for ` + name + ` has aged out."}`)
+		if strings.Contains(got, name) {
+			t.Errorf("profile %q survived in prose: %s", name, got)
+		}
+	}
+	// A name must still not be claimed as part of a longer word.
+	r := New(true)
+	r.JSON(`{"profiles":[{"name":"work"}]}`)
+	if got := r.JSON(`{"summary":"network workload"}`); strings.Contains(got, "profile-") {
+		t.Errorf("the name was claimed inside a longer word: %s", got)
+	}
+}

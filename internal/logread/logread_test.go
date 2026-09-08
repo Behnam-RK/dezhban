@@ -361,3 +361,31 @@ func TestALineOverTheCapKeepsTheRecordsBeforeIt(t *testing.T) {
 		t.Fatalf("got %d records, want the one parsed before the long line", len(recs))
 	}
 }
+
+// A line with no `level=` at all must survive a warn-and-above query.
+//
+// ParseLine defaulted such a record to the literal "INFO", which Known() then
+// calls recognised, so the filter dropped it — and the lines with no level are
+// raw panics and stack traces, exactly the records "Recent problems" exists to
+// show. Ranking empty as INFO for ORDERING must not become a verdict.
+func TestALineWithNoLevelSurvivesAWarnAndAboveQuery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeLog(t, path,
+		`time=2026-09-08T10:00:00Z level=INFO msg=ordinary`,
+		`panic: runtime error: invalid memory address`,
+		`time=2026-09-08T10:00:02Z level=ERROR msg=broken`,
+	)
+
+	recs, err := Read(path, Options{MinLevel: "warn"})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	var msgs []string
+	for _, r := range recs {
+		msgs = append(msgs, r.Msg)
+	}
+	if len(recs) != 2 || !strings.HasPrefix(msgs[0], "panic:") || msgs[1] != "broken" {
+		t.Fatalf("got %v, want the panic line kept and the INFO record filtered out", msgs)
+	}
+}

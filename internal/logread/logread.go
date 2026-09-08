@@ -79,7 +79,13 @@ func Known(level string) bool {
 // sense of comes back with Raw set and Msg holding the whole line, because a
 // malformed line in a diagnostic log is itself worth seeing.
 func ParseLine(line string) Record {
-	r := Record{Raw: line, Level: "INFO"}
+	// Level stays EMPTY until a level= is actually seen. Defaulting it to the
+	// literal "INFO" made Known() call it recognised, so a warn-and-above query
+	// dropped it — and the lines with no level= are raw panics and stack traces,
+	// exactly the records "Recent problems" exists to show. Severity("") already
+	// ranks empty as INFO for ordering; what must not follow from that ranking
+	// is a verdict.
+	r := Record{Raw: line}
 	// Whether a msg key was SEEN, not whether it is non-empty: slog writes
 	// `msg=""` for a record logged with an empty message, and testing the value
 	// would re-label that record with its own raw line as the message — so the
@@ -260,6 +266,12 @@ func readFile(path string, opt Options) ([]Record, error) {
 	// already parsed from this file, so one pathological line took the whole
 	// history with it. The error still travels — it is the caller's to report —
 	// but it no longer erases what was readable.
+	//
+	// What survives is the records BEFORE the oversized line, and only those: a
+	// bufio.Scanner cannot resume past ErrTooLong, so the rest of that file is
+	// still lost. Recovering it needs a reader loop that consumes through the
+	// long line's newline, which is a bigger change than the one this comment
+	// used to claim to have made.
 	if err := sc.Err(); err != nil {
 		return out, fmt.Errorf("read %s: %w", filepath.Base(path), err)
 	}

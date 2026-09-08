@@ -341,11 +341,20 @@ func (r *Redactor) knownNames(s string) string {
 		if reserved[n.value] || !strings.Contains(strings.ToLower(s), n.value) {
 			continue
 		}
-		re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(n.value) + `\b`)
+		// Not `\b`. config accepts a profile name of [A-Za-z0-9._-] (config.go's
+		// profile validation), and `\b` cannot match at a non-word-to-non-word
+		// edge — so a name spelled `-work-` or `.home` had no boundary at either
+		// end and stayed verbatim in every prose string. The boundary is the
+		// name's OWN alphabet: a match must not be flanked by another character
+		// that could be part of one.
+		re, err := regexp.Compile(`(?i)(^|[^A-Za-z0-9._-])` + regexp.QuoteMeta(n.value) + `($|[^A-Za-z0-9._-])`)
 		if err != nil {
 			continue
 		}
-		s = re.ReplaceAllLiteralString(s, n.token)
+		s = re.ReplaceAllStringFunc(s, func(m string) string {
+			sub := re.FindStringSubmatch(m)
+			return sub[1] + n.token + sub[2]
+		})
 	}
 	return s
 }

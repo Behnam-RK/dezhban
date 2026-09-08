@@ -478,3 +478,22 @@ func TestAnUnreplacedValueKeepsItsEscaping(t *testing.T) {
 		}
 	}
 }
+
+// dezhban ships on Windows, where the account name lives in `C:\Users\Alice\…`.
+// Matching only the unix spelling left it in a bundle that says it redacts it,
+// on a whole platform.
+func TestAWindowsHomeDirectoryAccountNameIsRedacted(t *testing.T) {
+	for _, in := range []string{
+		`C:\Users\alice\AppData\Roaming\dezhban`,
+		`"C:\\Users\\alice\\AppData"`, // as it arrives inside JSON or a quoted log value
+	} {
+		got := New(true).Text(in)
+		if strings.Contains(got, "alice") {
+			t.Errorf("Text(%q) = %q — the account name survived", in, got)
+		}
+		// The rest of the path is structural and stays readable.
+		if !strings.Contains(got, "AppData") {
+			t.Errorf("Text(%q) = %q — the path structure was lost", in, got)
+		}
+	}
+}

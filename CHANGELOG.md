@@ -104,6 +104,22 @@ current as you land changes.
   `--level warn`; a key the parser cannot read no longer discards the rest of
   that line's attrs; a line past the size cap, and an archive that cannot be
   opened, each now cost only themselves instead of the whole history.
+- **The bundle is never written over a file that already exists.** The mode
+  argument applies at creation, so opening an existing path kept whatever
+  permissions it had, and the open followed a symlink — a link sitting in the
+  output directory, which is one you pick and often a shared or synced one,
+  redirected an `--include-network` bundle wherever it pointed. A same-second
+  second export now gets a numbered name instead of overwriting the first.
+- **`--include-network` says what it actually turns off.** It disables redaction
+  entirely — profile names, tunnel hints, your account name and imported
+  filenames as well as addresses — while the flag help, the stderr warning, the
+  bundle's README and the app's checkbox all named only the network half. That
+  is the moment someone consents to publishing the rest.
+- **Windows home directories are redacted too.** `C:\Users\Alice\…` kept the
+  account name in a bundle that says it replaces it, on a whole platform.
+- **A log line with no `level=` survives `--level warn`.** Raw panics and stack
+  traces have no level field; defaulting them to `INFO` made the filter drop
+  exactly the records "Recent problems" exists to show.
 - **`dezhban report` cleans up after a failed write**, rather than leaving a
   truncated zip that looks like a good one. It no longer prints real hostnames
   and endpoints to the terminal while writing a redacted bundle, and on a host

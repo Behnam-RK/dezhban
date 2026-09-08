@@ -45,7 +45,8 @@ func cmdReport(args []string) int {
 	cfgPath := fs.String("config", "", "path to config file (JSON)")
 	outDir := fs.String("out", ".", "directory to write the bundle into")
 	includeNetwork := fs.Bool("include-network", false,
-		"keep real IP addresses and hostnames (default: replaced with stable placeholders)")
+		"turn redaction OFF entirely: keep real addresses, hostnames, VPN profile names,\n"+
+			"tunnel hints and account names (default: all replaced with stable placeholders)")
 	_ = fs.Parse(args)
 
 	r := redact.New(!*includeNetwork)
@@ -59,7 +60,7 @@ func cmdReport(args []string) int {
 	// to read it would undo the choice the flag exists to make deliberate. The
 	// redacted bundle gets the same mode; nothing here is improved by being
 	// world-readable.
-	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, path, err := createBundle(path)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "could not create the bundle:", err)
 		return 1
@@ -130,13 +131,45 @@ func cmdReport(args []string) int {
 		fmt.Fprintln(os.Stderr, "IP addresses and hostnames were replaced with stable placeholders.")
 		fmt.Fprintln(os.Stderr, "Use --include-network for the full-fidelity version (do not post that publicly).")
 	} else {
-		fmt.Fprintln(os.Stderr, "WARNING: this bundle contains your real VPN server addresses and exit IP.")
+		fmt.Fprintln(os.Stderr, "WARNING: redaction is OFF. This bundle contains your real VPN server")
+		fmt.Fprintln(os.Stderr, "addresses and exit IP, and also your VPN profile names, tunnel hints,")
+		fmt.Fprintln(os.Stderr, "account name, and the names of any config files you imported.")
 		fmt.Fprintln(os.Stderr, "Do not post it publicly. Re-run without --include-network for a shareable one.")
 	}
 	for _, n := range notes {
 		fmt.Fprintln(os.Stderr, "note:", n)
 	}
 	return 0
+}
+
+// createBundle opens a new bundle file, and only ever a NEW one.
+//
+// O_EXCL, not O_TRUNC. The mode argument applies at CREATION, so opening an
+// existing path left whatever permissions it already had — and O_TRUNC follows
+// a symlink, so a link planted in the output directory sent the bundle wherever
+// it pointed. The directory is one the user picks, often a shared or synced one,
+// and with --include-network this file holds the real server addresses: the two
+// things 0600 exists to prevent were both reachable by having something already
+// sitting at the path.
+//
+// The name carries a whole-second timestamp, so two exports in one second
+// collide honestly rather than one silently overwriting the other.
+func createBundle(path string) (*os.File, string, error) {
+	base := strings.TrimSuffix(path, ".zip")
+	for n := 0; n < 100; n++ {
+		try := path
+		if n > 0 {
+			try = fmt.Sprintf("%s-%d.zip", base, n+1)
+		}
+		f, err := os.OpenFile(try, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if err == nil {
+			return f, try, nil
+		}
+		if !os.IsExist(err) {
+			return nil, "", err
+		}
+	}
+	return nil, "", fmt.Errorf("%s and 99 numbered variants all exist", path)
 }
 
 // reportConfig reads the config file for the bundle, given the path dezhban
@@ -344,8 +377,10 @@ func reportReadme(at time.Time, r *redact.Redactor, notes []string) string {
 		b.WriteString("  that one publicly.\n\n")
 	} else {
 		b.WriteString("Redaction\n")
-		b.WriteString("  NONE — this bundle was collected with --include-network and contains your\n")
-		b.WriteString("  real VPN server addresses and public exit IP. Do not post it publicly.\n\n")
+		b.WriteString("  NONE — this bundle was collected with --include-network. It contains your\n")
+		b.WriteString("  real VPN server addresses and public exit IP, and also your VPN profile\n")
+		b.WriteString("  names, tunnel hints, account name, and the names of any config files you\n")
+		b.WriteString("  imported. Do not post it publicly.\n\n")
 	}
 
 	if len(notes) > 0 {

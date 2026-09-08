@@ -298,3 +298,41 @@ func TestRedactEntryUsesExactlyOnePass(t *testing.T) {
 			got.Legend(), want.Legend())
 	}
 }
+
+// The bundle is created EXCLUSIVELY, never opened over something already there.
+//
+// The mode argument applies at creation, so opening an existing path kept
+// whatever permissions it had; and the old O_TRUNC followed a symlink, so a link
+// planted in the output directory — one the user picks, often shared or synced —
+// sent an --include-network bundle wherever it pointed.
+func TestTheBundleIsNeverWrittenOverSomethingThatExists(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere.zip")
+	link := filepath.Join(dir, "bundle.zip")
+	if err := os.WriteFile(target, []byte("victim"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+
+	f, got, err := createBundle(link)
+	if err != nil {
+		t.Fatalf("createBundle: %v", err)
+	}
+	defer f.Close()
+	if got == link {
+		t.Errorf("createBundle wrote through the symlink at %s", link)
+	}
+	body, err := os.ReadFile(target)
+	if err != nil || string(body) != "victim" {
+		t.Errorf("the symlink target was overwritten: %q, %v", body, err)
+	}
+	info, err := os.Stat(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" {
+		t.Errorf("bundle mode = %v, want 0600", perm)
+	}
+}

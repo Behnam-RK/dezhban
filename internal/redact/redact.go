@@ -126,7 +126,11 @@ var (
 	// A home directory names the account, which names the person. The segment
 	// after /Users or /home is the only identifying part — the rest of the path
 	// is structural and worth reading.
-	homeDirRe = regexp.MustCompile(`(/(?:Users|home)/)([^/\s"']+)`)
+	// Both separators. dezhban ships on Windows, where the account lives in
+	// `C:\Users\Alice\…` — matching only the unix spelling left the account
+	// name in a bundle that says it redacts it, on a whole platform. The
+	// doubled form is how a path arrives inside JSON or a Go-quoted log value.
+	homeDirRe = regexp.MustCompile(`((?:/|\\\\?)(?:Users|home)(?:/|\\\\?))([^/\\\s"']+)`)
 )
 
 // Redactor rewrites text, remembering what it has already replaced so the same
