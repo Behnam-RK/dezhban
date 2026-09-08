@@ -210,6 +210,11 @@ final class AppState: ObservableObject {
     /// "couldn't read dezhban's log" on every visit before the first read lands
     /// — an error where the truth is "one moment".
     @Published var problemsAsked = false
+    /// Set when `dezhban logs` could read only part of its rotation chain. The
+    /// records it did return are real and worth showing; presenting them as the
+    /// whole history would be the same lie as collapsing "nothing logged" into
+    /// "couldn't read".
+    @Published var problemsPartial: String?
     /// Bumped by every read, captured by each, compared on completion, so the
     /// newest answer always wins. Diagnostics calls `refreshProblems` from both
     /// `onAppear` and the Run button, so two reads can be in flight; the
@@ -435,10 +440,11 @@ final class AppState: ObservableObject {
         problemsGeneration += 1
         let generation = problemsGeneration
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let recs = DezhbanCLI.readProblems()
+            let result = DezhbanCLI.readProblems()
             DispatchQueue.main.async {
                 guard let self, generation == self.problemsGeneration else { return }
-                self.problems = recs
+                self.problems = result?.records
+                self.problemsPartial = result?.partial
                 self.problemsAsked = true
             }
         }

@@ -318,7 +318,14 @@ func (r *Redactor) free(s string) string {
 // This is what reaches the names no shape and no key can see: the doctor writes
 // learned entry names — which are profile names — into its Details and Summary
 // as ordinary prose ("every learned address for work-nord has aged out"), and
-// nothing was looking at them. It works because config.json and learned.json are
+// nothing was looking at them.
+//
+// HOSTNAMES are in here for the same reason and it is not redundant with hostRe:
+// a single-label endpoint has no dot, so the shape cannot see it, and the daemon
+// logs it twice — `host=mullvad err="lookup mullvad: no such host"`. The
+// field-aware pass replaces the attr and the copy inside the error text is left
+// standing. Only hosts this redactor actually replaced are in here; an
+// allow-listed provider never reaches the map. It works because config.json and learned.json are
 // collected BEFORE doctor.json, so by the time the prose is walked the names are
 // known. Keep that order in cmd/dezhban/report.go.
 //
@@ -331,7 +338,7 @@ func (r *Redactor) knownNames(s string) string {
 	var names []named
 	for _, key := range r.order {
 		kind, value, _ := strings.Cut(key, ":")
-		if (kind == "profile" || kind == "hint") && value != "" {
+		if (kind == "profile" || kind == "hint" || kind == "host") && value != "" {
 			names = append(names, named{value, r.seen[key]})
 		}
 	}

@@ -154,7 +154,13 @@ struct DiagnosticsView: View {
     private var problemsSection: some View {
         if let problems = state.problems {
             Section("Recent problems") {
-                if problems.isEmpty {
+                if let partial = state.problemsPartial {
+                    Label("Part of the log could not be read, so this list may be incomplete. \(partial)",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                }
+                if problems.isEmpty && state.problemsPartial == nil {
                     Label("Nothing logged as a warning or an error.", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .font(.callout)

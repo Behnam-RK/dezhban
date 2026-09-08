@@ -301,3 +301,19 @@ func TestAPunctuatedProfileNameIsStillFoundInProse(t *testing.T) {
 		t.Errorf("the name was claimed inside a longer word: %s", got)
 	}
 }
+
+// A single-label endpoint is logged twice — once as an attr, once inside the
+// resolver's error — and only the attr has a key to recognise it by. The shape
+// passes cannot see it either, because it has no dot. It has to come off the
+// list of names the bundle already knows.
+func TestARememberedHostnameIsReplacedInErrorText(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"endpoints":["mullvad"]}}`)
+	got := r.JSON(`{"details":["host=mullvad err=\"lookup mullvad: no such host\""]}`)
+	if strings.Contains(got, "mullvad") {
+		t.Errorf("the endpoint survived in the error text: %s", got)
+	}
+	if !strings.Contains(got, "host-1") {
+		t.Errorf("got %q, want the token the config already uses", got)
+	}
+}

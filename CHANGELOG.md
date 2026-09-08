@@ -104,6 +104,16 @@ current as you land changes.
   `--level warn`; a key the parser cannot read no longer discards the rest of
   that line's attrs; a line past the size cap, and an archive that cannot be
   opened, each now cost only themselves instead of the whole history.
+- **Diagnostics says when the log it read was incomplete.** `dezhban logs`
+  returns the records it *could* read when one file in the rotation chain is
+  unreadable, and puts the reason on stderr; the app read only stdout and
+  presented a partial history as a complete one — the same lie as collapsing
+  "nothing logged" into "couldn't read", from the other side.
+- **A single-label VPN endpoint no longer leaks through the resolver's error.**
+  The daemon logs it twice — `host=mullvad err="lookup mullvad: no such host"` —
+  and only the first has a field to recognise it by, while a name with no dot is
+  invisible to the hostname shape. The bundle now replaces names it has already
+  redacted wherever they appear.
 - **The bundle is never written over a file that already exists.** The mode
   argument applies at creation, so opening an existing path kept whatever
   permissions it had, and the open followed a symlink — a link sitting in the

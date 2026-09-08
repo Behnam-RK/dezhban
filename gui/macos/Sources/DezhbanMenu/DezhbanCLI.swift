@@ -308,11 +308,27 @@ enum DezhbanCLI {
     /// nil is "could not ask" (no CLI, or one too old for the subcommand); an
     /// empty array is "asked, and there were none" — which is the good answer.
     /// The pane must show those differently, so they must not collapse here.
-    static func readProblems(limit: Int = 100) -> [LogRecord]? {
+    ///
+    /// `partial` is the fourth state, and it is why the result is not just an
+    /// array: `logs` exits 0 with the records it COULD read when one file in the
+    /// rotation chain was unreadable, and puts the reason on stderr. Reading only
+    /// stdout presented an incomplete history as a complete one — the same class
+    /// of lie as collapsing "none" into "couldn't read", arriving from the other
+    /// side.
+    static func readProblems(limit: Int = 100) -> ProblemsResult? {
         guard let bin = binaryPath() else { return nil }
         let r = exec(bin, ["logs", "--level", "warn", "--limit", String(limit), "--json"])
-        guard r.status == 0, let data = r.out.data(using: .utf8) else { return nil }
-        return LogRecord.decodeList(data)
+        guard r.status == 0, let data = r.out.data(using: .utf8),
+              let records = LogRecord.decodeList(data) else { return nil }
+        let warning = r.err.trimmingCharacters(in: .whitespacesAndNewlines)
+        return ProblemsResult(records: records, partial: warning.isEmpty ? nil : warning)
+    }
+
+    /// What `readProblems` found, and whether it found all of it.
+    struct ProblemsResult {
+        let records: [LogRecord]
+        /// Non-nil when part of the log could not be read; the text says which.
+        let partial: String?
     }
 
     /// Writes a diagnostic bundle into `directory` and returns its path.
