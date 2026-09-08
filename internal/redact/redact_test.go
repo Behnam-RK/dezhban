@@ -84,11 +84,104 @@ func TestShippedGeoProvidersAreKept(t *testing.T) {
 	}
 }
 
-func TestFilenamesAreNotHostnames(t *testing.T) {
+// dezhban's OWN filenames are noise, not identifiers, and a bundle that hid them
+// would be hard to read for no gain.
+func TestDezhbanFilenamesAreNotHostnames(t *testing.T) {
 	r := New(true)
-	for _, name := range []string{"learned.json", "dezhban.log", "home.conf", "uninstall.sh"} {
+	for _, name := range []string{"learned.json", "dezhban.log", "README.txt"} {
 		if got := r.Text("wrote " + name); !strings.Contains(got, name) {
 			t.Errorf("%s was treated as a hostname: %q", name, got)
+		}
+	}
+}
+
+// The user's OWN filenames are the opposite case, and this is the direction the
+// suffix list used to have backwards.
+//
+// A `.conf`/`.ovpn` file is named after the VPN it configures, so
+// `mullvad-frankfurt.conf` states the provider and the city outright — while
+// being no kind of hostname, which is exactly why a "these endings mean it is a
+// file" rule waved it through. `.sh` and `.md` are worse still: both are
+// delegated TLDs, so a provider can simply live on one.
+func TestUserFilenamesAndRealTLDsAreRedacted(t *testing.T) {
+	r := New(true)
+	for _, name := range []string{
+		"mullvad-frankfurt.conf", "work-vpn.ovpn", "provider.sh", "provider.md",
+	} {
+		if got := r.Text("imported " + name); strings.Contains(got, name) {
+			t.Errorf("%s survived redaction: %q", name, got)
+		}
+	}
+}
+
+// An mDNS name is the machine, and a Mac's is built from its owner's name. It
+// was the single largest identifier the suffix list let through.
+func TestLocalNamesAreRedacted(t *testing.T) {
+	r := New(true)
+	if got := r.Text("host=firstname-macbook.local"); strings.Contains(got, "firstname-macbook") {
+		t.Errorf("an mDNS name survived redaction: %q", got)
+	}
+}
+
+// Profile names and tunnel hints are not address-shaped at all — they are
+// ordinary words — and they name the provider as plainly as a server address
+// does. No shape-based rule can see them, so they get a field-aware pass and a
+// placeholder kind of their own.
+func TestProfileNamesAreRedacted(t *testing.T) {
+	r := New(true)
+	body := `{"activeProfile":"mullvad-de","profiles":[{"name":"nordvpn-ch","tunnelHint":"nordlynx"}]}`
+	got := r.Text(body)
+	for _, leaked := range []string{"mullvad-de", "nordvpn-ch", "nordlynx"} {
+		if strings.Contains(got, leaked) {
+			t.Errorf("%s survived redaction: %q", leaked, got)
+		}
+	}
+	// Stable and DISTINCT: three different names must not collapse onto one
+	// token, or "the active profile is not the one that was imported" stops
+	// being visible in the bundle.
+	for _, want := range []string{"profile-1", "profile-2", "profile-3"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %s in %q", want, got)
+		}
+	}
+	// The same name twice is the same token.
+	twice := r.Text(`profile=mullvad-de and profile=mullvad-de`)
+	if strings.Count(twice, "profile-1") != 2 {
+		t.Errorf("a repeated profile name did not get a stable token: %q", twice)
+	}
+}
+
+// A home directory names the account, which names the person. The rest of the
+// path is structural and stays readable.
+func TestHomeDirectoryAccountNamesAreRedacted(t *testing.T) {
+	r := New(true)
+	got := r.Text("imported /Users/firstname/Downloads/wg0.conf and /home/firstname/vpn")
+	if strings.Contains(got, "firstname") {
+		t.Errorf("an account name survived redaction: %q", got)
+	}
+	if !strings.Contains(got, "/Users/user-1/") || !strings.Contains(got, "/home/user-1/") {
+		t.Errorf("the same account should be one stable token on both paths: %q", got)
+	}
+	if !strings.Contains(got, "/Downloads/") {
+		t.Errorf("the structural part of the path should survive: %q", got)
+	}
+}
+
+// The legend counts the new kinds by name, or a reader cannot tell what class of
+// identifier the bundle held.
+func TestLegendNamesTheNewKinds(t *testing.T) {
+	r := New(true)
+	r.Text(`{"activeProfile":"mullvad-de"} /Users/firstname/x`)
+	legend := strings.Join(r.Legend(), "\n")
+	for _, want := range []string{"profile name", "account name"} {
+		if !strings.Contains(legend, want) {
+			t.Errorf("legend does not mention %q: %q", want, legend)
+		}
+	}
+	// And still never the originals.
+	for _, leaked := range []string{"mullvad-de", "firstname"} {
+		if strings.Contains(legend, leaked) {
+			t.Errorf("legend leaked %q: %q", leaked, legend)
 		}
 	}
 }

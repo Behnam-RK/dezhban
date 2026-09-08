@@ -27,6 +27,21 @@ func cmdLogs(args []string) int {
 	asJSON := fs.Bool("json", false, "machine-readable output")
 	_ = fs.Parse(args)
 
+	// Reject a level this command does not know, rather than letting it fall
+	// through logread.Severity's "anything unrecognised sorts as INFO" default.
+	// That default is right where it lives — an unknown level on a RECORD must
+	// not be a reason to drop the record — but applied to the QUERY it silently
+	// answers a different question than the one asked, and then prints
+	// "no oopz-or-worse records" as though the filter had been honoured.
+	if v := strings.ToLower(strings.TrimSpace(*level)); v != "" {
+		switch v {
+		case "debug", "info", "warn", "warning", "error":
+		default:
+			fmt.Fprintf(os.Stderr, "unknown level %q: use debug, info, warn, or error\n", *level)
+			return 2
+		}
+	}
+
 	opt := logread.Options{MinLevel: *level, Limit: *limit}
 	if *since > 0 {
 		opt.Since = time.Now().Add(-*since)

@@ -1386,8 +1386,19 @@ end up typing a password.
       `utun*` names, ports, `127.0.0.1`, and your private subnets are still
       there, and the same server is the same `ip-N` token in config.json,
       learned.json and rules-preview.txt.
+- [ ] **The names go too, not just the addresses.** In the same redacted bundle,
+      grep for your profile names (`vpn.profiles[].name`, `activeProfile`, any
+      `tunnelHint`), your macOS account name, your Mac's `.local` name, and the
+      basename of any `.conf`/`.ovpn` you imported. **None may appear** — each is
+      the provider or the person stated in plain words, which no address-shaped
+      rule can see. Confirm the structure survived: `/Users/user-1/Downloads/…`
+      still reads as a Downloads folder, and the same profile is the same
+      `profile-N` token in config.json and state.json.
+- [ ] **The bundle is 0600.** `ls -l dezhban-report-*.zip` — an
+      `--include-network` bundle must not be readable by other local accounts.
 - [ ] **The README never leaks.** Its legend reports counts
-      ("23 distinct IP addresses → ip-1 … ip-23") and no originals.
+      ("23 distinct IP addresses → ip-1 … ip-23", "2 distinct profile names →
+      profile-1 … profile-2") and no originals.
 - [ ] **The opt-out is loud.** With "Include my real VPN server addresses and
       exit IP" ticked, the bundle contains them AND says so at the top of its
       README; the CLI prints the same warning on stderr.

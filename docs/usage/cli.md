@@ -461,7 +461,18 @@ finding you can read. Loopback, private, link-local and multicast addresses are
 kept as-is: they identify nobody and hiding them would make a ruleset
 unreadable, and the geo-provider hostnames dezhban ships are kept for the same
 reason. Hostname redaction works from an **allow-list**, so a name nobody
-anticipated is redacted rather than leaked. `--include-network` produces the
+anticipated is redacted rather than leaked.
+
+Two identifiers in a bundle are not address-shaped and get placeholders of their
+own kind: the **profile names** you chose (`vpn.profiles[].name`,
+`state.json`'s `activeProfile`, and a profile's `tunnelHint` — these are called
+"mullvad-de" and "nordlynx", so they name the provider as plainly as a server
+address does) and the **account name** in any home-directory path. A file you
+imported is redacted too, because a `.conf` or `.ovpn` is named after the VPN it
+configures.
+
+The bundle is written **0600**, so the `--include-network` version is not
+readable by other accounts on the machine. `--include-network` produces that
 full-fidelity version through the same code path, and says so on stderr and in
 the bundle's own README.
 

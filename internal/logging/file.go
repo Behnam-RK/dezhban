@@ -12,10 +12,14 @@ import (
 // Rotation geometry for the persistent log file. 5 MiB × (1 live + 2 archives)
 // caps the footprint at ~15 MiB — months of the daemon's line rate — while
 // keeping any single file small enough to open casually.
-const (
-	fileMaxBytes = 5 << 20
-	fileBackups  = 2
-)
+const fileMaxBytes = 5 << 20
+
+// FileBackups is how many rotated archives rotateLocked keeps
+// (dezhban.log.1 … dezhban.log.N). Exported because internal/logread has to walk
+// exactly this chain to show the full history: a reader that guessed a smaller
+// number would silently drop the oldest records, which is the one failure a log
+// reader must not have.
+const FileBackups = 2
 
 // FileWriter is the daemon's persistent log sink: an append-only file with
 // size-based rotation (dezhban.log → dezhban.log.1 → dezhban.log.2, oldest
@@ -81,8 +85,8 @@ func (w *FileWriter) rotateLocked() error {
 		w.reopenLocked()
 		return err
 	}
-	os.Remove(fmt.Sprintf("%s.%d", w.path, fileBackups)) // oldest falls off
-	for i := fileBackups - 1; i >= 1; i-- {
+	os.Remove(fmt.Sprintf("%s.%d", w.path, FileBackups)) // oldest falls off
+	for i := FileBackups - 1; i >= 1; i-- {
 		os.Rename(fmt.Sprintf("%s.%d", w.path, i), fmt.Sprintf("%s.%d", w.path, i+1))
 	}
 	if err := os.Rename(w.path, w.path+".1"); err != nil && !os.IsNotExist(err) {

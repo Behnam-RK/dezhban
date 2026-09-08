@@ -1,10 +1,14 @@
 package logread
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/behnam-rk/dezhban/internal/logging"
 )
 
 // The quoting rule is the whole reason this parser exists rather than a
@@ -168,5 +172,89 @@ func TestSinceDropsOlderRecords(t *testing.T) {
 	}
 	if len(recs) != 1 || recs[0].Msg != "new" {
 		t.Errorf("recs = %v", recs)
+	}
+}
+
+// Read walks exactly the archive chain the writer keeps.
+//
+// The count used to be a literal 2 here and a separate literal in
+// internal/logging. Nothing tied them together, so growing the writer's chain
+// would have left this reader silently dropping the oldest records — the one
+// failure this package is built not to have. Reading it from logging.FileBackups
+// is what makes that impossible; this pins it in both directions.
+func TestReadCoversExactlyTheWritersArchiveChain(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+
+	write := func(name, msg string) {
+		t.Helper()
+		line := fmt.Sprintf(`time=2026-09-08T10:00:00.000000Z level=INFO msg=%s`+"\n", msg)
+		if err := os.WriteFile(name, []byte(line), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(path, "live")
+	for i := 1; i <= logging.FileBackups; i++ {
+		write(fmt.Sprintf("%s.%d", path, i), fmt.Sprintf("archive%d", i))
+	}
+	// One beyond the chain: the writer deletes this, so a reader must not invent it.
+	write(fmt.Sprintf("%s.%d", path, logging.FileBackups+1), "beyond")
+
+	recs, err := Read(path, Options{})
+	if err != nil {
+		t.Fatalf("Read: %v", err)
+	}
+	if len(recs) != logging.FileBackups+1 {
+		t.Fatalf("read %d records, want %d (%d archives + the live file)",
+			len(recs), logging.FileBackups+1, logging.FileBackups)
+	}
+	for _, r := range recs {
+		if r.Msg == "beyond" {
+			t.Error("read an archive past the writer's chain")
+		}
+	}
+	// Oldest archive first, live file last.
+	if recs[0].Msg != fmt.Sprintf("archive%d", logging.FileBackups) {
+		t.Errorf("first record = %q, want the oldest archive", recs[0].Msg)
+	}
+	if recs[len(recs)-1].Msg != "live" {
+		t.Errorf("last record = %q, want the live file", recs[len(recs)-1].Msg)
+	}
+}
+
+// A very long quoted value stays one value, with the attrs after it intact.
+//
+// slog quotes anything containing a space, and the reader admits lines up to
+// 4 MiB, so "long" here is ordinary rather than pathological — a rendered
+// ruleset in a msg reaches this size. The failure to guard against is a value
+// that ends early and turns the rest of the line into garbage attrs.
+func TestAVeryLongQuotedValueStaysOneValue(t *testing.T) {
+	body := strings.Repeat("a b ", 64*1024) // spaces, so slog would quote it
+	r := ParseLine(`time=2026-09-08T10:00:00.000000Z level=WARN msg="` + body + `" n=2`)
+
+	if r.Msg != body {
+		t.Errorf("message truncated: %d bytes, want %d", len(r.Msg), len(body))
+	}
+	if len(r.Attrs) != 1 || r.Attrs[0].Key != "n" || r.Attrs[0].Value != "2" {
+		t.Errorf("attrs after a long value = %+v, want one n=2", r.Attrs)
+	}
+}
+
+// slog writes `msg=""` for a record logged with an empty message. That is a
+// record it understood, not a line it failed on, so the raw-line fallback must
+// not fire — otherwise the surface shows `time=… level=WARN msg=""` where the
+// message should be.
+func TestAnEmptyMessageIsNotRelabelledWithTheRawLine(t *testing.T) {
+	line := `time=2026-09-08T10:00:00.000000Z level=WARN msg=""`
+	r := ParseLine(line)
+	if r.Msg != "" {
+		t.Errorf("Msg = %q, want the empty message slog actually wrote", r.Msg)
+	}
+	if r.Level != "WARN" {
+		t.Errorf("Level = %q, want WARN", r.Level)
+	}
+	// A line this parser genuinely could not read still falls back.
+	if got := ParseLine("panic: runtime error").Msg; got != "panic: runtime error" {
+		t.Errorf("the fallback stopped working: %q", got)
 	}
 }

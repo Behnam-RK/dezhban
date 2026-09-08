@@ -252,6 +252,13 @@ into an actual **ruleset**.
 **Ruleset** — the concrete firewall rules for a posture. Preview any of them with
 `dezhban print-rules`, which needs no root and changes nothing.
 
+**Diagnostic bundle** — the zip `dezhban report` writes (Diagnostics › Export… in
+the app): config, state, learned endpoints, the applied ruleset, `doctor`'s
+findings, each posture's rendered ruleset, and recent log records, plus a README
+naming anything that was missing. Written to a local file and nothing more — it
+is never sent anywhere. Addresses, hostnames, profile names and account names are
+replaced with stable placeholders unless `--include-network` is passed.
+
 **Backend** — the per-OS firewall implementation (pf on macOS, nft on Linux, WFP on
 Windows) behind the `FirewallBackend` interface. Nothing outside that interface may touch
 the firewall.

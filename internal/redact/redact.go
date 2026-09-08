@@ -7,6 +7,11 @@
 // ruleset carries both, because the whole point of the ruleset is which
 // addresses may be reached.
 //
+// Two identifiers in a bundle are not address-shaped and are just as telling:
+// the PROFILE NAMES the user chose (they are called "mullvad-de", and a tunnel
+// hint is "nordlynx"), and the ACCOUNT NAME in every home-directory path. Both
+// get placeholders of their own kind.
+//
 // **Stable** placeholders, not `[redacted]`: the same address becomes the same
 // placeholder everywhere it appears, so the bundle stays diagnosable. "The rules
 // pass ip-1 but the endpoint is ip-2" is the finding; with every address flattened
@@ -41,6 +46,23 @@ var (
 	// A dotted name with a TLD-ish last label. Matched after addresses so a
 	// dotted quad is never mistaken for one.
 	hostRe = regexp.MustCompile(`\b(?:[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?\.)+[A-Za-z]{2,}\b`)
+	// The identity-bearing NAMES, which are not address-shaped at all: a profile
+	// is called "mullvad-de" or "work-nord", and a tunnel hint is "nordlynx" or
+	// "proton". Those name the provider as plainly as its server address does,
+	// and no shape-based rule can see them — they are ordinary words.
+	//
+	// Field-aware, which the shape-based passes above deliberately are not. That
+	// is not a retreat from the rule at the top of this file: shape-matching is
+	// what makes the redactor complete, and this pass only ever REMOVES more. A
+	// key added to the config and not here is redacted by nothing, which is the
+	// failure to watch for — keep this in step with config.Profile and
+	// state.Snapshot.
+	profileJSONRe = regexp.MustCompile(`("(?:name|activeProfile|tunnelHint)"\s*:\s*")([^"]+)(")`)
+	profileAttrRe = regexp.MustCompile(`\b(profile|activeProfile|tunnelHint)=("[^"]*"|[^\s]+)`)
+	// A home directory names the account, which names the person. The segment
+	// after /Users or /home is the only identifying part — the rest of the path
+	// is structural and worth reading.
+	homeDirRe = regexp.MustCompile(`(/(?:Users|home)/)([^/\s"']+)`)
 )
 
 // Redactor rewrites text, remembering what it has already replaced so the same
@@ -66,7 +88,22 @@ func (r *Redactor) Text(s string) string {
 	if !r.Enabled {
 		return s
 	}
-	// Addresses first: an IPv4 literal also matches nothing in hostRe, but an
+	// Names first, while the field they sit in is still visible: once a value has
+	// been rewritten by a later pass there is no key left to recognise it by.
+	// Each yields a placeholder with no dots, so the passes below leave it alone.
+	s = profileJSONRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := profileJSONRe.FindStringSubmatch(m)
+		return g[1] + r.placeholder(strings.ToLower(g[2]), "profile") + g[3]
+	})
+	s = profileAttrRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := profileAttrRe.FindStringSubmatch(m)
+		return g[1] + "=" + r.placeholder(strings.ToLower(strings.Trim(g[2], `"`)), "profile")
+	})
+	s = homeDirRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := homeDirRe.FindStringSubmatch(m)
+		return g[1] + r.placeholder(strings.ToLower(g[2]), "user")
+	})
+	// Addresses next: an IPv4 literal also matches nothing in hostRe, but an
 	// IPv6 zone or a bracketed form could confuse the host pattern, and doing
 	// the precise patterns first keeps the loose one from claiming them.
 	s = ipv4Re.ReplaceAllStringFunc(s, func(m string) string { return r.address(m) })
@@ -156,11 +193,30 @@ var allowedHosts = map[string]bool{
 	"example.com":               true,
 }
 
-// keptSuffixes are the endings that mean "this is a file or an identifier, not
-// a host we reached".
+// keptSuffixes are the endings that mean "this is one of dezhban's own files, or
+// a name that cannot be a host we reached".
+//
+// Two rules decide membership, and both have to hold:
+//
+//  1. It cannot be a real public TLD. `.sh` (Saint Helena) and `.md` (Moldova)
+//     are delegated, so a provider can live on either and a suffix rule would
+//     wave it straight through.
+//  2. The name in FRONT of it is dezhban's, not the user's. `.conf` and `.ovpn`
+//     pass rule 1 and fail this one: those files are the user's, and they are
+//     named after the provider — `mullvad-frankfurt.conf` leaks exactly what
+//     this package exists to hide, while being no kind of hostname at all.
+//
+// `.local` fails both readings: an mDNS name is the machine, and a Mac's is
+// built from its owner's name. It was the single largest identifier this list
+// let through.
+//
+// This is a deny-list embedded in an allow-listed matcher, so it is kept as
+// short as those two rules allow. Redacting a filename is noise; keeping one is
+// a leak.
 var keptSuffixes = []string{
-	".json", ".log", ".conf", ".ovpn", ".plist", ".sh", ".go", ".swift", ".md",
-	".dezhban", ".local", ".arpa", ".invalid", ".test",
+	".json", ".log", ".txt", ".plist", ".dezhban",
+	// Reserved by RFC 2606 / RFC 6761: never delegated, so never a real host.
+	".arpa", ".invalid", ".test",
 }
 
 // placeholder returns the stable token for one value, minting it on first sight.
@@ -213,8 +269,13 @@ func (r *Redactor) Legend() []string {
 
 func kindNoun(kind string, n int) string {
 	singular, plural := "IP address", "IP addresses"
-	if kind == "host" {
+	switch kind {
+	case "host":
 		singular, plural = "hostname", "hostnames"
+	case "profile":
+		singular, plural = "profile name", "profile names"
+	case "user":
+		singular, plural = "account name", "account names"
 	}
 	if n == 1 {
 		return singular

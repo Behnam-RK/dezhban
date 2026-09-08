@@ -64,6 +64,12 @@ func Severity(level string) int {
 // malformed line in a diagnostic log is itself worth seeing.
 func ParseLine(line string) Record {
 	r := Record{Raw: line, Level: "INFO"}
+	// Whether a msg key was SEEN, not whether it is non-empty: slog writes
+	// `msg=""` for a record logged with an empty message, and testing the value
+	// would re-label that record with its own raw line as the message — so the
+	// surface shows `time=… level=WARN msg=""` where the message should be.
+	// Falling back is for a line this parser did not understand at all.
+	sawMsg := false
 	rest := line
 	for {
 		key, value, remainder, ok := nextPair(rest)
@@ -79,12 +85,12 @@ func ParseLine(line string) Record {
 		case "level":
 			r.Level = value
 		case "msg":
-			r.Msg = value
+			r.Msg, sawMsg = value, true
 		default:
 			r.Attrs = append(r.Attrs, Attr{Key: key, Value: value})
 		}
 	}
-	if r.Msg == "" && len(r.Attrs) == 0 {
+	if !sawMsg && len(r.Attrs) == 0 {
 		r.Msg = strings.TrimSpace(line)
 	}
 	return r

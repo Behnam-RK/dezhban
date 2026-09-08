@@ -66,3 +66,32 @@ struct LogRecordsTests {
         #expect(recs.isEmpty)
     }
 }
+
+@Suite("LogRecords zero timestamp")
+struct LogRecordsZeroTimeTests {
+    /// Go leaves `logread.Record.Time` zero for a line whose timestamp it could
+    /// not read, and `encoding/json` writes that as "0001-01-01T00:00:00Z" — a
+    /// perfectly valid RFC 3339 string. Decoding it as a real date meant the
+    /// "record whose timestamp did not parse keeps a nil date" contract never
+    /// fired, and the row showed a year-0001 clock time as though it were a real
+    /// one.
+    @Test func goesZeroTimeDecodesAsNoDate() throws {
+        let json = Data("""
+        [{"time":"0001-01-01T00:00:00Z","level":"WARN","msg":"unparseable line","raw":"garbage"}]
+        """.utf8)
+        let recs = try #require(LogRecord.decodeList(json))
+        try #require(recs.count == 1)
+        #expect(recs[0].time == nil)
+        #expect(recs[0].msg == "unparseable line")
+    }
+
+    /// A real timestamp still decodes, so the guard above cannot have been
+    /// implemented by dropping every date.
+    @Test func aRealTimestampStillDecodes() throws {
+        let json = Data("""
+        [{"time":"2026-09-08T10:00:00.123456Z","level":"ERROR","msg":"real","raw":"real"}]
+        """.utf8)
+        let recs = try #require(LogRecord.decodeList(json))
+        #expect(recs[0].time != nil)
+    }
+}

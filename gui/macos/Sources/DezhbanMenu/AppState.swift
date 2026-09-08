@@ -205,6 +205,11 @@ final class AppState: ObservableObject {
     /// which is the good answer, and the pane says so. Collapsing the two would
     /// make a healthy host look like a broken reader.
     @Published var problems: [LogRecord]?
+    /// Whether a read has come back at all. Without it, `problems == nil` covers
+    /// both "not asked yet" and "could not ask", and the pane would flash
+    /// "couldn't read dezhban's log" on every visit before the first read lands
+    /// — an error where the truth is "one moment".
+    @Published var problemsAsked = false
 
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
@@ -413,7 +418,10 @@ final class AppState: ObservableObject {
         guard cliFound else { return }
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let recs = DezhbanCLI.readProblems()
-            DispatchQueue.main.async { self?.problems = recs }
+            DispatchQueue.main.async {
+                self?.problems = recs
+                self?.problemsAsked = true
+            }
         }
     }
 

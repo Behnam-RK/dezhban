@@ -162,7 +162,7 @@ struct DiagnosticsView: View {
                     ForEach(problems.reversed()) { problemRow($0) }
                 }
             }
-        } else if state.cliFound {
+        } else if state.cliFound && state.problemsAsked {
             Section("Recent problems") {
                 Label("Couldn't read dezhban's log. A CLI older than `dezhban logs` can't be asked.",
                       systemImage: "questionmark.circle")

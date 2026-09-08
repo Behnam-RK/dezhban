@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -51,11 +52,21 @@ func cmdReport(args []string) int {
 	name := fmt.Sprintf("dezhban-report-%s.zip", stamp.Format("20060102-150405"))
 	path := filepath.Join(*outDir, name)
 
-	f, err := os.Create(path)
+	// 0600, not os.Create's 0666: with --include-network this file holds the real
+	// exit IP and the VPN server addresses, and it lands in a directory the user
+	// picked — often a shared or synced one. Every other local account being able
+	// to read it would undo the choice the flag exists to make deliberate. The
+	// redacted bundle gets the same mode; nothing here is improved by being
+	// world-readable.
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0o600)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "could not create the bundle:", err)
 		return 1
 	}
+	// Closed explicitly below, not only deferred: a zip whose final flush failed
+	// (a full disk is the ordinary way) is truncated, and exiting 0 over it would
+	// hand the operator a corrupt bundle that looks like a good one. The defer
+	// stays for the error returns above it, where a second Close is harmless.
 	defer f.Close()
 	z := zip.NewWriter(f)
 
@@ -99,11 +110,20 @@ func cmdReport(args []string) int {
 		add(item.entry, body, err)
 	}
 
-	// The README goes in LAST, so it can name what was missing.
-	if w, err := z.Create("README.txt"); err == nil {
-		fmt.Fprint(w, reportReadme(stamp, r, notes))
+	// The README goes in LAST, so it can name what was missing. It is also the
+	// entry that carries the redaction statement, so its absence is the one
+	// omission the bundle cannot describe from the inside — say it on stderr
+	// instead of dropping it silently.
+	if w, err := z.Create("README.txt"); err != nil {
+		fmt.Fprintln(os.Stderr, "note: README.txt: not included —", err)
+	} else if _, err := io.WriteString(w, reportReadme(stamp, r, notes)); err != nil {
+		fmt.Fprintln(os.Stderr, "note: README.txt: truncated —", err)
 	}
 	if err := z.Close(); err != nil {
+		fmt.Fprintln(os.Stderr, "could not finish the bundle:", err)
+		return 1
+	}
+	if err := f.Close(); err != nil {
 		fmt.Fprintln(os.Stderr, "could not finish the bundle:", err)
 		return 1
 	}
@@ -187,6 +207,18 @@ func reportLog() (string, error) {
 }
 
 func reportReadme(at time.Time, r *redact.Redactor, notes []string) string {
+	// Notes carry error text from the readers above, and an error can quote the
+	// value it choked on — a malformed endpoint in the config is exactly that
+	// shape. They ship inside the bundle, so they go through the same redactor as
+	// every other body: this package must never claim to have redacted something
+	// it did not. Done FIRST, so any placeholder a note mints is counted by the
+	// legend rendered below rather than missing from it.
+	redacted := make([]string, len(notes))
+	for i, n := range notes {
+		redacted[i] = r.Text(n)
+	}
+	notes = redacted
+
 	var b strings.Builder
 	fmt.Fprintf(&b, "dezhban diagnostic bundle\n")
 	fmt.Fprintf(&b, "collected %s\n", at.Format(time.RFC3339))

@@ -76,11 +76,25 @@ public struct LogRecord: Identifiable, Hashable {
     /// A record whose timestamp did not parse is still a record. Returning nil
     /// for the date rather than dropping the line keeps the one rule this whole
     /// path lives by: never silently discard a log record.
+    ///
+    /// Go's zero time is nil here too, and that is the case that actually
+    /// happens: `logread` leaves `Record.Time` zero for a line whose timestamp it
+    /// could not read, and `encoding/json` writes that as a perfectly valid
+    /// "0001-01-01T00:00:00Z" — which parses, so without this the "no date" path
+    /// never ran and the row showed a year-0001 clock time instead.
     private static func parseTime(_ s: String) -> Date? {
         for f in [fractional, plain] {
-            if let d = f.date(from: s) { return d }
+            guard let d = f.date(from: s) else { continue }
+            return isGoZero(d) ? nil : d
         }
         return nil
+    }
+
+    /// Go's `time.Time{}` — January 1 of year 1, UTC.
+    private static func isGoZero(_ d: Date) -> Bool {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TimeZone(secondsFromGMT: 0) ?? .gmt
+        return cal.component(.year, from: d) == 1
     }
 
     private static let fractional = formatter("yyyy-MM-dd'T'HH:mm:ss.SSSSSSZZZZZ")
