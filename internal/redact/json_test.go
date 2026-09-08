@@ -374,3 +374,30 @@ func TestAProviderInterfaceNameIsRedactedAndAGenericOneIsNot(t *testing.T) {
 		t.Errorf("tunnels[].name handled wrongly: %s", tun)
 	}
 }
+
+// learned.json records the interface it observed under `iface`. The same value
+// is redacted under tunnelInterfaces and tunnels[].name, so leaving this key out
+// meant one document redacted a provider-named interface and the one beside it
+// did not.
+func TestTheLearnedInterfaceKeyIsRedacted(t *testing.T) {
+	got := New(true).JSON(`{"entries":[{"name":"p","iface":"nordlynx"},{"name":"q","iface":"utun4"}]}`)
+	if strings.Contains(got, "nordlynx") {
+		t.Errorf("got %q — the learned interface survived", got)
+	}
+	if !strings.Contains(got, `"utun4"`) {
+		t.Errorf("got %q — a generic interface was redacted", got)
+	}
+}
+
+// Interface names need the same fail-open protection endpoints got. A config cut
+// off mid-array reaches Text, and Text had no field-aware interface handling at
+// all, so `tunnelInterfaces:["nordlynx"` came back untouched.
+func TestATruncatedInterfaceArrayIsStillRedacted(t *testing.T) {
+	if got := New(true).JSON(`{"vpn":{"tunnelInterfaces":["nordlynx"`); strings.Contains(got, "nordlynx") {
+		t.Errorf("got %q — the fallback left the interface name verbatim", got)
+	}
+	// And in a log attr, where there is no JSON to walk at all.
+	if got := New(true).Text(`level=WARN msg=drop iface=nordlynx tunnel=utun4`); strings.Contains(got, "nordlynx") {
+		t.Errorf("got %q — the attr form leaked", got)
+	}
+}

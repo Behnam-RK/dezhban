@@ -129,7 +129,15 @@ var (
 	endpointsJSONRe = regexp.MustCompile(`("endpoints"\s*:\s*\[)([^\[\]{}]*)(\]?)`)
 	endpointJSONRe  = regexp.MustCompile(`("(?:addr|endpoint)"\s*:\s*")((?:[^"\\]|\\.)+)(")`)
 	endpointAttrRe  = regexp.MustCompile(`\b(endpoint|host)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
-	jsonStringRe    = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
+	// Interfaces by field, for the text path and for a document that did not
+	// parse. Closing bracket optional for the same reason the endpoints pattern
+	// makes it optional: a config cut off mid-array is exactly what reaches
+	// Text, and requiring the `]` there left `tunnelInterfaces:["nordlynx"`
+	// untouched.
+	ifacesJSONRe = regexp.MustCompile(`("tunnelInterfaces"\s*:\s*\[)([^\[\]{}]*)(\]?)`)
+	ifaceJSONRe  = regexp.MustCompile(`("iface"\s*:\s*")((?:[^"\\]|\\.)+)(")`)
+	ifaceAttrRe  = regexp.MustCompile(`\b(iface|tunnel)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
+	jsonStringRe = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
 	// A home directory names the account, which names the person. The segment
 	// after /Users or /home is the only identifying part — the rest of the path
 	// is structural and worth reading.
@@ -226,6 +234,39 @@ func (r *Redactor) Text(s string) string {
 			return m
 		}
 		return g[1] + red + g[3]
+	})
+	s = ifacesJSONRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := ifacesJSONRe.FindStringSubmatch(m)
+		body := jsonStringRe.ReplaceAllStringFunc(g[2], func(q string) string {
+			v := jsonBody(strings.Trim(q, `"`))
+			red := r.ifaceName(v)
+			if red == v {
+				return q
+			}
+			return `"` + red + `"`
+		})
+		return g[1] + body + g[3]
+	})
+	s = ifaceJSONRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := ifaceJSONRe.FindStringSubmatch(m)
+		v := jsonBody(g[2])
+		red := r.ifaceName(v)
+		if red == v {
+			return m
+		}
+		return g[1] + red + g[3]
+	})
+	s = ifaceAttrRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := ifaceAttrRe.FindStringSubmatch(m)
+		v := jsonBody(strings.Trim(g[2], `"`))
+		red := r.ifaceName(v)
+		if red == v {
+			return m
+		}
+		if strings.HasPrefix(g[2], `"`) {
+			red = `"` + red + `"`
+		}
+		return g[1] + "=" + red
 	})
 	s = endpointAttrRe.ReplaceAllStringFunc(s, func(m string) string {
 		g := endpointAttrRe.FindStringSubmatch(m)
@@ -363,8 +404,16 @@ func (r *Redactor) address(m string) string {
 		// bundle harder to read for no gain.
 		return m
 	}
+	// The zone is an INTERFACE name — `fe80::1%nordlynx` — and a provider-created
+	// interface names the provider as plainly as a server address does. It used
+	// to be copied through verbatim on both branches, and the keepAddr branch is
+	// the one that mattered: a link-local address is structural, so the whole
+	// original was returned and the zone rode out with it.
+	if zone != "" {
+		zone = "%" + r.ifaceName(zone[1:])
+	}
 	if keepAddr(addr) {
-		return m
+		return body + zone + suffix
 	}
 	return r.placeholder(addr.String(), "ip") + zone + suffix
 }
@@ -542,7 +591,16 @@ func (r *Redactor) placeholder(value, kind string) string {
 			n++
 		}
 	}
+	// Skip an ordinal that would produce the value itself. Config accepts
+	// `[A-Za-z0-9._-]`, so a profile can legitimately be CALLED `profile-1` —
+	// and minting `profile-1` for it left the name verbatim in the bundle while
+	// the legend said it had been replaced, which is the one failure this
+	// package must never have: advertising a safety it did not deliver.
 	p := fmt.Sprintf("%s-%d", kind, n+1)
+	for p == value {
+		n++
+		p = fmt.Sprintf("%s-%d", kind, n+1)
+	}
 	r.seen[key] = p
 	r.order = append(r.order, key)
 	return p
@@ -558,28 +616,33 @@ func (r *Redactor) Legend() []string {
 	if !r.Enabled || len(r.order) == 0 {
 		return nil
 	}
-	counts := map[string]int{}
+	// The tokens ACTUALLY minted, in mint order — not 1..n. An ordinal is
+	// skipped whenever it would have produced the value it replaces (a profile
+	// really can be called `profile-1`), and a legend that assumed 1..n then
+	// advertised a token appearing nowhere in the bundle.
+	tokens := map[string][]string{}
+	var kinds []string
 	for _, key := range r.order {
 		kind, _, _ := strings.Cut(key, ":")
-		counts[kind]++
-	}
-	kinds := make([]string, 0, len(counts))
-	for kind := range counts {
-		kinds = append(kinds, kind)
+		if _, seen := tokens[kind]; !seen {
+			kinds = append(kinds, kind)
+		}
+		tokens[kind] = append(tokens[kind], r.seen[key])
 	}
 	sort.Strings(kinds)
 
 	out := make([]string, 0, len(kinds))
 	for _, kind := range kinds {
-		n := counts[kind]
+		t := tokens[kind]
+		n := len(t)
 		// A range of one is not a range: "ip-1 … ip-1" reads as a rendering
 		// bug in the one file that has to look trustworthy.
 		if n == 1 {
-			out = append(out, fmt.Sprintf("1 distinct %s → %s-1", kindNoun(kind, n), kind))
+			out = append(out, fmt.Sprintf("1 distinct %s → %s", kindNoun(kind, n), t[0]))
 			continue
 		}
-		out = append(out, fmt.Sprintf("%d distinct %s → %s-1 … %s-%d",
-			n, kindNoun(kind, n), kind, kind, n))
+		out = append(out, fmt.Sprintf("%d distinct %s → %s … %s",
+			n, kindNoun(kind, n), t[0], t[n-1]))
 	}
 	return out
 }

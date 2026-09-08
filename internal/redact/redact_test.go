@@ -523,3 +523,45 @@ func TestAnAccountNameWithASpaceOrApostropheIsFullyRedacted(t *testing.T) {
 		t.Errorf("got %q — the pass ate the prose after the path", p)
 	}
 }
+
+// A placeholder must never be the value it replaces.
+//
+// config accepts `[A-Za-z0-9._-]`, so a profile can legitimately be CALLED
+// `profile-1` — and minting `profile-1` for it left the name verbatim in the
+// bundle while the legend said it had been replaced. That is the one failure
+// this package must never have: advertising a safety it did not deliver.
+func TestAPlaceholderNeverEqualsTheValueItReplaces(t *testing.T) {
+	for _, tc := range []struct{ value, kind string }{
+		{"profile-1", "profile"}, {"host-1", "host"}, {"ip-1", "ip"},
+		{"iface-1", "iface"}, {"user-1", "user"},
+	} {
+		r := New(true)
+		got := r.placeholder(tc.value, tc.kind)
+		if got == tc.value {
+			t.Errorf("placeholder(%q, %q) = %q — the value was returned unchanged", tc.value, tc.kind, got)
+		}
+		// And the legend names the token that was really minted.
+		legend := r.Legend()
+		if len(legend) != 1 || !strings.Contains(legend[0], got) {
+			t.Errorf("legend = %v, want it to name %q", legend, got)
+		}
+	}
+}
+
+// An IPv6 zone is an interface name, and a provider-created interface names the
+// provider. It was copied through verbatim on both branches, and the keepAddr
+// branch was the one that mattered: a link-local address is structural, so the
+// whole original was returned and the zone rode out with it.
+func TestAnIPv6ZoneIsRedactedWhenItNamesAProvider(t *testing.T) {
+	got := New(true).Text(`pass out on utun4 from fe80::1%nordlynx to any`)
+	if strings.Contains(got, "nordlynx") {
+		t.Errorf("got %q — the zone survived", got)
+	}
+	// The address, the % and a generic zone are all structural and stay.
+	if !strings.Contains(got, "fe80::1%") {
+		t.Errorf("got %q — the structural address or its separator was lost", got)
+	}
+	if g := New(true).Text(`fe80::1%en0`); g != `fe80::1%en0` {
+		t.Errorf("got %q, want a generic zone left alone", g)
+	}
+}

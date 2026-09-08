@@ -3,7 +3,6 @@ package main
 import (
 	"archive/zip"
 	"encoding/json"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -217,19 +216,27 @@ func TestTheBundleIsRedactedAndPrivateEndToEnd(t *testing.T) {
 	// happens to spell out — checking only the tokens named there tests host-1
 	// and nothing else.
 	all := strings.Join(collect(bodies), "\n")
-	legend := regexp.MustCompile(`(\d+) distinct [a-z ]+ \S+ ([a-z]+)-1`)
-	for _, m := range legend.FindAllStringSubmatch(bodies["README.txt"], -1) {
+	// Every token the legend NAMES has to be in the bundle. It renders the
+	// ordinals actually minted, and an ordinal is skipped when it would have
+	// produced the value it replaces — so the first one is not always `-1`, and
+	// an assertion that assumed it was tested only the first token of each kind.
+	legend := regexp.MustCompile(`(\d+) distinct [a-z ]+ → ([a-z]+-\d+)(?: … ([a-z]+-\d+))?`)
+	rows := legend.FindAllStringSubmatch(bodies["README.txt"], -1)
+	if len(rows) == 0 && strings.Contains(bodies["README.txt"], "What was replaced") {
+		t.Error("the legend rendered rows this test cannot parse")
+	}
+	for _, m := range rows {
 		count, err := strconv.Atoi(m[1])
 		if err != nil {
 			t.Fatalf("legend count %q: %v", m[1], err)
 		}
-		kind := m[2]
-		for n := 1; n <= count; n++ {
-			token := fmt.Sprintf("%s-%d", kind, n)
-			if !strings.Contains(all, token) {
-				t.Errorf("the legend counts %d %s tokens but %s appears nowhere in the bundle",
-					count, kind, token)
+		for _, token := range []string{m[2], m[3]} {
+			if token != "" && !strings.Contains(all, token) {
+				t.Errorf("the legend names %s, which appears nowhere in the bundle", token)
 			}
+		}
+		if count == 1 && m[3] != "" {
+			t.Errorf("a count of one rendered as a range: %q", m[0])
 		}
 	}
 }

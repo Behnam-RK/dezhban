@@ -102,19 +102,32 @@ current as you land changes.
 - **`dezhban logs` stops losing records to one bad line or one bad file.** A
   record whose own level this build does not recognise is no longer dropped by
   `--level warn`; a key the parser cannot read no longer discards the rest of
-  that line's attrs; a line past the size cap, and an archive that cannot be
-  opened, each now cost only themselves instead of the whole history.
+  that line's attrs; and an archive that cannot be opened costs only itself
+  instead of the whole history. A line past the 4 MiB size cap is a partial
+  recovery, not a full one: the records before it survive, but a `bufio.Scanner`
+  cannot resume past `ErrTooLong`, so that line and the rest of that one file are
+  still lost.
 - **The bundle says what its permissions mean on Windows.** It is `0600` on
   macOS and Linux; on Windows the mode is synthetic and the file inherits the
   folder's ACL, so another account on the machine may be able to read an
   `--include-network` bundle. The README and the CLI warning say so rather than
   implying a guarantee that only holds on unix ([#62](https://github.com/Behnam-RK/dezhban/issues/62)).
+- **A placeholder is never the value it replaces.** A profile may legitimately
+  be *called* `profile-1`, and it was then "replaced" with that same token — left
+  verbatim in the bundle while the legend claimed it had been redacted. The
+  ordinal is skipped, and the legend names the tokens actually minted rather than
+  assuming they run from one.
+- **An IPv6 zone no longer carries an interface name out.** `fe80::1%nordlynx` is
+  a structural address with a provider-named zone, and the whole thing was
+  returned unchanged.
 - **A config that stopped parsing is still redacted.** A file cut off mid-array
   — the commonest way a hand-edited config breaks — is exactly what the text
   fallback exists for, and it was the one input the fallback could not see: the
   endpoints pattern needed a closing bracket, a single-label endpoint matches no
   shape, and the file came back verbatim.
-- **An interface name your VPN client created is redacted.** `vpn.tunnelInterfaces`
+- **An interface name your VPN client created is redacted**, wherever it appears
+  — `vpn.tunnelInterfaces`, `state.json`'s tunnels, `learned.json`'s `iface`, an
+  IPv6 zone, an `iface=` log attr, and a config too broken to parse. `vpn.tunnelInterfaces`
   takes whatever is there, and `nordlynx`, `proton` and `gpd` name the provider
   as plainly as a server address does. The kernel's own names — `utun4`, `lo0`,
   `en0` — stay, because every host has them and the rulesets show them anyway.

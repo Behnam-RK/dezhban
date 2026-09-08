@@ -253,7 +253,11 @@ func (r *Redactor) value(s string, path []string) string {
 		// literal-name pass. Prose still gets knownNames, where mangling a
 		// common word is noise and the leak it closes is not.
 		return r.Text(s)
-	case "tunnelInterfaces":
+	case "tunnelInterfaces", "iface":
+		// learned.json records the interface it observed under `iface`. The same
+		// value is redacted under tunnelInterfaces and tunnels[].name, so leaving
+		// this key out meant one document redacted a provider-named interface and
+		// the one beside it did not.
 		return r.ifaceName(s)
 	case "addr", "endpoint", "endpoints", "ip", "ipv6":
 		return r.endpointOrFree(s)
