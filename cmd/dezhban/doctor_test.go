@@ -356,10 +356,17 @@ func TestBuildEndpointsCheck(t *testing.T) {
 		if len(c.Details) != 2 || c.Details[0] != wantBad || c.Details[1] != wantOK {
 			t.Errorf("details = %v, want [%q %q]", c.Details, wantBad, wantOK)
 		}
-		wantFix := "10.0.0.1 is a tunnel-internal address (inside utun4 10.0.0.0/24); set vpn.endpoints to\n" +
-			"    your VPN server's PUBLIC IP from your VPN client config."
+		wantFix := "the endpoint marked MISCONFIGURED above is inside utun4's subnet; set\n" +
+			"    vpn.endpoints to your VPN server's PUBLIC IP from your VPN client config."
 		if len(c.Fixes) != 1 || c.Fixes[0] != wantFix {
 			t.Errorf("fixes = %v, want [%q]", c.Fixes, wantFix)
+		}
+		// The address belongs in Details, which `dezhban report` redacts, and
+		// NOT in a fix — a fix is a command someone copies, and the bundle
+		// treats fix text as dezhban's own words. Interpolating the endpoint
+		// here meant one check redacted the address and leaked it.
+		if strings.Contains(c.Fixes[0], "10.0.0.1") {
+			t.Errorf("the fix quotes the endpoint: %q", c.Fixes[0])
 		}
 	})
 }

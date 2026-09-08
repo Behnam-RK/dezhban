@@ -52,6 +52,29 @@ func TestADoctorFixStaysARunnableCommand(t *testing.T) {
 	}
 }
 
+// An ADDRESS in a fix is still a leak. The premise that a fix never carries user
+// data was wrong when it was written — buildEndpointsCheck interpolated the
+// offending endpoint — so one check redacted an address in Details and shipped
+// it verbatim here. The source no longer interpolates; this is the belt that
+// catches the next one.
+func TestAnAddressInterpolatedIntoAFixIsStillRedacted(t *testing.T) {
+	in := `{"checks":[{"name":"endpoints","fixes":[` +
+		`"203.0.113.9 is a tunnel-internal address; set vpn.endpoints to your public IP",` +
+		`"look in /Users/someone/Downloads"]}]}`
+	got := New(true).JSON(in)
+	for _, leak := range []string{"203.0.113.9", "someone"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("%q survived inside a fix: %s", leak, got)
+		}
+	}
+	// Still a runnable command: the config key and the path shape survive.
+	for _, want := range []string{"vpn.endpoints", "/Users/", "Downloads"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q was redacted out of a fix command: %s", want, got)
+		}
+	}
+}
+
 // The whole document must still parse, and the escapes in it must survive.
 //
 // A text pattern matched the tail of an escaped `<` where it abutted a dotted
@@ -74,16 +97,25 @@ func TestTheRewrittenDocumentStillParses(t *testing.T) {
 // A key's meaning comes from the path, so a name containing a bracket cannot
 // make the scoping vanish the way a bracket-balancing pattern let it.
 func TestNameScopingCannotFailOpenOnAWalk(t *testing.T) {
-	for _, tc := range []struct{ in, leak, keep string }{
-		{`{"profiles":[{"name":"work[de"},{"name":"mullvad-se"}]}`, "mullvad-se", ""},
-		{`{"profiles":[{"name":"a]b"},{"name":"mullvad-se"}]}`, "mullvad-se", ""},
-		{`{"entries":[{"name":"nord-ch","endpoints":[{"addr":"203.0.113.4"}]}]}`, "nord-ch", ""},
+	for _, tc := range []struct {
+		in    string
+		leaks []string
+		keep  string
+	}{
+		// The bracketed name itself must go too — it is the shape the whole
+		// redesign is named after, and asserting only its neighbour left it
+		// untested.
+		{`{"profiles":[{"name":"work[de"},{"name":"mullvad-se"}]}`, []string{"work[de", "mullvad-se"}, ""},
+		{`{"profiles":[{"name":"a]b"},{"name":"mullvad-se"}]}`, []string{"a]b", "mullvad-se"}, ""},
+		{`{"entries":[{"name":"nord-ch","endpoints":[{"addr":"203.0.113.4"}]}]}`, []string{"nord-ch"}, ""},
 		// A `name` that is NOT under profiles/entries is dezhban's vocabulary.
-		{`{"checks":[{"name":"lockout"}]}`, "", "lockout"},
+		{`{"checks":[{"name":"lockout"}]}`, nil, "lockout"},
 	} {
 		got := New(true).JSON(tc.in)
-		if tc.leak != "" && strings.Contains(got, tc.leak) {
-			t.Errorf("JSON(%q) = %q — %q survived", tc.in, got, tc.leak)
+		for _, leak := range tc.leaks {
+			if strings.Contains(got, leak) {
+				t.Errorf("JSON(%q) = %q — %q survived", tc.in, got, leak)
+			}
 		}
 		if tc.keep != "" && !strings.Contains(got, tc.keep) {
 			t.Errorf("JSON(%q) = %q — %q was redacted", tc.in, got, tc.keep)
@@ -150,5 +182,100 @@ func TestTheRewrittenDocumentIsNotHTMLEscaped(t *testing.T) {
 	}
 	if !strings.Contains(got, "<name>") {
 		t.Errorf("JSON(%q) = %q — the placeholder is not readable", in, got)
+	}
+}
+
+// A document with trailing content must not come back TRUNCATED.
+//
+// The walk decoded the first value and stopped, so everything after it was
+// dropped — the bundle then showed a config that is not the file on disk, which
+// is a diagnostic lie however well the surviving half was redacted. Those go to
+// Text, which reads the whole thing.
+func TestTrailingContentIsNotDropped(t *testing.T) {
+	in := `{"vpn":{"endpoints":["203.0.113.9"]}} stray 198.51.100.7`
+	got := New(true).JSON(in)
+	if !strings.Contains(got, "stray") {
+		t.Errorf("JSON(%q) = %q — content after the first value was dropped", in, got)
+	}
+	for _, leak := range []string{"203.0.113.9", "198.51.100.7"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("JSON(%q) = %q — %q survived", in, got, leak)
+		}
+	}
+}
+
+// A profile named after one of dezhban's own words must not take that word with
+// it. The literal-name pass is what reaches profile names in doctor's prose, and
+// it would otherwise replace the CHECK named `config` with the token minted for
+// a profile called `config` — the over-redaction the path scoping exists to
+// prevent, walking back in through a different door.
+func TestAProfileNamedLikeACheckDoesNotClaimTheCheck(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"profiles":[{"name":"config"}]}`)
+	got := r.JSON(`{"checks":[{"name":"config","status":"ok"}]}`)
+	if !strings.Contains(got, `"config"`) {
+		t.Errorf("the check name was claimed by a profile of the same name: %s", got)
+	}
+}
+
+// A bare-name endpoint carrying a PORT fell through every pass: `endpoint`
+// declines a value that is not a bare token, and hostRe needs a dot. It shipped
+// verbatim out of a file the package copies off disk without validating.
+func TestABareEndpointWithAPortIsRedacted(t *testing.T) {
+	got := New(true).JSON(`{"endpoints":["se-sto-01:51820"]}`)
+	if strings.Contains(got, "se-sto-01") {
+		t.Errorf("got %q — the server name survived", got)
+	}
+	// The port is structural: which one the tunnel uses is a real diagnostic.
+	if !strings.Contains(got, "51820") {
+		t.Errorf("got %q — the port was redacted with the name", got)
+	}
+}
+
+// A tunnel hint is an interface-name PREFIX, so on most hosts it is literally
+// `utun` or `wg` — dezhban's own vocabulary, naming nobody. Replacing it hides
+// whether the hint matches the interface the rulesets keep in plain sight.
+// A hint that names a provider still goes.
+func TestAGenericTunnelHintIsKeptAndAProviderHintIsNot(t *testing.T) {
+	got := New(true).JSON(`{"profiles":[` +
+		`{"name":"a","tunnelHint":"utun"},{"name":"b","tunnelHint":"wg"},` +
+		`{"name":"c","tunnelHint":"nordlynx"}]}`)
+	for _, want := range []string{`"utun"`, `"wg"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s was redacted: %s", want, got)
+		}
+	}
+	if strings.Contains(got, "nordlynx") {
+		t.Errorf("a provider-naming hint survived: %s", got)
+	}
+}
+
+// The literal-name pass must never claim dezhban's own stable identifiers. The
+// posture and mode strings are the ones CLAUDE.md forbids renaming, so a user
+// whose profile is called `guard` must not turn `"posture": "guard"` into a
+// placeholder — that is a broken diagnosis, where the miss is only noise.
+func TestKnownNamesNeverClaimsAReservedWord(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"profiles":[{"name":"guard"}]}`)
+	got := r.JSON(`{"posture":"guard","summary":"the guard is healthy","mode":"full-block"}`)
+	for _, want := range []string{`"guard"`, `"full-block"`} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s was claimed by a profile of that name: %s", want, got)
+		}
+	}
+}
+
+// One identifier, one token. Running the shape guess before the literal pass
+// minted a profile called `nord.vpn` as `host-N` in prose and `profile-N` in the
+// config — two legend lines for one server, and no way to see they are the same.
+func TestAHostShapedProfileNameGetsOneTokenNotTwo(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"profiles":[{"name":"nord.vpn"}]}`)
+	got := r.JSON(`{"summary":"the profile nord.vpn stopped resolving"}`)
+	if strings.Contains(got, "host-") {
+		t.Errorf("got %q — the profile name was minted a second time as a hostname", got)
+	}
+	if !strings.Contains(got, "profile-1") {
+		t.Errorf("got %q, want the profile token it already has", got)
 	}
 }

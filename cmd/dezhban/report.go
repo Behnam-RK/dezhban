@@ -91,35 +91,12 @@ func cmdReport(args []string) int {
 			notes = append(notes, fmt.Sprintf("%s: not included — %v", entry, werr))
 			return
 		}
-		redacted := r.Text(body)
-		if asJSON {
-			redacted = r.JSON(body)
-		}
-		if _, werr := w.Write([]byte(redacted)); werr != nil {
+		if _, werr := w.Write([]byte(redactEntry(r, body, asJSON))); werr != nil {
 			notes = append(notes, fmt.Sprintf("%s: truncated — %v", entry, werr))
 		}
 	}
 
-	// ORDER IS LOAD-BEARING. config.json and learned.json carry the profile
-	// names, and doctor.json writes those same names into its prose — "every
-	// learned address for work-nord has aged out" — where no shape and no key
-	// can see them. The redactor replaces them there by remembering what it has
-	// already replaced, so the files that TEACH it the names have to be
-	// collected first. Do not reorder this list.
-	for _, item := range []struct {
-		entry  string
-		read   func() (string, error)
-		asJSON bool
-	}{
-		{"config.json", func() (string, error) { return reportConfig(resolveConfigPath(*cfgPath)) }, true},
-		{"state.json", func() (string, error) { return readFileString(defaultStatePath()) }, true},
-		{"learned.json", func() (string, error) { return readFileString(defaultLearnedPath()) }, true},
-		{"armed.json", func() (string, error) { return readFileString(defaultArmedPath()) }, true},
-		{"applied-rules.json", func() (string, error) { return readFileString(applied.Path(stateDir())) }, true},
-		{"doctor.json", func() (string, error) { return reportDoctor(*cfgPath) }, true},
-		{"rules-preview.txt", func() (string, error) { return reportRulePreviews(*cfgPath) }, false},
-		{"log.txt", reportLog, false},
-	} {
+	for _, item := range bundleEntries(cfgPath) {
 		body, err := item.read()
 		add(item.entry, body, err, item.asJSON)
 	}
@@ -185,6 +162,52 @@ func removeTruncated(path string) {
 	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
 		fmt.Fprintf(os.Stderr, "note: the incomplete bundle is still at %s — delete it: %v\n", path, err)
 	}
+}
+
+// ORDER IS LOAD-BEARING, and TestTheBundleCollectsNameSourcesFirst pins it.
+// config.json and learned.json carry the profile names; doctor.json and
+// state.json write those same names into PROSE — "every learned address for
+// work-nord has aged out" — where no shape and no key can see them. The
+// redactor reaches them there by remembering what it has already replaced,
+// so the two files that TEACH it the names come first. learned.json is
+// ahead of state.json for that reason: a name known only to learned.json
+// still has to be known before state's display strings are walked.
+// bundleEntry is one file in the bundle: what to call it, how to read it, and
+// whether it is a document to walk or text to pattern-match.
+type bundleEntry struct {
+	entry  string
+	read   func() (string, error)
+	asJSON bool
+}
+
+// bundleEntries lists the bundle's contents IN COLLECTION ORDER.
+func bundleEntries(cfgPath *string) []bundleEntry {
+	return []bundleEntry{
+		{"config.json", func() (string, error) { return reportConfig(resolveConfigPath(*cfgPath)) }, true},
+		{"learned.json", func() (string, error) { return readFileString(defaultLearnedPath()) }, true},
+		{"state.json", func() (string, error) { return readFileString(defaultStatePath()) }, true},
+		{"armed.json", func() (string, error) { return readFileString(defaultArmedPath()) }, true},
+		{"applied-rules.json", func() (string, error) { return readFileString(applied.Path(stateDir())) }, true},
+		{"doctor.json", func() (string, error) { return reportDoctor(*cfgPath) }, true},
+		{"rules-preview.txt", func() (string, error) { return reportRulePreviews(*cfgPath) }, false},
+		{"log.txt", reportLog, false},
+	}
+}
+
+// redactEntry redacts one entry body: a document is WALKED, a textual entry gets
+// the shape passes.
+//
+// ONE pass, not two. This was an assignment followed by a conditional overwrite,
+// and the overwritten pass still MINTED — Text reads `vpn.endpoints` in a doctor
+// fix as a hostname, which the walk deliberately keeps, so the README's legend
+// counted a token appearing nowhere in the bundle and pushed every real token's
+// ordinal past it. A Redactor remembers, so a pass whose output you throw away
+// is not free.
+func redactEntry(r *redact.Redactor, body string, asJSON bool) string {
+	if asJSON {
+		return r.JSON(body)
+	}
+	return r.Text(body)
 }
 
 func readFileString(path string) (string, error) {
@@ -315,7 +338,8 @@ func reportReadme(at time.Time, r *redact.Redactor, notes []string) string {
 			b.WriteString("\n")
 		}
 		b.WriteString("  The JSON entries are re-serialised as they are redacted, so their\n")
-		b.WriteString("  whitespace may differ from the file on disk. Key order does not.\n\n")
+		b.WriteString("  whitespace may differ from the file on disk, and a byte that was not\n")
+		b.WriteString("  valid UTF-8 comes back as U+FFFD. Key order does not change.\n\n")
 		b.WriteString("  Re-run with --include-network for the full-fidelity version. Do not post\n")
 		b.WriteString("  that one publicly.\n\n")
 	} else {

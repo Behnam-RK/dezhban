@@ -3,6 +3,7 @@ package redact
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"regexp"
 	"sort"
 	"strings"
@@ -40,7 +41,20 @@ func (r *Redactor) JSON(s string) string {
 	if err != nil {
 		return r.Text(s)
 	}
+	// The document has to be ONE value and nothing else. A file with trailing
+	// content decoded to its first value and the rest was DROPPED — so the
+	// bundle showed a config that is not the file on disk, which is a
+	// diagnostic lie however well the part that survived was redacted. Hand
+	// those to Text, which reads the whole thing.
+	if _, err := dec.Token(); err != io.EOF {
+		return r.Text(s)
+	}
 
+	// Everything minted from here on is discarded if the encode fails, because
+	// the fallback re-reads the ORIGINAL text: without this the legend would
+	// count tokens that appear nowhere in the bundle and push every real token's
+	// ordinal past them.
+	mark := len(r.order)
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
@@ -49,9 +63,19 @@ func (r *Redactor) JSON(s string) string {
 	// that a text pattern then matched into and destroyed.
 	enc.SetEscapeHTML(false)
 	if err := enc.Encode(r.walk(doc, nil)); err != nil {
+		r.rollback(mark)
 		return r.Text(s)
 	}
 	return buf.String()
+}
+
+// rollback forgets every placeholder minted since mark, for a pass whose output
+// was thrown away.
+func (r *Redactor) rollback(mark int) {
+	for _, key := range r.order[mark:] {
+		delete(r.seen, key)
+	}
+	r.order = r.order[:mark]
 }
 
 // object preserves an object's key ORDER, which encoding/json's map does not.
@@ -216,16 +240,28 @@ func (r *Redactor) value(s string, path []string) string {
 		if within(path, "profiles") || within(path, "entries") {
 			return r.name(s, "profile")
 		}
-		return r.free(s)
+		// A `name` outside those arrays is dezhban's own vocabulary — a doctor
+		// CHECK name — so it gets the shape passes and NOT knownNames. A user
+		// whose profile is called `config` would otherwise have the check named
+		// `config` replaced with that profile's token: the exact over-redaction
+		// the scoping above exists to prevent, walking back in through the
+		// literal-name pass. Prose still gets knownNames, where mangling a
+		// common word is noise and the leak it closes is not.
+		return r.Text(s)
 	case "addr", "endpoint", "endpoints", "ip", "ipv6":
 		return r.endpointOrFree(s)
 	case "fixes":
-		// dezhban's own command text, never user data — every Fixes entry in
-		// the doctor is a literal template with nothing interpolated into it.
-		// Running the shape passes over it turned `vpn.endpoints` into a
-		// placeholder and made the suggested command nonsense. It still gets
-		// the known-name pass, so a name that reached it anyway still goes.
-		return r.knownNames(s)
+		// A fix is a command someone RUNS, so `vpn.endpoints` and `wg0.conf`
+		// have to survive it — the hostname shape claimed both and made the
+		// suggested command nonsense.
+		//
+		// Not "no redaction", though. The premise that a fix never carries user
+		// data was WRONG when it was written: buildEndpointsCheck interpolated
+		// the offending endpoint, so one check redacted an address in Details
+		// and shipped it verbatim here. That is fixed at the source, and the
+		// address passes stay as the belt — they cost nothing a fix command
+		// needs, and they are what catches the next interpolation.
+		return r.addresses(s)
 	default:
 		return r.free(s)
 	}
@@ -239,13 +275,41 @@ func (r *Redactor) endpointOrFree(s string) string {
 	if red := r.endpoint(s); red != s {
 		return red
 	}
+	// A bare name carrying a port — `se-sto-01:51820` — is not a bare token, so
+	// endpoint declines it, and hostRe needs a dot, so the shape passes decline
+	// it too. It fell through both and shipped verbatim. Split the port off and
+	// ask again, keeping the port: a port is structural, and which one the
+	// tunnel uses is a real diagnostic.
+	if host, port, ok := splitPort(s); ok {
+		if red := r.endpoint(host); red != host {
+			return red + ":" + port
+		}
+	}
 	return r.free(s)
+}
+
+// splitPort separates a trailing :port from a value that is not itself an
+// address. An IPv6 literal is full of colons and is never split.
+func splitPort(s string) (host, port string, ok bool) {
+	i := strings.LastIndexByte(s, ':')
+	if i <= 0 || i == len(s)-1 || strings.Count(s, ":") != 1 {
+		return "", "", false
+	}
+	host, port = s[:i], s[i+1:]
+	if !isAllDigits(port) {
+		return "", "", false
+	}
+	return host, port, true
 }
 
 // free rewrites a string that no key identifies: the shape passes, then the
 // names this bundle has already replaced elsewhere.
 func (r *Redactor) free(s string) string {
-	return r.knownNames(r.Text(s))
+	// knownNames FIRST. Its values are known identities; hostRe is a guess. Run
+	// the guess first and a profile called `nord.vpn` is minted as `host-N` in
+	// prose and `profile-N` in the config — one identifier, two tokens, two
+	// legend lines, and no way for a reader to see they are the same server.
+	return r.Text(r.knownNames(s))
 }
 
 // knownNames replaces profile and hint names this Redactor has already minted,
@@ -274,7 +338,7 @@ func (r *Redactor) knownNames(s string) string {
 	// Longest first, so a name that is a prefix of another cannot claim it.
 	sort.Slice(names, func(i, j int) bool { return len(names[i].value) > len(names[j].value) })
 	for _, n := range names {
-		if !strings.Contains(strings.ToLower(s), n.value) {
+		if reserved[n.value] || !strings.Contains(strings.ToLower(s), n.value) {
 			continue
 		}
 		re, err := regexp.Compile(`(?i)\b` + regexp.QuoteMeta(n.value) + `\b`)
@@ -284,6 +348,27 @@ func (r *Redactor) knownNames(s string) string {
 		s = re.ReplaceAllLiteralString(s, n.token)
 	}
 	return s
+}
+
+// reserved are the words this pass may never claim, whatever a profile is
+// called. They are dezhban's own stable identifiers — the posture and mode
+// strings CLAUDE.md forbids renaming, the placeholder kinds, and the doctor's
+// check names — so a user whose profile is called `guard` would otherwise have
+// `"posture": "guard"` rewritten to `"posture": "profile-1"`, which is the
+// over-redaction the path scoping exists to prevent arriving by another road.
+// Failing to redact one profile whose name collides with dezhban's vocabulary
+// is noise in a bundle; rewriting the vocabulary is a broken diagnosis.
+//
+// This pass cannot launder its own tokens, but that is `free`'s ordering rather
+// than anything here: knownNames runs on the value's ORIGINAL text, before Text
+// has minted a placeholder into it, so there is never a token present for a name
+// to match inside.
+var reserved = map[string]bool{
+	"guard": true, "full-block": true, "switch-window": true, "standby": true,
+	"stopped": true, "fullblock": true, "switch": true, "pause": true,
+	"config": true, "tunnels": true, "endpoints": true, "lockout": true,
+	"service": true, "liveness": true, "control": true, "armatboot": true,
+	"endpointretention": true,
 }
 
 // within reports whether key appears anywhere in the path.

@@ -2233,9 +2233,14 @@ func buildEndpointsCheck(endpoints []netip.Addr, bad []netdetect.EndpointRoute) 
 	if len(bad) > 0 {
 		c.Status = checkFail
 		for _, b := range bad {
+			// The address is NOT interpolated here. Details above already names
+			// it, once, and a fix is a command someone runs — quoting user data
+			// into one puts an identifier somewhere a reader copies and pastes,
+			// and `dezhban report` treats fix text as dezhban's own words when
+			// it redacts the bundle.
 			c.Fixes = append(c.Fixes,
-				fmt.Sprintf("%s is a tunnel-internal address (inside %s %s); set vpn.endpoints to\n"+
-					"    your VPN server's PUBLIC IP from your VPN client config.", b.Endpoint, b.Iface, b.Subnet))
+				fmt.Sprintf("the endpoint marked MISCONFIGURED above is inside %s's subnet; set\n"+
+					"    vpn.endpoints to your VPN server's PUBLIC IP from your VPN client config.", b.Iface))
 		}
 	}
 	return c

@@ -289,6 +289,26 @@ func isAllDigits(s string) bool {
 	return true
 }
 
+// addresses runs only the passes that find an ADDRESS or a home directory —
+// no hostname shape, no name pass. For text that is dezhban's own words but
+// could still have an identifier interpolated into it: an address there is
+// always a leak, while a dotted token is far more likely to be a config key or
+// a filename the reader needs.
+func (r *Redactor) addresses(s string) string {
+	if !r.Enabled {
+		return s
+	}
+	s = homeDirRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := homeDirRe.FindStringSubmatch(m)
+		return g[1] + r.placeholder(strings.ToLower(g[2]), "user")
+	})
+	s = ipv4Re.ReplaceAllStringFunc(s, func(m string) string { return r.address(m) })
+	return ipv6Re.ReplaceAllStringFunc(s, func(m string) string {
+		g := ipv6Re.FindStringSubmatch(m)
+		return g[1] + r.address(g[2])
+	})
+}
+
 // address replaces one address-shaped match, keeping any /prefix — the prefix
 // length is structural (it says "this is a subnet rule"), not identifying.
 func (r *Redactor) address(m string) string {
@@ -407,10 +427,27 @@ func (r *Redactor) replaceProfileNames(body string) string {
 // name replaces one identity-bearing NAME, keeping the words that are dezhban's
 // own rather than the user's.
 func (r *Redactor) name(v, kind string) string {
-	if v == unattributed {
+	lower := strings.ToLower(v)
+	if lower == unattributed {
 		return v
 	}
-	return r.placeholder(strings.ToLower(v), kind)
+	if kind == "hint" && keptHints[lower] {
+		return v
+	}
+	return r.placeholder(lower, kind)
+}
+
+// keptHints are the interface-name PREFIXES that are dezhban's own vocabulary
+// rather than the user's. A hint is matched against the live interface name, so
+// on most hosts it is literally `utun` or `wg` — replacing those names nobody
+// and hides whether the hint matches the `utun4` the rulesets keep in plain
+// sight, which is the only thing the field is for.
+//
+// The generic subset of netdetect.tunnelPrefixes, deliberately: `nordlynx`,
+// `proton` and `gpd` are on that list too and they name the provider as plainly
+// as a server address does, so those still go. Keep in step with it.
+var keptHints = map[string]bool{
+	"utun": true, "tun": true, "tap": true, "wg": true, "ipsec": true,
 }
 
 // unattributed is learned.json's name for endpoints that belong to no profile.

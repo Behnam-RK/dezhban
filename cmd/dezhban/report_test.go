@@ -2,10 +2,15 @@ package main
 
 import (
 	"archive/zip"
+	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -138,6 +143,7 @@ func TestTheBundleIsRedactedAndPrivateEndToEnd(t *testing.T) {
 	defer zr.Close()
 
 	seen := map[string]bool{}
+	bodies := map[string]string{}
 	for _, f := range zr.File {
 		seen[f.Name] = true
 		rc, err := f.Open()
@@ -149,6 +155,7 @@ func TestTheBundleIsRedactedAndPrivateEndToEnd(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", f.Name, err)
 		}
+		bodies[f.Name] = string(body)
 		for _, leak := range []string{endpoint, profile, bareHost} {
 			if strings.Contains(string(body), leak) {
 				t.Errorf("%s leaked %q", f.Name, leak)
@@ -161,5 +168,133 @@ func TestTheBundleIsRedactedAndPrivateEndToEnd(t *testing.T) {
 		if !seen[want] {
 			t.Errorf("the bundle has no %s (entries: %v)", want, seen)
 		}
+	}
+
+	// Every JSON entry still OPENS. A redactor that rewrites text it does not
+	// understand can break the escaping of the file it is rewriting, and a
+	// doctor.json no reader can open is a diagnosis nobody gets — which looks
+	// exactly like a working bundle until someone tries to use it. This shipped
+	// once; docs/contribute/testing.md asks a human for it, and a human is not
+	// a regression test.
+	for name, body := range bodies {
+		if !strings.HasSuffix(name, ".json") {
+			continue
+		}
+		if !json.Valid([]byte(body)) {
+			t.Errorf("%s is not valid JSON:\n%s", name, body)
+		}
+	}
+
+	// dezhban's OWN vocabulary survives. Over-redaction fails as badly as
+	// under-redaction: a bundle that hides the diagnosis has thrown away the
+	// answer and hidden no identity.
+	var report struct {
+		Checks []struct {
+			Name  string   `json:"name"`
+			Fixes []string `json:"fixes"`
+		} `json:"checks"`
+	}
+	if err := json.Unmarshal([]byte(bodies["doctor.json"]), &report); err != nil {
+		t.Fatalf("doctor.json: %v", err)
+	}
+	for _, c := range report.Checks {
+		if strings.HasPrefix(c.Name, "profile-") || strings.HasPrefix(c.Name, "host-") {
+			t.Errorf("a doctor check name was redacted: %q", c.Name)
+		}
+	}
+	if !strings.Contains(bodies["config.json"], "utun9") {
+		t.Error("the tunnel interface name was redacted out of config.json")
+	}
+	if !strings.Contains(bodies["rules-preview.txt"], "utun9") {
+		t.Error("the tunnel interface name was redacted out of rules-preview.txt")
+	}
+
+	// The legend counts what is actually in the bundle. A pass whose output is
+	// discarded still mints, and the README then advertises tokens that appear
+	// nowhere — which is the README overstating what it hid.
+	// The legend prints a RANGE ("4 distinct hostnames -> host-1 ... host-4"),
+	// so every ordinal has to come from the count, not from what the README
+	// happens to spell out — checking only the tokens named there tests host-1
+	// and nothing else.
+	all := strings.Join(collect(bodies), "\n")
+	legend := regexp.MustCompile(`(\d+) distinct [a-z ]+ \S+ ([a-z]+)-1`)
+	for _, m := range legend.FindAllStringSubmatch(bodies["README.txt"], -1) {
+		count, err := strconv.Atoi(m[1])
+		if err != nil {
+			t.Fatalf("legend count %q: %v", m[1], err)
+		}
+		kind := m[2]
+		for n := 1; n <= count; n++ {
+			token := fmt.Sprintf("%s-%d", kind, n)
+			if !strings.Contains(all, token) {
+				t.Errorf("the legend counts %d %s tokens but %s appears nowhere in the bundle",
+					count, kind, token)
+			}
+		}
+	}
+}
+
+// collect returns every entry body except the README, which is where the legend
+// itself lives.
+func collect(bodies map[string]string) []string {
+	var out []string
+	for name, body := range bodies {
+		if name != "README.txt" {
+			out = append(out, body)
+		}
+	}
+	return out
+}
+
+// The collection order is load-bearing and nothing pinned it.
+//
+// config.json and learned.json carry the profile names; doctor.json and
+// state.json write those names into PROSE, where the redactor reaches them only
+// by remembering what it has already replaced. Collect a prose file first and
+// its names ship verbatim — with every test still green, because the leak is in
+// a file the fixture does not have to contain.
+func TestTheBundleCollectsNameSourcesFirst(t *testing.T) {
+	order := bundleEntryOrder()
+	pos := map[string]int{}
+	for i, name := range order {
+		pos[name] = i
+	}
+	for _, src := range []string{"config.json", "learned.json"} {
+		for _, prose := range []string{"state.json", "doctor.json", "rules-preview.txt", "log.txt"} {
+			if pos[src] > pos[prose] {
+				t.Errorf("%s is collected after %s; a name it alone knows would ship verbatim in %s (order: %v)",
+					src, prose, prose, order)
+			}
+		}
+	}
+}
+
+// bundleEntryOrder is the entry names in the order cmdReport collects them.
+func bundleEntryOrder() []string {
+	empty := ""
+	var names []string
+	for _, e := range bundleEntries(&empty) {
+		names = append(names, e.entry)
+	}
+	return names
+}
+
+// One pass per entry. This call site was an assignment followed by a
+// conditional overwrite, and the overwritten pass still MINTED — Text reads
+// `vpn.endpoints` in a doctor fix as a hostname, which the walk deliberately
+// keeps, so the README's legend counted a token appearing nowhere in the
+// bundle. A Redactor remembers; a pass whose output you throw away is not free.
+func TestRedactEntryUsesExactlyOnePass(t *testing.T) {
+	body := `{"checks":[{"name":"endpoints","fixes":["sudo dezhban config set vpn.endpoints=x"]}]}`
+
+	got := redact.New(true)
+	redactEntry(got, body, true)
+
+	want := redact.New(true)
+	want.JSON(body)
+
+	if !slices.Equal(got.Legend(), want.Legend()) {
+		t.Errorf("redactEntry minted more than the walk alone:\n  got:  %v\n  want: %v",
+			got.Legend(), want.Legend())
 	}
 }
