@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -135,9 +136,17 @@ func cmdReport(args []string) int {
 		fmt.Fprintln(os.Stderr, "addresses and exit IP, and also your VPN profile names, tunnel hints,")
 		fmt.Fprintln(os.Stderr, "account name, and the names of any config files you imported.")
 		fmt.Fprintln(os.Stderr, "Do not post it publicly. Re-run without --include-network for a shareable one.")
+		if runtime.GOOS == "windows" {
+			fmt.Fprintln(os.Stderr, "On Windows this file inherits the folder's permissions, so another account")
+			fmt.Fprintln(os.Stderr, "on this machine may be able to read it. Put it somewhere only you can reach.")
+		}
 	}
+	// Redacted, like the copies that ship inside the README. A reader error can
+	// quote the value it choked on, and `report` goes out of its way to keep
+	// identifiers off the terminal during a redacted run (see quietLogger) —
+	// printing the raw note here undid that at the last step.
 	for _, n := range notes {
-		fmt.Fprintln(os.Stderr, "note:", n)
+		fmt.Fprintln(os.Stderr, "note:", r.Text(n))
 	}
 	return 0
 }
@@ -154,6 +163,15 @@ func cmdReport(args []string) int {
 //
 // The name carries a whole-second timestamp, so two exports in one second
 // collide honestly rather than one silently overwriting the other.
+//
+// WINDOWS: 0600 does not build a private DACL there — Go's mode bits on Windows
+// are synthetic, so the file inherits the directory's ACL and another local
+// account may be able to read it. O_EXCL still refuses an existing path. Making
+// this real needs a user-only SECURITY_ATTRIBUTES via golang.org/x/sys/windows,
+// which is a fifth third-party module in a project that caps them at four, and
+// it cannot be exercised on the machines that build this. The README and the
+// --include-network warning say so rather than implying a guarantee that only
+// holds on unix.
 func createBundle(path string) (*os.File, string, error) {
 	base := strings.TrimSuffix(path, ".zip")
 	for n := 0; n < 100; n++ {
@@ -381,6 +399,9 @@ func reportReadme(at time.Time, r *redact.Redactor, notes []string) string {
 		b.WriteString("  real VPN server addresses and public exit IP, and also your VPN profile\n")
 		b.WriteString("  names, tunnel hints, account name, and the names of any config files you\n")
 		b.WriteString("  imported. Do not post it publicly.\n\n")
+		b.WriteString("  On macOS and Linux this file is 0600, readable only by you. On WINDOWS it\n")
+		b.WriteString("  inherits the folder's permissions, so another account on the machine may\n")
+		b.WriteString("  be able to read it — put it somewhere only you can reach.\n\n")
 	}
 
 	if len(notes) > 0 {

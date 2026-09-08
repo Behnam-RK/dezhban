@@ -497,3 +497,29 @@ func TestAWindowsHomeDirectoryAccountNameIsRedacted(t *testing.T) {
 		}
 	}
 }
+
+// An account name can contain a space or an apostrophe, and Windows profile
+// directories routinely do. A class that stopped at whitespace and `'` left the
+// second half — `Alice Smith` became `user-1 Smith`, and `O'Brien` left `Brien`
+// standing — in a bundle advertised as redacted.
+func TestAnAccountNameWithASpaceOrApostropheIsFullyRedacted(t *testing.T) {
+	for _, tc := range []struct{ in, leak string }{
+		{`C:\Users\Alice Smith\AppData`, "Smith"},
+		{`C:\Users\O'Brien\AppData`, "Brien"},
+		{`/Users/Alice Smith/Library`, "Smith"},
+	} {
+		got := New(true).Text(tc.in)
+		if strings.Contains(got, tc.leak) {
+			t.Errorf("Text(%q) = %q — %q survived", tc.in, got, tc.leak)
+		}
+	}
+	// The same account is still ONE token, and prose is still not eaten.
+	r := New(true)
+	got := r.Text(`/Users/firstname/Downloads and /home/firstname/vpn`)
+	if strings.Count(got, "user-1") != 2 {
+		t.Errorf("got %q, want one stable token on both paths", got)
+	}
+	if p := r.Text(`look in /Users/alice and try again`); !strings.Contains(p, "and try again") {
+		t.Errorf("got %q — the pass ate the prose after the path", p)
+	}
+}

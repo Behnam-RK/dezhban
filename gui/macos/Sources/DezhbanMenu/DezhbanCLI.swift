@@ -340,7 +340,13 @@ enum DezhbanCLI {
         guard let bin = binaryPath() else {
             return .failed("dezhban CLI not found in a trusted install location")
         }
-        var args = ["report", "--out", directory.path, "--config", resolvedConfigPath()]
+        // No --config. resolvedConfigPath() hands back the canonical path even
+        // when no file is there, and passing it explicitly turns "no config, use
+        // built-in defaults" into "--config <a path that does not exist>" — so on
+        // a host that has never run setup the export lost config.json,
+        // doctor.json AND rules-preview.txt, which is most of the bundle. The
+        // child inherits DEZHBAN_CONFIG, so a non-default config still applies.
+        var args = ["report", "--out", directory.path]
         if includeNetwork { args.append("--include-network") }
         let r = exec(bin, args)
         let printed = r.out.trimmingCharacters(in: .whitespacesAndNewlines)

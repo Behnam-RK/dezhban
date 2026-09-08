@@ -2232,18 +2232,29 @@ func buildEndpointsCheck(endpoints []netip.Addr, bad []netdetect.EndpointRoute) 
 	}
 	if len(bad) > 0 {
 		c.Status = checkFail
-		for _, b := range bad {
-			// The address is NOT interpolated here. Details above already names
-			// it, once, and a fix is a command someone runs — quoting user data
-			// into one puts an identifier somewhere a reader copies and pastes,
-			// and `dezhban report` treats fix text as dezhban's own words when
-			// it redacts the bundle.
-			c.Fixes = append(c.Fixes,
-				fmt.Sprintf("the endpoint marked MISCONFIGURED above is inside %s's subnet; set\n"+
-					"    vpn.endpoints to your VPN server's PUBLIC IP from your VPN client config.", b.Iface))
-		}
+		// ONE fix for the check, however many endpoints are bad. The address is
+		// deliberately not interpolated — Details above names every one of them,
+		// and a fix is a command someone runs, so quoting user data into it puts
+		// an identifier somewhere a reader copies and pastes, and `dezhban
+		// report` treats fix text as dezhban's own words when it redacts the
+		// bundle. Repeating the sentence per entry produced N identical fixes
+		// that named neither the endpoint nor the interface.
+		c.Fixes = append(c.Fixes,
+			plural(len(bad),
+				"the endpoint marked MISCONFIGURED above is a tunnel-internal address; set\n"+
+					"    vpn.endpoints to your VPN server's PUBLIC IP from your VPN client config.",
+				"the endpoints marked MISCONFIGURED above are tunnel-internal addresses; set\n"+
+					"    vpn.endpoints to your VPN servers' PUBLIC IPs from your VPN client config."))
 	}
 	return c
+}
+
+// plural picks the wording for a count.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // buildLockoutCheck formats the "guard would block its own tunnel's transport"

@@ -151,11 +151,14 @@ func nextPair(s string) (key, value, rest string, ok bool) {
 	}
 	s = s[eq+1:]
 	if strings.HasPrefix(s, `"`) {
-		// Let strconv find the closing quote so escapes inside the value are
-		// handled by the same code that wrote them.
-		for i := 1; i <= len(s); i++ {
-			if v, err := strconv.Unquote(s[:i]); err == nil {
-				return key, v, s[i:], true
+		// QuotedPrefix scans for the closing quote ONCE. Trying Unquote on every
+		// prefix did the same work O(n) times, and the scanner admits lines up to
+		// 4 MiB, so a long quoted value full of escaped quotes made `dezhban
+		// logs` reparse the same megabyte over and over. Same decoder either way,
+		// so escapes are still handled by the code that wrote them.
+		if q, err := strconv.QuotedPrefix(s); err == nil {
+			if v, uerr := strconv.Unquote(q); uerr == nil {
+				return key, v, s[len(q):], true
 			}
 		}
 		// Unterminated quote: take the remainder verbatim rather than dropping

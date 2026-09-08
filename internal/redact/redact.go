@@ -119,7 +119,14 @@ var (
 	// The array body excludes braces and brackets so this matches the ARRAY OF
 	// STRINGS config and state.json write, and never learned.json's array of
 	// objects — whose own address field is endpointJSONRe's job.
-	endpointsJSONRe = regexp.MustCompile(`("endpoints"\s*:\s*\[)([^\[\]{}]*)(\])`)
+	// The closing bracket is OPTIONAL, and that is the point rather than a
+	// nicety. Text is the fallback for a document that did not parse, and the
+	// commonest way a config fails to parse is being cut off mid-array —
+	// `{"vpn":{"endpoints":["mullvad"`. Requiring the `]` meant that exact input
+	// matched nothing here, and a single-label endpoint matches no shape either,
+	// so the fallback returned the file VERBATIM. A fallback that fails open is
+	// worse than no fallback.
+	endpointsJSONRe = regexp.MustCompile(`("endpoints"\s*:\s*\[)([^\[\]{}]*)(\]?)`)
 	endpointJSONRe  = regexp.MustCompile(`("(?:addr|endpoint)"\s*:\s*")((?:[^"\\]|\\.)+)(")`)
 	endpointAttrRe  = regexp.MustCompile(`\b(endpoint|host)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
 	jsonStringRe    = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
@@ -130,7 +137,15 @@ var (
 	// `C:\Users\Alice\…` — matching only the unix spelling left the account
 	// name in a bundle that says it redacts it, on a whole platform. The
 	// doubled form is how a path arrives inside JSON or a Go-quoted log value.
-	homeDirRe = regexp.MustCompile(`((?:/|\\\\?)(?:Users|home)(?:/|\\\\?))([^/\\\s"']+)`)
+	// Two patterns, and the order matters. A segment FOLLOWED by another
+	// separator can safely take spaces and apostrophes, because the separator
+	// says where it ends — `C:\Users\Alice Smith\AppData` and
+	// `C:\Users\O'Brien\AppData` both leaked their second half to a class that
+	// stopped at whitespace and an apostrophe. A segment with nothing after it
+	// falls back to stopping at whitespace, because in prose ("look in
+	// /Users/alice and try again") that is where the name really ends.
+	homeDirSegRe = regexp.MustCompile(`((?:/|\\{1,2})(?:Users|home)(?:/|\\{1,2}))([^/\\"]+)((?:/|\\{1,2}))`)
+	homeDirRe    = regexp.MustCompile(`((?:/|\\{1,2})(?:Users|home)(?:/|\\{1,2}))([^/\\\s"']+)`)
 )
 
 // Redactor rewrites text, remembering what it has already replaced so the same
@@ -182,10 +197,7 @@ func (r *Redactor) Text(s string) string {
 		g := hintAttrRe.FindStringSubmatch(m)
 		return "tunnelHint=" + r.name(jsonBody(strings.Trim(g[1], `"`)), "hint")
 	})
-	s = homeDirRe.ReplaceAllStringFunc(s, func(m string) string {
-		g := homeDirRe.FindStringSubmatch(m)
-		return g[1] + r.placeholder(strings.ToLower(g[2]), "user")
-	})
+	s = r.homeDirs(s)
 	// Endpoints by field, still ahead of the shape passes and for the same
 	// reason: the key is what makes a bare name recognisable as a server.
 	//
@@ -302,16 +314,36 @@ func (r *Redactor) addresses(s string) string {
 	if !r.Enabled {
 		return s
 	}
-	s = homeDirRe.ReplaceAllStringFunc(s, func(m string) string {
-		g := homeDirRe.FindStringSubmatch(m)
-		return g[1] + r.placeholder(strings.ToLower(g[2]), "user")
-	})
+	s = r.homeDirs(s)
 	s = ipv4Re.ReplaceAllStringFunc(s, func(m string) string { return r.address(m) })
 	return ipv6Re.ReplaceAllStringFunc(s, func(m string) string {
 		g := ipv6Re.FindStringSubmatch(m)
 		return g[1] + r.address(g[2])
 	})
 }
+
+// homeDirs replaces the account segment of every home-directory path.
+func (r *Redactor) homeDirs(s string) string {
+	s = homeDirSegRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := homeDirSegRe.FindStringSubmatch(m)
+		return g[1] + r.placeholder(strings.ToLower(g[2]), "user") + g[3]
+	})
+	return homeDirRe.ReplaceAllStringFunc(s, func(m string) string {
+		g := homeDirRe.FindStringSubmatch(m)
+		// The segment pass has already run, so this one can be looking at its
+		// output: `/Users/user-1/x` would otherwise mint a placeholder FOR a
+		// placeholder and hand the same account two tokens.
+		if placeholderRe.MatchString(g[2]) {
+			return m
+		}
+		return g[1] + r.placeholder(strings.ToLower(g[2]), "user")
+	})
+}
+
+// placeholderRe matches a token this package has already minted. Any pass that
+// can run after another one needs it: replacing a placeholder produces a token
+// in no legend and splits one identifier across two.
+var placeholderRe = regexp.MustCompile(`^(?:ip|host|profile|hint|user)-\d+$`)
 
 // address replaces one address-shaped match, keeping any /prefix — the prefix
 // length is structural (it says "this is a subnet rule"), not identifying.
@@ -441,6 +473,44 @@ func (r *Redactor) name(v, kind string) string {
 	return r.placeholder(lower, kind)
 }
 
+// ifaceName replaces an interface name that is not one of the kernel's own.
+//
+// A generic name — `utun4`, `lo0`, `en0`, `wg0` — is structural: every host has
+// them, they identify nobody, and the rulesets keep them in plain sight, so
+// replacing them would make a bundle unreadable for no gain. But
+// `vpn.tunnelInterfaces` takes whatever the user's VPN client created, and
+// netdetect recognises `nordlynx`, `proton` and `gpd` by name precisely because
+// those are what commercial clients install. Those name the provider as plainly
+// as a server address does, and no shape can see them.
+func (r *Redactor) ifaceName(v string) string {
+	if v == "" || keepIface(v) {
+		return v
+	}
+	return r.placeholder(strings.ToLower(v), "iface")
+}
+
+// keepIface reports the interface names that are the kernel's vocabulary rather
+// than a vendor's: a generic prefix followed by nothing but digits.
+func keepIface(name string) bool {
+	l := strings.ToLower(name)
+	digits := len(l)
+	for digits > 0 && l[digits-1] >= '0' && l[digits-1] <= '9' {
+		digits--
+	}
+	return genericIfaces[l[:digits]]
+}
+
+// genericIfaces is the kernel/driver vocabulary. Deliberately NOT the whole of
+// netdetect.tunnelPrefixes: that list also carries `nordlynx`, `proton` and
+// `gpd`, which are there because they name a commercial VPN — the exact thing
+// this package exists to hide.
+var genericIfaces = map[string]bool{
+	"utun": true, "tun": true, "tap": true, "wg": true, "ipsec": true,
+	"lo": true, "en": true, "eth": true, "ppp": true, "bridge": true,
+	"awdl": true, "llw": true, "gif": true, "stf": true, "anpi": true,
+	"ap": true, "vmenet": true, "veth": true, "docker": true,
+}
+
 // keptHints are the interface-name PREFIXES that are dezhban's own vocabulary
 // rather than the user's. A hint is matched against the live interface name, so
 // on most hosts it is literally `utun` or `wg` — replacing those names nobody
@@ -523,6 +593,8 @@ func kindNoun(kind string, n int) string {
 		singular, plural = "profile name", "profile names"
 	case "hint":
 		singular, plural = "tunnel hint", "tunnel hints"
+	case "iface":
+		singular, plural = "interface name", "interface names"
 	case "user":
 		singular, plural = "account name", "account names"
 	}

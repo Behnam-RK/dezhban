@@ -104,6 +104,34 @@ current as you land changes.
   `--level warn`; a key the parser cannot read no longer discards the rest of
   that line's attrs; a line past the size cap, and an archive that cannot be
   opened, each now cost only themselves instead of the whole history.
+- **The bundle says what its permissions mean on Windows.** It is `0600` on
+  macOS and Linux; on Windows the mode is synthetic and the file inherits the
+  folder's ACL, so another account on the machine may be able to read an
+  `--include-network` bundle. The README and the CLI warning say so rather than
+  implying a guarantee that only holds on unix ([#62](https://github.com/Behnam-RK/dezhban/issues/62)).
+- **A config that stopped parsing is still redacted.** A file cut off mid-array
+  — the commonest way a hand-edited config breaks — is exactly what the text
+  fallback exists for, and it was the one input the fallback could not see: the
+  endpoints pattern needed a closing bracket, a single-label endpoint matches no
+  shape, and the file came back verbatim.
+- **An interface name your VPN client created is redacted.** `vpn.tunnelInterfaces`
+  takes whatever is there, and `nordlynx`, `proton` and `gpd` name the provider
+  as plainly as a server address does. The kernel's own names — `utun4`, `lo0`,
+  `en0` — stay, because every host has them and the rulesets show them anyway.
+- **An account name with a space or an apostrophe is redacted in full.**
+  `C:\Users\Alice Smith\` kept the surname and `C:\Users\O'Brien\` kept
+  `Brien`.
+- **GUI Export no longer loses most of the bundle on a default-config host.** It
+  passed the canonical config path explicitly even when no file was there, which
+  turned "use built-in defaults" into "a `--config` that does not exist" and
+  dropped `config.json`, `doctor.json` and `rules-preview.txt`.
+- **`dezhban logs --json` always hands back a payload.** An unreadable archive
+  beside zero matching records exited non-zero with no JSON, so the app fell back
+  to its generic "couldn't read" state and discarded the partial-read warning
+  with it.
+- **`dezhban report` redacts the notes it prints to your terminal**, not only the
+  copies inside the bundle, and `doctor` emits one fix for several
+  tunnel-internal endpoints rather than the same sentence repeated.
 - **Diagnostics says when the log it read was incomplete.** `dezhban logs`
   returns the records it *could* read when one file in the rotation chain is
   unreadable, and puts the reason on stderr; the app read only stdout and

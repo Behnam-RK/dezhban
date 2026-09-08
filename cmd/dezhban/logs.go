@@ -54,7 +54,13 @@ func cmdLogs(args []string) int {
 	recs, err := logread.Read(path, opt)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "warning: part of the log could not be read:", err)
-		if len(recs) == 0 {
+		// Exit 1 only when there is nothing to hand back at all. With --json
+		// there always is: `[]` plus the warning says "read what I could, matched
+		// nothing", and exiting non-zero instead made the caller discard the
+		// warning too and fall back to its generic "couldn't read" state — which
+		// is a worse answer than the partial one, and reached whenever an
+		// unreadable archive happened to sit beside zero matching records.
+		if len(recs) == 0 && !*asJSON {
 			return 1
 		}
 	}

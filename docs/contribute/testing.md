@@ -1415,9 +1415,12 @@ end up typing a password.
 - [ ] **The README never leaks.** Its legend reports counts
       ("23 distinct IP addresses → ip-1 … ip-23", "2 distinct profile names →
       profile-1 … profile-2") and no originals.
-- [ ] **The opt-out is loud.** With "Include my real VPN server addresses and
-      exit IP" ticked, the bundle contains them AND says so at the top of its
-      README; the CLI prints the same warning on stderr.
+- [ ] **The opt-out is loud.** With "Turn redaction off: include my real server
+      addresses, exit IP, VPN profile names and account name" ticked, the bundle
+      contains all of those AND says so at the top of its README; the CLI prints
+      the same warning on stderr. The label, the warning and the README name the
+      same set — the checkbox turns the whole redactor off, not just its network
+      half, and that is what someone is consenting to.
 - [ ] **A bundle collects on a bare host.** With dezhban installed but never
       started, `dezhban report` still writes a zip — the missing state files are
       notes, not failures.

@@ -240,6 +240,11 @@ func (r *Redactor) value(s string, path []string) string {
 		if within(path, "profiles") || within(path, "entries") {
 			return r.name(s, "profile")
 		}
+		// state.json's tunnels[].name is an INTERFACE name, and the generic ones
+		// are the kernel's vocabulary rather than the user's.
+		if within(path, "tunnels") {
+			return r.ifaceName(s)
+		}
 		// A `name` outside those arrays is dezhban's own vocabulary — a doctor
 		// CHECK name — so it gets the shape passes and NOT knownNames. A user
 		// whose profile is called `config` would otherwise have the check named
@@ -248,6 +253,8 @@ func (r *Redactor) value(s string, path []string) string {
 		// literal-name pass. Prose still gets knownNames, where mangling a
 		// common word is noise and the leak it closes is not.
 		return r.Text(s)
+	case "tunnelInterfaces":
+		return r.ifaceName(s)
 	case "addr", "endpoint", "endpoints", "ip", "ipv6":
 		return r.endpointOrFree(s)
 	case "fixes":

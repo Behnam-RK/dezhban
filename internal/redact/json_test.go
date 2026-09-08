@@ -333,3 +333,44 @@ func TestARedactedEndpointDoesNotClaimAProviderHostname(t *testing.T) {
 		t.Errorf("the provider hostname was claimed by a colliding endpoint: %s", got)
 	}
 }
+
+// The Text fallback must not FAIL OPEN on the very input it exists for.
+//
+// A config cut off mid-array is the commonest way a hand-edited file stops
+// parsing, and it is exactly the case the walk hands to Text. The endpoints
+// pattern required a closing `]`, so it matched nothing; a single-label endpoint
+// matches no shape either; and the file came back verbatim out of a bundle that
+// says it redacts it.
+func TestATruncatedEndpointsArrayIsStillRedacted(t *testing.T) {
+	for _, tc := range []struct{ in, leak string }{
+		{`{"vpn":{"endpoints":["mullvad"`, "mullvad"},
+		{`{"vpn":{"endpoints":["203.0.113.9","nl-01.protonvpn.net"`, "protonvpn"},
+	} {
+		if got := New(true).JSON(tc.in); strings.Contains(got, tc.leak) {
+			t.Errorf("JSON(%q) = %q — %q survived the fallback", tc.in, got, tc.leak)
+		}
+	}
+}
+
+// An interface name the user's VPN client created names the provider.
+// netdetect recognises `nordlynx`, `proton` and `gpd` by name for exactly that
+// reason, and no shape can see them. The kernel's own names stay: every host has
+// `utun4` and `lo0`, and the rulesets keep them in plain sight.
+func TestAProviderInterfaceNameIsRedactedAndAGenericOneIsNot(t *testing.T) {
+	got := New(true).JSON(`{"vpn":{"tunnelInterfaces":["utun4","nordlynx","proton","lo0","en0"]}}`)
+	for _, keep := range []string{`"utun4"`, `"lo0"`, `"en0"`} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("%s was redacted: %s", keep, got)
+		}
+	}
+	for _, leak := range []string{"nordlynx", "proton"} {
+		if strings.Contains(got, leak) {
+			t.Errorf("%q survived: %s", leak, got)
+		}
+	}
+	// state.json's tunnels[].name is the same kind of thing.
+	tun := New(true).JSON(`{"tunnels":[{"name":"utun4"},{"name":"nordlynx"}]}`)
+	if !strings.Contains(tun, `"utun4"`) || strings.Contains(tun, "nordlynx") {
+		t.Errorf("tunnels[].name handled wrongly: %s", tun)
+	}
+}
