@@ -12,6 +12,170 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Added
+
+- **Recent problems, in Diagnostics.** Warn-and-worse records from dezhban's own
+  log, newest first, with the evidence dezhban logged beside each one. "Nothing
+  logged as a warning or an error" is shown as the good answer it is, and kept
+  distinct from "couldn't read the log".
+- **`dezhban logs`** — recent records from `<state dir>/logs/dezhban.log`, the
+  rotated archives included (the interesting failure is often the one that
+  pushed the file over its rotation threshold). `--level warn` for just the
+  problems, plus `--since`, `--limit` and `--json`. No root: the log is `0644`
+  by design. Nothing matched exits 0.
+- **`dezhban report`, and Diagnostics → Export…** — one zip with everything
+  someone would otherwise ask for a file at a time: config, `state.json`,
+  `learned.json`, `armed.json`, the ruleset dezhban last applied, `doctor`'s
+  findings, what each posture would apply, and recent log records. A missing
+  file is noted *inside* the bundle rather than failing the whole collection.
+  **Nothing is sent anywhere** — it is a local file, and sharing it is your
+  decision. **Redacted by default**: addresses and hostnames become *stable*
+  placeholders, so the same server is the same token everywhere and the bundle
+  stays diagnosable; loopback, private, link-local and multicast addresses stay
+  as-is because they identify nobody and hiding them would make a ruleset
+  unreadable. Hostname redaction works from an allow-list, so an unanticipated
+  name is redacted rather than leaked. `--include-network` (a checkbox in the
+  app) produces the full-fidelity version and says so in three places.
+
+### Fixed
+
+- **The diagnostic bundle redacts the identifiers that are not addresses.** Your
+  profile names (`vpn.profiles[].name`, `activeProfile`, `tunnelHint`), the
+  account name in any home-directory path, your Mac's `.local` name, and the
+  basename of a `.conf`/`.ovpn` you imported all went into a "safe to paste into
+  a public issue" bundle verbatim — they are ordinary words rather than
+  address-shaped text, so nothing was looking at them, and they name the provider
+  or the person as plainly as a server address does. They now get placeholders of
+  their own kind (`profile-1`, `user-1`). The filename-suffix exemptions shrank to
+  match: `.sh` and `.md` are real top-level domains, and `.conf`/`.ovpn` files are
+  yours and named after your VPN.
+- **The diagnostic bundle redacts its own "not included" notes.** They name why a
+  file was left out, and the reason can quote the value that broke — a malformed
+  endpoint is exactly that shape — but they were written into the bundle's README
+  untouched.
+- **The diagnostic bundle is written 0600**, so the `--include-network` version is
+  not readable by every other account on the machine.
+- **A diagnostic bundle whose final write failed is reported as a failure** rather
+  than exiting 0 over a truncated zip, and a README that could not be written is
+  named on stderr instead of vanishing.
+- **`dezhban logs --level` rejects a level it does not know** instead of silently
+  filtering at INFO and then reporting "no `<that level>`-or-worse records" as
+  though the filter had been honoured.
+- **A record logged with an empty message is no longer re-labelled with its own
+  raw line.** `msg=""` is a record dezhban understood; only a line the parser
+  could not read at all falls back to showing the raw text.
+- **A log record whose timestamp dezhban could not read no longer shows a
+  year-0001 clock time** in the app. Go writes an unset timestamp as
+  `0001-01-01T00:00:00Z`, which parses perfectly well, so the "no date" path never
+  ran.
+- **Diagnostics no longer flashes "couldn't read dezhban's log"** while the first
+  read is still in flight.
+- **Redaction reaches identifiers it used to walk past.** An IPv6 address whose
+  compression sits at either end (`::ffff:cb00:7107`, `2001:db8::`) was matched
+  only in part and therefore left verbatim; an endpoint that is a bare name
+  rather than a dotted host (`mullvad`, `vpn.123abc` — both valid endpoints) was
+  not matched at all; and a name containing a quote had its tail left in the
+  bundle beside a stray quote that also broke the file's JSON.
+- **The bundle's JSON is redacted by walking it, not by pattern-matching its
+  text.** A pattern over raw JSON has to reason about escaping, about which
+  array a key sits in, and about where a value ends, and it got each of those
+  wrong: a match starting inside a `\u003c` escape left `doctor.json`
+  unparseable, so the file a reader opens first could not be opened at all;
+  hand-balanced brackets failed OPEN when a profile name contained one, and
+  every name in that file shipped verbatim. The document is now parsed once and
+  values are rewritten as values, with `encoding/json` re-escaping on the way
+  out — key order and all. A document that does not parse still gets the text
+  passes, because a hand-edited config is exactly the host a bundle is
+  collected from.
+- **Profile names in `doctor`'s prose are redacted.** The retention check writes
+  learned entry names into its summary and details as ordinary words ("every
+  learned address for work-nord has aged out") — no dot for a hostname shape to
+  catch, no key for a field-aware pass to read — so every host with learned
+  endpoints shipped its profile names inside a bundle that says it hides them.
+  Doctor's suggested fix commands, meanwhile, stay runnable: `vpn.endpoints` and
+  `wg0.conf` are dezhban's own words and are no longer replaced.
+- **The bundle no longer redacts dezhban's own words.** `doctor.json` gives every
+  check a name, and those were being replaced with `profile-N` — the file a
+  reader opens first came back unreadable, and the README's legend reported VPN
+  profiles the host does not have. A legend entry of one is written `ip-1`, not
+  `ip-1 … ip-1`.
+- **`dezhban logs` stops losing records to one bad line or one bad file.** A
+  record whose own level this build does not recognise is no longer dropped by
+  `--level warn`; a key the parser cannot read no longer discards the rest of
+  that line's attrs; and an archive that cannot be opened costs only itself
+  instead of the whole history. A line past the 4 MiB size cap is a partial
+  recovery, not a full one: the records before it survive, but a `bufio.Scanner`
+  cannot resume past `ErrTooLong`, so that line and the rest of that one file are
+  still lost.
+- **The bundle says what its permissions mean on Windows.** It is `0600` on
+  macOS and Linux; on Windows the mode is synthetic and the file inherits the
+  folder's ACL, so another account on the machine may be able to read an
+  `--include-network` bundle. The README and the CLI warning say so rather than
+  implying a guarantee that only holds on unix ([#62](https://github.com/Behnam-RK/dezhban/issues/62)).
+- **A placeholder is never the value it replaces.** A profile may legitimately
+  be *called* `profile-1`, and it was then "replaced" with that same token — left
+  verbatim in the bundle while the legend claimed it had been redacted. The
+  ordinal is skipped, and the legend names the tokens actually minted rather than
+  assuming they run from one.
+- **An IPv6 zone no longer carries an interface name out.** `fe80::1%nordlynx` is
+  a structural address with a provider-named zone, and the whole thing was
+  returned unchanged.
+- **A config that stopped parsing is still redacted.** A file cut off mid-array
+  — the commonest way a hand-edited config breaks — is exactly what the text
+  fallback exists for, and it was the one input the fallback could not see: the
+  endpoints pattern needed a closing bracket, a single-label endpoint matches no
+  shape, and the file came back verbatim.
+- **An interface name your VPN client created is redacted**, wherever it appears
+  — `vpn.tunnelInterfaces`, `state.json`'s tunnels, `learned.json`'s `iface`, an
+  IPv6 zone, an `iface=` log attr, and a config too broken to parse. `vpn.tunnelInterfaces`
+  takes whatever is there, and `nordlynx`, `proton` and `gpd` name the provider
+  as plainly as a server address does. The kernel's own names — `utun4`, `lo0`,
+  `en0` — stay, because every host has them and the rulesets show them anyway.
+- **An account name with a space or an apostrophe is redacted in full.**
+  `C:\Users\Alice Smith\` kept the surname and `C:\Users\O'Brien\` kept
+  `Brien`.
+- **GUI Export no longer loses most of the bundle on a default-config host.** It
+  passed the canonical config path explicitly even when no file was there, which
+  turned "use built-in defaults" into "a `--config` that does not exist" and
+  dropped `config.json`, `doctor.json` and `rules-preview.txt`.
+- **`dezhban logs --json` always hands back a payload.** An unreadable archive
+  beside zero matching records exited non-zero with no JSON, so the app fell back
+  to its generic "couldn't read" state and discarded the partial-read warning
+  with it.
+- **`dezhban report` redacts the notes it prints to your terminal**, not only the
+  copies inside the bundle, and `doctor` emits one fix for several
+  tunnel-internal endpoints rather than the same sentence repeated.
+- **Diagnostics says when the log it read was incomplete.** `dezhban logs`
+  returns the records it *could* read when one file in the rotation chain is
+  unreadable, and puts the reason on stderr; the app read only stdout and
+  presented a partial history as a complete one — the same lie as collapsing
+  "nothing logged" into "couldn't read", from the other side.
+- **A single-label VPN endpoint no longer leaks through the resolver's error.**
+  The daemon logs it twice — `host=mullvad err="lookup mullvad: no such host"` —
+  and only the first has a field to recognise it by, while a name with no dot is
+  invisible to the hostname shape. The bundle now replaces names it has already
+  redacted wherever they appear.
+- **The bundle is never written over a file that already exists.** The mode
+  argument applies at creation, so opening an existing path kept whatever
+  permissions it had, and the open followed a symlink — a link sitting in the
+  output directory, which is one you pick and often a shared or synced one,
+  redirected an `--include-network` bundle wherever it pointed. A same-second
+  second export now gets a numbered name instead of overwriting the first.
+- **`--include-network` says what it actually turns off.** It disables redaction
+  entirely — profile names, tunnel hints, your account name and imported
+  filenames as well as addresses — while the flag help, the stderr warning, the
+  bundle's README and the app's checkbox all named only the network half. That
+  is the moment someone consents to publishing the rest.
+- **Windows home directories are redacted too.** `C:\Users\Alice\…` kept the
+  account name in a bundle that says it replaces it, on a whole platform.
+- **A log line with no `level=` survives `--level warn`.** Raw panics and stack
+  traces have no level field; defaulting them to `INFO` made the filter drop
+  exactly the records "Recent problems" exists to show.
+- **`dezhban report` cleans up after a failed write**, rather than leaving a
+  truncated zip that looks like a good one. It no longer prints real hostnames
+  and endpoints to the terminal while writing a redacted bundle, and on a host
+  with no config file it says so instead of `open : no such file or directory`.
+
 ## [0.13.0] - 2026-09-06
 
 ### Added

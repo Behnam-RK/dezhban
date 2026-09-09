@@ -70,6 +70,8 @@ Commands:
   monitor     Live read-only view: IP, country, tunnel state, endpoints, verdict
   print-rules Print the ruleset a block/guard would apply (--applied/--installed: what is live)
   doctor      Diagnose VPN guard config (tunnels, endpoints, lockout risks)
+  logs        Print recent records from dezhban's own log (--level warn for problems)
+  report      Write a diagnostic bundle to a file (redacted by default; sent nowhere)
   panic       Force-remove dezhban's rules even if nothing is running
   install     Register dezhban as a boot-persistent OS service
   uninstall   Remove the OS service
@@ -136,6 +138,10 @@ func run(args []string) int {
 		return cmdMonitor(rest)
 	case "print-rules":
 		return cmdPrintRules(rest)
+	case "report":
+		return cmdReport(rest)
+	case "logs":
+		return cmdLogs(rest)
 	case "doctor":
 		return cmdDoctor(rest)
 	case "panic":
@@ -2226,13 +2232,29 @@ func buildEndpointsCheck(endpoints []netip.Addr, bad []netdetect.EndpointRoute) 
 	}
 	if len(bad) > 0 {
 		c.Status = checkFail
-		for _, b := range bad {
-			c.Fixes = append(c.Fixes,
-				fmt.Sprintf("%s is a tunnel-internal address (inside %s %s); set vpn.endpoints to\n"+
-					"    your VPN server's PUBLIC IP from your VPN client config.", b.Endpoint, b.Iface, b.Subnet))
-		}
+		// ONE fix for the check, however many endpoints are bad. The address is
+		// deliberately not interpolated — Details above names every one of them,
+		// and a fix is a command someone runs, so quoting user data into it puts
+		// an identifier somewhere a reader copies and pastes, and `dezhban
+		// report` treats fix text as dezhban's own words when it redacts the
+		// bundle. Repeating the sentence per entry produced N identical fixes
+		// that named neither the endpoint nor the interface.
+		c.Fixes = append(c.Fixes,
+			plural(len(bad),
+				"the endpoint marked MISCONFIGURED above is a tunnel-internal address; set\n"+
+					"    vpn.endpoints to your VPN server's PUBLIC IP from your VPN client config.",
+				"the endpoints marked MISCONFIGURED above are tunnel-internal addresses; set\n"+
+					"    vpn.endpoints to your VPN servers' PUBLIC IPs from your VPN client config."))
 	}
 	return c
+}
+
+// plural picks the wording for a count.
+func plural(n int, one, many string) string {
+	if n == 1 {
+		return one
+	}
+	return many
 }
 
 // buildLockoutCheck formats the "guard would block its own tunnel's transport"

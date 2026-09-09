@@ -10,6 +10,7 @@ import DezhbanCore
 struct DiagnosticsView: View {
     @EnvironmentObject var state: AppState
     @State private var discover = false
+    @State private var exporting = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -25,6 +26,7 @@ struct DiagnosticsView: View {
             state.runDoctorIfStale(maxAge: 15 * 60)
             state.refreshVPNInventoryIfStale()
             state.refreshAppliedRules()
+            state.refreshProblems()
         }
     }
 
@@ -35,6 +37,10 @@ struct DiagnosticsView: View {
             Toggle("Find my VPN's server", isOn: $discover)
                 .toggleStyle(.checkbox)
                 .help("macOS-only best-effort hunt for the connected VPN's real server IP (`--discover`).")
+            Button("Export…") { exportReport() }
+                .disabled(exporting || !state.cliFound)
+                .help("Save everything on this pane — plus your config, dezhban's state and its recent log — "
+                    + "to one zip you can attach to a bug report. Nothing is sent anywhere.")
             Spacer()
             if state.doctorRunning {
                 ProgressView().controlSize(.small)
@@ -49,6 +55,7 @@ struct DiagnosticsView: View {
         state.runDoctor(discover: discover)
         state.refreshVPNInventoryIfStale(maxAge: 0)
         state.refreshAppliedRules()
+        state.refreshProblems()
         // The kernel readback is a snapshot and re-reading it costs a password,
         // so a refresh drops it rather than silently renewing it. Keeping it
         // would leave the previous posture's rules under a heading that says
@@ -94,6 +101,7 @@ struct DiagnosticsView: View {
                     }
                 }
                 noReportYetRow
+                problemsSection
                 vpnInventorySection
                 firewallRulesSection
                 if let report = state.doctorReport {
@@ -130,6 +138,129 @@ struct DiagnosticsView: View {
                       systemImage: "stethoscope")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - problems
+
+    /// Recent warn-and-worse records from dezhban's own log.
+    ///
+    /// The three states are deliberately distinct. Nothing found is the GOOD
+    /// answer and says so; not-yet-asked shows nothing; could-not-ask explains
+    /// itself. Collapsing "no problems" into "no data" would make a healthy host
+    /// look like a broken reader, and the reverse would be worse.
+    @ViewBuilder
+    private var problemsSection: some View {
+        if let problems = state.problems {
+            Section("Recent problems") {
+                if let partial = state.problemsPartial {
+                    // The CLI's own warning goes in the tooltip, not inline: it
+                    // already opens with "part of the log could not be read", so
+                    // interpolating it after this sentence said the same thing
+                    // twice. Parsing the prefix off would couple this view to the
+                    // exact wording of a Go string, which is the coupling this
+                    // whole path avoids by parsing the log in Go.
+                    Label("Part of the log could not be read, so this list may be incomplete.",
+                          systemImage: "exclamationmark.triangle")
+                        .font(.callout)
+                        .foregroundStyle(.orange)
+                        .help(partial)
+                }
+                if problems.isEmpty && state.problemsPartial == nil {
+                    Label("Nothing logged as a warning or an error.", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.callout)
+                } else {
+                    ForEach(problems.reversed()) { problemRow($0) }
+                }
+            }
+        } else if state.cliFound && state.problemsAsked {
+            Section("Recent problems") {
+                Label("Couldn't read dezhban's log. A CLI older than `dezhban logs` can't be asked.",
+                      systemImage: "questionmark.circle")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    /// One record. The message is what a person reads; the attrs are the
+    /// evidence, in the order dezhban wrote them — that order reads as a
+    /// sentence, which is why they are carried as ordered pairs rather than a
+    /// dictionary all the way from Go.
+    private func problemRow(_ r: LogRecord) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: r.isError ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                .foregroundStyle(r.isError ? .red : .orange)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(r.msg)
+                    .font(.callout)
+                    .textSelection(.enabled)
+                    .fixedSize(horizontal: false, vertical: true)
+                if !r.detail.isEmpty {
+                    Text(r.detail)
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 8)
+            if let t = r.time {
+                Text(Self.stamp.string(from: t))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    // MARK: - export
+
+    /// Writes the bundle where the user chooses, then reveals it in Finder.
+    ///
+    /// Redacted by default. The checkbox is the deliberate opt-out, and its
+    /// label says what the unredacted bundle contains rather than describing the
+    /// mechanism — someone about to paste this into a public issue needs to read
+    /// the consequence, not the feature.
+    private func exportReport() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.canCreateDirectories = true
+        panel.prompt = "Save Here"
+        panel.message = "Where should the diagnostic bundle go?"
+
+        // The label names everything the box turns off, not just the network
+        // half. The checkbox disables the redactor ENTIRELY, so it also exposes
+        // profile names, tunnel hints, the account name and imported filenames —
+        // and someone about to attach this to a public issue is consenting to
+        // whatever the label told them, which had named a third of it.
+        let includeNetwork = NSButton(
+            checkboxWithTitle: "Turn redaction off: include my real server addresses, exit IP, "
+                + "VPN profile names and account name",
+            target: nil, action: nil)
+        includeNetwork.state = .off
+        includeNetwork.toolTip = "Leave this off to get a bundle that is safe to attach to a public issue: "
+            + "addresses, hostnames, profile names, tunnel hints and your account name are all "
+            + "replaced with stable placeholders, so it is still diagnosable."
+        panel.accessoryView = includeNetwork
+        panel.isAccessoryViewDisclosed = true
+
+        guard panel.runModal() == .OK, let dir = panel.url else { return }
+        exporting = true
+        let full = includeNetwork.state == .on
+        DispatchQueue.global(qos: .userInitiated).async {
+            let result = DezhbanCLI.writeReport(to: dir, includeNetwork: full)
+            DispatchQueue.main.async {
+                exporting = false
+                switch result {
+                case .wrote(let url):
+                    NSWorkspace.shared.activateFileViewerSelecting([url])
+                case .failed(let message):
+                    state.showInLogs(title: "dezhban — export diagnostics", text: message)
+                }
             }
         }
     }

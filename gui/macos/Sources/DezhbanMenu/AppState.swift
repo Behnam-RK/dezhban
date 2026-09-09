@@ -199,6 +199,39 @@ final class AppState: ObservableObject {
     /// Bumped by every clear, captured by every read, compared on completion.
     /// A read whose generation no longer matches is discarded rather than shown.
     private var installedRulesGeneration = 0
+
+    /// Recent warn-and-worse records from dezhban's own log. nil is "not asked
+    /// yet, or could not ask"; an EMPTY array is "asked, and there were none" —
+    /// which is the good answer, and the pane says so. Collapsing the two would
+    /// make a healthy host look like a broken reader.
+    @Published var problems: [LogRecord]?
+    /// Whether a read has come back at all. Without it, `problems == nil` covers
+    /// both "not asked yet" and "could not ask", and the pane would flash
+    /// "couldn't read dezhban's log" on every visit before the first read lands
+    /// — an error where the truth is "one moment".
+    @Published var problemsAsked = false
+    /// Set when `dezhban logs` could read only part of its rotation chain. The
+    /// records it did return are real and worth showing; presenting them as the
+    /// whole history would be the same lie as collapsing "nothing logged" into
+    /// "couldn't read".
+    @Published var problemsPartial: String?
+    /// Bumped by every read, captured by each, compared on completion, so the
+    /// newest answer always wins. Diagnostics calls `refreshProblems` from both
+    /// `onAppear` and the Run button, so two reads can be in flight; the
+    /// earlier one landing last would overwrite the newer answer, and a stale
+    /// `nil` flips the pane to "Couldn't read dezhban's log" on a host whose
+    /// log is perfectly fine.
+    ///
+    /// Related to `installedRulesGeneration` but NOT the same rule: that one is
+    /// bumped on CLEAR, to stop a read landing after the user threw its result
+    /// away. This one is bumped on every READ, because the race here is two
+    /// reads rather than a read against a clear. There is deliberately no
+    /// in-flight guard either — this is an unprivileged `dezhban logs` costing
+    /// a few milliseconds, not a call behind a password prompt, and refusing
+    /// the Run button because `onAppear` is still in flight would make the
+    /// button look broken on the one visit where it matters.
+    private var problemsGeneration = 0
+
     /// The sidebar's yellow dot: the last doctor report has something a person
     /// should look at. A dedicated Bool (not derived in the cell) so the
     /// sidebar can subscribe with removeDuplicates() and never reload at 1 Hz.
@@ -397,6 +430,23 @@ final class AppState: ObservableObject {
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             let rules = DezhbanCLI.readAppliedRules()
             DispatchQueue.main.async { self?.appliedRules = rules }
+        }
+    }
+
+    /// Reads recent problem records from dezhban's log. Unprivileged and cheap,
+    /// so it refreshes with the rest of the Diagnostics pane.
+    func refreshProblems() {
+        guard cliFound else { return }
+        problemsGeneration += 1
+        let generation = problemsGeneration
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            let result = DezhbanCLI.readProblems()
+            DispatchQueue.main.async {
+                guard let self, generation == self.problemsGeneration else { return }
+                self.problems = result?.records
+                self.problemsPartial = result?.partial
+                self.problemsAsked = true
+            }
         }
     }
 

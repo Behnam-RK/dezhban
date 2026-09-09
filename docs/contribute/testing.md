@@ -1362,6 +1362,69 @@ end up typing a password.
       `dezhban doctor` prints in a terminal.
 - [ ] CLI missing → the guided "dezhban CLI not found" state, not a blank list.
 
+### Problems and the diagnostic bundle
+
+- [ ] **Problems reads the real log.** Diagnostics → Recent problems lists the
+      same records as `dezhban logs --level warn --limit 100`, newest first, with
+      each record's attrs beside it in the order dezhban wrote them.
+- [ ] **"None" is shown as the good answer.** On a host with a clean log the
+      section reads "Nothing logged as a warning or an error" in green — not an
+      empty list, and not the "couldn't read" message.
+- [ ] **Rotation is covered.** Force a rotation (or rename `dezhban.log` to
+      `dezhban.log.1` and restart), then confirm `dezhban logs` still shows the
+      archived records, oldest first.
+- [ ] **The bundle collects.** Export… → pick a folder → Finder reveals
+      `dezhban-report-<stamp>.zip`. Open it: README.txt, config.json, state.json,
+      learned.json, armed.json, applied-rules.json, doctor.json,
+      rules-preview.txt, log.txt. Anything absent is named under "Not included"
+      in the README rather than missing silently.
+- [ ] **The redaction actually holds.** This is the check that matters — a
+      redactor that misses a field advertises a safety it did not deliver.
+      Unzip a default (redacted) bundle and grep every file for your real VPN
+      server address, your provider's hostname, and your public exit IP from
+      `dezhban status`. **None may appear.** Then confirm the structure survived:
+      `utun*` names, ports, `127.0.0.1`, and your private subnets are still
+      there, and the same server is the same `ip-N` token in config.json,
+      learned.json and rules-preview.txt.
+- [ ] **The names go too, not just the addresses.** In the same redacted bundle,
+      grep for your profile names (`vpn.profiles[].name`, `activeProfile`, any
+      `tunnelHint`), your macOS account name, your Mac's `.local` name, and the
+      basename of any `.conf`/`.ovpn` you imported. **None may appear** — each is
+      the provider or the person stated in plain words, which no address-shaped
+      rule can see. Confirm the structure survived: `/Users/user-1/Downloads/…`
+      still reads as a Downloads folder, and the same profile is the same
+      `profile-N` token in config.json and state.json.
+- [ ] **Nothing dezhban ships is redacted.** The other direction, and it fails
+      just as badly: a bundle that hides the diagnosis has thrown away the
+      answer and hidden no identity. In the same bundle confirm dezhban's OWN
+      vocabulary survived —
+      `doctor.json`'s check names (`config`, `tunnels`, `endpoints`, `lockout`,
+      …), the shipped geo-provider hostnames, the posture strings (`guard`,
+      `full-block`, `switch-window`, `standby`), the mode names in
+      rules-preview.txt, and every `utun*`/`lo0`. If the check names read as
+      `profile-N`, the redactor has replaced the answer rather than the
+      identity, and the legend is overcounting to match.
+- [ ] **Every JSON entry still opens.** `for f in *.json; do python3 -m json.tool
+      "$f" >/dev/null || echo "$f"; done` over the unpacked bundle prints
+      nothing. A redactor that rewrites text it does not understand can break
+      the escaping of the file it is rewriting, and a `doctor.json` no reader
+      can open is a diagnosis nobody gets — which looks exactly like a working
+      bundle until someone tries to use it.
+- [ ] **The bundle is 0600.** `ls -l dezhban-report-*.zip` — an
+      `--include-network` bundle must not be readable by other local accounts.
+- [ ] **The README never leaks.** Its legend reports counts
+      ("23 distinct IP addresses → ip-1 … ip-23", "2 distinct profile names →
+      profile-1 … profile-2") and no originals.
+- [ ] **The opt-out is loud.** With "Turn redaction off: include my real server
+      addresses, exit IP, VPN profile names and account name" ticked, the bundle
+      contains all of those AND says so at the top of its README; the CLI prints
+      the same warning on stderr. The label, the warning and the README name the
+      same set — the checkbox turns the whole redactor off, not just its network
+      half, and that is what someone is consenting to.
+- [ ] **A bundle collects on a bare host.** With dezhban installed but never
+      started, `dezhban report` still writes a zip — the missing state files are
+      notes, not failures.
+
 ### Firewall rules (Diagnostics)
 
 - [ ] **Applied appears without a password.** With the guard up, open
