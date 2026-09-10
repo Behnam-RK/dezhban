@@ -582,7 +582,15 @@ jobs:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -eu
-          mod="$(go list -m)"
+
+          # Never fatal, per the note above — which means `set -e` must not get
+          # a chance to kill the step either. Every command below is either
+          # guarded or explicitly ignored.
+          mod="$(go list -m 2>/dev/null || true)"
+          if [ -z "$mod" ]; then
+            echo "::warning title=pkg.go.dev::could not read the module path (go list -m); skipping"
+            exit 0
+          fi
 
           # Proxy URLs escape every uppercase letter as `!<lower>`. This module
           # path is all lowercase (github.com/behnam-rk/dezhban) even though the
@@ -600,18 +608,21 @@ jobs:
 
           # Retry: the tag needs a moment to reach GitHub's git servers, and the
           # proxy negative-caches a miss briefly.
+          attempts=6
+          attempt=1
           ok=""
-          for attempt in 1 2 3 4 5 6; do
+          while [ "$attempt" -le "$attempts" ]; do
             if curl -fsS --max-time 30 -o /dev/null "$info"; then
               ok=yes
               break
             fi
-            echo "proxy has not served $TAG yet (attempt $attempt/6)"
-            if [ "$attempt" -lt 6 ]; then sleep 20; fi
+            echo "proxy has not served $TAG yet (attempt $attempt/$attempts)"
+            attempt=$((attempt + 1))
+            if [ "$attempt" -le "$attempts" ]; then sleep 20; fi
           done
 
           if [ -z "$ok" ]; then
-            echo "::warning title=pkg.go.dev::proxy.golang.org did not serve $mod@$TAG within ~2m; it will be indexed on first fetch, or force it with: curl -fsS $info"
+            echo "::warning title=pkg.go.dev::proxy.golang.org did not serve $mod@$TAG after $attempts attempts; it will be indexed on first fetch, or force it with: curl -fsS $info"
             exit 0
           fi
 
