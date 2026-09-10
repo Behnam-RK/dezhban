@@ -10,15 +10,36 @@
 # same; that needs a $99/yr Apple Developer ID (see
 # packaging/macos/build-pkg.sh's dormant INSTALLER_SIGN_IDENTITY seam).
 #
-#   curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh | sudo bash
+# The DOCUMENTED path downloads first and runs from the file — see
+# docs/usage/install.md. Not because a pipe makes prompting impossible (it does
+# not: every prompt below reads /dev/tty, which is there either way) but because
+# a piped install is DEFINED to be non-interactive, by the `-t 0` gate and the
+# reasoning under "interactive discipline" further down. Run from a file at a
+# terminal, stdin is that terminal, so the gate opens and the questions happen:
+#
+#   curl -fsSL https://raw.githubusercontent.com/Behnam-RK/dezhban/main/scripts/install.sh -o ~/dezhban-install.sh &&
+#     sudo bash ~/dezhban-install.sh
+#
+# `&&`, and the home directory rather than /tmp, both matter: a failed download
+# can leave a stale OR half-written file behind — curl truncates the target and
+# writes what it received, and a truncated script still runs as far as it parses
+# — so a bare second line would run that. And in a world-writable directory
+# under a guessable name, what is there might be a file somebody else put there.
+# As root.
+#
+# The piped form remains supported and unchanged, for provisioners and CI:
+#
+#   curl -fsSL .../install.sh | sudo bash
 #   curl -fsSL .../install.sh | sudo VERSION=0.2.0 bash    # pin an exact version
 #
-# On a real terminal (curl saved to a file, then run — NOT piped, since piping
-# makes stdin the script text itself) this asks a few questions: which
-# components to install on a fresh machine, and upgrade/reinstall/uninstall on
-# a machine that already has dezhban. Piped or non-interactive, it takes
-# today's exact defaults with no prompt at all — DEZHBAN_ASSUME_YES=1 forces
-# that behavior even on a real terminal.
+# On a real terminal this offers a menu: on a fresh machine, install with
+# today's defaults / choose components (the menubar app on macOS, and whether to
+# register the service) / cancel — and then, fresh installs only, whether to run
+# the setup wizard. On a machine that already has dezhban the menu is upgrade
+# (or reinstall, whichever the version comparison calls for) / uninstall /
+# cancel. Piped or non-interactive, it takes today's exact defaults with no
+# prompt at all — DEZHBAN_ASSUME_YES=1 forces that behavior even on a real
+# terminal (pass it through sudo: `sudo DEZHBAN_ASSUME_YES=1 bash ...`).
 #
 # Must run as root: it installs to /usr/local and /etc, and registers a system
 # service. Written for bash 3.2 — that is what macOS ships at /bin/bash with no
@@ -32,7 +53,24 @@ GH="https://github.com/$REPO"
 die()  { echo "error: $*" >&2; exit 1; }
 note() { echo "==> $*"; }
 
-[ "$(id -u)" -eq 0 ] || die "run as root — e.g. curl -fsSL .../install.sh | sudo bash"
+# Name the actual file in the hint, but only when there IS one. Reading the
+# script from stdin leaves $0 as the interpreter's own name, so an interpreter
+# name is the tell — and it must be excluded by NAME rather than by testing
+# [ -f "$0" ], which is true whenever a file called `bash` happens to sit in the
+# working directory and produces the "sudo bash bash" this exists to avoid.
+#
+# The basename, not the whole path: `curl ... | sudo /usr/bin/bash` is the
+# ordinary spelling on Fedora and Arch, and /opt/homebrew/bin/bash on macOS, so
+# matching literal paths caught only the two this file happened to list and
+# emitted "sudo bash /opt/homebrew/bin/bash" for the rest. Quoted, too — a
+# script at a path with a space is otherwise an uncopyable command.
+if [ "$(id -u)" -ne 0 ]; then
+	case "${0##*/}" in
+		bash|sh|dash|zsh|ksh|-bash|-sh) ;;
+		*) [ -f "$0" ] && die "run as root — e.g. sudo bash \"$0\"" ;;
+	esac
+	die "run as root — e.g. curl -fsSL .../install.sh | sudo bash"
+fi
 
 # --- interactive discipline -----------------------------------------------
 # stdin IS the script text itself when piped (`curl | sudo bash`), so any

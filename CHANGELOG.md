@@ -37,6 +37,30 @@ current as you land changes.
   name is redacted rather than leaked. `--include-network` (a checkbox in the
   app) produces the full-fidelity version and says so in three places.
 
+### Changed
+
+- **The documented install downloads the script and runs it, instead of piping
+  it.** `scripts/install.sh` has been interactive since 0.9.0 — a menu on a
+  fresh machine (defaults / choose components / cancel), a different one on a
+  machine that already has dezhban (upgrade or reinstall / uninstall / cancel),
+  and, on fresh installs only, an offer to run the setup wizard — but nobody
+  following the README had ever seen a prompt, because the README said to pipe
+  it and a piped install is *defined* to be unattended. Not because piping makes
+  asking impossible: the prompts read `/dev/tty`, which is there either way. The
+  script gates on `[ -t 0 ]` deliberately, so `curl | sudo bash` behaves the
+  same on a laptop as in CI. The docs now lead with
+  `curl … -o ~/dezhban-install.sh && sudo bash ~/dezhban-install.sh`, which also
+  puts the script on disk so you can read it before running it as root — and
+  which chains the two
+  commands, because a failed download can leave a stale or half-written file
+  behind (curl truncates the target and writes what it received, and a truncated
+  script still runs as far as it parses), so a bare second line could run that,
+  or in `/tmp` a file somebody else put there. As root. The
+  piped one-liner is unchanged, still supported, and still documented for
+  unattended installs — its "never prompts" guarantee is untouched. The script's
+  "run as root" hint now names the actual file when there is one, quoted, rather
+  than always suggesting the pipe.
+
 ### Fixed
 
 - **The diagnostic bundle redacts the identifiers that are not addresses.** Your
