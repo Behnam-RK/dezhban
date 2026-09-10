@@ -22,7 +22,7 @@ prepare   resolve the version; require it's ALREADY rolled; require CI green
    |      -- writes nothing, anywhere --
 build     cross-compile all 5 CLI targets + 4 tarballs + 4 .deb/.rpm;
    |      build the macOS .pkg; install it on a runner and uninstall it again
-publish   tag the tested commit, sign SHA256SUMS, publish the release,
+publish   sign SHA256SUMS, tag the tested commit, publish the release,
           index the tag on pkg.go.dev (warn-only — see below)
 ```
 
@@ -183,20 +183,27 @@ The first is what actually indexes the version; the second just makes
 pkg.go.dev build the page now rather than on its next index poll. Run those two
 by hand for any tag that was cut before this step existed, or that it missed.
 
+**A version that has been indexed can never be re-cut.** The proxy and
+`sum.golang.org` record its content hash permanently, so re-tagging `vX.Y.Z` at
+a different commit gives every user a `checksum mismatch` security error on that
+version forever. This was always true of anyone who fetched a tag; the step only
+makes it certain, and immediate. It does not endanger the stranded-tag recovery
+above — that happens when `publish` fails *before* this step, so the version was
+never indexed — but never re-use a version number that reached a release. Bump.
+
 It **warns, it never fails**. By the time it runs, the tag is pushed and the
 release is created — a cache warm-up that timed out is not a failed release,
 and painting the run red would say it was. It also runs for rc tags: pkg.go.dev
 files prereleases separately and never shows an rc as the latest version.
 
 **pkg.go.dev shows no documentation for dezhban, and that is expected.** It
-renders docs only for licenses on its allow-list, and ours — Hippocratic
-License 3.0 (Core) with the Dezhban named-entity restriction — is a deliberately
-modified, non-OSI license that its detector will not match. The page still
-carries the import path, the version list and the install line, with a
+renders docs only for licenses on its allow-list, and this project's is not on
+it (see the LICENSE header for what it is and why). The page still carries the
+import path, the version list and the install line, with a
 not-legally-redistributable note where the docs would be. Nothing is lost in
-practice: every package here is under `internal/`, which pkg.go.dev never
-renders under any license, or is a `main` package. There is no importable
-library surface.
+practice: every package here is under `internal/` or is a `main` package, so
+nothing is importable from outside the module — there is no library surface for
+those docs to have described.
 
 ## Unsigned artifacts, signed checksums
 

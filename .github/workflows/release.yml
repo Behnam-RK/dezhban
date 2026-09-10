@@ -562,52 +562,50 @@ jobs:
 
           echo "### Published [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
 
-      # pkg.go.dev is not a publish target — it is a read-through cache over
-      # proxy.golang.org, and a version lands there only once somebody asks the
-      # proxy for it. Left alone that is whenever the first person happens to
-      # fetch the module: not a release step so much as a coincidence. Asking
-      # for it here makes the listing deterministic.
+      # Ask proxy.golang.org for the tag just pushed, so the version is indexed
+      # deterministically rather than whenever the first person happens to fetch
+      # the module. Why that is worth a step, what pkg.go.dev does and does not
+      # show for this project, and how to do it by hand, all live in one place:
+      # docs/contribute/releasing.md. Do not restate any of it here.
       #
-      # Warn-only, never fatal. By this point the tag is pushed and the release
-      # is created, so a failure here would paint a shipped release red over a
-      # cache warm-up — and the proxy still picks the tag up on first fetch.
-      #
-      # NOTE: pkg.go.dev lists the module but renders NO documentation, because
-      # LICENSE (Hippocratic 3.0 Core plus the Dezhban named-entity restriction)
-      # is not on its allow-list. That is expected, not a regression: every
-      # package here is internal/ or a main package, so there is no importable
-      # surface to lose. See docs/contribute/releasing.md.
+      # Last in the job, and warn-only, for one reason: by this point the tag is
+      # pushed and the release is created, so nothing here may fail the run or
+      # disturb the documented path that re-runs `publish` after a failure which
+      # already left a tag behind.
       - name: Index the tag on pkg.go.dev
         env:
           TAG: ${{ needs.prepare.outputs.tag }}
         run: |
           set -eu
 
-          # Never fatal, per the note above — which means `set -e` must not get
-          # a chance to kill the step either. Every command below is either
-          # guarded or explicitly ignored.
+          # Warn-only means `set -e` must not get a chance to kill the step
+          # either, so every command below is guarded or explicitly ignored.
           mod="$(go list -m 2>/dev/null || true)"
-          if [ -z "$mod" ]; then
-            echo "::warning title=pkg.go.dev::could not read the module path (go list -m); skipping"
-            exit 0
-          fi
 
-          # Proxy URLs escape every uppercase letter as `!<lower>`. This module
-          # path is all lowercase (github.com/behnam-rk/dezhban) even though the
-          # GitHub repo is Behnam-RK/dezhban, so no escaping is needed — but a
-          # rename that introduced a capital would 404 in silence. Say so rather
-          # than guess.
+          # One case for every module path this step cannot turn into a URL:
+          #   ""            go list failed, or printed nothing
+          #   not one word  a go.work lists every workspace module, one per line
+          #   uppercase     proxy URLs escape capitals as `!<lower>`, which this
+          #                 step does not implement. The path is all-lowercase
+          #                 github.com/behnam-rk/dezhban even though the repo is
+          #                 Behnam-RK/dezhban, so only a rename could produce one
+          #                 — and the failure mode is a silent 404, worth naming.
+          # `$mod` stays out of the annotation: a newline in it would truncate
+          # the annotation and lose the diagnostic. It goes to the log instead.
           case "$mod" in
-            *[A-Z]*)
-              echo "::warning title=pkg.go.dev::module path $mod has uppercase; proxy URLs need !-escaping — skipping"
+            "" | *[![:graph:]]* | *[[:upper:]]*)
+              echo "go list -m gave: $mod"
+              echo "::warning title=pkg.go.dev::no usable module path from go list -m; skipping"
               exit 0
               ;;
           esac
 
           info="https://proxy.golang.org/$mod/@v/$TAG.info"
 
-          # Retry: the tag needs a moment to reach GitHub's git servers, and the
-          # proxy negative-caches a miss briefly.
+          # Retry because the tag needs a moment to reach GitHub's git servers.
+          # Keep the budget small: the proxy negative-caches a miss, so sitting
+          # here longer does not clear one. When it does time out, the warning
+          # below hands over the command to force it later.
           attempts=6
           attempt=1
           ok=""
