@@ -39,7 +39,9 @@ the tag step reuses a tag that already points at the pinned commit, so the
 retry picks up where it stopped, and it still refuses a tag pointing anywhere
 else. A *fresh* dispatch is the wrong tool there — `resolve` sees the tag and
 stops, by design, so if you want a clean run instead of a re-run, delete the
-stranded tag first (`git push --delete origin vX.Y.Z`).
+stranded tag first (`git push --delete origin vX.Y.Z`) — after checking that the
+proxy has not already served that version, which would make it unusable
+([pkg.go.dev](#pkggodev)).
 
 `publish` also re-checks that `main` still points at the commit `prepare` pinned.
 If something merged mid-release, it stops rather than tag a tree that was never
@@ -183,13 +185,24 @@ The first is what actually indexes the version; the second just makes
 pkg.go.dev build the page now rather than on its next index poll. Run those two
 by hand for any tag that was cut before this step existed, or that it missed.
 
-**A version that has been indexed can never be re-cut.** The proxy and
-`sum.golang.org` record its content hash permanently, so re-tagging `vX.Y.Z` at
-a different commit gives every user a `checksum mismatch` security error on that
-version forever. This was always true of anyone who fetched a tag; the step only
-makes it certain, and immediate. It does not endanger the stranded-tag recovery
-above — that happens when `publish` fails *before* this step, so the version was
-never indexed — but never re-use a version number that reached a release. Bump.
+**A version the proxy has served can never be re-cut.** `sum.golang.org` records
+its content hash permanently, and re-tagging `vX.Y.Z` at a different commit then
+splits your users in two. On the default `GOPROXY=proxy.golang.org` they are
+served the *cached original* and silently get the old tree — the worse half, because
+the re-cut looks like it worked and shipped nothing. Fetching direct, they get
+`checksum mismatch` / `SECURITY ERROR`.
+
+This step makes that certain and immediate for every release, but it was never
+safe. A stranded tag that sat on origin for twenty minutes could have been
+fetched by anyone in that window — one `go get …@latest` or a dependency bot is
+enough. So the "delete the tag and re-dispatch" recovery above has a
+precondition: ask first whether the version is already out.
+
+```sh
+curl -fsS "https://proxy.golang.org/github.com/behnam-rk/dezhban/@v/v0.13.0.info"
+```
+
+Anything but a 404 means that version number is spent. Bump instead.
 
 It **warns, it never fails**. By the time it runs, the tag is pushed and the
 release is created — a cache warm-up that timed out is not a failed release,

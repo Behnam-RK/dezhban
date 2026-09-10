@@ -580,33 +580,51 @@ jobs:
 
           # Warn-only means `set -e` must not get a chance to kill the step
           # either, so every command below is guarded or explicitly ignored.
-          mod="$(go list -m 2>/dev/null || true)"
+          # stderr is deliberately kept: in a step whose only failure mode is
+          # silence, a toolchain error is the one line worth having.
+          mod="$(go list -m || true)"
 
-          # One case for every module path this step cannot turn into a URL:
-          #   ""            go list failed, or printed nothing
-          #   not one word  a go.work lists every workspace module, one per line
-          #   uppercase     proxy URLs escape capitals as `!<lower>`, which this
-          #                 step does not implement. The path is all-lowercase
-          #                 github.com/behnam-rk/dezhban even though the repo is
-          #                 Behnam-RK/dezhban, so only a rename could produce one
-          #                 — and the failure mode is a silent 404, worth naming.
-          # `$mod` stays out of the annotation: a newline in it would truncate
-          # the annotation and lose the diagnostic. It goes to the log instead.
+          # Every module path this step cannot turn into a URL, each with its
+          # own reason — "unusable" is false of the uppercase one, where the
+          # path is fine and this step is the limitation.
           case "$mod" in
-            "" | *[![:graph:]]* | *[[:upper:]]*)
-              echo "go list -m gave: $mod"
-              echo "::warning title=pkg.go.dev::no usable module path from go list -m; skipping"
-              exit 0
+            "" | *[![:graph:]]*)
+              reason="go list -m gave no single-word module path"
+              ;;
+            *[[:upper:]]*)
+              # The path is all-lowercase github.com/behnam-rk/dezhban even
+              # though the repo is Behnam-RK/dezhban, so only a rename could
+              # produce a capital — and a silent 404 is worth naming.
+              reason="module path has capitals; proxy URLs escape those as !<lower>, which this step does not implement"
+              ;;
+            *.*/*)
+              # A proxy path needs a host in its first element. Without this,
+              # `go list -m` run outside a module prints the literal
+              # "command-line-arguments", which is a single lowercase word and
+              # clears every check above.
+              reason=""
+              ;;
+            *)
+              reason="not a proxy-fetchable module path (its first element names no host)"
               ;;
           esac
+          if [ -n "$reason" ]; then
+            # $mod stays out of the annotation — a newline in it truncates the
+            # annotation and loses the diagnostic. It goes to the log instead.
+            echo "go list -m gave: $mod"
+            echo "::warning title=pkg.go.dev::$reason — skipping"
+            exit 0
+          fi
 
           info="https://proxy.golang.org/$mod/@v/$TAG.info"
 
-          # Retry because the tag needs a moment to reach GitHub's git servers.
-          # Keep the budget small: the proxy negative-caches a miss, so sitting
-          # here longer does not clear one. When it does time out, the warning
-          # below hands over the command to force it later.
-          attempts=6
+          # Three attempts, and no more. They cover a transient network error
+          # or a 5xx on the way out of the runner — NOT a tag the proxy has yet
+          # to see. A miss is negative-cached, so the request that loses the
+          # propagation race is the one that installs the cached 404, and every
+          # later attempt in this job only re-reads it. Sitting here longer buys
+          # nothing, which is why the warning below points at a wait instead.
+          attempts=3
           attempt=1
           ok=""
           while [ "$attempt" -le "$attempts" ]; do
@@ -614,13 +632,13 @@ jobs:
               ok=yes
               break
             fi
-            echo "proxy has not served $TAG yet (attempt $attempt/$attempts)"
+            echo "proxy did not serve $TAG (attempt $attempt/$attempts)"
             attempt=$((attempt + 1))
-            if [ "$attempt" -le "$attempts" ]; then sleep 20; fi
+            if [ "$attempt" -le "$attempts" ]; then sleep 10; fi
           done
 
           if [ -z "$ok" ]; then
-            echo "::warning title=pkg.go.dev::proxy.golang.org did not serve $mod@$TAG after $attempts attempts; it will be indexed on first fetch, or force it with: curl -fsS $info"
+            echo "::warning title=pkg.go.dev::proxy.golang.org did not serve $mod@$TAG. Most likely it has negative-cached the miss, which expires on its own (up to ~30 minutes); after that, curl -fsS $info indexes the version. The release itself is fine."
             exit 0
           fi
 
@@ -629,7 +647,10 @@ jobs:
           # version, so this one's status does not matter.
           curl -fsS --max-time 30 -o /dev/null "https://pkg.go.dev/$mod@$TAG" || true
 
-          echo "### Indexed on [pkg.go.dev](https://pkg.go.dev/$mod@$TAG)" >> "$GITHUB_STEP_SUMMARY"
+          # Only the proxy fetch was checked. pkg.go.dev often 404s or says
+          # "check back later" for a version it has not ingested yet, so do not
+          # claim the page is up — just link it.
+          echo "### Indexed on proxy.golang.org — [pkg.go.dev](https://pkg.go.dev/$mod@$TAG) follows shortly" >> "$GITHUB_STEP_SUMMARY"
 
   # Make a dry run say so loudly, rather than looking like a release that silently
   # did nothing.
