@@ -211,13 +211,16 @@ files prereleases separately and never shows an rc as the latest version.
 
 **pkg.go.dev shows no documentation for dezhban, and that is expected.** It
 renders docs only for licenses on its allow-list, and this project's is not on
-it (see the LICENSE header for what it is and why). The page still carries the
-import path, the version list, and a `Directories` listing of `cmd/dezhban` and
-the `internal/` tree; where the docs would be it says *Documentation not
-displayed due to license restrictions*, and the module reads `License:
-UNKNOWN`. Nothing is lost in practice: every package here is under `internal/` or is a `main` package, so
-nothing is importable from outside the module — there is no library surface for
-those docs to have described.
+it (see the LICENSE header for what it is and why). The module page still
+carries the import path, the version list, `License: UNKNOWN`, and a
+`Directories` listing — `cmd/dezhban`, the three `tools/`, and, behind *Show
+Internal Directories*, the `internal/` tree. It has no doc area at all, there
+being no package at the module root. Open one of those directories, say
+`cmd/dezhban`, and where its docs would be the page says *Documentation not
+displayed due to license restrictions*. Nothing is lost in practice: every
+package here is under `internal/` or is a `main` package, so nothing is
+importable from outside the module — there is no library surface for those docs
+to have described.
 
 ## Unsigned artifacts, signed checksums
 
