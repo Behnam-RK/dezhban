@@ -12,6 +12,8 @@ current as you land changes.
 
 ## [Unreleased]
 
+## [0.14.0] - 2026-09-10
+
 ### Added
 
 - **Recent problems, in Diagnostics.** Warn-and-worse records from dezhban's own
@@ -2772,7 +2774,8 @@ current as you land changes.
 - Cross-platform release build matrix (`task build:all`) producing five binaries:
   darwin/arm64, darwin/amd64, linux/amd64, linux/arm64, windows/amd64.
 
-[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.13.0...HEAD
+[Unreleased]: https://github.com/Behnam-RK/dezhban/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.14.0
 [0.13.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.13.0
 [0.12.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.12.0
 [0.11.0]: https://github.com/Behnam-RK/dezhban/releases/tag/v0.11.0
