@@ -22,7 +22,8 @@ prepare   resolve the version; require it's ALREADY rolled; require CI green
    |      -- writes nothing, anywhere --
 build     cross-compile all 5 CLI targets + 4 tarballs + 4 .deb/.rpm;
    |      build the macOS .pkg; install it on a runner and uninstall it again
-publish   tag the tested commit, sign SHA256SUMS, publish the release
+publish   tag the tested commit, sign SHA256SUMS, publish the release,
+          index the tag on pkg.go.dev (warn-only — see below)
 ```
 
 Nothing touches the repository until every artifact has been built and the
@@ -163,6 +164,39 @@ Each release carries:
 - `Dezhban-macos.app.zip` — the menubar app alone
 - `SHA256SUMS` — covering everything above
 - `SHA256SUMS.sig` — an **ed25519** signature over `SHA256SUMS` (see below)
+
+## pkg.go.dev
+
+The tag is what publishes the module. pkg.go.dev is not a publish target — it
+is a read-through cache over `proxy.golang.org`, and a version lands there only
+once somebody asks the proxy for it. Left alone, that is whenever the first
+person happens to fetch the module.
+
+So `publish`'s last step asks, for the tag it just pushed:
+
+```sh
+curl -fsS "https://proxy.golang.org/github.com/behnam-rk/dezhban/@v/v0.13.0.info"
+curl -fsS "https://pkg.go.dev/github.com/behnam-rk/dezhban@v0.13.0"
+```
+
+The first is what actually indexes the version; the second just makes
+pkg.go.dev build the page now rather than on its next index poll. Run those two
+by hand for any tag that was cut before this step existed, or that it missed.
+
+It **warns, it never fails**. By the time it runs, the tag is pushed and the
+release is created — a cache warm-up that timed out is not a failed release,
+and painting the run red would say it was. It also runs for rc tags: pkg.go.dev
+files prereleases separately and never shows an rc as the latest version.
+
+**pkg.go.dev shows no documentation for dezhban, and that is expected.** It
+renders docs only for licenses on its allow-list, and ours — Hippocratic
+License 3.0 (Core) with the Dezhban named-entity restriction — is a deliberately
+modified, non-OSI license that its detector will not match. The page still
+carries the import path, the version list and the install line, with a
+not-legally-redistributable note where the docs would be. Nothing is lost in
+practice: every package here is under `internal/`, which pkg.go.dev never
+renders under any license, or is a `main` package. There is no importable
+library surface.
 
 ## Unsigned artifacts, signed checksums
 

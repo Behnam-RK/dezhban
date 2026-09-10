@@ -562,6 +562,66 @@ jobs:
 
           echo "### Published [$TAG](https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG)" >> "$GITHUB_STEP_SUMMARY"
 
+      # pkg.go.dev is not a publish target — it is a read-through cache over
+      # proxy.golang.org, and a version lands there only once somebody asks the
+      # proxy for it. Left alone that is whenever the first person happens to
+      # fetch the module: not a release step so much as a coincidence. Asking
+      # for it here makes the listing deterministic.
+      #
+      # Warn-only, never fatal. By this point the tag is pushed and the release
+      # is created, so a failure here would paint a shipped release red over a
+      # cache warm-up — and the proxy still picks the tag up on first fetch.
+      #
+      # NOTE: pkg.go.dev lists the module but renders NO documentation, because
+      # LICENSE (Hippocratic 3.0 Core plus the Dezhban named-entity restriction)
+      # is not on its allow-list. That is expected, not a regression: every
+      # package here is internal/ or a main package, so there is no importable
+      # surface to lose. See docs/contribute/releasing.md.
+      - name: Index the tag on pkg.go.dev
+        env:
+          TAG: ${{ needs.prepare.outputs.tag }}
+        run: |
+          set -eu
+          mod="$(go list -m)"
+
+          # Proxy URLs escape every uppercase letter as `!<lower>`. This module
+          # path is all lowercase (github.com/behnam-rk/dezhban) even though the
+          # GitHub repo is Behnam-RK/dezhban, so no escaping is needed — but a
+          # rename that introduced a capital would 404 in silence. Say so rather
+          # than guess.
+          case "$mod" in
+            *[A-Z]*)
+              echo "::warning title=pkg.go.dev::module path $mod has uppercase; proxy URLs need !-escaping — skipping"
+              exit 0
+              ;;
+          esac
+
+          info="https://proxy.golang.org/$mod/@v/$TAG.info"
+
+          # Retry: the tag needs a moment to reach GitHub's git servers, and the
+          # proxy negative-caches a miss briefly.
+          ok=""
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsS --max-time 30 -o /dev/null "$info"; then
+              ok=yes
+              break
+            fi
+            echo "proxy has not served $TAG yet (attempt $attempt/6)"
+            if [ "$attempt" -lt 6 ]; then sleep 20; fi
+          done
+
+          if [ -z "$ok" ]; then
+            echo "::warning title=pkg.go.dev::proxy.golang.org did not serve $mod@$TAG within ~2m; it will be indexed on first fetch, or force it with: curl -fsS $info"
+            exit 0
+          fi
+
+          # Ask for the page so pkg.go.dev builds it now instead of on its next
+          # index poll. The proxy fetch above is what actually publishes the
+          # version, so this one's status does not matter.
+          curl -fsS --max-time 30 -o /dev/null "https://pkg.go.dev/$mod@$TAG" || true
+
+          echo "### Indexed on [pkg.go.dev](https://pkg.go.dev/$mod@$TAG)" >> "$GITHUB_STEP_SUMMARY"
+
   # Make a dry run say so loudly, rather than looking like a release that silently
   # did nothing.
   dry-run-summary:
