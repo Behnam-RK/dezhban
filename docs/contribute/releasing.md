@@ -204,7 +204,7 @@ curl -fsS "https://proxy.golang.org/github.com/behnam-rk/dezhban/@v/v0.13.0.info
 
 Anything but a 404 means that version number is spent. Bump instead.
 
-It **warns, it never fails**. By the time it runs, the tag is pushed and the
+The step **warns, it never fails**. By the time it runs, the tag is pushed and the
 release is created — a cache warm-up that timed out is not a failed release,
 and painting the run red would say it was. It also runs for rc tags: pkg.go.dev
 files prereleases separately and never shows an rc as the latest version.
@@ -212,9 +212,10 @@ files prereleases separately and never shows an rc as the latest version.
 **pkg.go.dev shows no documentation for dezhban, and that is expected.** It
 renders docs only for licenses on its allow-list, and this project's is not on
 it (see the LICENSE header for what it is and why). The page still carries the
-import path, the version list and the install line, with a
-not-legally-redistributable note where the docs would be. Nothing is lost in
-practice: every package here is under `internal/` or is a `main` package, so
+import path, the version list, and a `Directories` listing of `cmd/dezhban` and
+the `internal/` tree; where the docs would be it says *Documentation not
+displayed due to license restrictions*, and the module reads `License:
+UNKNOWN`. Nothing is lost in practice: every package here is under `internal/` or is a `main` package, so
 nothing is importable from outside the module — there is no library surface for
 those docs to have described.
 
