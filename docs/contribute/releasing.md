@@ -22,7 +22,8 @@ prepare   resolve the version; require it's ALREADY rolled; require CI green
    |      -- writes nothing, anywhere --
 build     cross-compile all 5 CLI targets + 4 tarballs + 4 .deb/.rpm;
    |      build the macOS .pkg; install it on a runner and uninstall it again
-publish   tag the tested commit, sign SHA256SUMS, publish the release
+publish   sign SHA256SUMS, tag the tested commit, publish the release,
+          index the tag on pkg.go.dev (warn-only — see below)
 ```
 
 Nothing touches the repository until every artifact has been built and the
@@ -38,7 +39,9 @@ the tag step reuses a tag that already points at the pinned commit, so the
 retry picks up where it stopped, and it still refuses a tag pointing anywhere
 else. A *fresh* dispatch is the wrong tool there — `resolve` sees the tag and
 stops, by design, so if you want a clean run instead of a re-run, delete the
-stranded tag first (`git push --delete origin vX.Y.Z`).
+stranded tag first (`git push --delete origin vX.Y.Z`) — after checking that the
+proxy has not already served that version, which would make it unusable
+([pkg.go.dev](#pkggodev)).
 
 `publish` also re-checks that `main` still points at the commit `prepare` pinned.
 If something merged mid-release, it stops rather than tag a tree that was never
@@ -163,6 +166,61 @@ Each release carries:
 - `Dezhban-macos.app.zip` — the menubar app alone
 - `SHA256SUMS` — covering everything above
 - `SHA256SUMS.sig` — an **ed25519** signature over `SHA256SUMS` (see below)
+
+## pkg.go.dev
+
+The tag is what publishes the module. pkg.go.dev is not a publish target — it
+is a read-through cache over `proxy.golang.org`, and a version lands there only
+once somebody asks the proxy for it. Left alone, that is whenever the first
+person happens to fetch the module.
+
+So `publish`'s last step asks, for the tag it just pushed:
+
+```sh
+curl -fsS "https://proxy.golang.org/github.com/behnam-rk/dezhban/@v/v0.13.0.info"
+curl -fsS "https://pkg.go.dev/github.com/behnam-rk/dezhban@v0.13.0"
+```
+
+The first is what actually indexes the version; the second just makes
+pkg.go.dev build the page now rather than on its next index poll. Run those two
+by hand for any tag that was cut before this step existed, or that it missed.
+
+**A version the proxy has served can never be re-cut.** `sum.golang.org` records
+its content hash permanently, and re-tagging `vX.Y.Z` at a different commit then
+splits your users in two. On the default `GOPROXY=proxy.golang.org` they are
+served the *cached original* and silently get the old tree — the worse half, because
+the re-cut looks like it worked and shipped nothing. Fetching direct, they get
+`checksum mismatch` / `SECURITY ERROR`.
+
+This step makes that certain and immediate for every release, but it was never
+safe. A stranded tag that sat on origin for twenty minutes could have been
+fetched by anyone in that window — one `go get …@latest` or a dependency bot is
+enough. So the "delete the tag and re-dispatch" recovery above has a
+precondition: ask first whether the version is already out.
+
+```sh
+curl -fsS "https://proxy.golang.org/github.com/behnam-rk/dezhban/@v/v0.13.0.info"
+```
+
+Anything but a 404 means that version number is spent. Bump instead.
+
+The step **warns, it never fails**. By the time it runs, the tag is pushed and the
+release is created — a cache warm-up that timed out is not a failed release,
+and painting the run red would say it was. It also runs for rc tags: pkg.go.dev
+files prereleases separately and never shows an rc as the latest version.
+
+**pkg.go.dev shows no documentation for dezhban, and that is expected.** It
+renders docs only for licenses on its allow-list, and this project's is not on
+it (see the LICENSE header for what it is and why). The module page still
+carries the import path, the version list, `License: UNKNOWN`, and a
+`Directories` listing — `cmd/dezhban`, the three `tools/`, and, behind *Show
+Internal Directories*, the `internal/` tree. It has no doc area at all, there
+being no package at the module root. Open one of those directories, say
+`cmd/dezhban`, and where its docs would be the page says *Documentation not
+displayed due to license restrictions*. Nothing is lost in practice: every
+package here is under `internal/` or is a `main` package, so nothing is
+importable from outside the module — there is no library surface for those docs
+to have described.
 
 ## Unsigned artifacts, signed checksums
 
