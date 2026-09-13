@@ -589,3 +589,34 @@ func TestANameSpelledLikeAnExistingTokenKeepsItsSpelling(t *testing.T) {
 		t.Errorf("legend = %v, want the single profile and no interface kind", legend)
 	}
 }
+
+// A unix group is a property of the machine, not of the person or the provider:
+// the macOS default is `admin`, and the control check exists to tell you which
+// group to join — which "you are not in the profile-1 group" cannot do. Kept
+// deliberately, in both entries that carry it, and pinned here because the
+// question has been raised once and closed (#69): a bundle that hides the
+// diagnosis has thrown away the answer and hidden no identity.
+//
+// Keeping it in only ONE of the two would be worse than either choice: the same
+// value would read as a token in one entry and a name in the other.
+func TestAUnixGroupNameIsKeptInEveryEntryThatCarriesIt(t *testing.T) {
+	r := New(true)
+	const group = "vpnadmins"
+
+	cfg := r.JSON(`{"control":{"enabled":true,"group":"` + group + `"}}`)
+	if !strings.Contains(cfg, group) {
+		t.Errorf("config.json redacted the group: %q", cfg)
+	}
+
+	doc := r.JSON(`{"checks":[{"name":"control","summary":"reachable (/var/db/dezhban/control.sock, group \"` + group + `\") — routine ops need no password."}]}`)
+	if !strings.Contains(doc, group) {
+		t.Errorf("doctor.json redacted the group: %q", doc)
+	}
+	// And the socket path beside it, for the same reason.
+	if !strings.Contains(doc, "/var/db/dezhban/control.sock") {
+		t.Errorf("doctor.json redacted the socket path: %q", doc)
+	}
+	if legend := r.Legend(); len(legend) != 0 {
+		t.Errorf("legend = %v, want nothing minted for a group name or a path", legend)
+	}
+}
