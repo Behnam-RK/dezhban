@@ -99,6 +99,16 @@ text we do not author: rendered rulesets, log records, OS error strings.
   `wireguard` — the words an interface can legitimately be called — and by
   minting only names that fail `keepIface`, so the kernel's vocabulary never
   enters the replay at all.
+- **The mint guard that makes the replay safe is cross-kind, and looks wrong.**
+  A pass that runs after the replay can be handed a token, so `placeholder`
+  returns a value unchanged when that value is a token it already minted — and
+  it does so regardless of which kind is asking. Scoping it to the kind reads as
+  a tightening and is a regression: a name that is both a profile and an
+  endpoint is replayed as `profile-1` into `host=…`, where the endpoint pass
+  offers it back under `host`, and a kind-scoped guard mints `host-2` for it —
+  a token standing for a token, and a legend counting a hostname that is nowhere
+  in the bundle. This was proposed during review and rejected on that evidence.
+  Pinned by `TestAReplayedTokenIsNotReMintedUnderAnotherKind`.
 - **The bundle's collection order stays load-bearing.** The replay can only
   replace what some earlier entry taught it, so `config.json` and `learned.json`
   must still be collected before `doctor.json` and `state.json`. Pinned by

@@ -54,7 +54,9 @@ current as you land changes.
   after each one. See [ADR-0016](docs/adr/0016-bundle-identifiers-are-data-not-prose.md).
 - **`status --json` and `state.json` publish one entry per tunnel interface**,
   each naming exactly one, and a tunnel's `detail` no longer repeats the name
-  already in its `name`.
+  already in its `name`. The app's Overview names every tunnel interface and its
+  state — it used to show only the first, and to pair the state with a detail
+  that repeated it ("up (up)").
 
 ## [0.14.0] - 2026-09-10
 
