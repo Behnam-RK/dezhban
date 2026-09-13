@@ -93,16 +93,26 @@ func TestTheBundleIsRedactedAndPrivateEndToEnd(t *testing.T) {
 	// A single-label endpoint: valid by config's grammar, invisible to a
 	// hostname SHAPE, and so the case only the field-aware pass reaches.
 	const bareHost = "acmevpn"
+	// A provider-created interface. It reaches the bundle as a BARE WORD in a
+	// rendered pf/nft ruleset (`pass out quick on { … }`) and in doctor's prose —
+	// no key, no dot, no attr — which is the shape only the name replay catches.
+	const vendorIface = "nordlynx"
+	// A profile legitimately CALLED like a placeholder. Config accepts
+	// [A-Za-z0-9._-], and this is what made one token stand for two identities.
+	const tokenShaped = "profile-1"
 	cfg := `{
   "pollInterval": "5s",
   "blockedCountries": [],
   "hysteresis": 1,
   "providers": ["https://ipinfo.io/json"],
   "vpn": {
-    "tunnelInterfaces": ["utun9"],
+    "tunnelInterfaces": ["utun9", "` + vendorIface + `"],
     "endpoints": ["` + endpoint + `", "` + bareHost + `"],
     "autoDetect": false,
-    "profiles": [{"name": "` + profile + `", "endpoints": ["` + endpoint + `"]}]
+    "profiles": [
+      {"name": "` + profile + `", "endpoints": ["` + endpoint + `"]},
+      {"name": "` + tokenShaped + `", "endpoints": ["` + endpoint + `"]}
+    ]
   },
   "providerQuorum": false,
   "logLevel": "error"
@@ -155,7 +165,7 @@ func TestTheBundleIsRedactedAndPrivateEndToEnd(t *testing.T) {
 			t.Fatalf("%s: %v", f.Name, err)
 		}
 		bodies[f.Name] = string(body)
-		for _, leak := range []string{endpoint, profile, bareHost} {
+		for _, leak := range []string{endpoint, profile, bareHost, vendorIface} {
 			if strings.Contains(string(body), leak) {
 				t.Errorf("%s leaked %q", f.Name, leak)
 			}
@@ -220,23 +230,45 @@ func TestTheBundleIsRedactedAndPrivateEndToEnd(t *testing.T) {
 	// ordinals actually minted, and an ordinal is skipped when it would have
 	// produced the value it replaces — so the first one is not always `-1`, and
 	// an assertion that assumed it was tested only the first token of each kind.
-	legend := regexp.MustCompile(`(\d+) distinct [a-z ]+ → ([a-z]+-\d+)(?: … ([a-z]+-\d+))?`)
+	// Two forms now: a RANGE when the kind's tokens run consecutively, and a
+	// comma-separated LIST when one was refused and left a hole. The fixture
+	// carries a profile literally called `profile-1`, so the list form is
+	// exercised on every run rather than only on an unusual host.
+	legend := regexp.MustCompile(`(\d+) distinct [A-Za-z ]+ → ((?:[a-z]+-\d+)(?:(?: … |, )[a-z]+-\d+)*)`)
 	rows := legend.FindAllStringSubmatch(bodies["README.txt"], -1)
 	if len(rows) == 0 && strings.Contains(bodies["README.txt"], "What was replaced") {
 		t.Error("the legend rendered rows this test cannot parse")
 	}
+	tokenRe := regexp.MustCompile(`[a-z]+-\d+`)
+	claimed := map[string]string{}
 	for _, m := range rows {
 		count, err := strconv.Atoi(m[1])
 		if err != nil {
 			t.Fatalf("legend count %q: %v", m[1], err)
 		}
-		for _, token := range []string{m[2], m[3]} {
-			if token != "" && !strings.Contains(all, token) {
+		named := tokenRe.FindAllString(m[2], -1)
+		for _, token := range named {
+			if !strings.Contains(all, token) {
 				t.Errorf("the legend names %s, which appears nowhere in the bundle", token)
 			}
+			// One token, one identity. A refused ordinal used to be vacated and
+			// reissued, so two distinct originals could land on the same token —
+			// invisible from outside except that the legend then names it twice.
+			if prev, dup := claimed[token]; dup {
+				t.Errorf("%s is claimed by two legend rows (%q and %q)", token, prev, m[0])
+			}
+			claimed[token] = m[0]
 		}
-		if count == 1 && m[3] != "" {
+		if count == 1 && len(named) != 1 {
 			t.Errorf("a count of one rendered as a range: %q", m[0])
+		}
+		// The list form spells every token out, so it must spell out as many as
+		// it counted. The range form names only its two ends.
+		if strings.Contains(m[2], ", ") && len(named) != count {
+			t.Errorf("legend row %q lists %d tokens for a count of %d", m[0], len(named), count)
+		}
+		if strings.Contains(m[2], ", ") && strings.Contains(m[2], " … ") {
+			t.Errorf("legend row %q mixes the range and list forms", m[0])
 		}
 	}
 }

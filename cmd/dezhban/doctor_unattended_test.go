@@ -25,7 +25,16 @@ func hasFix(c doctorCheck, substr string) bool {
 	return slices.ContainsFunc(c.Fixes, func(f string) bool { return strings.Contains(f, substr) })
 }
 
-func detailText(c doctorCheck) string { return strings.Join(c.Details, "\n") }
+func detailText(c doctorCheck) string { return strings.Join(detailLines(c), "\n") }
+
+// detailLines composes each finding the way both renderers do.
+func detailLines(c doctorCheck) []string {
+	out := make([]string, 0, len(c.Details))
+	for _, d := range c.Details {
+		out = append(out, d.line())
+	}
+	return out
+}
 
 func TestBuildServiceCheck(t *testing.T) {
 	const path = "/Library/LaunchDaemons/dezhban.plist"
@@ -278,5 +287,39 @@ func TestEveryCheckHasASection(t *testing.T) {
 		if !slices.Contains(sectionedChecks, c.Name) {
 			t.Errorf("check %q has no section in printDoctor; add one and list it in sectionedChecks", c.Name)
 		}
+	}
+}
+
+// The retention check names EVERY entry — one detail line each — so Profiles has
+// to carry every one of them, not only the stale or rotating ones the Summary
+// happens to mention. The carrier is what makes the coverage stop depending on
+// config.json and learned.json being collected before doctor.json.
+func TestTheRetentionCheckCarriesEveryEntryName(t *testing.T) {
+	now := time.Date(2026, 7, 27, 12, 0, 0, 0, time.UTC)
+	const ttl = 24 * time.Hour
+	store := &learned.Store{Entries: []learned.Entry{
+		{Name: "work-nord", Endpoints: []learned.Endpoint{
+			{Addr: "203.0.113.7", FirstSeen: now.Add(-time.Hour), LastSeen: now.Add(-time.Hour)},
+		}},
+		{Name: "home-wg", Endpoints: []learned.Endpoint{
+			{Addr: "203.0.113.8", FirstSeen: now.Add(-90 * time.Hour), LastSeen: now.Add(-90 * time.Hour)},
+		}},
+	}}
+	c := buildEndpointRetentionCheck(store, nil, ttl, 8, 0, now)
+
+	want := []string{"work-nord", "home-wg"}
+	if !slices.Equal(c.Profiles, want) {
+		t.Errorf("profiles = %v, want %v — every entry, not just the ones the summary names", c.Profiles, want)
+	}
+	for _, d := range c.Details {
+		for _, name := range want {
+			if strings.Contains(d.Text, name) {
+				t.Errorf("detail text %q names an entry that should be carried as a field", d.Text)
+			}
+		}
+	}
+	// The per-entry line still READS as one, with the name composed back in.
+	if got := detailText(c); !strings.Contains(got, "work-nord — 1 stored") {
+		t.Errorf("composed details = %q, want the entry named in its own line", got)
 	}
 }

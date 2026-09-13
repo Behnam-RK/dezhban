@@ -309,6 +309,7 @@ failure they were built to prevent.
 | Guard model | **Always-on interface guard — the only model** | A VPN drop is cut instantly, with a zero leak window. A reactive poller leaks for one poll interval, which is why the country-blocklist fallback was removed rather than kept as a peer ([ADR-0001](../adr/0001-single-guard-mode.md)) |
 | Resting posture | **STANDBY — no rules until a tunnel is observed** | A guard with no tunnel blocks everything, which is a blackout rather than security. This is the safety job `vpn.enabled: false` was quietly doing ([ADR-0002](../adr/0002-standby-no-tunnel-posture.md)) |
 | Recovery | **Wait for the VPN to return to an allowed country** | While full-blocked, observe the exit through a time-windowed probe and restore the guard once the exit is allowed again |
+| Bundle redaction | **By the KEY that names an identifier**, with a literal-name replay as the fallback | A value under `endpoint` or `tunnelInterfaces` is an identity whatever it spells; hunting for the same word in free text is the pass that has produced a defect in every round it was touched in, so it covers only text dezhban does not author — rendered rulesets, log records, OS errors ([ADR-0016](../adr/0016-bundle-identifiers-are-data-not-prose.md)) |
 
 Two of these were revisited during the build and are worth naming as *deviations*,
 since the reasoning is not obvious from the code:

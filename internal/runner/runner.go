@@ -420,15 +420,46 @@ type Options struct {
 	AllowConfigOps bool
 }
 
-// tunnelSnapshot maps a watcher edge to the published tunnel state. Name comes
-// from the interface the watcher identified; on a down/unknown edge it carries
-// no name, so fall back to the configured tunnel(s) the guard is watching.
+// tunnelSnapshot maps a watcher edge to the published tunnel state: ONE entry
+// per interface, each naming exactly one. Names come from the interfaces the
+// watcher identified; on a down/unknown edge it identified none, so fall back to
+// the configured tunnel(s) the guard is watching.
+//
+// One entry per interface, rather than one entry naming them all, because
+// `tunnels[].name` is a redacted field in the diagnostic bundle
+// (internal/redact) and a comma-joined value defeats that twice over: keepIface
+// cannot see `utun4,nordlynx` as the kernel vocabulary it half is, so the
+// structural half stops being kept, and the whole pair mints ONE token, so the
+// bundle reports two interfaces as one identity.
+//
+// Detail does not repeat the names. It is the same word one key over, landing
+// where only a literal pass can reach it, and Name already carries it. The
+// watcher's own Detail is untouched — it is documented as a short human reason
+// for logs, and the runner logs it.
 func tunnelSnapshot(st netdetect.TunnelState, tunnels []string) []state.Tunnel {
-	name := st.Name
-	if name == "" {
-		name = strings.Join(tunnels, ",")
+	names := st.Names
+	if len(names) == 0 && st.Name != "" {
+		names = []string{st.Name}
 	}
-	return []state.Tunnel{{Name: name, Up: st.Up, Detail: st.Detail}}
+	if len(names) == 0 {
+		names = tunnels
+	}
+	if len(names) == 0 {
+		// Nothing configured and nothing observed: keep one entry so a consumer
+		// reading tunnels[0] still sees the up/down answer.
+		return []state.Tunnel{{Up: st.Up, Detail: st.Detail}}
+	}
+	// Up: "up". Down: the watcher's reason, which names no interface
+	// ("no configured tunnel is up").
+	detail := st.Detail
+	if st.Up {
+		detail = "up"
+	}
+	out := make([]state.Tunnel, 0, len(names))
+	for _, n := range names {
+		out = append(out, state.Tunnel{Name: n, Up: st.Up, Detail: detail})
+	}
+	return out
 }
 
 // postureName maps (blocked, window, standby) to the snapshot's posture string.

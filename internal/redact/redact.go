@@ -7,10 +7,13 @@
 // ruleset carries both, because the whole point of the ruleset is which
 // addresses may be reached.
 //
-// Two identifiers in a bundle are not address-shaped and are just as telling:
-// the PROFILE NAMES the user chose (they are called "mullvad-de", and a tunnel
-// hint is "nordlynx"), and the ACCOUNT NAME in every home-directory path. Both
-// get placeholders of their own kind.
+// Several identifiers in a bundle are not address-shaped and are just as
+// telling, and each gets placeholders of its own kind: the PROFILE NAMES the
+// user chose (they are called "mullvad-de"), a profile's TUNNEL HINT, the
+// TUNNEL INTERFACE NAME the VPN client created ("nordlynx" names the provider
+// as plainly as a server does, while the kernel's own `utun4`/`en0` name
+// nobody), the VPN's SERVICE NAME from the OS network settings, and the ACCOUNT
+// NAME in every home-directory path.
 //
 // **Stable** placeholders, not `[redacted]`: the same address becomes the same
 // placeholder everywhere it appears, so the bundle stays diagnosable. "The rules
@@ -23,6 +26,26 @@
 // address-shaped and hostname-shaped text everywhere, in every file, rather than
 // by knowing which fields of which struct to blank. Anything it is unsure about
 // is redacted.
+//
+// TWO RESIDUALS, stated rather than implied, because the rule above means the
+// limits have to be written down as plainly as the coverage.
+//
+//  1. A real identifier SPELLED like an already-minted token, arriving after that
+//     mint, keeps its spelling — see placeholder. Nothing can move a token that
+//     earlier entries already carry. The bound: only `<kind>-<digits>` can
+//     collide, and that spelling names no provider and no person.
+//
+//  2. An interface known ONLY to the live host — autodetect with no
+//     vpn.tunnelInterfaces, and no daemon, so no state.json — is minted by
+//     nothing before rules-preview.txt and doctor.json are walked, and the name
+//     replay has nothing to replay. With the daemon running, state.json's
+//     tunnels[].name closes it, which is why the bundle's collection order
+//     (cmd/dezhban/report.go) is load-bearing. Closing it outright means either a
+//     field-aware pass over the three rendering grammars dezhban emits
+//     (`on { … }`, `oifname { … }`, `-InterfaceAlias …`) or seeding this
+//     Redactor from the resolved policy — the second risks minting tokens for
+//     values no entry ends up carrying, which is the legend overcount
+//     redactEntry's comment warns about.
 package redact
 
 import (
@@ -136,7 +159,13 @@ var (
 	// untouched.
 	ifacesJSONRe = regexp.MustCompile(`("tunnelInterfaces"\s*:\s*\[)([^\[\]{}]*)(\]?)`)
 	ifaceJSONRe  = regexp.MustCompile(`("iface"\s*:\s*")((?:[^"\\]|\\.)+)(")`)
-	ifaceAttrRe  = regexp.MustCompile(`\b(iface|tunnel)=("(?:[^"\\]|\\.)*"|[^\s]+)`)
+	// Only `iface=`. `tunnel=` was in here with no producer anywhere in the
+	// tree — the Windows preview writes `-DisplayName 'dezhban-tunnel'`, not an
+	// attr — and a pattern matching a key the daemon never writes is untested
+	// surface that can only mint a token for a word it should not have claimed.
+	// The producers that justify this one: internal/runner/runner.go's bad-route
+	// warning and internal/netdetect/resolve.go's tunnel-internal drop.
+	ifaceAttrRe  = regexp.MustCompile(`\biface=("(?:[^"\\]|\\.)*"|[^\s]+)`)
 	jsonStringRe = regexp.MustCompile(`"(?:[^"\\]|\\.)*"`)
 	// A home directory names the account, which names the person. The segment
 	// after /Users or /home is the only identifying part — the rest of the path
@@ -166,16 +195,62 @@ type Redactor struct {
 
 	seen  map[string]string
 	order []string
+
+	// next is the highest ordinal ever OFFERED for a kind, whether or not it was
+	// used. Monotonic, because an ordinal derived by counting `order` reissues
+	// one that a skip vacated — see placeholder.
+	next map[string]int
+	// values is every value keyed so far, ACROSS ALL KINDS. A token must not be
+	// the spelling of a name this bundle carries, and knownNames replays values
+	// without regard to kind, so the check cannot be per-kind either.
+	values map[string]bool
+	// minted is every token this Redactor has produced. A pass that runs after
+	// another one can be handed one — see placeholder.
+	minted map[string]bool
 }
 
 // New returns a Redactor. enabled false is the explicit opt-out: everything
 // passes through untouched.
 func New(enabled bool) *Redactor {
-	return &Redactor{Enabled: enabled, seen: map[string]string{}}
+	return &Redactor{
+		Enabled: enabled,
+		seen:    map[string]string{},
+		next:    map[string]int{},
+		values:  map[string]bool{},
+		minted:  map[string]bool{},
+	}
 }
 
-// Text rewrites every address and hostname in s.
+// Text redacts one TEXTUAL entry of a bundle: the names this bundle has already
+// replaced elsewhere, then the shape passes.
+//
+// knownNames FIRST, deliberately. Its values are known identities; hostRe is a
+// guess. Run the guess first and a profile called `nord.vpn` is minted as
+// `host-N` in prose and `profile-N` in the config — one identifier, two tokens,
+// two legend lines, and no way for a reader to see they are the same server.
+//
+// Every external caller wants this order, which is why it is what `Text` means
+// rather than a second exported method beside it. `rules-preview.txt`, `log.txt`
+// and the README's notes can each quote a name another entry taught the redactor,
+// and a two-door API whose wrong door under-redacts silently is the one shape
+// this package may not have. Inside the package, a caller that wants the shape
+// passes ALONE says so by calling shapes.
+//
+// The residual: a name first learned in the same entry that quotes it — the
+// daemon's `host=x err="lookup x: no such host"` when `x` appears in no earlier
+// file — is not replayed within that entry, because the replay runs ahead of the
+// mint by design. Entry order (see cmd/dezhban/report.go) is what keeps that rare.
 func (r *Redactor) Text(s string) string {
+	if !r.Enabled {
+		return s
+	}
+	return r.shapes(r.knownNames(s))
+}
+
+// shapes rewrites every address and hostname in s. No literal-name replay: a
+// caller reaching a value whose KEY already identified it must not have the
+// bundle's other names spliced into it.
+func (r *Redactor) shapes(s string) string {
 	if !r.Enabled {
 		return s
 	}
@@ -258,15 +333,15 @@ func (r *Redactor) Text(s string) string {
 	})
 	s = ifaceAttrRe.ReplaceAllStringFunc(s, func(m string) string {
 		g := ifaceAttrRe.FindStringSubmatch(m)
-		v := jsonBody(strings.Trim(g[2], `"`))
+		v := jsonBody(strings.Trim(g[1], `"`))
 		red := r.ifaceName(v)
 		if red == v {
 			return m
 		}
-		if strings.HasPrefix(g[2], `"`) {
+		if strings.HasPrefix(g[1], `"`) {
 			red = `"` + red + `"`
 		}
-		return g[1] + "=" + red
+		return "iface=" + red
 	})
 	s = endpointAttrRe.ReplaceAllStringFunc(s, func(m string) string {
 		g := endpointAttrRe.FindStringSubmatch(m)
@@ -381,10 +456,19 @@ func (r *Redactor) homeDirs(s string) string {
 	})
 }
 
+// placeholderKinds is every kind this package mints. It is a list rather than a
+// literal alternation because the alternation drifted: the `iface` kind was added
+// with its own mint path and placeholderRe was left as it was, so the pattern
+// stopped matching every token the package produces — which is the one thing it
+// promises. kindNoun keeps its own switch (nouns are prose, not identity) and a
+// test pins the two together.
+var placeholderKinds = []string{"ip", "host", "profile", "hint", "user", "iface", "vpn"}
+
 // placeholderRe matches a token this package has already minted. Any pass that
 // can run after another one needs it: replacing a placeholder produces a token
-// in no legend and splits one identifier across two.
-var placeholderRe = regexp.MustCompile(`^(?:ip|host|profile|hint|user)-\d+$`)
+// in no legend and splits one identifier across two. knownNames relies on it to
+// refuse a value that is spelled like a token — see json.go.
+var placeholderRe = regexp.MustCompile(`^(?:` + strings.Join(placeholderKinds, "|") + `)-\d+$`)
 
 // address replaces one address-shaped match, keeping any /prefix — the prefix
 // length is structural (it says "this is a subnet rule"), not identifying.
@@ -580,29 +664,67 @@ var keptHints = map[string]bool{
 const unattributed = "_unattributed"
 
 // placeholder returns the stable token for one value, minting it on first sight.
+//
+// A candidate ordinal is REFUSED for two reasons, and the second is the one that
+// is easy to get wrong.
+//
+//  1. It would produce the value itself. Config accepts `[A-Za-z0-9._-]`, so a
+//     profile can legitimately be CALLED `profile-1` — and minting `profile-1`
+//     for it left the name verbatim in the bundle while the legend said it had
+//     been replaced, which is the one failure this package must never have:
+//     advertising a safety it did not deliver.
+//
+//  2. It is a value this bundle already carries, under ANY kind. A token that is
+//     also a real name is indistinguishable from that name to a reader, and
+//     knownNames — which replays values without regard to kind — would rewrite
+//     the token as if it were the name.
+//
+// The counter is r.next, not a count of `order` entries, and that distinction is
+// the whole bug this replaced: a refusal advances the token but appends ONE
+// order entry, so a count-derived ordinal handed the vacated number to the next
+// value. `profile-1` refused its way to `profile-2`, then `alpha` counted one
+// entry and was also given `profile-2` — two identities, one token, and a legend
+// reading `2 distinct profile names → profile-2 … profile-2`.
+//
+// The residual a streaming redactor cannot close: a real identifier spelled like
+// a token ALREADY minted, arriving after that mint. Its own mint is safe, since
+// tokens are never reissued, but the entries carrying that token are already
+// written and nothing can move it retroactively. The bound that makes this
+// acceptable is that the only colliding spellings are `<kind>-<digits>`, which
+// name no provider and no person.
 func (r *Redactor) placeholder(value, kind string) string {
+	// A token this Redactor already produced is not a name. Text replays known
+	// names BEFORE the shape passes run, so `profile=mullvad-de` becomes
+	// `profile=profile-1` and profileAttrRe then offers `profile-1` here as if it
+	// were a value — minting a second token for the same identity, in no legend,
+	// splitting one server across two. This is the guard placeholderRe was
+	// written for; it belongs at the mint, the one place every pass funnels
+	// through, rather than at each pass.
+	//
+	// Membership, not shape: a real profile CALLED `profile-1` that this bundle
+	// has not already used as a token must still be replaced, which is what the
+	// refusal loop below is for.
+	if r.minted[value] {
+		return value
+	}
 	key := kind + ":" + value
 	if p, ok := r.seen[key]; ok {
 		return p
 	}
-	n := 0
-	for _, k := range r.order {
-		if strings.HasPrefix(k, kind+":") {
-			n++
+	n := r.next[kind]
+	var p string
+	for {
+		n++
+		p = fmt.Sprintf("%s-%d", kind, n)
+		if p != value && !r.values[p] {
+			break
 		}
 	}
-	// Skip an ordinal that would produce the value itself. Config accepts
-	// `[A-Za-z0-9._-]`, so a profile can legitimately be CALLED `profile-1` —
-	// and minting `profile-1` for it left the name verbatim in the bundle while
-	// the legend said it had been replaced, which is the one failure this
-	// package must never have: advertising a safety it did not deliver.
-	p := fmt.Sprintf("%s-%d", kind, n+1)
-	for p == value {
-		n++
-		p = fmt.Sprintf("%s-%d", kind, n+1)
-	}
+	r.next[kind] = n
 	r.seen[key] = p
 	r.order = append(r.order, key)
+	r.values[value] = true
+	r.minted[p] = true
 	return p
 }
 
@@ -641,10 +763,59 @@ func (r *Redactor) Legend() []string {
 			out = append(out, fmt.Sprintf("1 distinct %s → %s", kindNoun(kind, n), t[0]))
 			continue
 		}
-		out = append(out, fmt.Sprintf("%d distinct %s → %s … %s",
-			n, kindNoun(kind, n), t[0], t[n-1]))
+		// A RANGE promises everything between its ends. placeholder refuses an
+		// ordinal whenever it would collide, so the tokens of one kind need not
+		// be consecutive — and `profile-1 … profile-3` for two profiles
+		// advertises a `profile-2` that is nowhere in the bundle, which is the
+		// same lie the 1..n rendering told. When there is a hole, list them.
+		//
+		// Listing, rather than dropping to a bare count: the token SPELLING is
+		// what a reader greps the bundle with, and teaching that spelling is
+		// what the range was for. The list is not unbounded in practice — a hole
+		// needs an identifier literally spelled `<kind>-<digits>`, impossible for
+		// `ip` (values are parsed addresses) and vanishingly rare for `host`, so
+		// this branch belongs to the small-count kinds. It discloses one thing,
+		// and only one: that some identifier here is spelled like a placeholder,
+		// a spelling that names nobody.
+		if consecutive(t) {
+			out = append(out, fmt.Sprintf("%d distinct %s → %s … %s",
+				n, kindNoun(kind, n), t[0], t[n-1]))
+			continue
+		}
+		out = append(out, fmt.Sprintf("%d distinct %s → %s",
+			n, kindNoun(kind, n), strings.Join(t, ", ")))
 	}
 	return out
+}
+
+// consecutive reports whether tokens run without a gap. They arrive in mint
+// order, which placeholder guarantees is increasing ordinal order for one kind,
+// so only the ends have to be read. An unparseable token answers false, which
+// sends the caller to the enumeration — the honest direction, since a range
+// nobody can verify is exactly what this guards against.
+func consecutive(tokens []string) bool {
+	first, ok := ordinal(tokens[0])
+	if !ok {
+		return false
+	}
+	last, ok := ordinal(tokens[len(tokens)-1])
+	if !ok {
+		return false
+	}
+	return last-first+1 == len(tokens)
+}
+
+// ordinal is the number a minted token ends in.
+func ordinal(token string) (int, bool) {
+	i := strings.LastIndexByte(token, '-')
+	if i < 0 {
+		return 0, false
+	}
+	n, err := strconv.Atoi(token[i+1:])
+	if err != nil {
+		return 0, false
+	}
+	return n, true
 }
 
 func kindNoun(kind string, n int) string {
@@ -660,6 +831,8 @@ func kindNoun(kind string, n int) string {
 		singular, plural = "interface name", "interface names"
 	case "user":
 		singular, plural = "account name", "account names"
+	case "vpn":
+		singular, plural = "VPN service name", "VPN service names"
 	}
 	if n == 1 {
 		return singular

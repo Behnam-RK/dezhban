@@ -27,6 +27,7 @@ New records use [template.md](template.md) and take the next free number.
 | [0013](0013-geo-provider-pass-opt-out.md) | The geo-provider pass gets an opt-out, not a redesign | accepted, implemented |
 | [0014](0014-login-item-launch-marker.md) | The login item carries an explicit launch marker | accepted, implemented |
 | [0015](0015-complete-purge-semantics.md) | What a complete purge removes, and what it deliberately does not | accepted, implemented |
+| [0016](0016-bundle-identifiers-are-data-not-prose.md) | A bundle identifier is redacted by the key that names it | accepted, implemented |
 
 > **0006 is the one to read first if you are touching the geo lookup.** It records why
 > the obvious implementation silently defeats the exit-country check, and it exists

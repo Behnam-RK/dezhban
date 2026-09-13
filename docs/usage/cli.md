@@ -286,9 +286,18 @@ one of them (a rendered ruleset is firewall syntax, not JSON), and so is
 fixed path the config file does not move. Each exits 2 and says which flag to
 drop. `doctor
 --json` prints the identical findings `doctor` reports in prose — `{checks:
-[{name, status, summary, details, fixes}], ok}` — for a consumer (the macOS
-app's Diagnostics pane) that needs to render them itself rather than parse
-text. See [config.md](config.md) for the full field reference and
+[{name, status, profiles?, connectedVPN?, summary, details, fixes}], ok}` — for
+a consumer (the macOS app's Diagnostics pane) that needs to render them itself
+rather than parse text. Each entry of `details` is an object, `{iface?,
+profile?, endpoint?, text}`: the identifier the finding is **about**, carried as
+data, plus the prose that qualifies it. A renderer composes the line — the
+identifier, its text, and the interface in parentheses when a finding is about
+an endpoint *and* the interface it is misrouted onto. An entry whose `text` is
+empty and that carries no identifier is a **paragraph break**, not a finding.
+`profiles` and `connectedVPN` carry the identifiers named by the one-sentence
+`summary`. The identifiers are fields rather than words inside the prose so that
+`dezhban report` can redact them by key; a consumer that does not need them can
+ignore them. See [config.md](config.md) for the full field reference and
 [troubleshooting.md](troubleshooting.md) for the lockout-recovery runbook.
 
 `detect-vpn --json` is the machine-readable VPN inventory the app's
@@ -470,13 +479,36 @@ unreadable, and the geo-provider hostnames dezhban ships are kept for the same
 reason. Hostname redaction works from an **allow-list**, so a name nobody
 anticipated is redacted rather than leaked.
 
-Two identifiers in a bundle are not address-shaped and get placeholders of their
-own kind: the **profile names** you chose (`vpn.profiles[].name`,
-`state.json`'s `activeProfile`, and a profile's `tunnelHint` — these are called
-"mullvad-de" and "nordlynx", so they name the provider as plainly as a server
-address does) and the **account name** in any home-directory path. A file you
-imported is redacted too, because a `.conf` or `.ovpn` is named after the VPN it
-configures.
+Several identifiers in a bundle are not address-shaped and are just as telling.
+Each gets placeholders of its own kind, so the legend can say how many of each
+were replaced:
+
+- `ip-N` — a public IP address.
+- `host-N` — a hostname, including a single-label one like `mullvad` that no
+  shape can recognise.
+- `profile-N` — the **profile names** you chose (`vpn.profiles[].name`,
+  `state.json`'s `activeProfile`, and the names `learned.json` files endpoints
+  under). They are called "mullvad-de", so they name the provider as plainly as
+  a server address does.
+- `hint-N` — a profile's `tunnelHint`, unless it is one of the generic prefixes
+  every host has (`utun`, `tun`, `tap`, `wg`, `ipsec`), which name nobody.
+- `iface-N` — a **tunnel interface name** your VPN client created, like
+  `nordlynx` or `proton`. The kernel's own names — `utun4`, `en0`, `lo0`, `wg0`
+  — are kept: every host has them, they identify nobody, and hiding them would
+  make a ruleset unreadable.
+- `vpn-N` — the VPN's service name as your OS network settings show it.
+- `user-N` — the **account name** in any home-directory path. A file you
+  imported is redacted too, because a `.conf` or `.ovpn` is named after the VPN
+  it configures.
+
+The README's legend reports counts and the tokens they cover — a range
+("23 distinct IP addresses → ip-1 … ip-23") when a kind's tokens run
+consecutively, and a list ("2 distinct profile names → profile-1, profile-3")
+when one number was skipped. A number is skipped whenever it would have produced
+a name this bundle actually carries: a profile may legitimately be *called*
+`profile-1`, and a placeholder that is also a real name is no redaction at all.
+That is the same rule read twice — a token is never the spelling of a name in
+the bundle, and no two identities ever share a token.
 
 The bundle is written **0600**, so the `--include-network` version is not
 readable by other accounts on the machine. `--include-network` produces that

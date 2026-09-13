@@ -12,6 +12,50 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A bundle could give two different servers the same placeholder.** A profile
+  can legitimately be called `profile-1`, and the redactor skips a number that
+  would produce the name it is replacing — but it then handed that number to the
+  next name instead of leaving it behind. Two identities shared one token, the
+  legend said "2 distinct profile names → profile-2 … profile-2", and a bundle
+  that reports two servers as one looks like a working bundle until someone tries
+  to diagnose with it. A placeholder is now never a name the bundle carries, and
+  never stands for more than one thing.
+- **The README's legend no longer advertises tokens that are not in the bundle.**
+  When a number is skipped the tokens stop being consecutive, and a range implies
+  everything between its ends. The legend now prints a range only when the tokens
+  really do run consecutively, and lists them otherwise.
+- **Tunnel interface names your VPN client created now go from the prose, the
+  rendered rulesets and the log — not only from the fields that name them.**
+  `nordlynx` in `pass out quick on { nordlynx }`, in a doctor finding, in
+  `state.json`'s tunnel detail and in `detail="nordlynx up"` were all shipping
+  verbatim in a default, redacted bundle: a name with no dot is invisible to a
+  hostname shape, and the pass that reaches such names was not running over the
+  bundle's text entries at all. Every `utun*`, `en0` and `lo0` still survives —
+  they identify nobody, and hiding them would make a ruleset unreadable.
+- **A single-label server name quoted inside a log error no longer survives.**
+  The daemon logs it twice — `host=mullvad err="lookup mullvad: no such host"` —
+  and only the first copy was being replaced.
+- **`state.json` no longer reports two tunnel interfaces as one.** Multiple
+  interfaces were joined with a comma into a single name, which the redactor then
+  replaced with one placeholder for the pair — and stopped recognising the
+  generic half as a name worth keeping.
+
+### Changed
+
+- **`dezhban doctor --json` carries its identifiers as data.** Each entry of a
+  check's `details` is now an object, `{iface?, profile?, endpoint?, text}`,
+  instead of a pre-composed string, and a check may carry `profiles` and
+  `connectedVPN`. `dezhban doctor` and the app's Diagnostics pane print the same
+  sentences as before; what changed is that the identifier inside them is a field
+  the bundle's redactor can recognise rather than a word it has to hunt for. The
+  discover section names the connected VPN once, above its findings, instead of
+  after each one. See [ADR-0016](docs/adr/0016-bundle-identifiers-are-data-not-prose.md).
+- **`status --json` and `state.json` publish one entry per tunnel interface**,
+  each naming exactly one, and a tunnel's `detail` no longer repeats the name
+  already in its `name`.
+
 ## [0.14.0] - 2026-09-10
 
 ### Added

@@ -565,3 +565,117 @@ func TestAnIPv6ZoneIsRedactedWhenItNamesAProvider(t *testing.T) {
 		t.Errorf("got %q, want a generic zone left alone", g)
 	}
 }
+
+// Two identities must never share a token. The ordinal used to be derived by
+// COUNTING order entries of a kind, so a refusal — which advances the token but
+// appends one entry — vacated a number and handed it to the next value.
+// `profile-1` refused its way to `profile-2`, then `alpha` counted one entry and
+// was given `profile-2` as well: one token, two servers, and a legend reading
+// "2 distinct profile names → profile-2 … profile-2".
+func TestTwoIdentitiesNeverSharePlaceholder(t *testing.T) {
+	r := New(true)
+	first := r.placeholder("profile-1", "profile")
+	second := r.placeholder("alpha", "profile")
+	if first == second {
+		t.Fatalf("both values minted %q — one token for two identities", first)
+	}
+	legend := r.Legend()
+	if len(legend) != 1 {
+		t.Fatalf("legend = %v, want one line", legend)
+	}
+	for _, want := range []string{first, second} {
+		if !strings.Contains(legend[0], want) {
+			t.Errorf("legend %q does not name %q", legend[0], want)
+		}
+	}
+}
+
+// A token must not be the spelling of a name this bundle carries. Otherwise a
+// reader cannot tell the placeholder from the real profile beside it, and the
+// name replay rewrites the placeholder as if it were that name.
+func TestAPlaceholderIsNeverAValueTheBundleAlreadyCarries(t *testing.T) {
+	r := New(true)
+	r.placeholder("profile-3", "profile")
+	for _, v := range []string{"alpha", "beta", "gamma"} {
+		if got := r.placeholder(v, "profile"); got == "profile-3" {
+			t.Fatalf("%q minted %q, which is a real profile name in this bundle", v, got)
+		}
+	}
+}
+
+// A RANGE promises everything between its ends. A refused ordinal leaves a hole,
+// and "profile-1 … profile-3" for two profiles advertises a profile-2 that is
+// nowhere in the bundle — the same lie the old 1..n rendering told.
+func TestTheLegendNeverImpliesATokenThatWasNotMinted(t *testing.T) {
+	r := New(true)
+	r.placeholder("alpha", "profile")     // profile-1
+	r.placeholder("profile-2", "profile") // refuses profile-2, takes profile-3
+	legend := r.Legend()
+	if len(legend) != 1 {
+		t.Fatalf("legend = %v, want one line", legend)
+	}
+	const want = "2 distinct profile names → profile-1, profile-3"
+	if legend[0] != want {
+		t.Errorf("legend[0] = %q, want %q", legend[0], want)
+	}
+	if strings.Contains(legend[0], "…") {
+		t.Errorf("legend %q renders a range across a hole", legend[0])
+	}
+}
+
+// placeholderRe promises it matches every token this package mints, and a pass
+// that runs after another one relies on that. The alternation drifted once
+// already: the iface kind was added with its own mint path and the pattern was
+// left as it was.
+func TestEveryKindTheRedactorMintsIsRecognisedAsAPlaceholder(t *testing.T) {
+	nouns := map[string]bool{}
+	for _, kind := range placeholderKinds {
+		token := kind + "-1"
+		if !placeholderRe.MatchString(token) {
+			t.Errorf("placeholderRe does not match %q", token)
+		}
+		noun := kindNoun(kind, 2)
+		if nouns[noun] {
+			t.Errorf("kind %q reuses the legend noun %q — a kind with no noun of its own falls to the default", kind, noun)
+		}
+		nouns[noun] = true
+	}
+}
+
+// Text replays known names BEFORE the shape passes, so a shape pass is handed a
+// token it must not treat as a value. Guarding at the mint covers every pass at
+// once; guarding at each pass is how one gets missed.
+//
+// This guards the mechanism Text's new ordering introduced rather than an older
+// defect — it passes against the shape-only Text, where no pass could ever see a
+// token. It is here because the ordering is what makes the leak reachable, and
+// removing the guard must not be silent.
+func TestAShapePassNeverReMintsAToken(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"activeProfile":"mullvad-de"}`)
+	got := r.Text(`profile=mullvad-de and profile=mullvad-de`)
+	if strings.Count(got, "profile-1") != 2 {
+		t.Errorf("got %q, want the same token twice", got)
+	}
+	if len(r.Legend()) != 1 || !strings.Contains(r.Legend()[0], "1 distinct") {
+		t.Errorf("legend = %v — the replayed token was minted a second time", r.Legend())
+	}
+}
+
+// A discarded pass must leave the ordinal counter where it was, or the legend
+// counts tokens appearing nowhere in the bundle and pushes every real token's
+// ordinal past them. The counter is monotonic now, so truncating order no longer
+// restores it on its own.
+func TestADiscardedPassLeavesTheNextOrdinalWhereItWas(t *testing.T) {
+	r := New(true)
+	mark := r.checkpoint()
+	r.placeholder("alpha", "profile")
+	r.placeholder("beta", "profile")
+	r.rollback(mark)
+	if got := r.placeholder("gamma", "profile"); got != "profile-1" {
+		t.Errorf("after rollback the next token is %q, want profile-1", got)
+	}
+	if legend := r.Legend(); len(legend) != 1 || !strings.Contains(legend[0], "profile-1") {
+		t.Errorf("legend = %v, want only the surviving token", legend)
+	}
+}

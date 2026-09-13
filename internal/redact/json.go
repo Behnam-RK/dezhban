@@ -54,7 +54,7 @@ func (r *Redactor) JSON(s string) string {
 	// the fallback re-reads the ORIGINAL text: without this the legend would
 	// count tokens that appear nowhere in the bundle and push every real token's
 	// ordinal past them.
-	mark := len(r.order)
+	mark := r.checkpoint()
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetIndent("", "  ")
@@ -69,13 +69,41 @@ func (r *Redactor) JSON(s string) string {
 	return buf.String()
 }
 
-// rollback forgets every placeholder minted since mark, for a pass whose output
-// was thrown away.
-func (r *Redactor) rollback(mark int) {
-	for _, key := range r.order[mark:] {
+// checkpoint captures everything placeholder mutates, so a pass whose output is
+// thrown away can be undone. `order` alone is not enough: the ordinal counter is
+// monotonic by design (see placeholder), so truncating `order` no longer restores
+// it the way the old count-derived ordinal did.
+type checkpoint struct {
+	order int
+	next  map[string]int
+}
+
+func (r *Redactor) checkpoint() checkpoint {
+	next := make(map[string]int, len(r.next))
+	for k, v := range r.next {
+		next[k] = v
+	}
+	return checkpoint{order: len(r.order), next: next}
+}
+
+// rollback forgets every placeholder minted since c, for a pass whose output was
+// thrown away.
+func (r *Redactor) rollback(c checkpoint) {
+	for _, key := range r.order[c.order:] {
 		delete(r.seen, key)
 	}
-	r.order = r.order[:mark]
+	r.order = r.order[:c.order]
+	r.next = c.next
+	// values is rebuilt rather than pruned per key: one value can be keyed under
+	// two kinds, so deleting it for the discarded key would forget it for the
+	// surviving one. This runs at most once per bundle entry.
+	r.values = make(map[string]bool, len(r.order))
+	r.minted = make(map[string]bool, len(r.order))
+	for _, key := range r.order {
+		_, value, _ := strings.Cut(key, ":")
+		r.values[value] = true
+		r.minted[r.seen[key]] = true
+	}
 }
 
 // object preserves an object's key ORDER, which encoding/json's map does not.
@@ -227,7 +255,13 @@ func (r *Redactor) value(s string, path []string) string {
 		key = path[len(path)-1]
 	}
 	switch key {
-	case "activeProfile", "profile":
+	case "activeProfile", "profile", "profiles":
+		// `profiles` is doctor.json's carrier for the entry names its Summary
+		// names in prose, and it reuses this kind deliberately: a learned entry
+		// and the config profile it belongs to must be the SAME token, or the
+		// bundle shows two identities where the host has one. It cannot misfire
+		// on config.json, where `profiles` holds objects — walk never calls value
+		// on an object.
 		return r.name(s, "profile")
 	case "tunnelHint":
 		return r.name(s, "hint")
@@ -252,13 +286,20 @@ func (r *Redactor) value(s string, path []string) string {
 		// the scoping above exists to prevent, walking back in through the
 		// literal-name pass. Prose still gets knownNames, where mangling a
 		// common word is noise and the leak it closes is not.
-		return r.Text(s)
+		return r.shapes(s)
 	case "tunnelInterfaces", "iface":
 		// learned.json records the interface it observed under `iface`. The same
 		// value is redacted under tunnelInterfaces and tunnels[].name, so leaving
 		// this key out meant one document redacted a provider-named interface and
 		// the one beside it did not.
 		return r.ifaceName(s)
+	case "connectedVPN":
+		// The VPN's friendly service name, from the OS network settings and from
+		// doctor's discover check. It is chosen by the user and usually names the
+		// provider, so it is an identity — but not a tunnelHint, which is an
+		// interface-name PREFIX whose allow-list would keep `wg` or `utun` and
+		// whose legend noun would call this a tunnel hint.
+		return r.name(s, "vpn")
 	case "addr", "endpoint", "endpoints", "ip", "ipv6":
 		return r.endpointOrFree(s)
 	case "fixes":
@@ -274,7 +315,7 @@ func (r *Redactor) value(s string, path []string) string {
 		// needs, and they are what catches the next interpolation.
 		return r.addresses(s)
 	default:
-		return r.free(s)
+		return r.Text(s)
 	}
 }
 
@@ -296,7 +337,7 @@ func (r *Redactor) endpointOrFree(s string) string {
 			return red + ":" + port
 		}
 	}
-	return r.free(s)
+	return r.Text(s)
 }
 
 // splitPort separates a trailing :port from a value that is not itself an
@@ -313,18 +354,9 @@ func splitPort(s string) (host, port string, ok bool) {
 	return host, port, true
 }
 
-// free rewrites a string that no key identifies: the shape passes, then the
-// names this bundle has already replaced elsewhere.
-func (r *Redactor) free(s string) string {
-	// knownNames FIRST. Its values are known identities; hostRe is a guess. Run
-	// the guess first and a profile called `nord.vpn` is minted as `host-N` in
-	// prose and `profile-N` in the config — one identifier, two tokens, two
-	// legend lines, and no way for a reader to see they are the same server.
-	return r.Text(r.knownNames(s))
-}
-
-// knownNames replaces profile and hint names this Redactor has already minted,
-// wherever they appear as words in free text.
+// knownNames replaces the names this Redactor has already minted — profile, hint,
+// host and interface names, see replayKinds — wherever they appear as words in
+// free text.
 //
 // This is what reaches the names no shape and no key can see: the doctor writes
 // learned entry names — which are profile names — into its Details and Summary
@@ -349,14 +381,15 @@ func (r *Redactor) knownNames(s string) string {
 	var names []named
 	for _, key := range r.order {
 		kind, value, _ := strings.Cut(key, ":")
-		if (kind == "profile" || kind == "hint" || kind == "host") && value != "" {
+		if replayKinds[kind] && value != "" {
 			names = append(names, named{value, r.seen[key]})
 		}
 	}
 	// Longest first, so a name that is a prefix of another cannot claim it.
 	sort.Slice(names, func(i, j int) bool { return len(names[i].value) > len(names[j].value) })
 	for _, n := range names {
-		if reserved[n.value] || !strings.Contains(strings.ToLower(s), n.value) {
+		if reserved[n.value] || placeholderRe.MatchString(n.value) ||
+			!strings.Contains(strings.ToLower(s), n.value) {
 			continue
 		}
 		// Not `\b`. config accepts a profile name of [A-Za-z0-9._-] (config.go's
@@ -386,16 +419,53 @@ func (r *Redactor) knownNames(s string) string {
 // Failing to redact one profile whose name collides with dezhban's vocabulary
 // is noise in a bundle; rewriting the vocabulary is a broken diagnosis.
 //
-// This pass cannot launder its own tokens, but that is `free`'s ordering rather
-// than anything here: knownNames runs on the value's ORIGINAL text, before Text
-// has minted a placeholder into it, so there is never a token present for a name
-// to match inside.
+// This pass cannot launder its own tokens, and the GUARD is what makes that true
+// — ordering alone did not. knownNames runs on a value's original text, so a
+// token it minted is not there to be matched. But a real value can be SPELLED
+// like a token: `a-very-long-profile-name` mints `profile-1`, a later profile
+// literally called `profile-1` mints `profile-2`, and because the replay runs
+// longest-value-first it wrote `profile-1` into the prose and then matched its
+// own output — two identities collapsed onto one token, and the long name's real
+// token appearing nowhere. A value matching placeholderRe is therefore skipped.
+// Leaving such a name verbatim costs nothing a reader can use: by its spelling it
+// names nobody.
+// `vpn`, `tunnel` and `wireguard` are here because keepIface only keeps a generic
+// stem followed by digits, so an interface literally called one of them MINTS —
+// and once iface joined the replay, that would have rewritten dezhban's own prose:
+// the lockout check's "WireGuard (and other…", the runner's tunnel warnings, and
+// every "vpn guard active" line in the log. Note what reserved does and does not
+// cost: it suppresses only the free-text replay. The key-aware pass still redacts
+// the value where a key names it, so nothing leaks by being listed here.
 var reserved = map[string]bool{
 	"guard": true, "full-block": true, "switch-window": true, "standby": true,
 	"stopped": true, "fullblock": true, "switch": true, "pause": true,
 	"config": true, "tunnels": true, "endpoints": true, "lockout": true,
 	"service": true, "liveness": true, "control": true, "armatboot": true,
 	"endpointretention": true,
+	"vpn":               true, "tunnel": true, "wireguard": true,
+}
+
+// replayKinds are the kinds whose values knownNames replays into free text.
+//
+// `iface` is in here because a provider-created interface is named as plainly as
+// a server is, and no shape can see a single-label word: state.json's
+// tunnels[].detail is literally "<name> up", doctor's tunnels and lockout checks
+// write the name as an ordinary word, applied-rules.json carries the whole
+// rendered ruleset under one key, and the daemon logs `detail="<name> up"`. Only
+// names that FAIL keepIface ever mint, so the values here are vendor names
+// (`nordlynx`, `proton`, `gpd`) or host-structural stems (`wlan0`, `enp3s0`) —
+// the first is the point, the second is noise, and the words that would have been
+// damage are in reserved above.
+//
+// `user`, `ip` and `vpn` are deliberately absent, and that is a decision rather
+// than an oversight. Account names are routinely generic words (`admin`, `dev`)
+// and the home-directory pass already reaches the only place one appears; an
+// address is found everywhere by shape, so replaying it adds risk and no
+// coverage; and a VPN service name is whatever the user typed into Network
+// settings, which is as often `Work` or `Home` as it is a provider — the same
+// hazard as an account name, and it appears in exactly one field.
+var replayKinds = map[string]bool{
+	"profile": true, "hint": true, "host": true, "iface": true,
 }
 
 // within reports whether key appears anywhere in the path.
