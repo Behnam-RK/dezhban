@@ -501,6 +501,15 @@ were replaced:
   imported is redacted too, because a `.conf` or `.ovpn` is named after the VPN
   it configures.
 
+Two things are deliberately **kept**, because redacting them would replace the
+answer rather than an identity. The **unix group** in `control.group` is a
+property of the machine, not of you or your provider — the default is `admin` —
+and the control check exists to tell you which group to join, which
+"you are not in the `profile-1` group" cannot do. And the **paths of dezhban's
+own files**: the control check names the socket it probed, so a path reading as
+`…/host-N` would be a diagnosis with its subject removed. A socket you renamed
+yourself is redacted, because that name is yours.
+
 The README's legend reports counts and the tokens they cover — a range
 ("23 distinct IP addresses → ip-1 … ip-23") when a kind's tokens run
 consecutively, and a list ("2 distinct profile names → profile-1, profile-3")
