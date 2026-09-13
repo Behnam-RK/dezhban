@@ -113,6 +113,26 @@ func TestDezhbanFilenamesAreNotHostnames(t *testing.T) {
 	}
 }
 
+// The socket is a CONFIG KEY, so only its default basename is dezhban's. A suffix
+// rule would have kept whatever the user pointed `control.socket` at — and a
+// socket named after the VPN it sits beside states the provider as plainly as a
+// server address does. That is rule 2 on keptSuffixes, and the reason `.conf` and
+// `.ovpn` are kept off that list.
+func TestASocketTheUserNamedIsStillRedacted(t *testing.T) {
+	r := New(true)
+	for _, name := range []string{"nordvpn.sock", "mullvad.sock", "proton.lock"} {
+		if got := r.Text(name); got == name {
+			t.Errorf("%s survived — a user-named socket is not one of dezhban's files", name)
+		}
+	}
+	// While dezhban's own two still do.
+	for _, name := range []string{"control.sock", "dezhban.lock"} {
+		if got := r.Text(name); got != name {
+			t.Errorf("%s was redacted: %q", name, got)
+		}
+	}
+}
+
 // `.zip` must never join keptSuffixes, however much the bundle's own filename
 // ends in it: it is a delegated gTLD, so a suffix rule admitting it would wave a
 // real host straight through — rule 1 on that list, and the reason the list is

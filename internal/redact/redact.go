@@ -533,7 +533,7 @@ func (r *Redactor) host(m string) string {
 // merely look like hostnames.
 func keepHost(m string) bool {
 	lower := strings.ToLower(m)
-	if allowedHosts[lower] {
+	if allowedHosts[lower] || keptNames[lower] {
 		return true
 	}
 	for _, suffix := range keptSuffixes {
@@ -582,23 +582,33 @@ var allowedHosts = map[string]bool{
 // This is a deny-list embedded in an allow-listed matcher, so it is kept as
 // short as those two rules allow. Redacting a filename is noise; keeping one is
 // a leak.
-// Two of dezhban's own filenames were missing and were being replaced with
-// `host-N`: the control socket, which `doctor`'s control check quotes as the
-// answer to "which socket did it probe", and the run lock, whose path a startup
-// failure carries into the log. Neither is a delegated TLD and both are named by
-// dezhban, so both rules hold.
-//
-// `.zip` is NOT here and must not be added, though the bundle's own filename ends
-// in it: `.zip` is a delegated gTLD, so rule 1 refuses it. A bundle name quoted in
-// a note is redacted, and that is the correct trade — the rule exists precisely to
-// stop a suffix that looks like a file extension waving a real host through.
-// `.pkg` is left out for want of a check against the root zone rather than a
-// decision; it reaches a bundle from one error string, so the cost of leaving it
-// is one mangled word in a failure nobody sees twice.
+// `.zip` is NOT here and must not be added, though the report bundle's own
+// filename ends in it: `.zip` is a delegated gTLD, so rule 1 refuses it. A bundle
+// name quoted in a note is redacted, and that is the correct trade — this rule
+// exists precisely to stop a suffix that looks like a file extension from waving a
+// real host through.
 var keptSuffixes = []string{
-	".json", ".log", ".txt", ".plist", ".dezhban", ".sock", ".lock",
+	".json", ".log", ".txt", ".plist", ".dezhban",
 	// Reserved by RFC 2606 / RFC 6761: never delegated, so never a real host.
 	".arpa", ".invalid", ".test",
+}
+
+// keptNames are dezhban's own filenames, matched EXACTLY rather than by suffix.
+//
+// Exactly, because the part in front is only dezhban's for these two spellings.
+// `control.socket` is a config key, so a `.sock` suffix rule would keep whatever
+// the user pointed it at — `/var/run/nordvpn.sock` names the provider as plainly
+// as a server does, which is rule 2 on keptSuffixes and the reason `.conf` and
+// `.ovpn` are kept out. A user who renames the socket gets it redacted; the
+// default, which is dezhban's own name, survives.
+//
+// Both reach a bundle. `doctor`'s control check quotes the socket as the answer to
+// "which socket did it probe", and the run lock's path rides a startup failure
+// into the log. Replacing either with `host-N` throws the diagnosis away and hides
+// nothing, and counts a hostname in the legend that stands for a filename.
+var keptNames = map[string]bool{
+	"control.sock": true, // controlSocketPath's default basename
+	"dezhban.lock": true, // runLockName, a constant
 }
 
 // replaceProfileNames rewrites every `"name": "..."` in body.
