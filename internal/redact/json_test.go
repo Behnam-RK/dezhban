@@ -564,3 +564,28 @@ func TestAReplayedTokenIsNotReMintedUnderAnotherKind(t *testing.T) {
 		t.Errorf("the legend grew replaying a name it already knew:\n  before: %v\n  after:  %v", before, after)
 	}
 }
+
+// The one case the redaction does NOT cover, pinned so it stays true of the docs
+// that now state it (docs/usage/cli.md, and residual 1 in this package's doc
+// comment). A name spelled like a token ALREADY MINTED keeps its spelling: the
+// token is in entries that are already written, and nothing can move it.
+//
+// Pinned rather than merely documented, because this is the shape of thing that
+// gets "fixed" by someone who has not read why — and the fix that suggests
+// itself, making the mint guard kind-scoped, is the regression
+// TestAReplayedTokenIsNotReMintedUnderAnotherKind rejects.
+func TestANameSpelledLikeAnExistingTokenKeepsItsSpelling(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"profiles":[{"name":"alpha"}]}}`) // mints profile-1
+
+	got := r.JSON(`{"vpn":{"tunnelInterfaces":["profile-1"]}}`)
+	if !strings.Contains(got, `"profile-1"`) {
+		t.Errorf("got %q — the documented residual no longer holds; docs/usage/cli.md says it does", got)
+	}
+	// And the bundle does not grow a second identity for it: the legend still
+	// names exactly the one profile.
+	legend := r.Legend()
+	if len(legend) != 1 || !strings.Contains(legend[0], "1 distinct profile name") {
+		t.Errorf("legend = %v, want the single profile and no interface kind", legend)
+	}
+}

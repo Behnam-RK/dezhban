@@ -505,10 +505,18 @@ The README's legend reports counts and the tokens they cover — a range
 ("23 distinct IP addresses → ip-1 … ip-23") when a kind's tokens run
 consecutively, and a list ("2 distinct profile names → profile-1, profile-3")
 when one number was skipped. A number is skipped whenever it would have produced
-a name this bundle actually carries: a profile may legitimately be *called*
+a name this bundle already carries: a profile may legitimately be *called*
 `profile-1`, and a placeholder that is also a real name is no redaction at all.
-That is the same rule read twice — a token is never the spelling of a name in
-the bundle, and no two identities ever share a token.
+Two things follow, and they are guarantees: no two identities ever share a token,
+and a token is never the name it replaced.
+
+One case is **not** covered, and it is stated rather than implied. A name that is
+spelled like a token *already minted* keeps its spelling — an interface called
+`profile-1`, on a host where `profile-1` is already some profile's placeholder,
+stays `profile-1` in the bundle. Nothing can move a token that earlier entries
+already carry. It is left this way because the only spellings that can collide
+are `kind-number`, which name no provider and no person; if you have deliberately
+named something that way, know that it reads as a placeholder.
 
 The bundle is written **0600**, so the `--include-network` version is not
 readable by other accounts on the machine. `--include-network` produces that
