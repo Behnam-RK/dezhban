@@ -104,19 +104,19 @@ func (r *Redactor) rollback(c checkpoint) {
 	// values is rebuilt rather than pruned per key: one value can be keyed under
 	// two kinds, so deleting it for the discarded key would forget it for the
 	// surviving one. This runs at most once per bundle entry.
-	// Every key in order has a seen entry — placeholder appends to one and writes
-	// the other in the same breath — so the lookup below cannot come back empty.
-	// Said out loud because an empty token here would poison minted with "", and
-	// placeholder returns early on anything minted: the next empty value would
-	// come back unredacted.
+	// Every key in order has a seen entry, unconditionally: placeholder is the
+	// ONLY place that appends to order, and it writes seen in the same breath.
+	// So the lookup cannot come back empty, and there is deliberately no guard
+	// against it — a guard here would read as doubt about an invariant that is
+	// absolute, and it would take the wrong branch if it ever were not: skipping
+	// a token leaves it out of minted, and a token not in minted is one a later
+	// pass will mint a second token for.
 	r.values = make(map[string]bool, len(r.order))
 	r.minted = make(map[string]bool, len(r.order))
 	for _, key := range r.order {
 		_, value, _ := strings.Cut(key, ":")
 		r.values[value] = true
-		if token := r.seen[key]; token != "" {
-			r.minted[token] = true
-		}
+		r.minted[r.seen[key]] = true
 	}
 }
 

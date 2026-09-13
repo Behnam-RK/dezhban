@@ -718,11 +718,57 @@ func TestTheInterfaceAttrKeepsItsKeyAndItsQuoting(t *testing.T) {
 		{`iface=utun4`, `iface=utun4`},
 		// Not an attr this daemon writes, so the pattern does not claim it.
 		{`tunnel=something-else`, `tunnel=something-else`},
-		// But a name the bundle already knows still goes, via the replay.
-		{`tunnel=nordlynx`, `tunnel=iface-1`},
 	} {
 		if got := r.Text(tc.in); got != tc.want {
 			t.Errorf("Text(%q) = %q, want %q", tc.in, got, tc.want)
 		}
+	}
+}
+
+// Dropping `tunnel=` from the pattern is not a coverage loss, because a name the
+// bundle already knows is reached by the name replay rather than by a pattern
+// matching a key nothing writes.
+//
+// Its own test, with the mint SEEDED explicitly, because the precondition is the
+// whole point: as one more row of the table above it passed only because an
+// earlier row happened to have minted first, and reordering the rows would have
+// changed what it asserted without changing what it looked like.
+func TestAKnownInterfaceInAnUnwrittenAttrIsStillReplaced(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"tunnelInterfaces":["nordlynx"]}}`)
+
+	if got := r.Text(`tunnel=nordlynx`); got != `tunnel=iface-1` {
+		t.Errorf("Text(`tunnel=nordlynx`) = %q, want `tunnel=iface-1`", got)
+	}
+	// And with nothing minted, it is left alone — the pattern really is gone.
+	if got := New(true).Text(`tunnel=nordlynx`); got != `tunnel=nordlynx` {
+		t.Errorf("Text(`tunnel=nordlynx`) on a fresh Redactor = %q, want it untouched", got)
+	}
+}
+
+// rollback restores every map placeholder writes, not just the counter. `minted`
+// is the one that matters most: a token missing from it is one a later pass will
+// mint a second token for, which is the split-identifier failure placeholderRe
+// exists to prevent — and it would show up nowhere until a bundle carried both.
+func TestADiscardedPassRestoresTheMintedTokens(t *testing.T) {
+	r := New(true)
+	kept := r.placeholder("alpha", "profile")
+
+	mark := r.checkpoint()
+	discarded := r.placeholder("beta", "profile")
+	r.rollback(mark)
+
+	// The surviving token is still recognised, so a pass handed it back does not
+	// mint again.
+	if got := r.placeholder(kept, "profile"); got != kept {
+		t.Errorf("placeholder(%q) = %q — the surviving token was re-minted", kept, got)
+	}
+	// The discarded one is forgotten: its value may be keyed afresh, and its
+	// ordinal is free again.
+	if got := r.placeholder("beta", "profile"); got != discarded {
+		t.Errorf("after rollback, %q minted %q, want the ordinal back at %q", "beta", got, discarded)
+	}
+	if legend := r.Legend(); len(legend) != 1 || !strings.Contains(legend[0], "2 distinct") {
+		t.Errorf("legend = %v, want exactly the two surviving identities", legend)
 	}
 }
