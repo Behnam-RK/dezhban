@@ -31,9 +31,12 @@
 // limits have to be written down as plainly as the coverage.
 //
 //  1. A real identifier SPELLED like an already-minted token, arriving after that
-//     mint, keeps its spelling — see placeholder. Nothing can move a token that
-//     earlier entries already carry. The bound: only `<kind>-<digits>` can
-//     collide, and that spelling names no provider and no person.
+//     mint, keeps its spelling — see placeholder. This holds ACROSS KINDS, not
+//     only within one: an interface literally called `profile-1` ships as
+//     `profile-1` once that token exists. Nothing can move a token earlier
+//     entries already carry, and the alternative is worse — see the guard in
+//     placeholder, which must stay cross-kind. The bound: only `<kind>-<digits>`
+//     can collide, and that spelling names no provider and no person.
 //
 //  2. An interface known ONLY to the live host — autodetect with no
 //     vpn.tunnelInterfaces, and no daemon, so no state.json — is minted by
@@ -701,9 +704,20 @@ func (r *Redactor) placeholder(value, kind string) string {
 	// written for; it belongs at the mint, the one place every pass funnels
 	// through, rather than at each pass.
 	//
+	// CROSS-KIND, and it must stay that way. Scoping it to the kind looks tighter
+	// and is the opposite: the replay writes a token without regard to kind, and
+	// the pass that then offers it back is whichever pass owns the field it
+	// landed in. A name that is both a profile and an endpoint is replayed as
+	// `profile-1` into `host=…`, where endpointAttrRe offers it under `host` — a
+	// kind-scoped guard mints `host-2` for it, so the bundle carries a token
+	// standing for a token and the legend counts a hostname that exists nowhere.
+	// Pinned by TestAReplayedTokenIsNotReMintedUnderAnotherKind.
+	//
 	// Membership, not shape: a real profile CALLED `profile-1` that this bundle
 	// has not already used as a token must still be replaced, which is what the
-	// refusal loop below is for.
+	// refusal loop below is for. The reverse — a real name spelled like a token
+	// that DOES already exist — keeps its spelling, and is residual 1 in this
+	// package's doc comment rather than a case this can close.
 	if r.minted[value] {
 		return value
 	}

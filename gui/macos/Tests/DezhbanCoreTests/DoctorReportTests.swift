@@ -99,3 +99,29 @@ struct DoctorReportTests {
         #expect(DoctorReport.decode("not json".data(using: .utf8)!) == nil)
     }
 }
+
+extension DoctorReportTests {
+    /// The same table as Go's TestTheComposedDetailLineIsTheSameOnBothSides in
+    /// cmd/dezhban/doctor_test.go. Two renderers compose this sentence and they
+    /// must never disagree about what a check found; changing one side without
+    /// the other is the drift this pins.
+    @Test func theComposedDetailLineIsTheSameOnBothSides() {
+        let cases: [(DoctorDetail, String)] = [
+            (DoctorDetail(text: ""), ""),
+            (DoctorDetail(text: "plain prose"), "plain prose"),
+            (DoctorDetail(iface: "nordlynx", text: "— no subnet"), "nordlynx — no subnet"),
+            (DoctorDetail(iface: "nordlynx", text: ""), "nordlynx"),
+            (DoctorDetail(profile: "work-nord", text: "— 2 stored"), "work-nord — 2 stored"),
+            (DoctorDetail(endpoint: "1.2.3.4", text: ":51820"), "1.2.3.4:51820"),
+            (DoctorDetail(iface: "utun4", endpoint: "1.2.3.4", text: "— MISCONFIGURED"),
+             "1.2.3.4 — MISCONFIGURED (utun4)"),
+            (DoctorDetail(iface: "utun4", profile: "p", endpoint: "1.2.3.4", text: "— x"),
+             "1.2.3.4 — x (utun4)"),
+            (DoctorDetail(iface: "utun4", profile: "p", text: "— x"), "p — x (utun4)"),
+            (DoctorDetail(iface: "utun4", text: ":51820"), "utun4:51820"),
+        ]
+        for (detail, want) in cases {
+            #expect(detail.line == want)
+        }
+    }
+}

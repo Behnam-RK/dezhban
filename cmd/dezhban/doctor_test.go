@@ -758,3 +758,30 @@ func TestTheDiscoverCheckDoesNotNameTheVPNClientInAnyDetailLine(t *testing.T) {
 		t.Errorf("details = %+v, want one per candidate", c.Details)
 	}
 }
+
+// Two renderers compose this sentence — printDoctor here, DoctorDetail.line in
+// gui/macos/Sources/DezhbanCore/DoctorReport.swift — and they must never
+// disagree about what a check found. The table is duplicated verbatim in
+// DoctorReportTests.swift; changing one without the other is the drift this
+// pins.
+func TestTheComposedDetailLineIsTheSameOnBothSides(t *testing.T) {
+	for _, tc := range []struct {
+		d    doctorDetail
+		want string
+	}{
+		{doctorDetail{Text: ""}, ""},
+		{doctorDetail{Text: "plain prose"}, "plain prose"},
+		{doctorDetail{Iface: "nordlynx", Text: "— no subnet"}, "nordlynx — no subnet"},
+		{doctorDetail{Iface: "nordlynx"}, "nordlynx"},
+		{doctorDetail{Profile: "work-nord", Text: "— 2 stored"}, "work-nord — 2 stored"},
+		{doctorDetail{Endpoint: "1.2.3.4", Text: ":51820"}, "1.2.3.4:51820"},
+		{doctorDetail{Iface: "utun4", Endpoint: "1.2.3.4", Text: "— MISCONFIGURED"}, "1.2.3.4 — MISCONFIGURED (utun4)"},
+		{doctorDetail{Iface: "utun4", Profile: "p", Endpoint: "1.2.3.4", Text: "— x"}, "1.2.3.4 — x (utun4)"},
+		{doctorDetail{Iface: "utun4", Profile: "p", Text: "— x"}, "p — x (utun4)"},
+		{doctorDetail{Iface: "utun4", Text: ":51820"}, "utun4:51820"},
+	} {
+		if got := tc.d.line(); got != tc.want {
+			t.Errorf("line(%+v) = %q, want %q", tc.d, got, tc.want)
+		}
+	}
+}

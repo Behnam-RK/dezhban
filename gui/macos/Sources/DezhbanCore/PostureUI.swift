@@ -159,6 +159,27 @@ public enum PostureUI {
         return false
     }
 
+    /// The Overview's one-line tunnel summary: every interface named, with its
+    /// state, in the order the daemon published them.
+    ///
+    /// Here rather than in the view because there is one right reading of the
+    /// list and it is easy to get two. `state.json` publishes ONE ENTRY PER
+    /// INTERFACE, so a view taking `.first` names one and silently hides the
+    /// rest on a multi-tunnel host; and a tunnel's `detail` no longer repeats
+    /// the name that its own `name` carries, so pairing the two rendered as
+    /// "up (up)".
+    ///
+    /// An entry with no name is what a host with nothing configured and nothing
+    /// observed publishes — it still carries the up/down answer, which is the
+    /// part this row exists for.
+    public static func tunnelSummary(_ tunnels: [Tunnel]) -> String {
+        tunnels.map { t in
+            let state = t.up ? "up" : "down"
+            guard let name = t.name, !name.isEmpty else { return state }
+            return "\(name) — \(state)"
+        }.joined(separator: ", ")
+    }
+
     /// SwiftUI accent for a brand state — used where the bundled bitmap isn't
     /// (SF Symbol fallback, text highlights).
     public static func color(for state: String) -> Color {

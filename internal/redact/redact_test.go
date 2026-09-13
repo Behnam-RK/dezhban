@@ -679,3 +679,50 @@ func TestADiscardedPassLeavesTheNextOrdinalWhereItWas(t *testing.T) {
 		t.Errorf("legend = %v, want only the surviving token", legend)
 	}
 }
+
+// A checkpoint has to keep describing the state it was taken at. rollback used
+// to assign the checkpoint's own map, so the Redactor then mutated it on every
+// later mint and a second rollback restored whatever had happened since.
+func TestACheckpointIsNotMutatedByWhatFollowsIt(t *testing.T) {
+	r := New(true)
+	mark := r.checkpoint()
+	r.placeholder("alpha", "profile")
+	r.rollback(mark)
+
+	r.placeholder("beta", "profile")
+	r.placeholder("gamma", "profile")
+	r.rollback(mark)
+
+	if got := r.placeholder("delta", "profile"); got != "profile-1" {
+		t.Errorf("after rolling back to the same mark twice the next token is %q, want profile-1", got)
+	}
+}
+
+// The attr pass carries exactly one capture group now that `tunnel=` is gone,
+// and getting the renumbering half-right compiles: the old indexing against the
+// new pattern reads a group that is not there. Pin the exact output, including
+// that quotes survive only when the original had them and that the kernel's own
+// names are left alone.
+//
+// And pin the REMOVAL. `tunnel=` had no producer anywhere in the tree, so this
+// pass no longer claims it — without a case saying so, dropping the alternative
+// is invisible to the suite and adding it back is free. A name in a
+// `tunnel=` attr this bundle already knows is still replaced, by the name
+// replay rather than by a pattern matching a key nothing writes.
+func TestTheInterfaceAttrKeepsItsKeyAndItsQuoting(t *testing.T) {
+	r := New(true)
+	for _, tc := range []struct{ in, want string }{
+		{`iface="nordlynx"`, `iface="iface-1"`},
+		{`iface=nordlynx`, `iface=iface-1`},
+		{`iface="utun4"`, `iface="utun4"`},
+		{`iface=utun4`, `iface=utun4`},
+		// Not an attr this daemon writes, so the pattern does not claim it.
+		{`tunnel=something-else`, `tunnel=something-else`},
+		// But a name the bundle already knows still goes, via the replay.
+		{`tunnel=nordlynx`, `tunnel=iface-1`},
+	} {
+		if got := r.Text(tc.in); got != tc.want {
+			t.Errorf("Text(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}

@@ -272,3 +272,36 @@ struct PostureUITests {
         #expect(PostureUI.agoString(125) == "2m ago")
     }
 }
+
+extension PostureUITests {
+    /// state.json publishes one entry per interface, so a summary taking only
+    /// the first names one and hides the rest.
+    @Test func theTunnelSummaryNamesEveryInterface() {
+        let tuns = [
+            Tunnel(name: "utun4", up: true, detail: "up"),
+            Tunnel(name: "nordlynx", up: true, detail: "up"),
+        ]
+        #expect(PostureUI.tunnelSummary(tuns) == "utun4 — up, nordlynx — up")
+    }
+
+    /// A tunnel's detail no longer repeats the name its own `name` carries, so
+    /// pairing the two rendered as "up (up)".
+    @Test func theTunnelSummaryNeverRepeatsTheState() {
+        let s = PostureUI.tunnelSummary([Tunnel(name: "utun4", up: false, detail: "no configured tunnel is up")])
+        #expect(s == "utun4 — down")
+    }
+
+    /// The view guards on `!tuns.isEmpty`, but this is a public helper and the
+    /// guard is one caller's choice — an empty list must produce an empty string
+    /// rather than a stray separator, so a future caller that skips the guard
+    /// renders nothing rather than something wrong.
+    @Test func anEmptyTunnelListSummarisesToNothing() {
+        #expect(PostureUI.tunnelSummary([]).isEmpty)
+    }
+
+    /// Nothing configured and nothing observed still carries the up/down answer,
+    /// which is the part the row exists for.
+    @Test func anUnnamedTunnelStillReportsItsState() {
+        #expect(PostureUI.tunnelSummary([Tunnel(name: nil, up: false, detail: "no tunnel interface is up")]) == "down")
+    }
+}

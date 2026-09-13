@@ -2,6 +2,7 @@ package redact
 
 import (
 	"encoding/json"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -534,5 +535,32 @@ func TestAConnectedVPNNameIsRedacted(t *testing.T) {
 	legend := r.Legend()
 	if len(legend) != 1 || !strings.Contains(legend[0], "VPN service name") {
 		t.Errorf("legend = %v — the kind has no noun of its own", legend)
+	}
+}
+
+// The mint guard is CROSS-KIND, and a review proposed scoping it to the kind as
+// a tightening. It is the opposite, and this is the case that shows it.
+//
+// `work-nord` is both a profile name and an endpoint, so it holds two tokens.
+// Text replays one of them into the log line, and endpointAttrRe then offers
+// that token back under the `host` kind. Cross-kind, the guard recognises it and
+// the line keeps the token it was given. Kind-scoped, `host` has not minted that
+// spelling, so a SECOND token is minted for the first one — the bundle carries a
+// token standing for a token, and the legend counts a hostname that is nowhere
+// in it.
+func TestAReplayedTokenIsNotReMintedUnderAnotherKind(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"profiles":[{"name":"work-nord"}],"endpoints":["work-nord"]}}`)
+	before := append([]string(nil), r.Legend()...)
+
+	got := r.Text(`level=WARN host=work-nord msg="resolve failed"`)
+	if strings.Contains(got, "work-nord") {
+		t.Fatalf("the name survived: %q", got)
+	}
+	if strings.Contains(got, "host-2") {
+		t.Errorf("got %q — a token was minted for a token", got)
+	}
+	if after := r.Legend(); !slices.Equal(before, after) {
+		t.Errorf("the legend grew replaying a name it already knew:\n  before: %v\n  after:  %v", before, after)
 	}
 }

@@ -93,16 +93,30 @@ func (r *Redactor) rollback(c checkpoint) {
 		delete(r.seen, key)
 	}
 	r.order = r.order[:c.order]
-	r.next = c.next
+	// COPIED, not aliased. Assigning the checkpoint's own map would leave this
+	// Redactor mutating it on the next mint, so the checkpoint would no longer
+	// describe the state it was taken at — and a second rollback from it would
+	// restore whatever had happened since.
+	r.next = make(map[string]int, len(c.next))
+	for k, v := range c.next {
+		r.next[k] = v
+	}
 	// values is rebuilt rather than pruned per key: one value can be keyed under
 	// two kinds, so deleting it for the discarded key would forget it for the
 	// surviving one. This runs at most once per bundle entry.
+	// Every key in order has a seen entry — placeholder appends to one and writes
+	// the other in the same breath — so the lookup below cannot come back empty.
+	// Said out loud because an empty token here would poison minted with "", and
+	// placeholder returns early on anything minted: the next empty value would
+	// come back unredacted.
 	r.values = make(map[string]bool, len(r.order))
 	r.minted = make(map[string]bool, len(r.order))
 	for _, key := range r.order {
 		_, value, _ := strings.Cut(key, ":")
 		r.values[value] = true
-		r.minted[r.seen[key]] = true
+		if token := r.seen[key]; token != "" {
+			r.minted[token] = true
+		}
 	}
 }
 
