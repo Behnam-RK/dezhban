@@ -12,6 +12,18 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A redacted bundle no longer replaces dezhban's own file paths with a hostname
+  token.** `doctor`'s control check names the socket it probed, and that path came
+  back as `/var/db/dezhban/host-1` — the answer replaced, and no identity hidden,
+  which is the wrong direction twice over. The run lock's path had the same
+  problem wherever a startup failure carried it into the log. Both survive now,
+  and the legend no longer counts a hostname that stands for a filename. The
+  bundle's own `.zip` name is still redacted, deliberately: `.zip` is a real
+  top-level domain, so admitting it as a file ending would wave a genuine
+  hostname through.
+
 ## [0.15.0] - 2026-09-13
 
 ### Fixed

@@ -582,8 +582,21 @@ var allowedHosts = map[string]bool{
 // This is a deny-list embedded in an allow-listed matcher, so it is kept as
 // short as those two rules allow. Redacting a filename is noise; keeping one is
 // a leak.
+// Two of dezhban's own filenames were missing and were being replaced with
+// `host-N`: the control socket, which `doctor`'s control check quotes as the
+// answer to "which socket did it probe", and the run lock, whose path a startup
+// failure carries into the log. Neither is a delegated TLD and both are named by
+// dezhban, so both rules hold.
+//
+// `.zip` is NOT here and must not be added, though the bundle's own filename ends
+// in it: `.zip` is a delegated gTLD, so rule 1 refuses it. A bundle name quoted in
+// a note is redacted, and that is the correct trade — the rule exists precisely to
+// stop a suffix that looks like a file extension waving a real host through.
+// `.pkg` is left out for want of a check against the root zone rather than a
+// decision; it reaches a bundle from one error string, so the cost of leaving it
+// is one mangled word in a failure nobody sees twice.
 var keptSuffixes = []string{
-	".json", ".log", ".txt", ".plist", ".dezhban",
+	".json", ".log", ".txt", ".plist", ".dezhban", ".sock", ".lock",
 	// Reserved by RFC 2606 / RFC 6761: never delegated, so never a real host.
 	".arpa", ".invalid", ".test",
 }
