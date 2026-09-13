@@ -694,3 +694,25 @@ func TestDrainingALongLineCostsTheCapNotTheLine(t *testing.T) {
 			large, small)
 	}
 }
+
+// maxLineBytes' doc comment says the number is stated in docs/usage/cli.md, and
+// that a change to it means changing the doc too. This makes the claim checkable
+// instead of hopeful.
+//
+// It exists because the claim was FALSE when it was written: the doc edit was
+// dropped on the way in and nothing noticed, because prose is not compiled and the
+// gate has nothing to say about it. A comment that names a file is a promise about
+// that file, and the cheapest way to keep a promise is to fail without it.
+func TestTheDocumentedLineCapMatchesTheCode(t *testing.T) {
+	const doc = "../../docs/usage/cli.md"
+	body, err := os.ReadFile(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The doc states the cap the way a reader says it, not the way Go writes it.
+	want := strconv.Itoa(maxLineBytes>>20) + " MiB"
+	if !strings.Contains(string(body), want) {
+		t.Errorf("%s does not state the per-line cap as %q; maxLineBytes is %d and its comment says this doc names it",
+			doc, want, maxLineBytes)
+	}
+}
