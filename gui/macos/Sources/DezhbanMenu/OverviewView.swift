@@ -231,8 +231,13 @@ struct OverviewView: View {
             if let preset = state.presetLabel {
                 row("Strictness", preset)
             }
-            if let t = s.tunnels?.first {
-                row("Tunnel", "\(t.up ? "up" : "down")\(t.detail.map { " (\($0))" } ?? "")")
+            if let tuns = s.tunnels, !tuns.isEmpty {
+                // The NAME, then the state. Each entry names exactly one
+                // interface now (state.json publishes one per interface), so
+                // `.first` would hide the rest on a multi-tunnel host — and
+                // `detail` no longer repeats the name, so pairing it with the
+                // up/down word read as "up (up)".
+                row("Tunnel", PostureUI.tunnelSummary(tuns))
             }
             if let app = state.vpnInventory?.connectedName {
                 row("VPN app", app)

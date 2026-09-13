@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
 	"io"
 	"log/slog"
 	"net/netip"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -27,7 +30,7 @@ func TestBuildTunnelsCheck(t *testing.T) {
 		if c.Status != checkWarn {
 			t.Errorf("status = %q, want %q", c.Status, checkWarn)
 		}
-		if len(c.Details) != 1 || c.Details[0] != "(none — set vpn.tunnelInterfaces or vpn.autoDetect)" {
+		if len(c.Details) != 1 || c.Details[0].line() != "(none — set vpn.tunnelInterfaces or vpn.autoDetect)" {
 			t.Errorf("details = %v", c.Details)
 		}
 	})
@@ -39,7 +42,7 @@ func TestBuildTunnelsCheck(t *testing.T) {
 			t.Errorf("status = %q, want %q", c.Status, checkOK)
 		}
 		want := "utun4 — 10.0.0.0/24"
-		if len(c.Details) != 1 || c.Details[0] != want {
+		if len(c.Details) != 1 || c.Details[0].line() != want {
 			t.Errorf("details = %v, want [%q]", c.Details, want)
 		}
 	})
@@ -50,7 +53,7 @@ func TestBuildTunnelsCheck(t *testing.T) {
 			t.Errorf("status = %q, want %q (informational only)", c.Status, checkOK)
 		}
 		want := "utun9 — no subnet (interface down or absent?)"
-		if len(c.Details) != 1 || c.Details[0] != want {
+		if len(c.Details) != 1 || c.Details[0].line() != want {
 			t.Errorf("details = %v, want [%q]", c.Details, want)
 		}
 	})
@@ -62,7 +65,7 @@ func TestBuildTunnelsCheck(t *testing.T) {
 		}
 		c := buildTunnelsCheck([]string{"utun4"}, nets)
 		want := "utun4 — 10.0.0.0/24, fe80::/64"
-		if len(c.Details) != 1 || c.Details[0] != want {
+		if len(c.Details) != 1 || c.Details[0].line() != want {
 			t.Errorf("details = %v, want [%q]", c.Details, want)
 		}
 	})
@@ -95,7 +98,7 @@ func TestBuildLivenessCheck(t *testing.T) {
 		if c.Status != checkWarn {
 			t.Errorf("status = %q, want %q", c.Status, checkWarn)
 		}
-		if len(c.Details) != 1 || !strings.Contains(c.Details[0], "re-applied 2 time(s)") {
+		if len(c.Details) != 1 || !strings.Contains(c.Details[0].line(), "re-applied 2 time(s)") {
 			t.Errorf("details = %v", c.Details)
 		}
 	})
@@ -111,7 +114,7 @@ func TestBuildLivenessCheck(t *testing.T) {
 		if c.Status != checkOK {
 			t.Errorf("status = %q, want %q", c.Status, checkOK)
 		}
-		if len(c.Details) != 1 || !strings.Contains(c.Details[0], "Exit IP last changed at") {
+		if len(c.Details) != 1 || !strings.Contains(c.Details[0].line(), "Exit IP last changed at") {
 			t.Errorf("details = %v", c.Details)
 		}
 	})
@@ -154,7 +157,7 @@ func TestBuildLivenessCheck(t *testing.T) {
 		if c.Status != checkWarn {
 			t.Errorf("status = %q, want %q", c.Status, checkWarn)
 		}
-		if len(c.Details) != 1 || !strings.Contains(c.Details[0], "apply: exit status 1") {
+		if len(c.Details) != 1 || !strings.Contains(c.Details[0].line(), "apply: exit status 1") {
 			t.Errorf("details = %v", c.Details)
 		}
 		if !strings.Contains(c.Summary, "could not confirm") {
@@ -219,7 +222,7 @@ func TestBuildControlCheck(t *testing.T) {
 		if len(c.Fixes) != 0 {
 			t.Errorf("fixes = %v, want none — there is no portable add-to-group command to badge", c.Fixes)
 		}
-		if !strings.Contains(strings.Join(c.Details, "\n"), "passwordless.md") {
+		if !strings.Contains(detailText(c), "passwordless.md") {
 			t.Errorf("details = %v, want the doc pointer", c.Details)
 		}
 	})
@@ -271,7 +274,7 @@ func TestBuildControlCheck(t *testing.T) {
 		cfg := base()
 		cfg.Control.Group = ""
 		c := buildControlCheck(&cfg, control.Response{}, errors.New("dial: no such file"))
-		if len(c.Details) == 0 || !strings.Contains(c.Details[0], "no group") {
+		if len(c.Details) == 0 || !strings.Contains(c.Details[0].line(), "no group") {
 			t.Errorf("details = %v, want a note about the missing group", c.Details)
 		}
 	})
@@ -304,7 +307,7 @@ func TestBuildControlCheck(t *testing.T) {
 		cfg.Control.AllowSwitchOps = false
 		cfg.Control.AllowConfigOps = false
 		c := buildControlCheck(&cfg, control.Response{OK: true}, nil)
-		joined := strings.Join(c.Details, "\n")
+		joined := detailText(c)
 		if !strings.Contains(joined, "allowSwitchOps=false") {
 			t.Errorf("details = %v, want the switch gate named", c.Details)
 		}
@@ -323,7 +326,7 @@ func TestBuildEndpointsCheck(t *testing.T) {
 		if c.Status != checkWarn {
 			t.Errorf("status = %q, want %q", c.Status, checkWarn)
 		}
-		if len(c.Details) != 1 || c.Details[0] != "(none resolved)" {
+		if len(c.Details) != 1 || c.Details[0].line() != "(none resolved)" {
 			t.Errorf("details = %v", c.Details)
 		}
 	})
@@ -335,7 +338,7 @@ func TestBuildEndpointsCheck(t *testing.T) {
 			t.Errorf("status = %q, want %q", c.Status, checkOK)
 		}
 		want := "203.0.113.9 — ok (assumed reachable on the physical interface)"
-		if len(c.Details) != 1 || c.Details[0] != want {
+		if len(c.Details) != 1 || c.Details[0].line() != want {
 			t.Errorf("details = %v, want [%q]", c.Details, want)
 		}
 		if len(c.Fixes) != 0 {
@@ -351,9 +354,9 @@ func TestBuildEndpointsCheck(t *testing.T) {
 		if c.Status != checkFail {
 			t.Errorf("status = %q, want %q", c.Status, checkFail)
 		}
-		wantBad := "10.0.0.1 — MISCONFIGURED: inside utun4's subnet 10.0.0.0/24"
+		wantBad := "10.0.0.1 — MISCONFIGURED: inside its subnet 10.0.0.0/24 (utun4)"
 		wantOK := "203.0.113.9 — ok (assumed reachable on the physical interface)"
-		if len(c.Details) != 2 || c.Details[0] != wantBad || c.Details[1] != wantOK {
+		if len(c.Details) != 2 || c.Details[0].line() != wantBad || c.Details[1].line() != wantOK {
 			t.Errorf("details = %v, want [%q %q]", c.Details, wantBad, wantOK)
 		}
 		wantFix := "the endpoint marked MISCONFIGURED above is a tunnel-internal address; set\n" +
@@ -397,7 +400,7 @@ func TestBuildLockoutCheck(t *testing.T) {
 	if c.Summary != "dezhban will refuse to start" {
 		t.Errorf("summary = %q", c.Summary)
 	}
-	if len(c.Details) == 0 || c.Details[0] != "The VPN guard is on and utun4 is up, but no server address is known." {
+	if len(c.Details) == 0 || c.Details[0].line() != "utun4 is up and the VPN guard is on, but no server address is known." {
 		t.Errorf("details[0] = %v", c.Details)
 	}
 	if len(c.Fixes) != 3 {
@@ -468,10 +471,16 @@ func TestPrintDoctorMatchesKnownLayout(t *testing.T) {
 		OK: false,
 		Checks: []doctorCheck{
 			{Name: "config", Status: checkOK, Summary: "OK (loaded and validated)"},
-			{Name: "tunnels", Status: checkOK, Details: []string{"utun4 — 10.0.0.0/24"}},
+			{Name: "tunnels", Status: checkOK, Details: []doctorDetail{
+				{Iface: "utun4", Text: "— 10.0.0.0/24"},
+			}},
 			{
 				Name: "endpoints", Status: checkFail,
-				Details: []string{"10.0.0.1 — MISCONFIGURED: inside utun4's subnet 10.0.0.0/24"},
+				Details: []doctorDetail{{
+					Endpoint: "10.0.0.1",
+					Iface:    "utun4",
+					Text:     "— MISCONFIGURED: inside its subnet 10.0.0.0/24",
+				}},
 				Fixes: []string{
 					"10.0.0.1 is a tunnel-internal address (inside utun4 10.0.0.0/24); set vpn.endpoints to\n" +
 						"    your VPN server's PUBLIC IP from your VPN client config.",
@@ -487,7 +496,7 @@ func TestPrintDoctorMatchesKnownLayout(t *testing.T) {
 		"  utun4 — 10.0.0.0/24\n" +
 		"\n" +
 		"endpoints (resolved: literals + hostnames + discovery):\n" +
-		"  10.0.0.1 — MISCONFIGURED: inside utun4's subnet 10.0.0.0/24\n" +
+		"  10.0.0.1 — MISCONFIGURED: inside its subnet 10.0.0.0/24 (utun4)\n" +
 		"\n" +
 		"fixes:\n" +
 		"  - 10.0.0.1 is a tunnel-internal address (inside utun4 10.0.0.0/24); set vpn.endpoints to\n" +
@@ -510,19 +519,24 @@ func TestPrintDoctorLayoutForLockoutTouchIDAndDiscover(t *testing.T) {
 		OK: false,
 		Checks: []doctorCheck{
 			{Name: "config", Status: checkOK, Summary: "OK (loaded and validated)"},
-			{Name: "tunnels", Status: checkOK, Details: []string{"utun4 — 10.0.0.0/24"}},
-			{Name: "endpoints", Status: checkWarn, Details: []string{"(none resolved)"}},
+			{Name: "tunnels", Status: checkOK, Details: []doctorDetail{
+				{Iface: "utun4", Text: "— 10.0.0.0/24"},
+			}},
+			{Name: "endpoints", Status: checkWarn, Details: details("(none resolved)")},
 			buildLockoutCheck([]string{"utun4"}),
 			{
 				Name: "touchID", Status: checkWarn,
 				Summary: "not configured for sudo — privileged ops will ask for a password.",
-				Details: []string{"To authenticate with a fingerprint instead (survives OS updates):"},
+				Details: details("To authenticate with a fingerprint instead (survives OS updates):"),
 				Fixes:   []string{"echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local"},
 			},
 			{
 				Name: "discover", Status: checkOK,
-				Details: []string{"198.51.100.7:51820 [wg0]  <- not in vpn.endpoints"},
-				Fixes:   []string{"add any missing server IP to vpn.endpoints and drop stale entries."},
+				ConnectedVPN: "wg0",
+				Details: []doctorDetail{
+					{Endpoint: "198.51.100.7", Text: ":51820  <- not in vpn.endpoints"},
+				},
+				Fixes: []string{"add any missing server IP to vpn.endpoints and drop stale entries."},
 			},
 		},
 	}
@@ -537,7 +551,7 @@ func TestPrintDoctorLayoutForLockoutTouchIDAndDiscover(t *testing.T) {
 		"  (none resolved)\n" +
 		"\n" +
 		"LOCKOUT RISK — dezhban will refuse to start:\n" +
-		"  The VPN guard is on and utun4 is up, but no server address is known.\n" +
+		"  utun4 is up and the VPN guard is on, but no server address is known.\n" +
 		"  The guard would block the tunnel's own transport and cut ALL traffic.\n" +
 		"\n" +
 		"  Auto-discovery reads CONNECTED sockets. WireGuard (and other\n" +
@@ -555,7 +569,8 @@ func TestPrintDoctorLayoutForLockoutTouchIDAndDiscover(t *testing.T) {
 		"    echo 'auth       sufficient     pam_tid.so' | sudo tee /etc/pam.d/sudo_local\n" +
 		"\n" +
 		"discover (best-effort, macOS):\n" +
-		"  198.51.100.7:51820 [wg0]  <- not in vpn.endpoints\n" +
+		"  via wg0\n" +
+		"  198.51.100.7:51820  <- not in vpn.endpoints\n" +
 		"  add any missing server IP to vpn.endpoints and drop stale entries.\n"
 	got := captureStdout(t, func() { printDoctor(r) })
 	if got != want {
@@ -600,8 +615,8 @@ func TestPrintDoctorDropsNoCheck(t *testing.T) {
 		Checks: []doctorCheck{
 			{Name: "config", Status: checkOK, Summary: "first"},
 			{Name: "config", Status: checkFail, Summary: "second, same name"},
-			{Name: "tunnels", Status: checkOK, Details: []string{"utun4"}},
-			{Name: "endpoints", Status: checkOK, Details: []string{"1.2.3.4"}},
+			{Name: "tunnels", Status: checkOK, Details: []doctorDetail{{Iface: "utun4"}}},
+			{Name: "endpoints", Status: checkOK, Details: []doctorDetail{{Endpoint: "1.2.3.4"}}},
 			{Name: "brandNew", Status: checkWarn, Summary: "a check with no section yet",
 				Fixes: []string{"do the thing"}},
 		},
@@ -636,5 +651,137 @@ func TestDoctorChecksHaveUniqueNames(t *testing.T) {
 			t.Errorf("two doctor checks share the name %q", c.Name)
 		}
 		seen[c.Name] = true
+	}
+}
+
+// A finding's identifier is a FIELD, not a word inside its prose. That is what
+// lets the diagnostic bundle's redactor see it by key (internal/redact's value
+// switch) instead of hunting for it in free text — the pass that has produced a
+// defect in every round it has been touched in.
+func TestADetailLineCarriesItsIdentifierAsAField(t *testing.T) {
+	t.Run("tunnels", func(t *testing.T) {
+		nets := []netdetect.TunnelNet{{Iface: "nordlynx", Subnet: netip.MustParsePrefix("10.0.0.0/24")}}
+		c := buildTunnelsCheck([]string{"nordlynx"}, nets)
+		if len(c.Details) != 1 || c.Details[0].Iface != "nordlynx" {
+			t.Fatalf("details = %+v, want the interface carried in Iface", c.Details)
+		}
+		if strings.Contains(c.Details[0].Text, "nordlynx") {
+			t.Errorf("text %q still names the interface", c.Details[0].Text)
+		}
+	})
+
+	t.Run("endpoints", func(t *testing.T) {
+		bad := netip.MustParseAddr("10.0.0.1")
+		route := netdetect.EndpointRoute{Endpoint: bad, Iface: "nordlynx", Subnet: netip.MustParsePrefix("10.0.0.0/24")}
+		c := buildEndpointsCheck([]netip.Addr{bad}, []netdetect.EndpointRoute{route})
+		if len(c.Details) != 1 {
+			t.Fatalf("details = %+v, want one", c.Details)
+		}
+		d := c.Details[0]
+		if d.Endpoint != "10.0.0.1" || d.Iface != "nordlynx" {
+			t.Errorf("details[0] = %+v, want both identifiers carried as fields", d)
+		}
+		if strings.Contains(d.Text, "nordlynx") || strings.Contains(d.Text, "10.0.0.1") {
+			t.Errorf("text %q still names an identifier", d.Text)
+		}
+	})
+
+	t.Run("lockout", func(t *testing.T) {
+		c := buildLockoutCheck([]string{"utun4", "nordlynx"})
+		var carried []string
+		for _, d := range c.Details {
+			if d.Iface != "" {
+				carried = append(carried, d.Iface)
+			}
+			if strings.Contains(d.Text, "nordlynx") {
+				t.Errorf("text %q still names the interface", d.Text)
+			}
+		}
+		// One line per interface, each naming exactly one: a comma-joined list
+		// in a single field mints ONE token for the pair and stops keepIface
+		// recognising the generic half as the kernel's vocabulary.
+		want := []string{"utun4", "nordlynx"}
+		if !slices.Equal(carried, want) {
+			t.Errorf("carried %v, want %v", carried, want)
+		}
+	})
+}
+
+// encoding/json emits fields in declaration order and the redactor's walk visits
+// an object's keys in document order, so an identifier declared after Text would
+// be minted only after the prose that might repeat it had already been walked.
+func TestAnIdentifierFieldIsMarshalledBeforeItsText(t *testing.T) {
+	b, err := json.Marshal(doctorDetail{Iface: "a", Profile: "b", Endpoint: "c", Text: "d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := bytes.Index(b, []byte(`"text"`))
+	for _, key := range []string{`"iface"`, `"profile"`, `"endpoint"`} {
+		if i := bytes.Index(b, []byte(key)); i < 0 || i > text {
+			t.Errorf("%s is marshalled at %d, after %q at %d: %s", key, i, "text", text, b)
+		}
+	}
+
+	c, err := json.Marshal(doctorCheck{Profiles: []string{"p"}, ConnectedVPN: "v", Summary: "s"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	summary := bytes.Index(c, []byte(`"summary"`))
+	for _, key := range []string{`"profiles"`, `"connectedVPN"`} {
+		if i := bytes.Index(c, []byte(key)); i < 0 || i > summary {
+			t.Errorf("%s is marshalled after summary: %s", key, c)
+		}
+	}
+}
+
+// The VPN's friendly service name is read once per scan and is the same for
+// every candidate, so repeating it as a suffix on each line only put a provider
+// name where no key could see it. It belongs to the check.
+func TestTheDiscoverCheckDoesNotNameTheVPNClientInAnyDetailLine(t *testing.T) {
+	cands := []netdetect.Candidate{
+		{VPN: "Mullvad VPN", Server: netip.MustParseAddr("198.51.100.7"), Port: 51820},
+		{VPN: "Mullvad VPN", Server: netip.MustParseAddr("198.51.100.8"), Port: 51820},
+	}
+	c := buildDiscoverCheck(cands, nil, nil)
+	if c.ConnectedVPN != "Mullvad VPN" {
+		t.Errorf("connectedVPN = %q, want the service name carried as a field", c.ConnectedVPN)
+	}
+	for _, d := range c.Details {
+		if strings.Contains(d.Text, "Mullvad") {
+			t.Errorf("detail text %q names the VPN client", d.Text)
+		}
+		if d.Endpoint == "" {
+			t.Errorf("detail %+v does not carry its server address as a field", d)
+		}
+	}
+	if len(c.Details) != 2 {
+		t.Errorf("details = %+v, want one per candidate", c.Details)
+	}
+}
+
+// Two renderers compose this sentence — printDoctor here, DoctorDetail.line in
+// gui/macos/Sources/DezhbanCore/DoctorReport.swift — and they must never
+// disagree about what a check found. The table is duplicated verbatim in
+// DoctorReportTests.swift; changing one without the other is the drift this
+// pins.
+func TestTheComposedDetailLineIsTheSameOnBothSides(t *testing.T) {
+	for _, tc := range []struct {
+		d    doctorDetail
+		want string
+	}{
+		{doctorDetail{Text: ""}, ""},
+		{doctorDetail{Text: "plain prose"}, "plain prose"},
+		{doctorDetail{Iface: "nordlynx", Text: "— no subnet"}, "nordlynx — no subnet"},
+		{doctorDetail{Iface: "nordlynx"}, "nordlynx"},
+		{doctorDetail{Profile: "work-nord", Text: "— 2 stored"}, "work-nord — 2 stored"},
+		{doctorDetail{Endpoint: "1.2.3.4", Text: ":51820"}, "1.2.3.4:51820"},
+		{doctorDetail{Iface: "utun4", Endpoint: "1.2.3.4", Text: "— MISCONFIGURED"}, "1.2.3.4 — MISCONFIGURED (utun4)"},
+		{doctorDetail{Iface: "utun4", Profile: "p", Endpoint: "1.2.3.4", Text: "— x"}, "1.2.3.4 — x (utun4)"},
+		{doctorDetail{Iface: "utun4", Profile: "p", Text: "— x"}, "p — x (utun4)"},
+		{doctorDetail{Iface: "utun4", Text: ":51820"}, "utun4:51820"},
+	} {
+		if got := tc.d.line(); got != tc.want {
+			t.Errorf("line(%+v) = %q, want %q", tc.d, got, tc.want)
+		}
 	}
 }

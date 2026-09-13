@@ -1394,6 +1394,24 @@ end up typing a password.
       rule can see. Confirm the structure survived: `/Users/user-1/Downloads/…`
       still reads as a Downloads folder, and the same profile is the same
       `profile-N` token in config.json and state.json.
+- [ ] **The interface name goes from the PROSE and the RULESET, not only from the
+      fields that name it.** If your VPN client made its own interface
+      (`nordlynx`, `proton`, `gpd`), grep the whole bundle for it — and make sure
+      you look in `rules-preview.txt` and `log.txt`, not just the JSON. A rendered
+      pf or nft rule carries it as a bare word (`pass out quick on { … }`,
+      `oifname { … }`), doctor's tunnels and lockout checks write it into a
+      finding, and the daemon logs `detail="… up"` — none of which any shape can
+      see. **None may appear.** Then confirm the other direction: every
+      `utun*`/`en0`/`lo0` is still there, or the ruleset has become unreadable for
+      no gain. Same check for the VPN's service name as Network settings shows it.
+- [ ] **One token, one identity.** Two different servers must be two different
+      `ip-N`, and two different profiles two different `profile-N`. The README's
+      legend is where a collision shows: a row naming the same token twice, or two
+      rows claiming one token, means the bundle reports two things as one — which
+      reads as a working bundle right up until someone tries to diagnose with it.
+      A legend row rendered as a **list** ("2 distinct profile names → profile-1,
+      profile-3") rather than a range is not a bug: a number is skipped whenever
+      it would have produced a name the bundle actually carries.
 - [ ] **Nothing dezhban ships is redacted.** The other direction, and it fails
       just as badly: a bundle that hides the diagnosis has thrown away the
       answer and hidden no identity. In the same bundle confirm dezhban's OWN
@@ -1412,9 +1430,11 @@ end up typing a password.
       bundle until someone tries to use it.
 - [ ] **The bundle is 0600.** `ls -l dezhban-report-*.zip` — an
       `--include-network` bundle must not be readable by other local accounts.
-- [ ] **The README never leaks.** Its legend reports counts
-      ("23 distinct IP addresses → ip-1 … ip-23", "2 distinct profile names →
-      profile-1 … profile-2") and no originals.
+- [ ] **The README never leaks.** Its legend reports counts and the tokens they
+      cover — a range when they run consecutively ("23 distinct IP addresses →
+      ip-1 … ip-23"), a list when one was skipped ("2 distinct profile names →
+      profile-1, profile-3") — and no originals. Every token it names must be
+      findable somewhere in the bundle.
 - [ ] **The opt-out is loud.** With "Turn redaction off: include my real server
       addresses, exit IP, VPN profile names and account name" ticked, the bundle
       contains all of those AND says so at the top of its README; the CLI prints

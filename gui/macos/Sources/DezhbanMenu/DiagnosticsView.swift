@@ -526,11 +526,25 @@ struct DiagnosticsView: View {
             Label(rowTitle(check), systemImage: symbol(for: check.status))
                 .foregroundStyle(color(for: check.status))
                 .font(.body.weight(.semibold))
-            ForEach(Array((check.details ?? []).enumerated()), id: \.offset) { _, line in
+            // Said once, above the findings, because it is read once per scan
+            // and is the same for every one of them — and because saying it once
+            // is what lets it be a field the report bundle's redactor can see.
+            if let vpn = check.connectedVPN, !vpn.isEmpty {
+                Text("via \(vpn)")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            ForEach(Array((check.details ?? []).enumerated()), id: \.offset) { _, found in
                 // An empty detail is a paragraph break, not a finding (see
-                // doctorCheck.Details in cmd/dezhban/main.go) — rendering it as
-                // a Text would leave a stray blank row where the CLI puts a
-                // blank line.
+                // doctorDetail in cmd/dezhban/main.go) — rendering it as a Text
+                // would leave a stray blank row where the CLI puts a blank line.
+                //
+                // `line` composes the identifier with its prose, the same way
+                // printDoctor does: the identifier is carried as a FIELD so the
+                // bundle's redactor can see it by key, so the sentence is this
+                // view's to build.
+                let line = found.line
                 if line.isEmpty {
                     Spacer().frame(height: 4)
                 } else {

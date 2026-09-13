@@ -2153,21 +2153,97 @@ const (
 	checkFail checkStatus = "fail"
 )
 
+// doctorDetail is one of a check's findings: the identifier it is ABOUT, carried
+// as data, plus the prose that qualifies it. Both renderers compose the line —
+// printDoctor for the terminal, the GUI's checkRow for Diagnostics — and neither
+// has to reparse the other's sentence.
+//
+// The identifier is a field rather than a word inside Text because the diagnostic
+// bundle's redactor (internal/redact) works by KEY: a value under `iface`,
+// `profile` or `endpoint` is recognised for what it is and replaced with a stable
+// token, while the same word inside prose is reachable only by a literal
+// word-replacement pass over free text — the pass that has produced a defect in
+// every round it has been touched in. These key names are exactly the ones that
+// redactor's value switch already knows; do not invent new spellings for them.
+//
+// DECLARATION ORDER IS LOAD-BEARING. encoding/json emits fields in declaration
+// order and the redactor's walk visits an object's keys in document order, so an
+// identifier declared after Text would be minted only after the prose that might
+// repeat it had already been walked.
+//
+// An empty Text with no identifier is a PARAGRAPH BREAK, not a finding — the only
+// piece of layout this contract carries, and it is here because both renderers
+// need it: printDoctor emits a blank line, and the GUI's checkRow emits vertical
+// space. A renderer that treats it as an ordinary line gets a stray empty row.
+// Anything more elaborate than a break belongs in Fixes.
+type doctorDetail struct {
+	Iface    string `json:"iface,omitempty"`
+	Profile  string `json:"profile,omitempty"`
+	Endpoint string `json:"endpoint,omitempty"`
+	Text     string `json:"text"`
+}
+
+// line is the composed human form: the finding's subject, its prose, and — when
+// a finding is about an endpoint AND the interface it is misrouted onto — the
+// interface in parentheses after it. Both renderers use this shape, so the CLI
+// and the GUI cannot disagree about what a check found.
+func (d doctorDetail) line() string {
+	subject := d.Endpoint
+	if subject == "" {
+		subject = d.Profile
+	}
+	if subject == "" {
+		subject = d.Iface
+	}
+	var b strings.Builder
+	b.WriteString(subject)
+	switch {
+	case d.Text == "":
+	case subject == "":
+		b.WriteString(d.Text)
+	case strings.HasPrefix(d.Text, ":"):
+		// A port joins its address with no separator: `1.2.3.4:51820`.
+		b.WriteString(d.Text)
+	default:
+		b.WriteString(" " + d.Text)
+	}
+	if d.Iface != "" && d.Iface != subject {
+		b.WriteString(" (" + d.Iface + ")")
+	}
+	return b.String()
+}
+
+// detail is a finding with no identifier of its own — prose, or the empty
+// paragraph break.
+func detail(text string) doctorDetail { return doctorDetail{Text: text} }
+
+// details converts a run of identifier-free lines.
+func details(texts ...string) []doctorDetail {
+	out := make([]doctorDetail, 0, len(texts))
+	for _, t := range texts {
+		out = append(out, detail(t))
+	}
+	return out
+}
+
 // doctorCheck is one section of `doctor`'s output, structured. Details/Fixes
-// are the exact lines printDoctor prints under the check's header — kept as
-// data so a second renderer (the GUI's Diagnostics pane, over --json) never
-// has to reparse human prose to find out what's wrong.
+// are the lines printDoctor prints under the check's header — kept as data so a
+// second renderer (the GUI's Diagnostics pane, over --json) never has to reparse
+// human prose to find out what's wrong.
 type doctorCheck struct {
-	Name    string      `json:"name"`
-	Status  checkStatus `json:"status"`
-	Summary string      `json:"summary"`
-	// Details are the check's findings, one line each. An EMPTY string is a
-	// paragraph break, not a finding — the only piece of layout this contract
-	// carries, and it is here because both renderers need it: printDoctor emits
-	// a blank line, and the GUI's checkRow emits vertical space. A renderer that
-	// treats it as an ordinary line gets a stray empty row, so new consumers
-	// must handle it. Anything more elaborate than a break belongs in Fixes.
-	Details []string `json:"details,omitempty"`
+	Name   string      `json:"name"`
+	Status checkStatus `json:"status"`
+
+	// Identifier carriers for the prose in Summary, which is one sentence and
+	// stays one sentence. Declared above it for the ordering reason given on
+	// doctorDetail. Profiles reuses the redactor's `profile` key; ConnectedVPN is
+	// the VPN's friendly service name, which names the provider as plainly as a
+	// server address does.
+	Profiles     []string `json:"profiles,omitempty"`
+	ConnectedVPN string   `json:"connectedVPN,omitempty"`
+
+	Summary string         `json:"summary"`
+	Details []doctorDetail `json:"details,omitempty"`
 	// Fixes are the commands or actions that resolve the check, never prose
 	// about them — the GUI badges each one, so a sentence dressed as a fix
 	// reads as a command the user should run.
@@ -2190,7 +2266,7 @@ func buildTunnelsCheck(tunnels []string, nets []netdetect.TunnelNet) doctorCheck
 	c := doctorCheck{Name: "tunnels", Status: checkOK}
 	if len(tunnels) == 0 {
 		c.Status = checkWarn
-		c.Details = []string{"(none — set vpn.tunnelInterfaces or vpn.autoDetect)"}
+		c.Details = details("(none — set vpn.tunnelInterfaces or vpn.autoDetect)")
 		return c
 	}
 	subsByIface := map[string][]string{}
@@ -2199,9 +2275,9 @@ func buildTunnelsCheck(tunnels []string, nets []netdetect.TunnelNet) doctorCheck
 	}
 	for _, t := range tunnels {
 		if subs := subsByIface[t]; len(subs) > 0 {
-			c.Details = append(c.Details, fmt.Sprintf("%s — %s", t, strings.Join(subs, ", ")))
+			c.Details = append(c.Details, doctorDetail{Iface: t, Text: "— " + strings.Join(subs, ", ")})
 		} else {
-			c.Details = append(c.Details, fmt.Sprintf("%s — no subnet (interface down or absent?)", t))
+			c.Details = append(c.Details, doctorDetail{Iface: t, Text: "— no subnet (interface down or absent?)"})
 		}
 	}
 	return c
@@ -2216,7 +2292,7 @@ func buildEndpointsCheck(endpoints []netip.Addr, bad []netdetect.EndpointRoute) 
 	c := doctorCheck{Name: "endpoints", Status: checkOK}
 	if len(endpoints) == 0 {
 		c.Status = checkWarn
-		c.Details = []string{"(none resolved)"}
+		c.Details = details("(none resolved)")
 		return c
 	}
 	internal := map[string]netdetect.EndpointRoute{}
@@ -2225,9 +2301,16 @@ func buildEndpointsCheck(endpoints []netip.Addr, bad []netdetect.EndpointRoute) 
 	}
 	for _, ep := range endpoints {
 		if b, ok := internal[ep.String()]; ok {
-			c.Details = append(c.Details, fmt.Sprintf("%s — MISCONFIGURED: inside %s's subnet %s", ep, b.Iface, b.Subnet))
+			c.Details = append(c.Details, doctorDetail{
+				Endpoint: ep.String(),
+				Iface:    b.Iface,
+				Text:     fmt.Sprintf("— MISCONFIGURED: inside its subnet %s", b.Subnet),
+			})
 		} else {
-			c.Details = append(c.Details, fmt.Sprintf("%s — ok (assumed reachable on the physical interface)", ep))
+			c.Details = append(c.Details, doctorDetail{
+				Endpoint: ep.String(),
+				Text:     "— ok (assumed reachable on the physical interface)",
+			})
 		}
 	}
 	if len(bad) > 0 {
@@ -2260,25 +2343,35 @@ func plural(n int, one, many string) string {
 // buildLockoutCheck formats the "guard would block its own tunnel's transport"
 // warning. Pure — the caller decides whether the lockout condition holds.
 func buildLockoutCheck(tunnels []string) doctorCheck {
-	return doctorCheck{
+	c := doctorCheck{
 		Name:    "lockout",
 		Status:  checkFail,
 		Summary: "dezhban will refuse to start",
-		Details: []string{
-			fmt.Sprintf("The VPN guard is on and %s is up, but no server address is known.", strings.Join(tunnels, ", ")),
-			"The guard would block the tunnel's own transport and cut ALL traffic.",
-			"",
-			"Auto-discovery reads CONNECTED sockets. WireGuard (and other",
-			"NetworkExtension clients) send from an UNCONNECTED UDP socket, so they",
-			"never appear as a connected flow — discovery cannot find them. Name the",
-			"server explicitly:",
-		},
-		Fixes: []string{
-			"dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it",
-			"dezhban vpn add <name> --endpoint <host-or-ip>",
-			"sudo dezhban config set vpn.endpoints=<server-ip>",
-		},
 	}
+	// One line per interface, each naming exactly one, so the redactor sees each
+	// name under its own key. A comma-joined list in a single field mints one
+	// token for the lot and stops keepIface recognising the generic ones as the
+	// kernel's vocabulary.
+	for _, t := range tunnels {
+		c.Details = append(c.Details, doctorDetail{
+			Iface: t,
+			Text:  "is up and the VPN guard is on, but no server address is known.",
+		})
+	}
+	c.Details = append(c.Details, details(
+		"The guard would block the tunnel's own transport and cut ALL traffic.",
+		"",
+		"Auto-discovery reads CONNECTED sockets. WireGuard (and other",
+		"NetworkExtension clients) send from an UNCONNECTED UDP socket, so they",
+		"never appear as a connected flow — discovery cannot find them. Name the",
+		"server explicitly:",
+	)...)
+	c.Fixes = []string{
+		"dezhban vpn import <wg0.conf|client.ovpn>   # reads the endpoint from it",
+		"dezhban vpn add <name> --endpoint <host-or-ip>",
+		"sudo dezhban config set vpn.endpoints=<server-ip>",
+	}
+	return c
 }
 
 // buildServiceCheck answers "will dezhban be there after I reboot". Pure — the
@@ -2302,7 +2395,7 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 		// may exist but could not be read. Guessing between them is how a
 		// correctly-installed user gets told to reinstall.
 		c.Summary = "cannot tell without asking the service manager."
-		c.Details = []string{"Nothing readable here says what happens at boot. Ask it directly:"}
+		c.Details = details("Nothing readable here says what happens at boot. Ask it directly:")
 		c.Fixes = []string{"dezhban status"}
 		return c
 	}
@@ -2311,34 +2404,34 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 	case !unit.Present:
 		c.Status = checkWarn
 		c.Summary = "not registered to start at boot."
-		c.Details = []string{
+		c.Details = details(
 			fmt.Sprintf("No service unit at %s, so nothing", unit.Path),
 			"arms the guard after a reboot until you start dezhban by hand.",
-		}
+		)
 		if daemonLive {
-			c.Details = append(c.Details,
+			c.Details = append(c.Details, details(
 				"",
 				"dezhban IS enforcing right now — this is about reboots, not about",
-				"the guard being off today.")
+				"the guard being off today.")...)
 		}
 		c.Fixes = []string{"sudo dezhban install"}
 
 	case !unit.AtBoot:
 		c.Status = checkWarn
 		c.Summary = "installed, but not set to start at boot."
-		c.Details = []string{
+		c.Details = details(
 			fmt.Sprintf("%s exists but does not ask", unit.Path),
 			"the service manager to start dezhban at boot, so `start` works and",
 			"every reboot comes up unguarded. Reinstalling rewrites the unit:",
-		}
+		)
 		c.Fixes = []string{"sudo dezhban install"}
 
 	case !daemonLive:
 		c.Status = checkWarn
 		c.Summary = "set to start at boot, but nothing is enforcing right now."
-		c.Details = []string{
+		c.Details = details(
 			"The next reboot will arm the guard. Until then this host is unguarded.",
-		}
+		)
 		c.Fixes = []string{"sudo dezhban start"}
 
 	default:
@@ -2346,10 +2439,10 @@ func buildServiceCheck(unit svc.BootUnit, daemonLive bool) doctorCheck {
 		// The point of saying this out loud: it rules out the enforcement
 		// explanation for "I have to turn it on after every reboot" and leaves
 		// only the presentation one, which has an entirely different fix.
-		c.Details = []string{
+		c.Details = details(
 			"If the menubar app is missing after a login, that is a login-item",
 			"question — the guard is already up without it.",
-		}
+		)
 	}
 	return c
 }
@@ -2397,21 +2490,21 @@ func buildControlCheck(cfg *config.Config, resp control.Response, probeErr error
 	case errors.Is(probeErr, control.ErrForbidden):
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("reachable (%s), but you are not in the %q group — routine ops need sudo.", path, cfg.Control.Group)
-		c.Details = []string{
+		c.Details = details(
 			fmt.Sprintf("Add your account to %q the normal way for this OS, then log out and back in — group membership is read at login, not live.", cfg.Control.Group),
 			seeDoc,
-		}
+		)
 	case probeErr != nil || !resp.OK:
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("unreachable (%s) — dezhban is not running; routine ops need sudo.", path)
 		if cfg.Control.Group == "" {
-			c.Details = []string{"no group is configured either — once running, an unprivileged caller would still need sudo.", seeDoc}
+			c.Details = details("no group is configured either — once running, an unprivileged caller would still need sudo.", seeDoc)
 			c.Fixes = []string{setGroupFix()}
 		}
 	case cfg.Control.Group == "":
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("reachable (%s), but no group is configured — routine ops need sudo.", path)
-		c.Details = []string{seeDoc}
+		c.Details = details(seeDoc)
 		c.Fixes = []string{setGroupFix()}
 	default:
 		c.Summary = fmt.Sprintf("reachable (%s, group %q) — routine ops need no password.", path, cfg.Control.Group)
@@ -2429,10 +2522,10 @@ func buildControlCheck(cfg *config.Config, resp control.Response, probeErr error
 	}
 	if len(gated) > 0 {
 		if len(c.Details) > 0 {
-			c.Details = append(c.Details, "")
+			c.Details = append(c.Details, details("")...)
 		}
-		c.Details = append(c.Details, "Forced back to sudo regardless of group membership:")
-		c.Details = append(c.Details, gated...)
+		c.Details = append(c.Details, details("Forced back to sudo regardless of group membership:")...)
+		c.Details = append(c.Details, details(gated...)...)
 	}
 	return c
 }
@@ -2456,25 +2549,25 @@ func buildArmAtBootCheck(armAtBoot bool, haveTunnel bool, rec *armed.Record, loa
 	if loadErr != nil {
 		c.Status = checkWarn
 		c.Summary = "the arm-at-boot record could not be read; boot will fall back to standby."
-		c.Details = []string{
+		c.Details = details(
 			loadErr.Error(),
 			"",
 			"dezhban treats an unreadable record as \"no tunnel has ever been up\",",
 			"which is safe but means the next reboot waits for a live tunnel instead",
 			"of arming straight away. dezhban rewrites it the next time a tunnel",
 			"comes up.",
-		}
+		)
 		return c
 	}
 
 	if !armAtBoot {
 		c.Status = checkWarn
 		c.Summary = "off — after a reboot the guard waits for a live tunnel before arming."
-		c.Details = []string{
+		c.Details = details(
 			"That leaves a gap between boot and the VPN connecting, during which",
 			"traffic uses your real address. Turning it on closes the gap on a host",
 			"whose VPN has already worked once.",
-		}
+		)
 		c.Fixes = []string{"sudo dezhban config set vpn.armAtBoot=true"}
 		return c
 	}
@@ -2482,28 +2575,28 @@ func buildArmAtBootCheck(armAtBoot bool, haveTunnel bool, rec *armed.Record, loa
 	if !rec.TunnelEverUp {
 		c.Status = checkWarn
 		c.Summary = "on, but no tunnel has been observed up yet, so it cannot arm."
-		c.Details = []string{
+		c.Details = details(
 			fmt.Sprintf("The record at %s has not seen a tunnel come up on this host.", path),
 			"Arm-at-boot needs that observation — arming without it would fail closed",
 			"on a machine that has never had a working VPN, which is a lockout by",
 			"design rather than a guard.",
 			"",
-		}
+		)
 		if haveTunnel {
-			c.Details = append(c.Details,
-				"Connect your VPN once with dezhban running and this becomes permanent.")
+			c.Details = append(c.Details, details(
+				"Connect your VPN once with dezhban running and this becomes permanent.")...)
 		} else {
-			c.Details = append(c.Details,
-				"Configure a tunnel first, then connect it once with dezhban running.")
+			c.Details = append(c.Details, details(
+				"Configure a tunnel first, then connect it once with dezhban running.")...)
 		}
 		return c
 	}
 
 	c.Summary = "on — the next reboot arms the guard without waiting for a tunnel."
-	c.Details = []string{
+	c.Details = details(
 		fmt.Sprintf("A tunnel was first seen up %s and last seen %s.",
 			rec.FirstUp.Local().Format(time.RFC1123), rec.LastUp.Local().Format(time.RFC1123)),
-	}
+	)
 	return c
 }
 
@@ -2586,7 +2679,7 @@ func buildLivenessCheck(snap state.Snapshot, daemonLive bool) doctorCheck {
 				"country would show here even though the blocked-country check saw no change).",
 			snap.ExitIPChangedAt.Local().Format(time.RFC1123)))
 	}
-	c.Details = lines
+	c.Details = details(lines...)
 	return c
 }
 
@@ -2607,7 +2700,7 @@ func buildEndpointRetentionCheck(store *learned.Store, loadErr error, ttl time.D
 	if loadErr != nil {
 		c.Status = checkWarn
 		c.Summary = "the learned-endpoint store could not be read; every drop starts from nothing."
-		c.Details = []string{loadErr.Error()}
+		c.Details = details(loadErr.Error())
 		return c
 	}
 
@@ -2622,10 +2715,10 @@ func buildEndpointRetentionCheck(store *learned.Store, loadErr error, ttl time.D
 		}
 		c.Status = checkWarn
 		c.Summary = "nothing learned, and no server address configured either."
-		c.Details = []string{
+		c.Details = details(
 			"A drop has no known address to redial through, so it needs a window",
 			"every time. Naming the server once removes the interaction entirely.",
-		}
+		)
 		c.Fixes = []string{"dezhban vpn add <name> --endpoint <host-or-ip>"}
 		return c
 	}
@@ -2646,8 +2739,11 @@ func buildEndpointRetentionCheck(store *learned.Store, loadErr error, ttl time.D
 				recentlyNew++
 			}
 		}
-		c.Details = append(c.Details, fmt.Sprintf("%s — %d stored, %d within the %s retention window",
-			e.Name, len(e.Endpoints), fresh, ttl))
+		c.Profiles = append(c.Profiles, e.Name)
+		c.Details = append(c.Details, doctorDetail{
+			Profile: e.Name,
+			Text:    fmt.Sprintf("— %d stored, %d within the %s retention window", len(e.Endpoints), fresh, ttl),
+		})
 
 		switch {
 		case fresh == 0:
@@ -2661,21 +2757,21 @@ func buildEndpointRetentionCheck(store *learned.Store, loadErr error, ttl time.D
 	case len(staleOnly) > 0:
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("every learned address for %s has aged out.", strings.Join(staleOnly, ", "))
-		c.Details = append(c.Details, "",
+		c.Details = append(c.Details, details("",
 			"They were learned and then discarded, so the next drop redials with",
 			"nothing known and needs a window. Retaining them for longer removes",
-			"that interaction.")
+			"that interaction.")...)
 		c.Fixes = []string{"sudo dezhban config set vpn.advanced.learnedEndpointTTL=720h"}
 
 	case len(rotating) > 0:
 		c.Status = checkWarn
 		c.Summary = fmt.Sprintf("%s looks like it rotates its server address.", strings.Join(rotating, ", "))
-		c.Details = append(c.Details, "",
+		c.Details = append(c.Details, details("",
 			"The store is full and most of what is in it was seen for the first time",
 			"recently, which means the address is rarely the same twice. Retaining",
 			"more of them only delays the problem — a hostname is the real fix,",
 			"because dezhban re-resolves it on vpn.endpointRefresh and follows the",
-			"rotation instead of chasing it.")
+			"rotation instead of chasing it.")...)
 		c.Fixes = []string{
 			"dezhban vpn add <name> --endpoint <server-hostname>",
 			"sudo dezhban config set vpn.advanced.learnedMaxPerProfile=32",
@@ -2770,7 +2866,7 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 			Name:    "touchID",
 			Status:  checkWarn,
 			Summary: "not configured for sudo — privileged ops will ask for a password.",
-			Details: []string{"To authenticate with a fingerprint instead (survives OS updates):"},
+			Details: details("To authenticate with a fingerprint instead (survives OS updates):"),
 			// The command is a Fix, not a Detail: it is the thing to run, so it
 			// belongs where every other runnable line lives (and where the GUI
 			// badges it) rather than as a detail line the CLI had to indent
@@ -2780,36 +2876,8 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 	}
 
 	if discover {
-		discoverCheck := doctorCheck{Name: "discover", Status: checkOK}
 		cands, err := netdetect.DiscoverEndpoints()
-		switch {
-		// Summary only, never also as a Detail: the GUI renders Summary in the
-		// row's title and Details beneath it, so setting both printed the same
-		// sentence twice.
-		case err != nil:
-			discoverCheck.Status = checkWarn
-			discoverCheck.Summary = err.Error()
-		case len(cands) == 0:
-			discoverCheck.Status = checkWarn
-			discoverCheck.Summary = "no physical-side public transport sockets found — is the VPN connected?"
-		default:
-			configured := map[string]bool{}
-			for _, ep := range endpoints {
-				configured[ep.String()] = true
-			}
-			for _, c := range cands {
-				line := fmt.Sprintf("%s:%d", c.Server, c.Port)
-				if c.VPN != "" {
-					line += " [" + c.VPN + "]"
-				}
-				if !configured[c.Server.String()] {
-					line += "  <- not in vpn.endpoints"
-				}
-				discoverCheck.Details = append(discoverCheck.Details, line)
-			}
-			discoverCheck.Fixes = []string{"add any missing server IP to vpn.endpoints and drop stale entries."}
-		}
-		checks = append(checks, discoverCheck)
+		checks = append(checks, buildDiscoverCheck(cands, err, endpoints))
 	}
 
 	// A diagnostic that reports a guaranteed blackout and still exits 0 is one
@@ -2817,6 +2885,48 @@ func runDoctor(cfg *config.Config, log *slog.Logger, discover bool) doctorReport
 	// the two conditions the daemon refuses to start on, so doctor must agree
 	// with it.
 	return doctorReport{Checks: checks, OK: !(lockout || len(bad) > 0)}
+}
+
+// buildDiscoverCheck formats the discovered transport sockets (already looked up
+// by the caller — this function does no I/O) into a doctorCheck. Pure, so the
+// no-candidates, error and listing branches are directly testable without a live
+// VPN, matching every other builder above.
+func buildDiscoverCheck(cands []netdetect.Candidate, err error, endpoints []netip.Addr) doctorCheck {
+	c := doctorCheck{Name: "discover", Status: checkOK}
+	switch {
+	// Summary only, never also as a Detail: the GUI renders Summary in the
+	// row's title and Details beneath it, so setting both printed the same
+	// sentence twice.
+	case err != nil:
+		c.Status = checkWarn
+		c.Summary = err.Error()
+	case len(cands) == 0:
+		c.Status = checkWarn
+		c.Summary = "no physical-side public transport sockets found — is the VPN connected?"
+	default:
+		// The VPN's friendly service name is the same for every candidate — it is
+		// read once per scan, not per socket — so it belongs to the CHECK, not to
+		// each line. Carrying it as a field rather than interpolating it into the
+		// prose is what lets the bundle's redactor see it by key; repeated inside
+		// a detail line, it is a bare word no shape can find.
+		c.ConnectedVPN = cands[0].VPN
+		configured := map[string]bool{}
+		for _, ep := range endpoints {
+			configured[ep.String()] = true
+		}
+		for _, cand := range cands {
+			d := doctorDetail{
+				Endpoint: cand.Server.String(),
+				Text:     fmt.Sprintf(":%d", cand.Port),
+			}
+			if !configured[cand.Server.String()] {
+				d.Text += "  <- not in vpn.endpoints"
+			}
+			c.Details = append(c.Details, d)
+		}
+		c.Fixes = []string{"add any missing server IP to vpn.endpoints and drop stale entries."}
+	}
+	return c
 }
 
 // unattendedSections are the checks that answer "will dezhban need me again" —
@@ -2957,6 +3067,12 @@ func printDoctor(r doctorReport) {
 		if len(discover.Details) == 0 && discover.Summary != "" {
 			fmt.Printf("  %s\n", discover.Summary)
 		}
+		// Once, above the sockets, rather than repeated as a suffix on each one:
+		// it is read once per scan and is the same for every candidate. Saying it
+		// once is also what lets it be a field the bundle's redactor can see.
+		if discover.ConnectedVPN != "" {
+			fmt.Printf("  via %s\n", discover.ConnectedVPN)
+		}
 		printDetails(discover.Details)
 		for _, f := range discover.Fixes {
 			fmt.Printf("  %s\n", f)
@@ -2982,9 +3098,11 @@ func printDoctor(r doctorReport) {
 }
 
 // printDetails prints a check's Details at the standard two-space indent,
-// honouring the empty-string paragraph break (see doctorCheck.Details).
-func printDetails(details []string) {
-	for _, line := range details {
+// composing each finding's identifier with its prose (doctorDetail.line) and
+// honouring the empty paragraph break (see doctorDetail).
+func printDetails(found []doctorDetail) {
+	for _, d := range found {
+		line := d.line()
 		if line == "" {
 			fmt.Println()
 			continue

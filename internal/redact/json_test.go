@@ -2,6 +2,8 @@ package redact
 
 import (
 	"encoding/json"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -399,5 +401,191 @@ func TestATruncatedInterfaceArrayIsStillRedacted(t *testing.T) {
 	// And in a log attr, where there is no JSON to walk at all.
 	if got := New(true).Text(`level=WARN msg=drop iface=nordlynx tunnel=utun4`); strings.Contains(got, "nordlynx") {
 		t.Errorf("got %q — the attr form leaked", got)
+	}
+}
+
+// The replay sorts longest-value-first, so a value SPELLED like a token gets the
+// pair (`profile-1` → `profile-2`) applied to text the replay itself just wrote:
+// the long name became `profile-1` and was then rewritten to `profile-2`. Two
+// identities onto one token, and the long name's real token nowhere in the file.
+func TestTheNameReplayNeverLaundersATokenIntoAnother(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"profiles":[{"name":"a-very-long-profile-name"},{"name":"profile-1"}]}}`)
+	got := r.JSON(`{"checks":[{"summary":"every learned address for a-very-long-profile-name has aged out."}]}`)
+	if strings.Contains(got, "a-very-long-profile-name") {
+		t.Fatalf("the name survived: %q", got)
+	}
+	if !strings.Contains(got, "profile-1") || strings.Contains(got, "profile-2") {
+		t.Errorf("got %q — the prose carries a token minted for a different identity", got)
+	}
+}
+
+// An interface can be CALLED `vpn` or `wireguard`: keepIface only keeps a generic
+// stem followed by digits. Once iface joined the replay, such a name would have
+// rewritten dezhban's own prose everywhere it says those words.
+func TestTheReplayNeverClaimsAWordDezhbanWrites(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"tunnelInterfaces":["vpn"]}}`)
+	const prose = "The vpn guard is on. WireGuard clients send from an unconnected socket."
+	got := r.JSON(`{"checks":[{"summary":` + strconv.Quote(prose) + `}]}`)
+	if !strings.Contains(got, "vpn guard is on") || !strings.Contains(got, "WireGuard clients") {
+		t.Errorf("got %q — the replay claimed dezhban's own vocabulary", got)
+	}
+}
+
+// state.json pairs tunnels[].name, which the walk redacts by key, with a detail
+// that repeats the same word one key over — where only the replay can reach it.
+func TestAnInterfaceNameTheBundleAlreadyKnowsIsReplacedInProse(t *testing.T) {
+	got := New(true).JSON(`{"tunnels":[{"name":"nordlynx","detail":"nordlynx up"}]}`)
+	if strings.Contains(got, "nordlynx") {
+		t.Fatalf("the interface name survived: %q", got)
+	}
+	if strings.Count(got, "iface-1") != 2 {
+		t.Errorf("got %q — the two copies are not the same token", got)
+	}
+}
+
+// rules-preview.txt is a rendered ruleset, and a pf or nft rule carries an
+// interface name as a bare word — no key, no dot, no attr. Only the replay can
+// see it, and Text did not run the replay.
+func TestARenderedRulesetLosesTheProviderInterface(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"tunnelInterfaces":["nordlynx","utun4"]}}`)
+	got := r.Text("pass out quick on { nordlynx utun4 } all no state\n" +
+		"oifname { \"nordlynx\" } accept\n" +
+		"pass out quick on lo0 all\n")
+	if strings.Contains(got, "nordlynx") {
+		t.Fatalf("the provider interface survived the ruleset: %q", got)
+	}
+	for _, keep := range []string{"utun4", "lo0", "pass out quick", "accept"} {
+		if !strings.Contains(got, keep) {
+			t.Errorf("got %q — %q is structural and must survive", got, keep)
+		}
+	}
+}
+
+// The daemon logs a single-label endpoint twice: once as an attr, once inside
+// the resolver's error text. A name with no dot is invisible to hostRe, so the
+// copy in the error stood while the attr went.
+func TestASingleLabelHostSurvivesNowhereInALogLine(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"endpoints":["mullvad"]}}`)
+	got := r.Text(`level=ERROR msg="resolve failed" host=mullvad err="lookup mullvad: no such host"`)
+	if strings.Contains(got, "mullvad") {
+		t.Fatalf("the host survived: %q", got)
+	}
+	if strings.Count(got, "host-1") != 2 {
+		t.Errorf("got %q — the attr and the error text are not the same token", got)
+	}
+}
+
+// doctor.json carries its identifiers as fields so the walk sees them by key.
+// The keys are the ones this switch already knows; a new spelling would fall to
+// the default branch and get only the treatment the prose already had.
+func TestADoctorDetailsIdentifierIsRedactedByItsKey(t *testing.T) {
+	got := New(true).JSON(`{"checks":[{"name":"tunnels","details":[` +
+		`{"iface":"nordlynx","text":"— 10.0.0.0/24"},` +
+		`{"iface":"utun4","text":"— 10.1.0.0/24"},` +
+		`{"endpoint":"198.51.100.7","text":":51820"}` +
+		`]}]}`)
+	if strings.Contains(got, "nordlynx") {
+		t.Errorf("the interface name survived: %q", got)
+	}
+	if !strings.Contains(got, "utun4") {
+		t.Errorf("got %q — a generic interface is structural and must survive", got)
+	}
+	if strings.Contains(got, "198.51.100.7") {
+		t.Errorf("the endpoint survived: %q", got)
+	}
+	if !strings.Contains(got, `"text": "— 10.0.0.0/24"`) {
+		t.Errorf("got %q — the private subnet is deliberately kept", got)
+	}
+}
+
+// A doctor check's profiles field must share the config's token, or the bundle
+// shows two identities where the host has one. And it must not fire on
+// config.json's own `profiles`, which holds objects rather than names.
+func TestADoctorChecksProfileFieldSharesTheConfigsToken(t *testing.T) {
+	r := New(true)
+	cfg := r.JSON(`{"vpn":{"profiles":[{"name":"work-nord"}]}}`)
+	if !strings.Contains(cfg, "profile-1") || strings.Contains(cfg, "work-nord") {
+		t.Fatalf("config = %q", cfg)
+	}
+	got := r.JSON(`{"checks":[{"name":"endpointRetention","profiles":["work-nord"]}]}`)
+	if strings.Contains(got, "work-nord") {
+		t.Fatalf("the entry name survived: %q", got)
+	}
+	if !strings.Contains(got, "profile-1") {
+		t.Errorf("got %q — the same profile got a second token", got)
+	}
+}
+
+// The connected VPN's service name is chosen by the user and usually names the
+// provider. It is its own kind: a tunnelHint is an interface-name PREFIX whose
+// allow-list would keep `wg`, and whose legend noun would mislabel this.
+func TestAConnectedVPNNameIsRedacted(t *testing.T) {
+	r := New(true)
+	got := r.JSON(`{"checks":[{"name":"discover","connectedVPN":"Mullvad VPN"}]}`)
+	if strings.Contains(got, "Mullvad") {
+		t.Fatalf("the service name survived: %q", got)
+	}
+	if !strings.Contains(got, "vpn-1") {
+		t.Errorf("got %q, want a vpn-N token", got)
+	}
+	legend := r.Legend()
+	if len(legend) != 1 || !strings.Contains(legend[0], "VPN service name") {
+		t.Errorf("legend = %v — the kind has no noun of its own", legend)
+	}
+}
+
+// The mint guard is CROSS-KIND, and a review proposed scoping it to the kind as
+// a tightening. It is the opposite, and this is the case that shows it.
+//
+// `work-nord` is both a profile name and an endpoint, so it holds two tokens.
+// Text replays one of them into the log line, and endpointAttrRe then offers
+// that token back under the `host` kind. Cross-kind, the guard recognises it and
+// the line keeps the token it was given. Kind-scoped, `host` has not minted that
+// spelling, so a SECOND token is minted for the first one — the bundle carries a
+// token standing for a token, and the legend counts a hostname that is nowhere
+// in it.
+func TestAReplayedTokenIsNotReMintedUnderAnotherKind(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"profiles":[{"name":"work-nord"}],"endpoints":["work-nord"]}}`)
+	before := append([]string(nil), r.Legend()...)
+
+	got := r.Text(`level=WARN host=work-nord msg="resolve failed"`)
+	if strings.Contains(got, "work-nord") {
+		t.Fatalf("the name survived: %q", got)
+	}
+	if strings.Contains(got, "host-2") {
+		t.Errorf("got %q — a token was minted for a token", got)
+	}
+	if after := r.Legend(); !slices.Equal(before, after) {
+		t.Errorf("the legend grew replaying a name it already knew:\n  before: %v\n  after:  %v", before, after)
+	}
+}
+
+// The one case the redaction does NOT cover, pinned so it stays true of the docs
+// that now state it (docs/usage/cli.md, and residual 1 in this package's doc
+// comment). A name spelled like a token ALREADY MINTED keeps its spelling: the
+// token is in entries that are already written, and nothing can move it.
+//
+// Pinned rather than merely documented, because this is the shape of thing that
+// gets "fixed" by someone who has not read why — and the fix that suggests
+// itself, making the mint guard kind-scoped, is the regression
+// TestAReplayedTokenIsNotReMintedUnderAnotherKind rejects.
+func TestANameSpelledLikeAnExistingTokenKeepsItsSpelling(t *testing.T) {
+	r := New(true)
+	r.JSON(`{"vpn":{"profiles":[{"name":"alpha"}]}}`) // mints profile-1
+
+	got := r.JSON(`{"vpn":{"tunnelInterfaces":["profile-1"]}}`)
+	if !strings.Contains(got, `"profile-1"`) {
+		t.Errorf("got %q — the documented residual no longer holds; docs/usage/cli.md says it does", got)
+	}
+	// And the bundle does not grow a second identity for it: the legend still
+	// names exactly the one profile.
+	legend := r.Legend()
+	if len(legend) != 1 || !strings.Contains(legend[0], "1 distinct profile name") {
+		t.Errorf("legend = %v, want the single profile and no interface kind", legend)
 	}
 }
