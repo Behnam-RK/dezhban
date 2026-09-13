@@ -1419,7 +1419,10 @@ end up typing a password.
       `doctor.json`'s check names (`config`, `tunnels`, `endpoints`, `lockout`,
       …), the shipped geo-provider hostnames, the posture strings (`guard`,
       `full-block`, `switch-window`, `standby`), the mode names in
-      rules-preview.txt, and every `utun*`/`lo0`. If the check names read as
+      rules-preview.txt, every `utun*`/`lo0`, and the paths of dezhban's OWN
+      files — the control check names the socket it probed
+      (`…/control.sock`), and a path reading as `…/host-N` has had the answer
+      replaced rather than an identity. If the check names read as
       `profile-N`, the redactor has replaced the answer rather than the
       identity, and the legend is overcounting to match.
 - [ ] **Every JSON entry still opens.** `for f in *.json; do python3 -m json.tool

@@ -89,9 +89,59 @@ func TestShippedGeoProvidersAreKept(t *testing.T) {
 // would be hard to read for no gain.
 func TestDezhbanFilenamesAreNotHostnames(t *testing.T) {
 	r := New(true)
-	for _, name := range []string{"learned.json", "dezhban.log", "README.txt"} {
+	// control.sock and dezhban.lock were missing, and both reach a bundle: the
+	// control check quotes the socket as the answer to "which socket did it
+	// probe", and a startup failure carries the lock's path into the log. Turning
+	// either into host-N throws away the diagnosis and hides nothing, which is
+	// the direction docs/contribute/testing.md calls out by name.
+	for _, name := range []string{
+		"learned.json", "dezhban.log", "README.txt", "control.sock", "dezhban.lock",
+	} {
 		if got := r.Text("wrote " + name); !strings.Contains(got, name) {
 			t.Errorf("%s was treated as a hostname: %q", name, got)
+		}
+	}
+	// The whole path survives, not just the basename — the control check's value
+	// is that it names WHERE the socket is.
+	const path = "/var/db/dezhban/control.sock"
+	if got := r.Text("reachable (" + path + ")"); !strings.Contains(got, path) {
+		t.Errorf("the socket path was redacted: %q", got)
+	}
+	// And the legend does not gain a hostname that stands for a filename.
+	if legend := r.Legend(); len(legend) != 0 {
+		t.Errorf("legend = %v, want nothing minted for dezhban's own filenames", legend)
+	}
+}
+
+// The socket is a CONFIG KEY, so only its default basename is dezhban's. A suffix
+// rule would have kept whatever the user pointed `control.socket` at — and a
+// socket named after the VPN it sits beside states the provider as plainly as a
+// server address does. That is rule 2 on keptSuffixes, and the reason `.conf` and
+// `.ovpn` are kept off that list.
+func TestASocketTheUserNamedIsStillRedacted(t *testing.T) {
+	r := New(true)
+	for _, name := range []string{"nordvpn.sock", "mullvad.sock", "proton.lock"} {
+		if got := r.Text(name); got == name {
+			t.Errorf("%s survived — a user-named socket is not one of dezhban's files", name)
+		}
+	}
+	// While dezhban's own two still do.
+	for _, name := range []string{"control.sock", "dezhban.lock"} {
+		if got := r.Text(name); got != name {
+			t.Errorf("%s was redacted: %q", name, got)
+		}
+	}
+}
+
+// `.zip` must never join keptSuffixes, however much the bundle's own filename
+// ends in it: it is a delegated gTLD, so a suffix rule admitting it would wave a
+// real host straight through — rule 1 on that list, and the reason the list is
+// kept as short as its two rules allow.
+func TestADelegatedTLDIsNeverTreatedAsAFileExtension(t *testing.T) {
+	for _, host := range []string{"dezhban-report-20260913.zip", "mullvad.zip", "vpn.sh", "server.md"} {
+		r := New(true)
+		if got := r.Text(host); got == host {
+			t.Errorf("%s survived — a delegated TLD was treated as one of dezhban's file endings", host)
 		}
 	}
 }

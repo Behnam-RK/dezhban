@@ -12,6 +12,21 @@ current as you land changes.
 
 ## [Unreleased]
 
+### Fixed
+
+- **A redacted bundle no longer replaces dezhban's own file paths with a hostname
+  token.** `doctor`'s control check names the socket it probed, and that path came
+  back as `/var/db/dezhban/host-1` — the answer replaced, and no identity hidden,
+  which is the wrong direction twice over. The run lock's path had the same
+  problem wherever a startup failure carried it into the log. Both survive now,
+  and the legend no longer counts a hostname that stands for a filename.
+  Those two names exactly, not the file endings: `control.socket` is a config
+  key, so a socket you renamed — `/var/run/nordvpn.sock` — is still redacted,
+  because that name is yours and it states the provider. The bundle's own `.zip`
+  name is still redacted for the same family of reason: `.zip` is a real
+  top-level domain, so admitting it as a file ending would wave a genuine
+  hostname through.
+
 ## [0.15.0] - 2026-09-13
 
 ### Fixed
