@@ -95,3 +95,31 @@ struct LogRecordsZeroTimeTests {
         #expect(recs[0].time != nil)
     }
 }
+
+extension LogRecordsTests {
+    /// The record logread puts in place of a line it could not read.
+    ///
+    /// It is the one record shape with no timestamp that a person actually sees —
+    /// Recent problems fetches `--level warn`, so a gap lands in that list. The Go
+    /// side pins what it emits; this pins that the pane can render it: a warning
+    /// rather than an error, a date the row knows to omit (problemRow's
+    /// `if let t = r.time` drops the column), and a detail line carrying how much
+    /// was lost.
+    @Test func theOversizedLineMarkerDecodesAsAWarningWithNoDate() throws {
+        let json = """
+        [{"time":"0001-01-01T00:00:00Z","level":"WARN",
+          "msg":"log line too long to read; skipped",
+          "attrs":[{"key":"logread.oversized","value":"5242880"},
+                   {"key":"limit","value":"4194304"}],
+          "raw":"level=WARN msg=\\"log line too long to read; skipped\\" logread.oversized=5242880 limit=4194304"}]
+        """.data(using: .utf8)!
+
+        let recs = try #require(LogRecord.decodeList(json))
+        let r = try #require(recs.first)
+        #expect(r.time == nil)
+        #expect(r.isWarning)
+        #expect(!r.isError)
+        #expect(!r.msg.isEmpty)
+        #expect(r.detail.contains("logread.oversized=5242880"))
+    }
+}
