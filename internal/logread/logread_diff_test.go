@@ -14,6 +14,16 @@ import (
 // a reference oracle. Duplicated on purpose: the claim it supports is "for a file
 // with no over-cap line, NOTHING changed", and the only way to assert that is to
 // keep the thing being compared against. It is short, frozen, and has one caller.
+//
+// IF THIS TEST FAILS, THE READER CHANGED — do not edit the oracle to match. An
+// oracle edited to agree with the thing it checks is not an oracle, and the next
+// reader of this file will believe it is. Either the change to readFile was
+// unintended, or it was intended and this test should be deleted along with the
+// claim it makes. Both are decisions; silently re-aligning the copy is not.
+//
+// Note the oracle calls the REAL ParseLine and the real filters are not exercised
+// here (Options{} is empty), so a change to either does not rot this quietly: it
+// either fails loudly or is out of scope.
 func scannerRef(t *testing.T, path string) []Record {
 	f, err := os.Open(path)
 	if err != nil {

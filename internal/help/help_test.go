@@ -5,8 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/behnam-rk/dezhban/internal/logread"
 
 	"github.com/behnam-rk/dezhban/internal/config"
 )
@@ -473,5 +476,29 @@ func TestIndexDecodes(t *testing.T) {
 	}
 	if tutorial == 0 {
 		t.Error("no page is in the tutorial track, so a first-time reader has no starting point")
+	}
+}
+
+// logread.MaxLineBytes' doc comment says the number is stated in
+// docs/usage/cli.md, and that changing it means changing that doc too. This is
+// where that promise is kept, beside TestEveryTunableDocAnchorResolves — which
+// validates a claim internal/config makes, for the same reason and in the same
+// place. "The docs still say what the code does" is this package's business; a
+// package growing its own ../../docs reader is how that stops being true of any
+// one place.
+//
+// It exists because the claim was FALSE when it was written: the doc edit was
+// dropped on the way in and nothing noticed, because prose is not compiled.
+func TestTheDocumentedLogLineCapMatchesTheCode(t *testing.T) {
+	const page = "usage/cli.md"
+	body, err := os.ReadFile(filepath.Join(docsDir, filepath.FromSlash(page)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The doc states the cap the way a reader says it, not the way Go writes it.
+	want := strconv.Itoa(logread.MaxLineBytes>>20) + " MiB"
+	if !strings.Contains(string(body), want) {
+		t.Errorf("%s does not state the per-line log cap as %q; logread.MaxLineBytes is %d and its comment says this page names it",
+			page, want, logread.MaxLineBytes)
 	}
 }

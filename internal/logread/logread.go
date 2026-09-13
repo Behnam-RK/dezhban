@@ -142,13 +142,13 @@ func ParseLine(line string) Record {
 const UnparsedKey = "logread.unparsed"
 
 // OversizedKey is the attr key on the record readFile puts in place of a line
-// past maxLineBytes; its value is that line's length in bytes, not counting the
+// past MaxLineBytes; its value is that line's length in bytes, not counting the
 // line ending. A sibling of UnparsedKey, named for the same reason — a surface
 // can tell dezhban's own words from the daemon's, and a caller counting gaps has
 // something exact to match on rather than the English in Msg.
 const OversizedKey = "logread.oversized"
 
-// maxLineBytes caps one log line. A stack trace, or a rendered ruleset inside a
+// MaxLineBytes caps one log line. A stack trace, or a rendered ruleset inside a
 // msg, runs far past bufio's 64 KiB default, so the cap is generous; what it
 // protects is memory, since a reader that held whatever the file happened to
 // contain could be made to hold the whole file.
@@ -156,15 +156,20 @@ const OversizedKey = "logread.oversized"
 // A line longer than this is SKIPPED and reported in its place — never silently
 // dropped, and never held. See readFile and oversizedRecord.
 //
-// Named rather than written as a literal, for the reason logging.FileBackups is
-// exported and internal/vpnimport names maxConfigLine: the number is stated in
-// this package's prose, in its tests, and in docs/usage/cli.md, and a limit that
-// lives in four places is a limit that drifts. Changing it means changing that
-// doc too.
-const maxLineBytes = 4 << 20 // 4 MiB
+// Named rather than written as a literal, for the reason internal/vpnimport names
+// maxConfigLine: the number is stated in this package's prose, in its tests, and
+// in docs/usage/cli.md, and a limit that lives in four places is a limit that
+// drifts. Changing it means changing that doc too.
+//
+// Exported for the same reason logging.FileBackups is — so the one place that
+// checks the doc against the code does not have to restate the number. That check
+// lives in internal/help, which is where this repo keeps "the docs still say what
+// the code does": see TestTheDocumentedLogLineCapMatchesTheCode there, alongside
+// the Tunable.DocAnchor check that validates a claim internal/config makes.
+const MaxLineBytes = 4 << 20 // 4 MiB
 
 // lineBufBytes is the window the reader fills per read, NOT a limit: a longer
-// line is assembled from as many windows as it takes, and one past maxLineBytes
+// line is assembled from as many windows as it takes, and one past MaxLineBytes
 // is drained through this window without being kept. It is the size the
 // bufio.Scanner this replaced started at, so the ordinary path costs what it did.
 const lineBufBytes = 64 << 10 // 64 KiB
@@ -194,7 +199,7 @@ const oversizedMsg = "log line too long to read; skipped"
 // !r.Time.IsZero(), always lets a marker through — right, because a gap that may
 // hide in-window records must not itself be hidden by the window.
 func oversizedRecord(n int64) Record {
-	size, limit := strconv.FormatInt(n, 10), strconv.Itoa(maxLineBytes)
+	size, limit := strconv.FormatInt(n, 10), strconv.Itoa(MaxLineBytes)
 	return Record{
 		Level: "WARN",
 		Msg:   oversizedMsg,
@@ -225,7 +230,7 @@ func nextPair(s string) (key, value, rest string, ok bool) {
 	if strings.HasPrefix(s, `"`) {
 		// QuotedPrefix scans for the closing quote ONCE. Trying Unquote on every
 		// prefix did the same work O(n) times, and the reader admits lines up to
-		// maxLineBytes, so a long quoted value full of escaped quotes made `dezhban
+		// MaxLineBytes, so a long quoted value full of escaped quotes made `dezhban
 		// logs` reparse the same megabyte over and over. Same decoder either way,
 		// so escapes are still handled by the code that wrote them.
 		if q, err := strconv.QuotedPrefix(s); err == nil {
@@ -355,7 +360,7 @@ func readFile(path string, opt Options) ([]Record, error) {
 		case dropped > 0:
 			// Already past the cap: count the rest of the line, keep none of it.
 			dropped += int64(len(frag))
-		case len(line)+len(frag) > maxLineBytes:
+		case len(line)+len(frag) > MaxLineBytes:
 			// This piece crosses the cap. Release what was held — the line is not
 			// coming back, and holding it in order to describe it is the
 			// allocation the cap exists to refuse.

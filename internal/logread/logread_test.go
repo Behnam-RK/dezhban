@@ -366,7 +366,7 @@ func TestALineOverTheCapCostsThatLineAndNothingElse(t *testing.T) {
 	path := filepath.Join(dir, "dezhban.log")
 	writeLog(t, path,
 		`time=2026-09-08T10:00:00Z level=ERROR msg=before`,
-		`time=2026-09-08T10:00:01Z level=ERROR msg=`+strings.Repeat("x", maxLineBytes+1),
+		`time=2026-09-08T10:00:01Z level=ERROR msg=`+strings.Repeat("x", MaxLineBytes+1),
 		`time=2026-09-08T10:00:02Z level=ERROR msg=after`,
 	)
 
@@ -392,7 +392,7 @@ func TestALineOverTheCapCostsThatLineAndNothingElse(t *testing.T) {
 func TestASkippedLineLeavesAMarkerRecordInItsPlace(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dezhban.log")
-	huge := strings.Repeat("x", maxLineBytes+7)
+	huge := strings.Repeat("x", MaxLineBytes+7)
 	writeLog(t, path, huge)
 
 	recs, err := Read(path, Options{})
@@ -462,7 +462,7 @@ func TestALongLastLineWithNoTrailingNewlineIsStillSkippedCleanly(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dezhban.log")
 	writeRaw(t, path, "time=2026-09-08T10:00:00Z level=ERROR msg=before\n"+
-		strings.Repeat("x", maxLineBytes+1))
+		strings.Repeat("x", MaxLineBytes+1))
 
 	recs, err := Read(path, Options{})
 	if err != nil {
@@ -500,7 +500,7 @@ func TestALastLineWithNoTrailingNewlineIsStillRead(t *testing.T) {
 func TestTwoLongLinesInOneFileEachLeaveTheirOwnMarker(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dezhban.log")
-	first, second := strings.Repeat("x", maxLineBytes+1), strings.Repeat("y", maxLineBytes+9)
+	first, second := strings.Repeat("x", MaxLineBytes+1), strings.Repeat("y", MaxLineBytes+9)
 	writeLog(t, path,
 		`time=2026-09-08T10:00:00Z level=ERROR msg=before`,
 		first,
@@ -550,7 +550,7 @@ func TestALongLineInAnArchiveDoesNotCostTheLiveFileOrItsOwnTail(t *testing.T) {
 	path := filepath.Join(dir, "dezhban.log")
 	writeLog(t, path+".1",
 		`time=2026-09-08T09:00:00Z level=ERROR msg=archived-before`,
-		strings.Repeat("x", maxLineBytes+1),
+		strings.Repeat("x", MaxLineBytes+1),
 		`time=2026-09-08T09:00:01Z level=ERROR msg=archived-after`,
 	)
 	writeLog(t, path, `time=2026-09-08T10:00:00Z level=ERROR msg=live`)
@@ -571,12 +571,12 @@ func TestALongLineInAnArchiveDoesNotCostTheLiveFileOrItsOwnTail(t *testing.T) {
 
 // The cap is INCLUSIVE. bufio.Scanner errored when its buffer was full at max, so
 // the old true maximum was one byte below the number everything else stated; the
-// reader admits exactly maxLineBytes. Pinned so the shift is deliberate.
+// reader admits exactly MaxLineBytes. Pinned so the shift is deliberate.
 func TestALineExactlyAtTheCapIsStillARecord(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dezhban.log")
 	const prefix = `time=2026-09-08T10:00:00Z level=ERROR msg=`
-	writeLog(t, path, prefix+strings.Repeat("x", maxLineBytes-len(prefix)))
+	writeLog(t, path, prefix+strings.Repeat("x", MaxLineBytes-len(prefix)))
 
 	recs, err := Read(path, Options{})
 	if err != nil {
@@ -598,7 +598,7 @@ func TestTheSkippedLineMarkerAnswersAWarnQueryButNotAnErrorQuery(t *testing.T) {
 	path := filepath.Join(dir, "dezhban.log")
 	writeLog(t, path,
 		`time=2026-09-08T10:00:00Z level=ERROR msg=before`,
-		strings.Repeat("x", maxLineBytes+1),
+		strings.Repeat("x", MaxLineBytes+1),
 		`time=2026-09-08T10:00:01Z level=ERROR msg=after`,
 	)
 
@@ -632,7 +632,7 @@ func TestTheSkippedLineMarkerSurvivesASinceQuery(t *testing.T) {
 	path := filepath.Join(dir, "dezhban.log")
 	writeLog(t, path,
 		`time=2020-01-01T00:00:00Z level=ERROR msg=ancient`,
-		strings.Repeat("x", maxLineBytes+1),
+		strings.Repeat("x", MaxLineBytes+1),
 		`time=2026-09-08T10:00:01Z level=ERROR msg=recent`,
 	)
 
@@ -678,11 +678,11 @@ func TestDrainingALongLineCostsTheCapNotTheLine(t *testing.T) {
 		return after.TotalAlloc - before.TotalAlloc, recs
 	}
 
-	small, recs := read(maxLineBytes + 1)
+	small, recs := read(MaxLineBytes + 1)
 	if len(recs) != 3 || recs[0].Msg != "before" || recs[2].Msg != "after" {
 		t.Fatalf("got %+v, want the records either side of the long line", recs)
 	}
-	large, recs := read(16 * maxLineBytes)
+	large, recs := read(16 * MaxLineBytes)
 	if len(recs) != 3 || recs[0].Msg != "before" || recs[2].Msg != "after" {
 		t.Fatalf("got %+v, want the records either side of the long line", recs)
 	}
@@ -692,27 +692,5 @@ func TestDrainingALongLineCostsTheCapNotTheLine(t *testing.T) {
 	if large > 2*small {
 		t.Errorf("a 16x longer line cost %d bytes against %d — allocation is tracking line length",
 			large, small)
-	}
-}
-
-// maxLineBytes' doc comment says the number is stated in docs/usage/cli.md, and
-// that a change to it means changing the doc too. This makes the claim checkable
-// instead of hopeful.
-//
-// It exists because the claim was FALSE when it was written: the doc edit was
-// dropped on the way in and nothing noticed, because prose is not compiled and the
-// gate has nothing to say about it. A comment that names a file is a promise about
-// that file, and the cheapest way to keep a promise is to fail without it.
-func TestTheDocumentedLineCapMatchesTheCode(t *testing.T) {
-	const doc = "../../docs/usage/cli.md"
-	body, err := os.ReadFile(doc)
-	if err != nil {
-		t.Fatal(err)
-	}
-	// The doc states the cap the way a reader says it, not the way Go writes it.
-	want := strconv.Itoa(maxLineBytes>>20) + " MiB"
-	if !strings.Contains(string(body), want) {
-		t.Errorf("%s does not state the per-line cap as %q; maxLineBytes is %d and its comment says this doc names it",
-			doc, want, maxLineBytes)
 	}
 }
