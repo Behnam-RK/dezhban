@@ -454,7 +454,11 @@ one pathological line from making the reader hold a whole file — is skipped
 rather than read, and a `warn` record saying so takes its place, in the position
 that line held. Nothing before it and nothing after it is lost, and the file
 still counts as read. Because the stand-in is a warning, `--level error` hides
-it: ask for `warn`, or for no level at all, when you want to see gaps.
+it: ask for `warn`, or for no level at all, when you want to see gaps. It is the
+one record with **no timestamp** — the `time=` was inside the bytes that went, and
+guessing one would sort a gap against real records — so `--json` reports its
+`time` as Go's zero value, `0001-01-01T00:00:00Z`, and a surface rendering the
+output should read that as "no time" rather than as the year 1.
 
 ### Collecting a bug report
 
