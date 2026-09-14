@@ -449,6 +449,17 @@ level — is never filtered out, whatever `--level` you asked for: a level
 dezhban cannot rank is not evidence the record is unimportant, and a log
 reader that silently drops lines is worse than none.
 
+A single line too long to read — past a 4 MiB per-line cap, which is what stops
+one pathological line from making the reader hold a whole file — is skipped
+rather than read, and a `warn` record saying so takes its place, in the position
+that line held. Nothing before it and nothing after it is lost, and the file
+still counts as read. Because the stand-in is a warning, `--level error` hides
+it: ask for `warn`, or for no level at all, when you want to see gaps. It is the
+one record with **no timestamp** — the `time=` was inside the bytes that went, and
+guessing one would sort a gap against real records — so `--json` reports its
+`time` as Go's zero value, `0001-01-01T00:00:00Z`, and a surface rendering the
+output should read that as "no time" rather than as the year 1.
+
 ### Collecting a bug report
 
 ```sh

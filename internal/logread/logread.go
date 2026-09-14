@@ -10,12 +10,21 @@
 //
 // Read-only and unprivileged by design: the log is 0644 precisely so the GUI and
 // an ordinary operator can read history without root.
+//
+// Nothing readable is ever dropped in silence. A line the parser cannot break
+// into pairs keeps its tail under UnparsedKey; a line with no level at all
+// survives a warn-and-above query; a line too long to hold is skipped and leaves
+// a record saying so (OversizedKey) where it was; and a file that cannot be read
+// costs only itself, its error travelling back beside the records from the rest
+// of the chain. A surface that shows fewer records than the log holds, without
+// saying so, is the one failure this package is built not to have.
 package logread
 
 import (
 	"bufio"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -132,6 +141,74 @@ func ParseLine(line string) Record {
 // tell dezhban's own words from the daemon's.
 const UnparsedKey = "logread.unparsed"
 
+// OversizedKey is the attr key on the record readFile puts in place of a line
+// past MaxLineBytes; its value is that line's length in bytes, not counting the
+// line ending. A sibling of UnparsedKey, named for the same reason — a surface
+// can tell dezhban's own words from the daemon's, and a caller counting gaps has
+// something exact to match on rather than the English in Msg.
+const OversizedKey = "logread.oversized"
+
+// MaxLineBytes caps one log line. A stack trace, or a rendered ruleset inside a
+// msg, runs far past bufio's 64 KiB default, so the cap is generous; what it
+// protects is memory, since a reader that held whatever the file happened to
+// contain could be made to hold the whole file.
+//
+// A line longer than this is SKIPPED and reported in its place — never silently
+// dropped, and never held. See readFile and oversizedRecord.
+//
+// Named rather than written as a literal, for the reason internal/vpnimport names
+// maxConfigLine: the number is stated in this package's prose, in its tests, and
+// in docs/usage/cli.md, and a limit that lives in four places is a limit that
+// drifts. Changing it means changing that doc too.
+//
+// Exported for the same reason logging.FileBackups is — so the one place that
+// checks the doc against the code does not have to restate the number. That check
+// lives in internal/help, which is where this repo keeps "the docs still say what
+// the code does": see TestTheDocumentedLogLineCapMatchesTheCode there, alongside
+// the Tunable.DocAnchor check that validates a claim internal/config makes.
+const MaxLineBytes = 4 << 20 // 4 MiB
+
+// lineBufBytes is the window the reader fills per read, NOT a limit: a longer
+// line is assembled from as many windows as it takes, and one past MaxLineBytes
+// is drained through this window without being kept. It is the size the
+// bufio.Scanner this replaced started at, so the ordinary path costs what it did.
+const lineBufBytes = 64 << 10 // 64 KiB
+
+// oversizedMsg is what a skipped line says for itself. Prose, because the macOS
+// pane renders it as the row's primary text to someone who is not a developer:
+// it has to name the cause and the consequence in one line.
+const oversizedMsg = "log line too long to read; skipped"
+
+// oversizedRecord stands in for a line readFile would not hold, carrying how many
+// bytes went and what they were measured against.
+//
+// Raw is a real slog line, not a summary, because `dezhban logs` in text mode and
+// the bundle's log.txt print Raw and NOTHING else — a record with an empty Raw
+// prints a blank line exactly where the explanation belongs. Writing it in slog's
+// own grammar keeps log.txt homogeneous and keeps it readable by the parser that
+// produced it: ParseLine(Raw) reconstructs this record field for field.
+//
+// WARN, not ERROR: dezhban did not fail, one line was too big to read, and
+// escalating a reading limit to the loudest row on a diagnostics pane misdirects.
+// Not an empty level either — Known("") is false, so no filter could ever drop it
+// and `--level error` would show it, which is not what a gap deserves.
+//
+// The zero Time is the honest one: the `time=` was inside the bytes that went. A
+// guessed "now" would sort a gap against real timestamps and let --since include
+// it on a fabrication. It also means the Since filter, which tests
+// !r.Time.IsZero(), always lets a marker through — right, because a gap that may
+// hide in-window records must not itself be hidden by the window.
+func oversizedRecord(n int64) Record {
+	size, limit := strconv.FormatInt(n, 10), strconv.Itoa(MaxLineBytes)
+	return Record{
+		Level: "WARN",
+		Msg:   oversizedMsg,
+		Attrs: []Attr{{Key: OversizedKey, Value: size}, {Key: "limit", Value: limit}},
+		Raw: fmt.Sprintf("level=WARN msg=%s %s=%s limit=%s",
+			strconv.Quote(oversizedMsg), OversizedKey, size, limit),
+	}
+}
+
 // nextPair pulls one key=value off the front of s, honouring slog's quoting:
 // a value containing a space, a quote, or an equals sign is written as a Go
 // quoted string. Without that, `msg="rules missing, re-applied" n=2` would parse
@@ -152,8 +229,8 @@ func nextPair(s string) (key, value, rest string, ok bool) {
 	s = s[eq+1:]
 	if strings.HasPrefix(s, `"`) {
 		// QuotedPrefix scans for the closing quote ONCE. Trying Unquote on every
-		// prefix did the same work O(n) times, and the scanner admits lines up to
-		// 4 MiB, so a long quoted value full of escaped quotes made `dezhban
+		// prefix did the same work O(n) times, and the reader admits lines up to
+		// MaxLineBytes, so a long quoted value full of escaped quotes made `dezhban
 		// logs` reparse the same megabyte over and over. Same decoder either way,
 		// so escapes are still handled by the code that wrote them.
 		if q, err := strconv.QuotedPrefix(s); err == nil {
@@ -193,6 +270,10 @@ type Options struct {
 // A non-nil error and a non-empty slice arrive TOGETHER when part of the chain
 // could not be read. Callers must report the error and still use the records —
 // the whole point is that one unreadable file costs only itself.
+//
+// A line past the reader's size cap is NOT one of those cases: it is skipped, a
+// record marking the gap takes its place, and the read is not an error. Nothing
+// before or after such a line is lost.
 func Read(path string, opt Options) ([]Record, error) {
 	var all []Record
 	var problems []string
@@ -242,41 +323,90 @@ func readFile(path string, opt Options) ([]Record, error) {
 	}
 
 	var out []Record
-	sc := bufio.NewScanner(f)
-	// A stack trace or a long attr can exceed bufio's 64KiB default, and a
-	// scanner that stops mid-file would silently truncate the history.
-	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-	for sc.Scan() {
-		line := sc.Text()
-		if strings.TrimSpace(line) == "" {
-			continue
-		}
-		r := ParseLine(line)
+	// One gate for every record, synthesised or parsed. A marker that skipped the
+	// filters would answer a different question than the one asked, and a marker
+	// the filters could not see would be a record this package had decided was
+	// exempt from the caller's query.
+	keep := func(r Record) {
 		// Only a level this build RECOGNISES may be filtered out. A level it
 		// does not know is not evidence the record is unimportant — a newer
 		// daemon, a custom slog level, a hand-edited line — and ranking it as
 		// INFO for ordering must not become a warn-and-above query silently
 		// swallowing it.
 		if Known(r.Level) && Severity(r.Level) < min {
-			continue
+			return
 		}
 		if !opt.Since.IsZero() && !r.Time.IsZero() && r.Time.Before(opt.Since) {
-			continue
+			return
 		}
 		out = append(out, r)
 	}
-	// `out`, not nil: a single line past the 4 MiB cap used to cost every record
-	// already parsed from this file, so one pathological line took the whole
-	// history with it. The error still travels — it is the caller's to report —
-	// but it no longer erases what was readable.
+
+	// A bufio.Reader, NOT a Scanner. A Scanner cannot resume past ErrTooLong, so
+	// one line longer than the cap ended the scan and took every record after it
+	// in that file with it. ReadLine hands a long line back in PIECES, which is
+	// what makes it possible to walk past one without ever holding it.
+	br := bufio.NewReaderSize(f, lineBufBytes)
+	var (
+		line    []byte // the line being assembled
+		dropped int64  // length of an over-cap line being drained; 0 when not draining
+		readErr error
+	)
+	for {
+		frag, isPrefix, err := br.ReadLine()
+		// frag points INTO br's buffer and dies at the next read, so every byte
+		// kept is copied here and now.
+		switch {
+		case dropped > 0:
+			// Already past the cap: count the rest of the line, keep none of it.
+			dropped += int64(len(frag))
+		case len(line)+len(frag) > MaxLineBytes:
+			// This piece crosses the cap. Release what was held — the line is not
+			// coming back, and holding it in order to describe it is the
+			// allocation the cap exists to refuse.
+			dropped, line = int64(len(line)+len(frag)), nil
+		default:
+			line = append(line, frag...)
+		}
+		if isPrefix {
+			continue
+		}
+		// A whole line. ReadLine reports isPrefix false for the LAST piece of a
+		// long line and for a final line the file left without a newline, so both
+		// arrive here — and this emit has to happen BEFORE the break below, or a
+		// file ending mid-line loses its last record to the io.EOF.
+		if dropped > 0 {
+			keep(oversizedRecord(dropped))
+		} else if s := strings.TrimSuffix(string(line), "\r"); strings.TrimSpace(s) != "" {
+			// ScanLines dropped a trailing \r from every line INCLUDING a final
+			// one with no newline; ReadLine drops it only before a newline. Same
+			// line either way, so Raw stays what it has always been.
+			keep(ParseLine(s))
+		}
+		line, dropped = line[:0], 0
+		if err != nil {
+			// io.EOF is the end, not a problem — the io.Reader contract makes it
+			// that exact value and bufio does not wrap it. Anything else is a
+			// genuine read failure and travels back BESIDE the records already
+			// parsed, exactly as a file that cannot be opened does.
+			if err != io.EOF {
+				readErr = err
+			}
+			break
+		}
+	}
+	// `out`, not nil — and no error for a line this reader chose to skip. Reading
+	// SUCCEEDED: the file was walked to its end, one line was not a record, and
+	// the record standing in its place says so where it happened.
 	//
-	// What survives is the records BEFORE the oversized line, and only those: a
-	// bufio.Scanner cannot resume past ErrTooLong, so the rest of that file is
-	// still lost. Recovering it needs a reader loop that consumes through the
-	// long line's newline, which is a bigger change than the one this comment
-	// used to claim to have made.
-	if err := sc.Err(); err != nil {
-		return out, fmt.Errorf("read %s: %w", filepath.Base(path), err)
+	// That is the whole of issue #64. A single line past the cap used to cost
+	// every record after it in the same file, because a Scanner stops at
+	// ErrTooLong and cannot be restarted. The error path that remains is the one
+	// it was built for: a file that could not be opened, or could not be read at
+	// all — see TestAnUnreadableArchiveDoesNotCostTheLiveFile, which is now the
+	// only test holding it open.
+	if readErr != nil {
+		return out, fmt.Errorf("read %s: %w", filepath.Base(path), readErr)
 	}
 	return out, nil
 }

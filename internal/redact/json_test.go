@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/behnam-rk/dezhban/internal/logread"
 )
 
 // The doctor writes learned entry names — which are the user's profile names —
@@ -618,5 +620,27 @@ func TestAUnixGroupNameIsKeptInEveryEntryThatCarriesIt(t *testing.T) {
 	}
 	if legend := r.Legend(); len(legend) != 0 {
 		t.Errorf("legend = %v, want nothing minted for a group name or a path", legend)
+	}
+}
+
+// logread namespaces its own attr keys with a dot so a surface can tell dezhban's
+// words from the daemon's — which gives them a hostname's shape. `logread.oversized`
+// reaches a redacted bundle inside a record's Raw, and Raw is what log.txt prints,
+// so without an exact-match keep it reads `host-1=5242880` and the legend counts a
+// hostname that stands for an attr key.
+//
+// The spellings come from logread itself, not from a literal here, so the two
+// cannot drift apart — the same reason Read walks logging.FileBackups rather than
+// restating 2.
+func TestDezhbansOwnLogKeysSurviveRedaction(t *testing.T) {
+	r := New(true)
+	for _, key := range []string{logread.OversizedKey, logread.UnparsedKey} {
+		line := "level=WARN msg=\"log line too long to read; skipped\" " + key + "=5242880"
+		if got := r.Text(line); !strings.Contains(got, key) {
+			t.Errorf("%s was redacted: %q", key, got)
+		}
+	}
+	if legend := r.Legend(); len(legend) != 0 {
+		t.Errorf("legend = %v, want nothing minted for dezhban's own attr keys", legend)
 	}
 }

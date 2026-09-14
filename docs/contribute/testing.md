@@ -1373,6 +1373,16 @@ end up typing a password.
 - [ ] **Rotation is covered.** Force a rotation (or rename `dezhban.log` to
       `dezhban.log.1` and restart), then confirm `dezhban logs` still shows the
       archived records, oldest first.
+- [ ] **An oversized line does not swallow the rest of the file.** Append a line
+      longer than 4 MiB to `dezhban.log`
+      (`python3 -c "print('x'*5000000)" | sudo tee -a <state dir>/logs/dezhban.log`),
+      then write a normal record after it. `dezhban logs` shows the records written
+      **after** the long line — that is the half that used to be lost — with one
+      `log line too long to read; skipped` where it was, and **no** "part of the log
+      could not be read" warning on stderr. `--level error` hides that stand-in;
+      `--level warn` shows it. Diagnostics → Recent problems shows it too, as a
+      warning with no timestamp. In a redacted bundle's `log.txt` it still reads
+      `logread.oversized=…`, not `host-N=…`.
 - [ ] **The bundle collects.** Export… → pick a folder → Finder reveals
       `dezhban-report-<stamp>.zip`. Open it: README.txt, config.json, state.json,
       learned.json, armed.json, applied-rules.json, doctor.json,

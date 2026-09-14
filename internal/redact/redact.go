@@ -606,9 +606,21 @@ var keptSuffixes = []string{
 // "which socket did it probe", and the run lock's path rides a startup failure
 // into the log. Replacing either with `host-N` throws the diagnosis away and hides
 // nothing, and counts a hostname in the legend that stands for a filename.
+// The two logread attr keys are here for the same reason and not because either
+// ever named a host: they are namespaced with a dot so a surface can tell
+// dezhban's own words from the daemon's, which gives them a hostname's shape.
+// `logread.oversized` reaches a redacted bundle inside a record's Raw, and Raw is
+// what log.txt prints — without this it would read `host-1=5242880`, and the
+// README's legend would count a hostname that stands for an attr key.
+// `logread.unparsed` does not reach log.txt today (it lives only in Attrs, and
+// reportLog writes Raw), and is listed anyway because the reason is identical and
+// the next surface to print attrs should not have to rediscover it.
 var keptNames = map[string]bool{
 	"control.sock": true, // controlSocketPath's default basename
 	"dezhban.lock": true, // runLockName, a constant
+	// Keep in step with internal/logread's UnparsedKey and OversizedKey.
+	"logread.unparsed":  true,
+	"logread.oversized": true,
 }
 
 // replaceProfileNames rewrites every `"name": "..."` in body.

@@ -4,6 +4,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
+	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -83,6 +86,16 @@ func TestAnUnknownLevelSortsAsInfoNotDropped(t *testing.T) {
 	}
 	if Severity("ERROR") <= Severity("WARN") || Severity("WARN") <= Severity("INFO") {
 		t.Error("severity ordering is wrong")
+	}
+}
+
+// writeRaw writes body verbatim — no trailing newline added. Its whole purpose is
+// the file that ends mid-line, which writeLog cannot produce and which is where a
+// hand-rolled read loop is easiest to get wrong.
+func writeRaw(t *testing.T, path, body string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -340,25 +353,77 @@ func TestAnUnreadableArchiveDoesNotCostTheLiveFile(t *testing.T) {
 	}
 }
 
-// A line past the scanner's cap costs that line, not the file.
+// A line past the cap costs THAT LINE, and nothing else in the file.
 //
-// sc.Err() used to discard every record already parsed, so one pathological
-// line took the whole history with it and `dezhban logs` printed nothing.
-func TestALineOverTheCapKeepsTheRecordsBeforeIt(t *testing.T) {
+// Two things used to go wrong here, and this pins both. A bufio.Scanner stops at
+// ErrTooLong and cannot be restarted, so the records AFTER a long line were lost
+// along with it — the `after` assertion is issue #64. And the failed read was
+// reported as an error, which said the log could not be read when in fact it had
+// been read to the end; that is why `err == nil` below is the reverse of what the
+// earlier version of this test asserted.
+func TestALineOverTheCapCostsThatLineAndNothingElse(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "dezhban.log")
-	huge := strings.Repeat("x", 5*1024*1024) // over the 4 MiB cap
 	writeLog(t, path,
 		`time=2026-09-08T10:00:00Z level=ERROR msg=before`,
-		`time=2026-09-08T10:00:01Z level=ERROR msg=`+huge,
+		`time=2026-09-08T10:00:01Z level=ERROR msg=`+strings.Repeat("x", MaxLineBytes+1),
+		`time=2026-09-08T10:00:02Z level=ERROR msg=after`,
 	)
 
 	recs, err := Read(path, Options{})
-	if err == nil {
-		t.Error("a line past the cap must still be reported")
+	if err != nil {
+		t.Errorf("err = %v; the file was read to its end, so this is not a partial read", err)
 	}
-	if len(recs) != 1 || recs[0].Msg != "before" {
-		t.Fatalf("got %d records, want the one parsed before the long line", len(recs))
+	if len(recs) != 3 {
+		t.Fatalf("got %d records, want before + the marker + after: %+v", len(recs), recs)
+	}
+	if recs[0].Msg != "before" || recs[2].Msg != "after" {
+		t.Errorf("got %q and %q, want the records either side of the long line", recs[0].Msg, recs[2].Msg)
+	}
+	if recs[1].Msg != oversizedMsg {
+		t.Errorf("recs[1] = %+v, want the marker in the long line's place", recs[1])
+	}
+}
+
+// The marker is a record like any other, and every surface has to be able to
+// render it: `dezhban logs` and the bundle's log.txt print Raw and NOTHING else,
+// the macOS pane reads Msg and Attrs, and log.txt is re-parseable by the code that
+// wrote it.
+func TestASkippedLineLeavesAMarkerRecordInItsPlace(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	huge := strings.Repeat("x", MaxLineBytes+7)
+	writeLog(t, path, huge)
+
+	recs, err := Read(path, Options{})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(recs) != 1 {
+		t.Fatalf("got %d records, want just the marker: %+v", len(recs), recs)
+	}
+	r := recs[0]
+	if r.Level != "WARN" {
+		t.Errorf("level = %q, want WARN so --level warn shows it and --level error does not", r.Level)
+	}
+	if !r.Time.IsZero() {
+		t.Errorf("time = %v, want the zero time — the timestamp was inside the bytes that went", r.Time)
+	}
+	if strings.TrimSpace(r.Raw) == "" {
+		t.Error("Raw is blank; `dezhban logs` and log.txt print Raw and nothing else, so this prints an empty line")
+	}
+	var size string
+	for _, a := range r.Attrs {
+		if a.Key == OversizedKey {
+			size = a.Value
+		}
+	}
+	if want := strconv.Itoa(len(huge)); size != want {
+		t.Errorf("%s = %q, want %q — the length of the line that was skipped", OversizedKey, size, want)
+	}
+	// log.txt is read back by the same parser that produced it.
+	if got := ParseLine(r.Raw); !reflect.DeepEqual(got, r) {
+		t.Errorf("ParseLine(Raw) did not round-trip:\n got %+v\nwant %+v", got, r)
 	}
 }
 
@@ -387,5 +452,245 @@ func TestALineWithNoLevelSurvivesAWarnAndAboveQuery(t *testing.T) {
 	}
 	if len(recs) != 2 || !strings.HasPrefix(msgs[0], "panic:") || msgs[1] != "broken" {
 		t.Fatalf("got %v, want the panic line kept and the INFO record filtered out", msgs)
+	}
+}
+
+// A file that ends mid-long-line still ends cleanly. ReadLine reports isPrefix
+// false for the last piece of a long line whether a newline follows it or not, so
+// the marker has to be emitted before the io.EOF ends the loop.
+func TestALongLastLineWithNoTrailingNewlineIsStillSkippedCleanly(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeRaw(t, path, "time=2026-09-08T10:00:00Z level=ERROR msg=before\n"+
+		strings.Repeat("x", MaxLineBytes+1))
+
+	recs, err := Read(path, Options{})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(recs) != 2 || recs[0].Msg != "before" || recs[1].Msg != oversizedMsg {
+		t.Fatalf("got %+v, want the record then the marker", recs)
+	}
+}
+
+// A final line the writer left without a newline is still a record.
+//
+// Unlike its siblings this one PASSES against the code it guards — bufio.Scanner
+// handled it for free. It is here because the hand-rolled reader that replaced the
+// Scanner is exactly where that free behaviour is easiest to lose: emit the record
+// after the io.EOF check rather than before it, and this is the only thing that
+// notices.
+func TestALastLineWithNoTrailingNewlineIsStillRead(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeRaw(t, path, "time=2026-09-08T10:00:00Z level=ERROR msg=first\n"+
+		"time=2026-09-08T10:00:01Z level=ERROR msg=unterminated")
+
+	recs, err := Read(path, Options{})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(recs) != 2 || recs[1].Msg != "unterminated" {
+		t.Fatalf("got %+v, want the unterminated final line kept", recs)
+	}
+}
+
+// Each long line is counted on its own. A drain counter that did not reset would
+// report the second gap as the sum of both.
+func TestTwoLongLinesInOneFileEachLeaveTheirOwnMarker(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	first, second := strings.Repeat("x", MaxLineBytes+1), strings.Repeat("y", MaxLineBytes+9)
+	writeLog(t, path,
+		`time=2026-09-08T10:00:00Z level=ERROR msg=before`,
+		first,
+		`time=2026-09-08T10:00:01Z level=ERROR msg=middle`,
+		second,
+		`time=2026-09-08T10:00:02Z level=ERROR msg=after`,
+	)
+
+	recs, err := Read(path, Options{})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(recs) != 5 {
+		t.Fatalf("got %d records, want three real ones and two markers: %+v", len(recs), recs)
+	}
+	for i, want := range []string{"before", oversizedMsg, "middle", oversizedMsg, "after"} {
+		if recs[i].Msg != want {
+			t.Errorf("recs[%d].Msg = %q, want %q", i, recs[i].Msg, want)
+		}
+	}
+	if a, b := sizeAttr(t, recs[1]), sizeAttr(t, recs[3]); a != len(first) || b != len(second) {
+		t.Errorf("marker sizes = %d and %d, want %d and %d — each marker counts its OWN line",
+			a, b, len(first), len(second))
+	}
+}
+
+// sizeAttr is the byte count a marker record carries.
+func sizeAttr(t *testing.T, r Record) int {
+	t.Helper()
+	for _, a := range r.Attrs {
+		if a.Key == OversizedKey {
+			n, err := strconv.Atoi(a.Value)
+			if err != nil {
+				t.Fatalf("%s = %q: %v", OversizedKey, a.Value, err)
+			}
+			return n
+		}
+	}
+	t.Fatalf("no %s attr on %+v", OversizedKey, r)
+	return 0
+}
+
+// The rotation analogue of TestAnUnreadableArchiveDoesNotCostTheLiveFile: a long
+// line in an archive costs neither that archive's own tail nor the live file.
+func TestALongLineInAnArchiveDoesNotCostTheLiveFileOrItsOwnTail(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeLog(t, path+".1",
+		`time=2026-09-08T09:00:00Z level=ERROR msg=archived-before`,
+		strings.Repeat("x", MaxLineBytes+1),
+		`time=2026-09-08T09:00:01Z level=ERROR msg=archived-after`,
+	)
+	writeLog(t, path, `time=2026-09-08T10:00:00Z level=ERROR msg=live`)
+
+	recs, err := Read(path, Options{})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	var got []string
+	for _, r := range recs {
+		got = append(got, r.Msg)
+	}
+	want := []string{"archived-before", oversizedMsg, "archived-after", "live"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("got %v, want %v — oldest first, with the gap in its place", got, want)
+	}
+}
+
+// The cap is INCLUSIVE. bufio.Scanner errored when its buffer was full at max, so
+// the old true maximum was one byte below the number everything else stated; the
+// reader admits exactly MaxLineBytes. Pinned so the shift is deliberate.
+func TestALineExactlyAtTheCapIsStillARecord(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	const prefix = `time=2026-09-08T10:00:00Z level=ERROR msg=`
+	writeLog(t, path, prefix+strings.Repeat("x", MaxLineBytes-len(prefix)))
+
+	recs, err := Read(path, Options{})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(recs) != 1 || recs[0].Msg == oversizedMsg {
+		t.Fatalf("got %+v, want a line exactly at the cap read as a record", recs)
+	}
+}
+
+// The marker goes THROUGH the level filter, not around it — so a warn-and-above
+// query shows the gap and an errors-only query does not.
+//
+// The cost is stated rather than hidden: the skipped line might itself have been
+// an ERROR. Its bytes are gone, so claiming so would rank a guess against real
+// records; docs/usage/cli.md says to ask for warn when you want to see gaps.
+func TestTheSkippedLineMarkerAnswersAWarnQueryButNotAnErrorQuery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeLog(t, path,
+		`time=2026-09-08T10:00:00Z level=ERROR msg=before`,
+		strings.Repeat("x", MaxLineBytes+1),
+		`time=2026-09-08T10:00:01Z level=ERROR msg=after`,
+	)
+
+	warn, err := Read(path, Options{MinLevel: "warn"})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(warn) != 3 || warn[1].Msg != oversizedMsg {
+		t.Errorf("warn query = %+v, want the gap shown", warn)
+	}
+
+	errs, err := Read(path, Options{MinLevel: "error"})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(errs) != 2 {
+		t.Fatalf("error query = %+v, want only the two ERROR records", errs)
+	}
+	for _, r := range errs {
+		if r.Msg == oversizedMsg {
+			t.Error("the marker is a WARN and must not answer an errors-only query")
+		}
+	}
+}
+
+// A marker survives a time window it has no timestamp for. The gap may hide
+// in-window records, so hiding the gap itself because its time is unknown would
+// answer the query with a silence it cannot justify.
+func TestTheSkippedLineMarkerSurvivesASinceQuery(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dezhban.log")
+	writeLog(t, path,
+		`time=2020-01-01T00:00:00Z level=ERROR msg=ancient`,
+		strings.Repeat("x", MaxLineBytes+1),
+		`time=2026-09-08T10:00:01Z level=ERROR msg=recent`,
+	)
+
+	recs, err := Read(path, Options{Since: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)})
+	if err != nil {
+		t.Fatalf("err = %v, want none", err)
+	}
+	if len(recs) != 2 || recs[0].Msg != oversizedMsg || recs[1].Msg != "recent" {
+		t.Fatalf("got %+v, want the marker and the in-window record", recs)
+	}
+}
+
+// Draining a long line costs the cap, not the line.
+//
+// The claim is not a byte count, it is that cost does not TRACK line length: a
+// reader that buffered the line would scale with it, and this one does not. So the
+// test compares two reads whose lines differ by 16x and asserts the allocation
+// barely moves — which a buffering design cannot satisfy at any threshold.
+//
+// TotalAlloc, not peak RSS: cumulative is what is stable enough to assert in CI.
+// Measured, it is ~20 MiB either way — five times the cap, because append's growth
+// factor for large slices is about 1.25 and the intermediate copies add up. Flat is
+// the property worth having; the constant factor is transient garbage on a
+// pathological line, and buying it down would mean hand-rolling slice growth.
+//
+// The record assertions are what make this a fix-pin. The allocation comparison
+// alone would also pass against the bufio.Scanner this replaced, which allocated to
+// the cap and then gave up.
+func TestDrainingALongLineCostsTheCapNotTheLine(t *testing.T) {
+	read := func(lineLen int) (uint64, []Record) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "dezhban.log")
+		writeRaw(t, path, "time=2026-09-08T10:00:00Z level=ERROR msg=before\n"+
+			strings.Repeat("x", lineLen)+"\ntime=2026-09-08T10:00:01Z level=ERROR msg=after\n")
+		runtime.GC()
+		var before, after runtime.MemStats
+		runtime.ReadMemStats(&before)
+		recs, err := Read(path, Options{})
+		runtime.ReadMemStats(&after)
+		if err != nil {
+			t.Fatalf("err = %v, want none", err)
+		}
+		return after.TotalAlloc - before.TotalAlloc, recs
+	}
+
+	small, recs := read(MaxLineBytes + 1)
+	if len(recs) != 3 || recs[0].Msg != "before" || recs[2].Msg != "after" {
+		t.Fatalf("got %+v, want the records either side of the long line", recs)
+	}
+	large, recs := read(16 * MaxLineBytes)
+	if len(recs) != 3 || recs[0].Msg != "before" || recs[2].Msg != "after" {
+		t.Fatalf("got %+v, want the records either side of the long line", recs)
+	}
+
+	// 16x the line for no more than 2x the allocation. A design that held the
+	// line would need 16x.
+	if large > 2*small {
+		t.Errorf("a 16x longer line cost %d bytes against %d — allocation is tracking line length",
+			large, small)
 	}
 }

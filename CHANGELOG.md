@@ -14,6 +14,20 @@ current as you land changes.
 
 ### Fixed
 
+- **`dezhban logs` no longer loses the rest of a file to one oversized line.**
+  0.15.0 kept the records *before* a line past the 4 MiB cap and said that line and
+  everything after it in the same file were still lost, because a `bufio.Scanner`
+  cannot resume past `ErrTooLong`. The reader now walks a long line in pieces
+  without ever holding it, so the records **after** it come back too, and the
+  skipped line leaves a `warn` record in its place (`logread.oversized=<bytes>`)
+  rather than a silent gap — the same call the parser already makes for a line tail
+  it cannot read. Because that stand-in is a warning, `--level error` hides it: ask
+  for `warn`, or for no level at all, to see gaps. A file with such a line is no
+  longer reported as a partial read; a file that cannot be opened at all still is.
+  Redaction keeps the marker legible too — `logread.oversized` has a hostname's
+  shape, and without an exact-match keep a redacted bundle's `log.txt` would have
+  printed `host-1=<bytes>`.
+
 - **A redacted bundle no longer replaces dezhban's own file paths with a hostname
   token.** `doctor`'s control check names the socket it probed, and that path came
   back as `/var/db/dezhban/host-1` — the answer replaced, and no identity hidden,
